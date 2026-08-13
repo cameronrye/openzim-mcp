@@ -526,6 +526,16 @@ class OpenZimMcpConfig(BaseSettings):
                 "variable to run without auth (localhost only), or set a real "
                 "secret value."
             )
+        if v is not None and not v.get_secret_value().isascii():
+            # Starlette decodes header bytes as latin-1, so a client that
+            # sends a non-ASCII token as UTF-8 bytes is mojibake-decoded and
+            # always 401s while a latin-1-encoding client authenticates — a
+            # confusing client-dependent lockout, never a working setup.
+            raise OpenZimMcpConfigurationError(
+                "OPENZIM_MCP_AUTH_TOKEN contains non-ASCII characters. HTTP "
+                "header encoding makes such a token match or fail depending "
+                "on the client's byte encoding — choose an ASCII secret."
+            )
         return v
 
     def setup_logging(self) -> None:

@@ -155,6 +155,21 @@ def register(server: "OpenZimMcpServer") -> None:
             if err is not None:
                 return err
 
+            # Oversize batches are rejected by the data layer before any
+            # entry is read — reject them here instead, before the remainder
+            # debit, so the zero-work failure costs the flat price and comes
+            # back as a structured envelope rather than a generic one after
+            # draining the bucket.
+            if entry_paths is not None and len(entry_paths) > MAX_BATCH_SIZE:
+                return tool_error(
+                    operation="invalid_batch_size",
+                    message=(
+                        f"`entry_paths` accepts at most {MAX_BATCH_SIZE} "
+                        f"paths per call (provided: {len(entry_paths)}); "
+                        f"split into multiple batches."
+                    ),
+                )
+
             # Dispatchable batch: charge the rest of the per-entry cost. The
             # flat table cost was already debited above, so the two together
             # come to the clamped batch price computed there.

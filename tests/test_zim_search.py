@@ -159,15 +159,48 @@ async def test_zim_search_rejects_limit_above_ceiling(
 async def test_zim_search_allows_limit_at_ceiling(
     server: MagicMock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # Exactly at the ceiling is allowed — it reaches the data layer and the
-    # value passes through unchanged. Cross-file path avoids an auto_select patch.
+    # Exactly at the applicable ceiling is allowed — it reaches the data
+    # layer unchanged. Cross-file's ceiling is search_all_data's
+    # limit_per_file cap (50), not MAX_SEARCH_RESULT_LIMIT.
     ops = _patch_async_ops(monkeypatch, search_all_data={"results": []})
     register_zim_search(server)
     fn, _ = server._tools_store["zim_search"]
-    await fn(query="x", mode="fulltext", cross_file=True, limit=MAX_SEARCH_RESULT_LIMIT)
-    ops.search_all_data.assert_awaited_once_with(
-        "x", limit_per_file=MAX_SEARCH_RESULT_LIMIT
-    )
+    await fn(query="x", mode="fulltext", cross_file=True, limit=50)
+    ops.search_all_data.assert_awaited_once_with("x", limit_per_file=50)
+
+
+@pytest.mark.asyncio
+async def test_cross_file_limit_above_data_layer_cap_rejected(
+    server: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """cross_file maps `limit` to search_all_data's limit_per_file (cap 50).
+
+    Validating only against MAX_SEARCH_RESULT_LIMIT let 51..1000 through to
+    a data-layer OpenZimMcpValidationError rendered as a generic envelope
+    naming the internal `limit_per_file` parameter — instead of the
+    structured invalid_limit envelope the tool description promises.
+    """
+    ops = _patch_async_ops(monkeypatch, search_all_data={"results": []})
+    register_zim_search(server)
+    fn, _ = server._tools_store["zim_search"]
+    result = await fn(query="x", mode="fulltext", cross_file=True, limit=60)
+    assert result["operation"] == "invalid_limit"
+    assert "50" in result["message"]
+    assert not ops.search_all_data.called
+
+
+@pytest.mark.asyncio
+async def test_filtered_limit_above_data_layer_cap_rejected(
+    server: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """namespace/content_type-filtered fulltext caps at 100 in the data layer."""
+    ops = _patch_async_ops(monkeypatch, search_with_filters_data={"results": []})
+    register_zim_search(server)
+    fn, _ = server._tools_store["zim_search"]
+    result = await fn(query="x", mode="fulltext", namespace="C", limit=150)
+    assert result["operation"] == "invalid_limit"
+    assert "100" in result["message"]
+    assert not ops.search_with_filters_data.called
 
 
 @pytest.mark.asyncio
@@ -436,6 +469,102 @@ async def test_title_promotion_row_normalised_and_counts_recomputed(
     assert result["page_info"]["returned_count"] == 2
     assert result["_meta"]["promotion_applied"] is True
     ops.find_entry_by_title_data.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_title_promotion_survives_an_empty_raw_page(
+    server: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A resolved promotion must not be discarded when the raw page is empty.
+
+    Filler-prose queries are the class promotion exists for: the full-phrase
+    lookup misses (``reason="0_hits"``) while the tail/window probes resolve
+    the canonical. Returning the raw empty page throws that answer away and
+    reports an undetectable miss — while, paradoxically, a query with one
+    irrelevant raw hit gets the canonical injected at the top.
+    """
+    _patch_async_ops(
+        monkeypatch,
+        find_entry_by_title_data={
+            "results": [],
+            "next_cursor": None,
+            "total": 0,
+            "done": True,
+            "page_info": {"offset": 0, "limit": 10, "returned_count": 0},
+            "_meta": {"reason": "0_hits"},
+        },
+    )
+    with (
+        patch(
+            "openzim_mcp.topic_preprocessing.auto_select_zim_file",
+            return_value="/data/wiki.zim",
+        ),
+        patch(
+            "openzim_mcp.topic_preprocessing.promote_topic_via_title_index",
+            return_value={
+                "path": "A/Big_Rapids,_Michigan",
+                "title": "Big Rapids, Michigan",
+                "match_type": "redirect",
+            },
+        ),
+    ):
+        register_zim_search(server)
+        fn, _ = server._tools_store["zim_search"]
+        result = await fn(query="famous people from big rapids michigan", mode="title")
+
+    rows = result["results"]
+    assert len(rows) == 1
+    assert rows[0]["path"] == "A/Big_Rapids,_Michigan"
+    assert rows[0]["score"] == 1.0
+    assert result["total"] == 1
+    assert result["page_info"]["returned_count"] == 1
+    assert result["_meta"]["promotion_applied"] is True
+    assert "reason" not in result["_meta"]  # the 0_hits verdict is stale now
+
+
+@pytest.mark.asyncio
+async def test_title_promotion_runs_off_the_event_loop(
+    server: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Promotion probes are blocking libzim I/O and must not hold the loop.
+
+    ``promote_topic_via_title_index`` performs up to dozens of uncached
+    archive-open + SuggestionSearcher probes; every sibling data-layer call
+    dispatches via ``AsyncZimOperations``/``to_thread``, and run inline this
+    one freezes every concurrent session for the whole probe train.
+    """
+    import threading
+
+    _patch_async_ops(
+        monkeypatch,
+        find_entry_by_title_data={"results": [], "_meta": {}},
+    )
+    loop_thread = threading.current_thread()
+    seen_threads: list[threading.Thread] = []
+
+    def recording_promotion(**kwargs: Any) -> None:
+        seen_threads.append(threading.current_thread())
+        return None
+
+    with (
+        patch(
+            "openzim_mcp.topic_preprocessing.auto_select_zim_file",
+            return_value="/data/wiki.zim",
+        ),
+        patch(
+            "openzim_mcp.topic_preprocessing.promote_topic_via_title_index",
+            side_effect=recording_promotion,
+        ),
+    ):
+        register_zim_search(server)
+        fn, _ = server._tools_store["zim_search"]
+        await fn(query="anything", mode="title")
+
+    assert seen_threads, "promotion was never invoked"
+    assert all(thread is not loop_thread for thread in seen_threads), (
+        "promote_topic_via_title_index ran on the event-loop thread; it must "
+        "be offloaded via asyncio.to_thread"
+    )
 
 
 @pytest.mark.asyncio

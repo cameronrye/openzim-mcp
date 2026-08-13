@@ -11,6 +11,7 @@ module directly for the timeout-guarded ``safe_regex_*`` helpers.
 
 import logging
 import re
+import threading
 from collections import Counter
 from contextlib import ExitStack
 from dataclasses import dataclass, field
@@ -154,6 +155,11 @@ class SimpleToolsHandler(
         # named counter here. No PII; the dict is small enough to ship in
         # a health-check response. Process-local — restarts reset.
         self._telemetry: Counter[str] = Counter()
+        # ``handle_zim_query`` runs on ``asyncio.to_thread`` workers, and a
+        # key's FIRST increment routes through ``Counter.__missing__`` — a
+        # pure-Python preemption point where two threads can both read 0
+        # and both store 1.
+        self._telemetry_lock = threading.Lock()
 
     def _track(self, event: str) -> None:
         """Increment the named telemetry counter.
@@ -162,7 +168,8 @@ class SimpleToolsHandler(
         INFO log line per call so simple-mode operators (who don't have
         ``get_server_health``) can observe them in the server log.
         """
-        self._telemetry[event] += 1
+        with self._telemetry_lock:
+            self._telemetry[event] += 1
         if event in _INFO_LEVEL_TELEMETRY_EVENTS:
             logger.info("telemetry: %s", event)
 

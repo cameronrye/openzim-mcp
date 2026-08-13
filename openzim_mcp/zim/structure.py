@@ -1086,6 +1086,22 @@ class _StructureMixin:
         )
         from openzim_mcp.pagination import archive_identity
 
+        # Cursor integrity: an inbound cursor issued for archive A must not
+        # resume against archive B (same guard every other paginated surface
+        # applies — see extract_article_links_data above).
+        if cursor_archive_identity is not None:
+            from openzim_mcp.pagination import Cursor as _CursorClass
+            from openzim_mcp.pagination import CursorMismatchError
+
+            try:
+                _CursorClass.verify_archive_identity(
+                    cast("Any", {"ai": cursor_archive_identity}),
+                    expected=archive_identity(validated_path),
+                    tool="get_inbound_links",
+                )
+            except CursorMismatchError as e:
+                raise OpenZimMcpValidationError(str(e)) from e
+
         with _zim_ops_mod.zim_archive(Path(validated_str)) as archive:
             live_uuid = str(archive.uuid)
         reader = LinkGraphReader.open_for(validated_str, live_archive_uuid=live_uuid)

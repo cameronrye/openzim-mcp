@@ -28,6 +28,22 @@ def test_blank_auth_token_rejected_at_config_load(tmp_path, blank):
         )
 
 
+def test_non_ascii_auth_token_rejected_at_config_load(tmp_path):
+    """A non-ASCII token can never authenticate a UTF-8-encoding client.
+
+    Starlette decodes header bytes as latin-1, so a client sending the
+    token as UTF-8 bytes is mojibake-decoded and always 401s while a
+    latin-1 client authenticates — a confusing, client-dependent lockout.
+    Catch it at config load like the blank-token footgun.
+    """
+    with pytest.raises(OpenZimMcpConfigurationError, match="ASCII"):
+        OpenZimMcpConfig(
+            allowed_directories=[str(tmp_path)],
+            transport="http",
+            auth_token="café-secret",
+        )
+
+
 def test_valid_and_absent_auth_token_accepted(tmp_path):
     # A real secret is fine.
     cfg = OpenZimMcpConfig(

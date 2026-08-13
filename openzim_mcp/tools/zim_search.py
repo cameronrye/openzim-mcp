@@ -37,6 +37,7 @@ rc0 sign-off: WIRED.
 
 from __future__ import annotations
 
+import asyncio
 from typing import TYPE_CHECKING, Any, Literal, Optional
 
 from ..constants import MAX_SEARCH_RESULT_LIMIT
@@ -63,6 +64,14 @@ _VALID_MODES = {"fulltext", "title", "suggest"}
 # envelope instead of a generic broad-except one.
 _CAPPED_LIMIT_MODES = {"title", "suggest"}
 _CAPPED_MODE_RESULT_LIMIT = 50
+
+# Fulltext's dispatch targets carry their own data-layer caps, mirrored here
+# for the same reason: ``search_all_data`` rejects ``limit_per_file`` > 50
+# and ``search_with_filters_data`` rejects ``limit`` > 100 (both in
+# ``zim/search.py``); only plain single-archive fulltext accepts the full
+# ``MAX_SEARCH_RESULT_LIMIT`` range.
+_CROSS_FILE_RESULT_LIMIT = 50
+_FILTERED_RESULT_LIMIT = 100
 
 # Page size title mode asks the data layer for when the caller omits ``limit``.
 _TITLE_DEFAULT_LIMIT = 10
@@ -124,11 +133,16 @@ def register(server: "OpenZimMcpServer") -> None:
                         f"`limit` must be a positive integer (provided: {limit})."
                     ),
                 )
-            max_limit = (
-                _CAPPED_MODE_RESULT_LIMIT
-                if mode in _CAPPED_LIMIT_MODES
-                else MAX_SEARCH_RESULT_LIMIT
-            )
+            if mode in _CAPPED_LIMIT_MODES:
+                max_limit = _CAPPED_MODE_RESULT_LIMIT
+            elif cross_file:
+                max_limit = _CROSS_FILE_RESULT_LIMIT
+            elif namespace is not None or content_type is not None:
+                # ``is not None`` matches the dispatch condition in
+                # ``_handle_fulltext_mode``, not truthiness.
+                max_limit = _FILTERED_RESULT_LIMIT
+            else:
+                max_limit = MAX_SEARCH_RESULT_LIMIT
             if limit is not None and limit > max_limit:
                 # Only single-archive fulltext paginates — recommending
                 # `offset` anywhere else points at the M28 rejection below.
@@ -444,7 +458,12 @@ async def _handle_title_mode(
 
     from ..topic_preprocessing import promote_topic_via_title_index
 
-    promoted = promote_topic_via_title_index(
+    # Promotion runs up to dozens of blocking libzim probes (archive open +
+    # SuggestionSearcher + redirect walks per tail/window probe, and empty
+    # probes are deliberately uncached). Offload like every other data-layer
+    # touch so the probe train doesn't hold the event loop.
+    promoted = await asyncio.to_thread(
+        promote_topic_via_title_index,
         zim_operations=server.zim_operations,
         zim_file_path=resolved_path,
         topic=preprocessed,
@@ -475,7 +494,24 @@ def _merge_promotion_into_title_results(
     matches = raw.get("results", [])
     promoted_path = promoted.get("path") or promoted.get("entry_path")
     if not matches:
-        return raw
+        # An empty raw page is the case promotion exists for: filler-prose
+        # queries miss on the full phrase (reason="0_hits") while the
+        # tail/window probes resolve the canonical. Serve the promoted row
+        # as the page rather than discarding a resolved answer.
+        promoted_row = dict(promoted)
+        promoted_row.setdefault("score", 1.0)
+        out = dict(raw)  # copy-on-write: raw may be the H15-cached object
+        out["results"] = [promoted_row]
+        if "total" in out:
+            out["total"] = 1
+        page_info = out.get("page_info")
+        if isinstance(page_info, dict):
+            out["page_info"] = {**page_info, "returned_count": 1}
+        meta = {**raw.get("_meta", {}), "promotion_applied": True}
+        # The raw page's "0_hits" verdict is stale once promotion answered.
+        meta.pop("reason", None)
+        out["_meta"] = meta
+        return out
     top = matches[0]
     top_path = top.get("entry_path") or top.get("path")
     if top_path == promoted_path:

@@ -563,10 +563,19 @@ class OpenZimMcpCache:
         logger.debug("Cache shutdown complete")
 
     def _get_persistence_file(self) -> Path:
-        """Get the path to the persistence file."""
+        """Get the path to the persistence file.
+
+        The extension is APPENDED, never substituted: ``with_suffix``
+        replaces the text after the last dot, so ``openzim.prod`` and
+        ``openzim.dev`` would silently collide onto one ``openzim.json``
+        snapshot — breaking the per-instance isolation an explicit
+        ``persistence_path`` promises.
+        """
         if self._persistence_path.suffix == CACHE_FILE_EXTENSION:
             return self._persistence_path
-        return self._persistence_path.with_suffix(CACHE_FILE_EXTENSION)
+        return self._persistence_path.with_name(
+            self._persistence_path.name + CACHE_FILE_EXTENSION
+        )
 
     def _save_to_disk(self) -> None:
         """Save cache contents to disk for persistence.

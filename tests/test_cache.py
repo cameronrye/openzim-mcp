@@ -503,6 +503,28 @@ class TestCachePersistence:
         persistence_file = cache._get_persistence_file()
         assert str(persistence_file).endswith(".json")
 
+    def test_get_persistence_file_appends_to_dotted_names(self, temp_dir):
+        """A dotted basename must be appended-to, not rewritten.
+
+        ``with_suffix`` replaces the text after the last dot, so two servers
+        configured with ``openzim.prod`` and ``openzim.dev`` silently
+        collided onto one ``openzim.json`` snapshot — last-writer-wins on
+        save, and a peer exiting with an empty cache unlinked the other's
+        file — violating the documented per-instance isolation contract.
+        """
+        from openzim_mcp.config import CacheConfig
+
+        config = CacheConfig(
+            enabled=True,
+            max_size=10,
+            ttl_seconds=60,
+            persistence_enabled=True,
+            persistence_path=str(temp_dir / "openzim.prod"),
+        )
+        cache = OpenZimMcpCache(config, enable_background_cleanup=False)
+
+        assert cache._get_persistence_file().name == "openzim.prod.json"
+
     def test_get_persistence_file_already_has_suffix(self, temp_dir):
         """Test _get_persistence_file when path already has .json suffix."""
         from openzim_mcp.config import CacheConfig

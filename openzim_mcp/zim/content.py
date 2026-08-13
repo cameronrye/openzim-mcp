@@ -1237,10 +1237,34 @@ class _ContentMixin:
             # Error payloads carry the requested path in ``path`` and the
             # diagnostic message in ``content``.
             return f"# {payload['path']}\n\n{payload['content']}", False
+        # Mirror ``_render_entry_payload_text``'s offset accounting: a tail
+        # slice must not read as the complete value, and a past-end offset
+        # must not read as "the value is empty".
+        offset_past_end = bool(payload.get("content_offset_past_end"))
+        offset_line = ""
+        if "content_offset" in payload:
+            applied_offset = payload["content_offset"]
+            total_length = payload["total_chars"]
+            if offset_past_end:
+                offset_line = (
+                    f"Content Offset: {applied_offset} is past the end of "
+                    f"the {total_length:,}-character body — no content at "
+                    f"this offset.\n"
+                )
+            else:
+                offset_line = (
+                    f"Content Offset: {applied_offset} of "
+                    f"{total_length:,} characters\n"
+                )
+        body = (
+            "(No content — offset beyond end of body)"
+            if offset_past_end
+            else payload["content"]
+        )
         return (
             f"# {payload['title']}\n\nRequested Path: {payload['path']}\n"
             f"Type: {payload.get('content_type') or 'unknown'}\n"
-            f"## Content\n\n{payload['content']}"
+            f"{offset_line}## Content\n\n{body}"
         ), True
 
     def _get_metadata_entry_data(

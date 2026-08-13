@@ -1235,7 +1235,7 @@ class _NamespaceMixin:
                     present.append(path)
             except Exception as e:
                 logger.debug(f"has_entry_by_path probe failed for {path}: {e}")
-        return self._new_scheme_browse_payload(
+        payload = self._new_scheme_browse_payload(
             namespace=namespace,
             total=len(present),
             offset=offset,
@@ -1245,6 +1245,12 @@ class _NamespaceMixin:
             ),
             discovery_method="known_path_probe",
         )
+        # Resume by CANDIDATE rows consumed, not survivors: a row that drops
+        # during materialisation must still advance the cursor, or a dropped
+        # row is re-scanned every page (duplicates when a survivor shares the
+        # window; a never-advancing cursor when the whole window drops).
+        payload["scanned_count"] = len(present[offset : offset + limit])
+        return payload
 
     def _materialise_browse_entry(
         self, archive: Archive, entry_path: str, has_new_scheme: bool

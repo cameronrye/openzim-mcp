@@ -184,3 +184,34 @@ def test_inbound_paginates_emits_cursor(
     assert len(full["results"]) == 2
     assert full["done"] is True
     assert full["next_cursor"] is None
+
+
+def test_inbound_rejects_cursor_from_another_archive(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An inbound cursor issued for archive A must not paginate archive B.
+
+    Every other paginated surface (outbound links, browse/walk, search)
+    rejects the replay with a cursor archive-identity mismatch; without the
+    guard here, B's inbound list silently resumes at A's offset, skipping
+    B's first page.
+    """
+    from openzim_mcp.exceptions import OpenZimMcpValidationError
+
+    archive = tmp_path / "x.zim"
+    _build_sidecar(
+        archive,
+        uuid="u1",
+        stream=[("A", [("T", "")]), ("B", [("T", "")])],
+    )
+    _patch_archive_open(monkeypatch, uuid="u1")
+
+    with pytest.raises(OpenZimMcpValidationError, match="archive"):
+        _StructureMixin.get_inbound_links_data(
+            _stub_self(archive),
+            str(archive),
+            "T",
+            limit=1,
+            offset=1,
+            cursor_archive_identity="000000000000",
+        )
