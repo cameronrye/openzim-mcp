@@ -380,8 +380,8 @@ A literal slash will fail to route. Other RFC 3986 reserved characters in the pa
 
 ### Subscriptions never fire
 
-- Check `OPENZIM_MCP_SUBSCRIPTIONS_ENABLED` — set to `false` disables the watcher entirely. The `subscriptions/listen` request is still acknowledged, so a successful subscription is not evidence the watcher is running.
-- Notifications are published only under the HTTP transport (`--transport http`). On stdio and SSE a listen stream is acknowledged and stays silent.
+- Check `OPENZIM_MCP_SUBSCRIPTIONS_ENABLED` — set to `false` disables the watcher and withholds the capability: `subscriptions/listen` fails with method-not-found, so an *acknowledged* listen actually proves the subscription gate is open.
+- Notifications are published only under the HTTP transport (`--transport http`). On stdio and SSE the capability is not advertised and a listen request fails with method-not-found.
 - Check what your client asked for. A `.zim` appearing or disappearing publishes `notifications/resources/list_changed` (opt in with `resourcesListChanged: true`); only an in-place replacement publishes `notifications/resources/updated`, and only for that archive's own `zim://{name}` URI. Listing `zim://files` under `resourceSubscriptions` never fires.
 - Tune `OPENZIM_MCP_WATCH_INTERVAL_SECONDS` (default 5, range 1-60). Slower poll = longer detection latency.
 - Detection compares mtime **and** size — same-size archive replacement is caught via the mtime change, same-mtime rewrites via the size change.

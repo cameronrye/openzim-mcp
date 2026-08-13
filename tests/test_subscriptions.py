@@ -350,6 +350,11 @@ class TestSubscriptionCapabilityGate:
             self._server(tmp_path, transport="http", subscriptions_enabled=False)
         )
 
+    def test_sse_does_not_advertise_subscriptions(self, tmp_path: Path):
+        """SSE never runs the watcher either — the gate is http-only, not
+        merely non-stdio, and the docs promise method-not-found on SSE."""
+        self._assert_not_advertised(self._server(tmp_path, transport="sse"))
+
     def test_http_with_subscriptions_enabled_advertises(self, tmp_path: Path):
         server = self._server(tmp_path, transport="http")
         assert server.subscription_bus is not None

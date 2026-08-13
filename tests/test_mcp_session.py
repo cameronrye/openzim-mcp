@@ -430,6 +430,32 @@ async def test_overview_error_bodies_keep_the_watcher_bounded_ttl(
 
 
 @pytest.mark.asyncio
+async def test_overview_partial_failure_bodies_keep_the_watcher_bounded_ttl(
+    tmp_path: Path,
+) -> None:
+    """The ``*_error`` partial-failure shape is excluded from the long TTL too.
+
+    An overview of an archive that resolves but cannot be read reports each
+    failed section as a ``*_error`` key with no top-level ``"error"`` — a
+    transient condition, not the sealed archive, so an hour-long hint on it
+    would freeze the failure. A bogus ``.zim`` file produces the shape
+    naturally: name resolution globs the directory and succeeds, then every
+    section read fails.
+    """
+    (tmp_path / "bogus.zim").write_bytes(b"not a zim archive")
+
+    async with _modern_client(
+        tmp_path, watch_interval_seconds=5, resource_cache_ttl_seconds=7200
+    ) as session:
+        read = await session.read_resource("zim://bogus")
+
+    body = json.loads(read.contents[0].text)
+    assert "error" not in body  # precondition: this is the partial shape,
+    assert any(key.endswith("_error") for key in body)  # not the total one
+    assert read.ttl_ms == 5 * 1000
+
+
+@pytest.mark.asyncio
 async def test_files_listing_keeps_the_watcher_bounded_ttl(tmp_path: Path) -> None:
     """``zim://files`` is a live directory scan and must not take the long TTL.
 

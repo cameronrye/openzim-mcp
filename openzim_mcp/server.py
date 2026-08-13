@@ -122,12 +122,13 @@ def _cache_hints(config: OpenZimMcpConfig) -> dict:
     the mutable member: bounding it by the poll interval means a cached read is
     never staler than the server's own detection latency.
 
-    That floor is the *fallback*, not the whole story. Archive-backed URIs are
-    fixed by a sealed file and carry a much longer TTL, stamped per URI by
+    That floor is the *fallback*, not the whole story. ``zim://{name}``
+    overview reads carry a much longer TTL, stamped per URI by
     ``EnvelopeAwareMCPServer._handle_read_resource`` — the SDK fills only
     fields a handler left unset, so a handler's explicit ``ttl_ms`` wins over
-    the value here. Reads of ``zim://files`` are left alone and land on this
-    one.
+    the value here. Everything else lands on this one: ``zim://files``,
+    per-entry reads (no ``resources/updated`` is ever published for an entry
+    URI), and overview bodies that report an error.
 
     ``cacheScope`` is ``private`` throughout: these payloads embed
     server-local absolute paths and configuration, so a shared intermediary
