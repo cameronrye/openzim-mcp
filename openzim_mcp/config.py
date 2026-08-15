@@ -425,10 +425,12 @@ class OpenZimMcpConfig(BaseSettings):
         default=True,
         description=(
             "Master switch for resource subscriptions. When False, the "
-            "polling task is not started and the subscribe/unsubscribe "
-            "handlers are not registered, so `resources/subscribe` "
-            "requests fail with method-not-found and the capability is "
-            "not advertised."
+            "polling watcher is not started and the `subscriptions/listen` "
+            "handler is not registered, so listen requests fail with "
+            "method-not-found and the capability is not advertised. Only "
+            "meaningful on the HTTP transport: the watcher runs under the "
+            "HTTP lifespan, so a stdio server withholds the capability "
+            "regardless of this setting."
         ),
     )
     presets_override_path: Path | None = Field(

@@ -21,7 +21,7 @@ Before diving into specific failure modes — v2 changed how errors come back fr
 }
 ```
 
-Check for it with `isinstance(result, dict) and result.get("error") is True`. Since v2.6 the server also sets the MCP `isError` flag on these — `EnvelopeAwareFastMCP.call_tool` recognises the envelope on the way out and returns a `CallToolResult` with `isError=True` — so a client that branches on `isError` works too. No tool advertises an `outputSchema`, so nothing arrives in `structuredContent`; the envelope is JSON in the response's text `content` block. Common error `operation` values you'll see in this guide:
+Check for it with `isinstance(result, dict) and result.get("error") is True`. Since v2.6 the server also sets the MCP `isError` flag on these — `EnvelopeAwareMCPServer.call_tool` recognises the envelope on the way out and returns a `CallToolResult` with `isError=True` — so a client that branches on `isError` works too. No tool advertises an `outputSchema`, so nothing arrives in `structuredContent`; the envelope is JSON in the response's text `content` block. Common error `operation` values you'll see in this guide:
 
 - `invalid_path_combination` — `zim_get` got an impossible branch: `entry_path` + `entry_paths`, `entry_paths` + a non-`full` `view`, `entry_paths` + `content_offset`, `binary` + `entry_paths`/`main_page`/a non-`full` `view`, `binary` without `entry_path`, `main_page` + a path or a non-`full` `view`, or no selector at all
 - `invalid_view` — `zim_get` got a `view` outside `{full, summary, toc, structure}`

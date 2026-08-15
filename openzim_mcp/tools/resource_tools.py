@@ -28,11 +28,11 @@ from typing import TYPE_CHECKING, Any, Optional, Union, cast
 from mcp.server.mcpserver.exceptions import ResourceNotFoundError
 from mcp.server.mcpserver.resources import Resource, ResourceTemplate
 from mcp.shared.exceptions import MCPError
-from mcp_types import INTERNAL_ERROR
+from mcp_types import INTERNAL_ERROR, INVALID_PARAMS
 from pydantic import ConfigDict, Field
 
 from ..constants import INPUT_LIMIT_ENTRY_PATH
-from ..exceptions import OpenZimMcpArchiveError
+from ..exceptions import OpenZimMcpArchiveError, OpenZimMcpValidationError
 from ..security import sanitize_input
 from ..zim.redirects import resolve_redirect_chain
 from ..zim_operations import zim_archive
@@ -251,7 +251,17 @@ class ZimEntryTemplate(ResourceTemplate):
         # decoding again would corrupt entry paths containing a literal ``%``.
         # Strip control characters (e.g. NUL bytes from %00) before they
         # reach libzim, which has no defense against embedded NULs.
-        decoded_path = sanitize_input(params["path"], INPUT_LIMIT_ENTRY_PATH)
+        try:
+            decoded_path = sanitize_input(params["path"], INPUT_LIMIT_ENTRY_PATH)
+        except OpenZimMcpValidationError as e:
+            # Converted for the same reason as the ``ResourceNotFoundError``
+            # above, and it has to happen HERE rather than in a caller:
+            # ``ResourceManager.get_resource`` invokes ``create_resource``
+            # outside the ``try`` that wraps ``resource.read()``, so nothing
+            # downstream maps this. An unmapped exception is replaced wholesale
+            # by a generic "Internal server error", discarding the one thing
+            # the caller can act on ("Input is empty…" / "Input too long: …").
+            raise MCPError(code=INVALID_PARAMS, message=str(e)) from e
         return ZimEntryResource(
             # v2's Resource.uri is a plain ``str`` (it was ``AnyUrl`` in 1.x).
             uri=uri,

@@ -92,6 +92,15 @@ def _is_overview_error_body(result: ReadResourceResult) -> bool:
     sole = result.contents[0]
     if not isinstance(sole, TextResourceContents):
         return False
+    # Cheap probe first. This runs on the response path of every archive-backed
+    # read, and the alternative is re-parsing a body the handler just
+    # serialized — full metadata dict, namespace summary, and up to a
+    # 2000-character main-page preview — on the event loop, to answer one
+    # boolean. Both key shapes end in ``error"`` once serialized, so a body
+    # without that substring cannot be an error body; one that has it (an
+    # article mentioning the word) still gets the exact check below.
+    if 'error"' not in sole.text:
+        return False
     try:
         payload = json.loads(sole.text)
     except ValueError:

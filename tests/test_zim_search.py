@@ -523,6 +523,56 @@ async def test_title_promotion_survives_an_empty_raw_page(
 
 
 @pytest.mark.asyncio
+async def test_title_promotion_drops_the_zero_result_suggestions(
+    server: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Alt-spelling recovery hints must not ride along with a confident hit.
+
+    ``_assemble_find_response`` fills ``_meta.suggestions`` only for the
+    no-results and fuzzy-hit cases, and states the rule for the rest: a
+    non-fuzzy hit carries none, "so confident matches aren't muddled by
+    alt-spelling noise". Promotion converts a 0-hit page into exactly such a
+    hit — a canonical title-index match — so a promoted page that keeps the
+    suggestions hands the model "did you mean X?" recovery hints next to the
+    answer it asked for, inviting a second lookup for a query already resolved.
+    """
+    _patch_async_ops(
+        monkeypatch,
+        find_entry_by_title_data={
+            "results": [],
+            "next_cursor": None,
+            "total": 0,
+            "done": True,
+            "page_info": {"offset": 0, "limit": 10, "returned_count": 0},
+            "_meta": {
+                "reason": "0_hits",
+                "suggestions": [{"type": "alt_spelling", "value": "Big Rapids"}],
+            },
+        },
+    )
+    with (
+        patch(
+            "openzim_mcp.topic_preprocessing.auto_select_zim_file",
+            return_value="/data/wiki.zim",
+        ),
+        patch(
+            "openzim_mcp.topic_preprocessing.promote_topic_via_title_index",
+            return_value={
+                "path": "A/Big_Rapids,_Michigan",
+                "title": "Big Rapids, Michigan",
+                "match_type": "redirect",
+            },
+        ),
+    ):
+        register_zim_search(server)
+        fn, _ = server._tools_store["zim_search"]
+        result = await fn(query="famous people from big rapids michigan", mode="title")
+
+    assert result["_meta"]["promotion_applied"] is True
+    assert "suggestions" not in result["_meta"]
+
+
+@pytest.mark.asyncio
 async def test_title_promotion_runs_off_the_event_loop(
     server: MagicMock, monkeypatch: pytest.MonkeyPatch
 ) -> None:

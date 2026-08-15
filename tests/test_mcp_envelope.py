@@ -173,3 +173,59 @@ async def test_override_flags_a_returned_envelope():
 
     assert result.is_error is True
     assert json.loads(result.content[0].text)["operation"] == "failing_tool"
+
+
+def _read_result(text: str):
+    """A single-text-content ``ReadResourceResult`` carrying ``text``."""
+    from mcp_types import ReadResourceResult, TextResourceContents
+
+    return ReadResourceResult(
+        contents=[TextResourceContents(uri="zim://wiki", text=text)]
+    )
+
+
+def test_overview_error_detection_ignores_prose_mentioning_error():
+    """An article that merely says "error" is not a failed overview.
+
+    The TTL decision short-circuits on a substring before parsing (the body was
+    just serialized by the handler; re-parsing a full overview — metadata,
+    namespace summary, a 2000-character main-page preview — to answer one
+    boolean runs on the event loop for every archive-backed read). The probe is
+    a filter, not the verdict: a body carrying the substring in its *content*
+    still has to be parsed and found free of error keys, or a legitimate
+    archive would be denied the long TTL for mentioning the word.
+    """
+    from openzim_mcp.mcp_envelope import _is_overview_error_body
+
+    # A value *ending* in the word puts the probe's substring in the body: the
+    # closing quote follows it, exactly as it would after a real error key.
+    body = json.dumps(
+        {"name": "wiki", "main_page_preview": "Recovering from a fatal error"}
+    )
+
+    assert 'error"' in body  # precondition: the fast path does not decide this
+    assert _is_overview_error_body(_read_result(body)) is False
+
+
+def test_overview_error_detection_still_catches_both_error_shapes():
+    """Both failure shapes must survive the fast path.
+
+    ``{"error": ...}`` is total failure and ``*_error`` keys are partial
+    section failures; a probe tuned to only one of them would silently stamp
+    the other with the hour-long TTL, freezing a transient failure for an hour
+    with nothing able to evict it.
+    """
+    from openzim_mcp.mcp_envelope import _is_overview_error_body
+
+    total = json.dumps({"error": "ZIM file 'wiki' not found"})
+    partial = json.dumps({"name": "wiki", "metadata_error": "unreadable"})
+
+    assert _is_overview_error_body(_read_result(total)) is True
+    assert _is_overview_error_body(_read_result(partial)) is True
+
+
+def test_overview_error_detection_tolerates_a_non_json_body():
+    """A body that isn't JSON is not an error body — and must not raise."""
+    from openzim_mcp.mcp_envelope import _is_overview_error_body
+
+    assert _is_overview_error_body(_read_result('plain text error" here')) is False

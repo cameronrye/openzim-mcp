@@ -374,3 +374,32 @@ def test_serve_streamable_http_runs_safe_check_and_serves(
     )
     # Auth + CORS middleware get added (auth always; CORS only if origins set)
     assert fake_app.add_middleware.called
+
+
+def test_serving_twice_does_not_stack_duplicate_health_routes(
+    monkeypatch, tmp_path
+) -> None:
+    """Health routes must be registered once per server, not once per serve.
+
+    ``custom_route`` appends unconditionally, so any caller that serves the
+    same server object twice — a retry after a failed bind, an embedding
+    harness — grows the route list each time. Starlette matches the first, so
+    the duplicates are unreachable, and each carries a live ``_make_readyz``
+    closure over the server for the process lifetime. Exercised against a real
+    MCPServer because the defect lives in the SDK's route list, which the
+    MagicMock harness above does not have.
+    """
+    from openzim_mcp.config import OpenZimMcpConfig
+    from openzim_mcp.http_app import serve_streamable_http
+    from openzim_mcp.server import OpenZimMcpServer
+
+    config = OpenZimMcpConfig(allowed_directories=[str(tmp_path)], transport="http")
+    server = OpenZimMcpServer(config)
+
+    monkeypatch.setattr("openzim_mcp.http_app.check_safe_startup", lambda c: None)
+    serve_streamable_http(server, runner=lambda app, host, port: None)
+    serve_streamable_http(server, runner=lambda app, host, port: None)
+
+    paths = [route.path for route in server.mcp._custom_starlette_routes]
+    assert paths.count("/healthz") == 1
+    assert paths.count("/readyz") == 1

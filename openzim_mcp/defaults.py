@@ -117,13 +117,12 @@ class TimeoutDefaults:
 
     REGEX_SECONDS: float = 1.0
     ARCHIVE_OPEN_SECONDS: float = 30.0
-    # Per-subscriber timeout for ``send_resource_updated`` during broadcast.
-    # A subscriber that doesn't respond within this window is treated as dead
-    # and evicted from the registry. The fan-out is concurrent
-    # (``asyncio.gather``), so one hung subscriber never delays the others —
-    # this timeout only bounds how long an individual hung send blocks its
-    # own task before being cancelled.
-    SUBSCRIPTION_SEND_SECONDS: float = 5.0
+    # ``SUBSCRIPTION_SEND_SECONDS`` lived here until the 2026-07-28 port. It
+    # bounded a per-subscriber ``send_resource_updated`` inside a hand-rolled
+    # ``asyncio.gather`` fan-out over a session registry — all three of which
+    # the SDK's ``subscriptions/listen`` handler now owns. Left as a note
+    # rather than a constant: a documented default that nothing reads is worse
+    # than none, because it describes machinery a reader will go looking for.
 
 
 @dataclass(frozen=True)

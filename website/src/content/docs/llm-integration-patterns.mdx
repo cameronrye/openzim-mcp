@@ -430,7 +430,7 @@ For programmatic checks, the underlying exception class hierarchy lives in [open
 
 ### Branching on `isError`
 
-As of v2.6.0 the failure is visible at the protocol level too: `EnvelopeAwareFastMCP.call_tool` ([openzim_mcp/mcp_envelope.py](https://github.com/cameronrye/openzim-mcp/blob/main/openzim_mcp/mcp_envelope.py)) recognises a returned envelope and emits a `CallToolResult` with `isError: true`. Tools still signal failure by *returning* the envelope rather than raising — before v2.6.0 that meant every failure, security denials included, travelled the SDK's ordinary success path and reached the client with `isError: false`.
+As of v2.6.0 the failure is visible at the protocol level too: `EnvelopeAwareMCPServer.call_tool` ([openzim_mcp/mcp_envelope.py](https://github.com/cameronrye/openzim-mcp/blob/main/openzim_mcp/mcp_envelope.py)) recognises a returned envelope and emits a `CallToolResult` with `isError: true`. Tools still signal failure by *returning* the envelope rather than raising — before v2.6.0 that meant every failure, security denials included, travelled the SDK's ordinary success path and reached the client with `isError: false`.
 
 If your MCP client surfaces the flag, branch on it first: it is one boolean and needs no JSON parsing. The body is unchanged — byte-identical to what the plain dict return produced — so parse `content[0].text` only when you need `operation`, `message`, or the extra keys.
 

@@ -510,6 +510,14 @@ def _merge_promotion_into_title_results(
         meta = {**raw.get("_meta", {}), "promotion_applied": True}
         # The raw page's "0_hits" verdict is stale once promotion answered.
         meta.pop("reason", None)
+        # So are its suggestions. ``_assemble_find_response`` fills
+        # ``suggestions`` only for the no-results and fuzzy-hit cases, and its
+        # stated contract is that a confident hit carries none "so confident
+        # matches aren't muddled by alt-spelling noise". Promotion produces
+        # exactly such a hit — a canonical title-index match — so leaving the
+        # zero-result recovery hints attached would hand the model "did you
+        # mean X?" alongside the answer it asked for.
+        meta.pop("suggestions", None)
         out["_meta"] = meta
         return out
     top = matches[0]

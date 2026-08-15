@@ -99,6 +99,44 @@ _STYLE_HEADING_TOKENS: Dict[str, Tuple[str, ...]] = {
 }
 
 
+def _render_offset_and_body(payload: Dict[str, Any]) -> Tuple[str, str]:
+    """Render the ``Content Offset:`` line and the body for an entry payload.
+
+    Shared by :func:`_render_entry_payload_text` and the ``M/<key>`` metadata
+    presenter, which render the same two facts and must render them the same
+    way. They were copies once, and the copy silently drifted — the metadata
+    side lost the empty-value fallback, so a genuinely empty value printed as a
+    bare ``## Content`` heading and nothing else, reading as "this entry has no
+    content" rather than "this value is empty". Keeping one builder is what
+    makes that class of drift impossible rather than merely fixed.
+
+    Returns ``(offset_line, body)``. ``offset_line`` is ``""`` when no positive
+    offset was applied and already carries its trailing newline otherwise, so
+    callers concatenate it unconditionally.
+    """
+    offset_past_end = bool(payload.get("content_offset_past_end"))
+    offset_line = ""
+    # ``content_offset`` / ``total_chars`` are present exactly when a
+    # positive offset was applied by the payload builder.
+    if "content_offset" in payload:
+        content_offset = payload["content_offset"]
+        total_length = payload["total_chars"]
+        if offset_past_end:
+            offset_line = (
+                f"Content Offset: {content_offset} is past the end of the "
+                f"{total_length:,}-character body — no content at this offset.\n"
+            )
+        else:
+            offset_line = (
+                f"Content Offset: {content_offset} of {total_length:,} characters\n"
+            )
+    if offset_past_end:
+        body = "(No content — offset beyond end of body)"
+    else:
+        body = payload["content"] or "(No content)"
+    return offset_line, body
+
+
 def _render_entry_payload_text(payload: Dict[str, Any]) -> str:
     """Render a ``_build_entry_payload`` dict as the legacy markdown text.
 
@@ -116,27 +154,8 @@ def _render_entry_payload_text(payload: Dict[str, Any]) -> str:
     else:
         result_text += f"Path: {payload['path']}\n"
     result_text += f"Type: {payload.get('content_type') or 'Unknown'}\n"
-    offset_past_end = bool(payload.get("content_offset_past_end"))
-    # ``content_offset`` / ``total_chars`` are present exactly when a
-    # positive offset was applied by the payload builder.
-    if "content_offset" in payload:
-        content_offset = payload["content_offset"]
-        total_length = payload["total_chars"]
-        if offset_past_end:
-            result_text += (
-                f"Content Offset: {content_offset} is past the end of the "
-                f"{total_length:,}-character body — no content at this offset.\n"
-            )
-        else:
-            result_text += (
-                f"Content Offset: {content_offset} of {total_length:,} characters\n"
-            )
-    result_text += "## Content\n\n"
-    if offset_past_end:
-        result_text += "(No content — offset beyond end of body)"
-    else:
-        result_text += payload["content"] or "(No content)"
-    return result_text
+    offset_line, body = _render_offset_and_body(payload)
+    return f"{result_text}{offset_line}## Content\n\n{body}"
 
 
 def _heading_matches(title: str, tokens: Tuple[str, ...]) -> bool:
@@ -1237,33 +1256,14 @@ class _ContentMixin:
             # Error payloads carry the requested path in ``path`` and the
             # diagnostic message in ``content``.
             return f"# {payload['path']}\n\n{payload['content']}", False
-        # Mirror ``_render_entry_payload_text``'s offset accounting: a tail
-        # slice must not read as the complete value, and a past-end offset
-        # must not read as "the value is empty".
-        offset_past_end = bool(payload.get("content_offset_past_end"))
-        offset_line = ""
-        if "content_offset" in payload:
-            applied_offset = payload["content_offset"]
-            total_length = payload["total_chars"]
-            if offset_past_end:
-                offset_line = (
-                    f"Content Offset: {applied_offset} is past the end of "
-                    f"the {total_length:,}-character body — no content at "
-                    f"this offset.\n"
-                )
-            else:
-                offset_line = (
-                    f"Content Offset: {applied_offset} of "
-                    f"{total_length:,} characters\n"
-                )
-        body = (
-            "(No content — offset beyond end of body)"
-            if offset_past_end
-            else payload["content"]
-        )
+        # Offset accounting and the body come from the renderer the regular
+        # entry surface uses, not a copy of it: a tail slice must not read as
+        # the complete value, a past-end offset must not read as "the value is
+        # empty", and an empty value must not read as "no content here".
+        offset_line, body = _render_offset_and_body(payload)
         return (
             f"# {payload['title']}\n\nRequested Path: {payload['path']}\n"
-            f"Type: {payload.get('content_type') or 'unknown'}\n"
+            f"Type: {payload.get('content_type') or 'Unknown'}\n"
             f"{offset_line}## Content\n\n{body}"
         ), True
 

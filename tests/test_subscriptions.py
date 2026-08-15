@@ -303,6 +303,201 @@ async def test_watcher_replacement_uri_matches_template_expansion(
     assert (expected, "replaced") in events
 
 
+@pytest.mark.asyncio
+async def test_watcher_also_publishes_the_readable_raw_spelling(
+    tmp_path: Path,
+) -> None:
+    """Both spellings that READ must also be spellings that NOTIFY.
+
+    ``UriTemplate.match`` percent-decodes before matching, so
+    ``zim://wikipedia_es_niños`` is a *successful* ``resources/read`` — which
+    means a client that built its URI from the ``zim://files`` listing rather
+    than by RFC 6570 expansion gets a working read and will subscribe with that
+    same string. Delivery is exact-string, so publishing only the encoded form
+    leaves that client on a URI nothing ever fires on: no notification, and
+    (with the hour-long resource TTL) a stale overview for the life of the
+    stream. Both forms are published when they differ.
+    """
+    from mcp.shared.uri_template import UriTemplate
+
+    from openzim_mcp.subscriptions import MtimeWatcher
+
+    stem = "wikipedia_es_niños"
+    target = tmp_path / f"{stem}.zim"
+    target.write_bytes(b"v1")
+
+    events: list[tuple[str, str]] = []
+
+    async def emit(uri: str, change_type: str) -> None:
+        events.append((uri, change_type))
+
+    watcher = MtimeWatcher([str(tmp_path)], interval=100, on_change=emit)
+    await watcher.start()
+    try:
+        target.write_bytes(b"v2-with-different-length")
+        await watcher._tick()
+    finally:
+        await watcher.stop()
+
+    raw = f"zim://{stem}"
+    encoded = UriTemplate.parse("zim://{name}").expand({"name": stem})
+    assert raw != encoded  # guards the premise: this stem needs encoding
+    # Both read, so both must notify.
+    assert UriTemplate.parse("zim://{name}").match(raw) == {"name": stem}
+    assert (raw, "replaced") in events
+    assert (encoded, "replaced") in events
+
+
+@pytest.mark.asyncio
+async def test_watcher_publishes_one_event_for_an_unreserved_stem(
+    tmp_path: Path,
+) -> None:
+    """A stem needing no encoding must not be published twice.
+
+    The dual publish above is conditional on the two spellings differing. If it
+    were unconditional, every ordinary archive would deliver each replacement
+    twice to the same subscriber.
+    """
+    from openzim_mcp.subscriptions import MtimeWatcher
+
+    target = tmp_path / "wikipedia_en.zim"
+    target.write_bytes(b"v1")
+
+    events: list[tuple[str, str]] = []
+
+    async def emit(uri: str, change_type: str) -> None:
+        events.append((uri, change_type))
+
+    watcher = MtimeWatcher([str(tmp_path)], interval=100, on_change=emit)
+    await watcher.start()
+    try:
+        target.write_bytes(b"v2-with-different-length")
+        await watcher._tick()
+    finally:
+        await watcher.stop()
+
+    assert events == [("zim://wikipedia_en", "replaced")]
+
+
+@pytest.mark.asyncio
+async def test_publish_change_drops_an_unknown_change_kind() -> None:
+    """An unrecognised kind must publish nothing, not a fallthrough ``updated``.
+
+    ``publish_change`` used to treat "not list_changed" as "replaced", so a
+    third watcher change kind — a removal carrying ``zim://files``, say —
+    would have been delivered as a ``resources/updated`` for that URI: exactly
+    the conflation of list-membership with content that the 2026-07-28 split
+    exists to end, silently reintroduced at the one seam nothing asserts on.
+    """
+    from openzim_mcp.subscriptions import publish_change
+
+    bus = _RecordingBus()
+    await publish_change(bus, "zim://files", "removed")
+
+    assert bus.events == []
+
+
+class TestBoundedListenHandler:
+    """The per-stream ceiling on the client-supplied subscription URI set.
+
+    The 1.x registry capped distinct URIs (``MAX_URIS_PER_SESSION``) and URI
+    length; the port dropped both with the registry. The SDK's ``ListenHandler``
+    does not replace them — it bounds stream count and event backlog and never
+    inspects the URI list, which it then holds for the stream's lifetime. So
+    the ceiling on that list is restored here, and ``subscriptions/listen`` is
+    not covered by the project's rate limiter (it wraps tool calls only).
+    """
+
+    @staticmethod
+    def _params(uris: list[str]) -> object:
+        """A ``subscriptions/listen`` params object carrying ``uris``."""
+        from mcp_types import SubscriptionFilter, SubscriptionsListenRequestParams
+
+        return SubscriptionsListenRequestParams(
+            notifications=SubscriptionFilter(resource_subscriptions=uris)
+        )
+
+    @pytest.mark.asyncio
+    async def test_rejects_an_oversized_uri_set(self) -> None:
+        """More URIs than the cap is INVALID_PARAMS, refused before the ack."""
+        from mcp.shared.exceptions import MCPError
+        from mcp_types import INVALID_PARAMS
+
+        from openzim_mcp.subscriptions import (
+            MAX_SUBSCRIPTION_URIS,
+            _bounded_listen_handler_class,
+        )
+
+        handler = _bounded_listen_handler_class()(InMemorySubscriptionBus())
+        uris = [f"zim://a{i}" for i in range(MAX_SUBSCRIPTION_URIS + 1)]
+
+        with pytest.raises(MCPError) as excinfo:
+            await handler(object(), self._params(uris))
+
+        assert excinfo.value.error.code == INVALID_PARAMS
+
+    @pytest.mark.asyncio
+    async def test_rejects_an_overlong_uri(self) -> None:
+        """One absurdly long URI is refused even inside a small set."""
+        from mcp.shared.exceptions import MCPError
+        from mcp_types import INVALID_PARAMS
+
+        from openzim_mcp.subscriptions import (
+            MAX_SUBSCRIPTION_URI_LENGTH,
+            _bounded_listen_handler_class,
+        )
+
+        handler = _bounded_listen_handler_class()(InMemorySubscriptionBus())
+        uris = ["zim://" + "x" * MAX_SUBSCRIPTION_URI_LENGTH]
+
+        with pytest.raises(MCPError) as excinfo:
+            await handler(object(), self._params(uris))
+
+        assert excinfo.value.error.code == INVALID_PARAMS
+
+    @pytest.mark.asyncio
+    async def test_accepts_a_set_within_the_caps(self) -> None:
+        """A normal request must reach the SDK handler untouched.
+
+        Pinned via the SDK's own rejection: a stream with no request id raises
+        INVALID_REQUEST from ``ListenHandler``, which can only happen if the
+        bounded subclass delegated rather than short-circuiting.
+        """
+        from mcp.shared.exceptions import MCPError
+        from mcp_types import INVALID_REQUEST
+
+        from openzim_mcp.subscriptions import _bounded_listen_handler_class
+
+        handler = _bounded_listen_handler_class()(InMemorySubscriptionBus())
+
+        class _Ctx:
+            request_id = None
+
+        with pytest.raises(MCPError) as excinfo:
+            await handler(_Ctx(), self._params(["zim://files"]))
+
+        assert excinfo.value.error.code == INVALID_REQUEST
+
+    def test_the_server_installs_it_when_subscriptions_are_live(
+        self, tmp_path: Path
+    ) -> None:
+        """The bound is only worth having if it is the registered handler."""
+        from openzim_mcp.config import OpenZimMcpConfig
+        from openzim_mcp.server import OpenZimMcpServer
+        from openzim_mcp.subscriptions import _bounded_listen_handler_class
+
+        config = OpenZimMcpConfig(
+            allowed_directories=[str(tmp_path)],
+            transport="http",
+            subscriptions_enabled=True,
+        )
+        server = OpenZimMcpServer(config)
+        entry = server.mcp._lowlevel_server._request_handlers["subscriptions/listen"]
+
+        assert isinstance(entry.handler, _bounded_listen_handler_class().__mro__[1])
+        assert type(entry.handler).__name__ == "BoundedListenHandler"
+
+
 class TestSubscriptionCapabilityGate:
     """The wire advertisement must track the subscriptions gate.
 

@@ -20,21 +20,25 @@ to ``False``. None of it has a 2026-07-28 analogue: sessions no longer exist,
 ``resources/subscribe`` is gone, and capabilities are advertised through
 ``server/discover``.
 
-The registry's DoS caps (``MAX_URIS_TOTAL`` / ``MAX_URIS_PER_SESSION``) and the
-inbound-URI validation went with it. They bounded a *server-global, session-
-lifetime* structure keyed by client-supplied URIs — which no longer exists.
-The equivalent admission control now lives in the SDK's ``ListenHandler``,
-which caps concurrent listen streams (``max_subscriptions``) and per-stream
-event backlog (``max_buffered_events``), ending a stream that outruns its
-consumer. A client's requested URI set is scoped to its own stream and bounded
-by the transport's request-body cap.
+The registry's DoS caps (``MAX_URIS_TOTAL`` / ``MAX_URIS_PER_SESSION``) went
+with it: they bounded a *server-global, session-lifetime* structure keyed by
+client-supplied URIs, which no longer exists. The SDK's ``ListenHandler``
+supplies part of the replacement — it caps concurrent listen streams
+(``max_subscriptions``) and per-stream event backlog (``max_buffered_events``),
+ending a stream that outruns its consumer — but it is *not* the whole of it,
+because it never looks at the requested URI set. That set is held for the
+stream's lifetime in a ``frozenset``, so with the SDK's caps alone the ceiling
+is ``max_subscriptions`` (1024) × the transport's 4 MiB body limit. That is
+three orders of magnitude looser than what it replaced, on a method the
+project's rate limiter does not cover (it wraps tool calls only). So the
+per-stream half is restored here — see :func:`install_bounded_listen_handler`.
 """
 
 import asyncio
 import contextlib
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, Awaitable, Callable, Iterable, Optional
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Iterable, Optional
 from urllib.parse import quote
 
 if TYPE_CHECKING:
@@ -42,12 +46,29 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["MtimeWatcher", "OnChange", "publish_change"]
+__all__ = [
+    "MAX_SUBSCRIPTION_URIS",
+    "MAX_SUBSCRIPTION_URI_LENGTH",
+    "MtimeWatcher",
+    "OnChange",
+    "install_bounded_listen_handler",
+    "publish_change",
+]
 
 # Change kinds emitted by :class:`MtimeWatcher`, mapped to MCP notifications
 # by :func:`publish_change`.
 CHANGE_LIST_CHANGED = "list_changed"
 CHANGE_REPLACED = "replaced"
+
+# Per-stream ceilings on the client-supplied ``resource_subscriptions`` list,
+# carried over from the 1.x registry's ``MAX_URIS_PER_SESSION`` /
+# ``MAX_URI_LENGTH``. Both are far above any real client: this server serves
+# three URI shapes (``zim://files``, ``zim://{name}``,
+# ``zim://{name}/entry/{path}``), so 256 distinct URIs is a client watching 255
+# archives at once, and 2048 characters is well past any path libzim will
+# accept (``INPUT_LIMIT_ENTRY_PATH`` is 500).
+MAX_SUBSCRIPTION_URIS = 256
+MAX_SUBSCRIPTION_URI_LENGTH = 2048
 
 OnChange = Callable[[str, str], Awaitable[None]]
 
@@ -168,10 +189,23 @@ class MtimeWatcher:
         # advertised ``zim://{name}`` template would produce it (``quote``
         # with ``safe=""`` keeps the same unreserved set), because the SDK
         # delivers events by exact string match against the URIs the client
-        # subscribed with — a raw non-ASCII or spaced stem would never match.
+        # subscribed with.
+        #
+        # BOTH spellings are published when they differ, because both READ:
+        # ``UriTemplate.match`` percent-decodes before matching, so a client
+        # that built ``zim://my archive`` from the ``zim://files`` listing gets
+        # a successful ``resources/read`` and will naturally subscribe with the
+        # same string. Publishing only the encoded form leaves that client
+        # subscribed to a URI nothing ever fires on — a silent stale read for
+        # the life of the stream, made worse by the hour-long resource TTL.
+        # Exact-string delivery means a client sees only the spelling it asked
+        # for, so the extra publish is a no-op for everyone else.
         for path in changed:
-            name = quote(Path(path).stem, safe="")
-            await self._on_change(f"zim://{name}", CHANGE_REPLACED)
+            stem = Path(path).stem
+            encoded = quote(stem, safe="")
+            await self._on_change(f"zim://{encoded}", CHANGE_REPLACED)
+            if encoded != stem:
+                await self._on_change(f"zim://{stem}", CHANGE_REPLACED)
         self._snapshot = new_snap
 
     async def _loop(self) -> None:
@@ -210,10 +244,96 @@ async def publish_change(
     ``notifications/resources/updated`` for its URI. Previously both were sent
     as an ``updated`` for ``zim://files``, because ``resources/subscribe`` gave
     clients no way to ask for list-membership changes.
+
+    Both kinds are matched explicitly and anything else is dropped with a
+    warning, rather than falling through to ``ResourceUpdated``. A third change
+    kind added to the watcher would otherwise be delivered as an ``updated``
+    for whatever URI accompanied it — silently re-creating the conflation the
+    2026-07-28 split exists to end, in the one place no test is looking.
     """
     from mcp.server.subscriptions import ResourcesListChanged, ResourceUpdated
 
     if change_type == CHANGE_LIST_CHANGED:
         await bus.publish(ResourcesListChanged())
         return
-    await bus.publish(ResourceUpdated(uri=uri))
+    if change_type == CHANGE_REPLACED:
+        await bus.publish(ResourceUpdated(uri=uri))
+        return
+    logger.warning(
+        "Dropping change of unknown kind %r for %r; no notification mapping",
+        change_type,
+        uri,
+    )
+
+
+def _bounded_listen_handler_class() -> type:
+    """Build the ``ListenHandler`` subclass, importing the SDK lazily.
+
+    Deferred so importing this module (which the watcher half needs) doesn't
+    drag in the SDK's subscription stack — the same lazy-import shape
+    ``publish_change`` uses.
+    """
+    from mcp.server.subscriptions import ListenHandler
+
+    class BoundedListenHandler(ListenHandler):
+        """``ListenHandler`` that rejects an oversized requested URI set.
+
+        The one dimension the SDK's own caps leave unbounded (see the module
+        docstring). Validation happens before ``super().__call__`` takes a
+        subscription slot or acks, so a rejected request costs nothing beyond
+        the parse the transport already did.
+
+        Rejection is ``INVALID_PARAMS`` rather than the SDK's
+        ``INTERNAL_ERROR``-for-capacity: an over-long URI list is the client's
+        request being wrong, not the server being full, and the two want
+        opposite client behavior (fix the request vs. retry later).
+        """
+
+        async def __call__(self, ctx: Any, params: Any) -> Any:
+            """Validate the requested URI set, then serve the stream."""
+            from mcp.shared.exceptions import MCPError
+            from mcp_types import INVALID_PARAMS
+
+            uris = getattr(params.notifications, "resource_subscriptions", None) or ()
+            if len(uris) > MAX_SUBSCRIPTION_URIS:
+                raise MCPError(
+                    INVALID_PARAMS,
+                    f"subscriptions/listen accepts at most "
+                    f"{MAX_SUBSCRIPTION_URIS} resource subscriptions per "
+                    f"stream; {len(uris)} were requested.",
+                )
+            for uri in uris:
+                if len(uri) > MAX_SUBSCRIPTION_URI_LENGTH:
+                    raise MCPError(
+                        INVALID_PARAMS,
+                        f"Subscription URI exceeds "
+                        f"{MAX_SUBSCRIPTION_URI_LENGTH} characters.",
+                    )
+            return await super().__call__(ctx, params)
+
+    return BoundedListenHandler
+
+
+def install_bounded_listen_handler(mcp: Any, bus: "SubscriptionBus") -> None:
+    """Swap the SDK's ``subscriptions/listen`` handler for the bounded one.
+
+    ``MCPServer`` constructs its ``ListenHandler`` internally and exposes no
+    seam for supplying one, so the registration is replaced after the fact —
+    the same private-registry seam ``server.py`` already uses to *withhold* the
+    handler when subscriptions are disabled, and the reason both live behind
+    named helpers rather than inline attribute pokes.
+
+    Silently does nothing if the SDK stops registering the method under this
+    name; the capability itself is derived from that same registry entry, so a
+    missing entry means the server isn't advertising subscriptions either.
+    """
+    from mcp.server.lowlevel.server import HandlerEntry
+    from mcp_types import SubscriptionsListenRequestParams
+
+    handlers = mcp._lowlevel_server._request_handlers
+    if "subscriptions/listen" not in handlers:
+        return
+    handlers["subscriptions/listen"] = HandlerEntry(
+        SubscriptionsListenRequestParams,
+        _bounded_listen_handler_class()(bus),
+    )

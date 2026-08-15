@@ -474,8 +474,20 @@ def serve_streamable_http(
     check_safe_startup(server.config)
 
     # Register health routes through the SDK's public custom-route hook.
-    server.mcp.custom_route(HEALTHZ_PATH, methods=["GET"])(healthz)
-    server.mcp.custom_route(READYZ_PATH, methods=["GET"])(_make_readyz(server))
+    #
+    # Guarded because ``custom_route`` appends unconditionally: serving the
+    # same server object twice (a retry after a failed bind, or an embedding
+    # harness) would stack duplicate Route objects that Starlette can never
+    # reach — it matches the first — while retaining every dead closure for
+    # the process lifetime. The pre-port ``_custom_starlette_routes.extend``
+    # had the same shape, so this is fixed at the seam rather than carried.
+    _registered = {
+        getattr(route, "path", None) for route in server.mcp._custom_starlette_routes
+    }
+    if HEALTHZ_PATH not in _registered:
+        server.mcp.custom_route(HEALTHZ_PATH, methods=["GET"])(healthz)
+    if READYZ_PATH not in _registered:
+        server.mcp.custom_route(READYZ_PATH, methods=["GET"])(_make_readyz(server))
 
     # Transport configuration is an argument to the app builder on the v2 SDK
     # (there is no ``settings`` object to mutate). ``host`` feeds the SDK's

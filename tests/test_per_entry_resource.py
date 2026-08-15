@@ -437,6 +437,47 @@ class TestPerEntryResource:
         assert called_path == "A/Foobar"
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("bad_path", "expected"),
+        [
+            ("   ", "empty"),
+            ("A/" + "x" * 600, "too long"),
+        ],
+        ids=["empty-after-sanitize", "over-length"],
+    )
+    async def test_rejected_entry_path_keeps_its_message_on_the_wire(
+        self, server, ctx: Context, bad_path: str, expected: str
+    ):
+        """A path ``sanitize_input`` rejects must not become "Internal server error".
+
+        ``sanitize_input`` raises ``OpenZimMcpValidationError``, which is
+        neither ``MCPError`` nor a ``ResourceError`` — and nothing downstream
+        converts it, because ``ResourceManager.get_resource`` calls
+        ``create_resource`` *outside* the ``try`` that wraps ``resource.read()``.
+        An unmapped exception is replaced wholesale by a generic
+        ``-32603 Internal server error``, so the caller loses the only
+        actionable part ("Input is empty…" / "Input too long: N > M") and reads
+        a request-shaped mistake as a retryable server fault.
+        """
+        from mcp.shared.exceptions import MCPError
+        from mcp_types import INVALID_PARAMS
+
+        server.zim_operations.list_zim_files_data = MagicMock(
+            return_value=[{"path": "/zim/wiki.zim", "name": "wiki.zim"}]
+        )
+        template = server.mcp._resource_manager._templates["zim://{name}/entry/{path}"]
+
+        with pytest.raises(MCPError) as excinfo:
+            await template.create_resource(
+                f"zim://wiki/entry/{bad_path}",
+                {"name": "wiki", "path": bad_path},
+                context=ctx,
+            )
+
+        assert excinfo.value.error.code == INVALID_PARAMS
+        assert expected in excinfo.value.error.message.lower()
+
+    @pytest.mark.asyncio
     async def test_redirect_entry_is_resolved_before_get_item(
         self, server, ctx: Context, monkeypatch
     ):

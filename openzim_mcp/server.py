@@ -364,6 +364,12 @@ class OpenZimMcpServer:
             self.mcp._lowlevel_server._request_handlers.pop(
                 "subscriptions/listen", None
             )
+        else:
+            # Bound the one dimension the SDK's handler leaves open: the
+            # client-supplied URI set it holds for the stream's lifetime.
+            from .subscriptions import install_bounded_listen_handler
+
+            install_bounded_listen_handler(self.mcp, self.subscription_bus)
         self._register_tools()
 
         logger.info(
