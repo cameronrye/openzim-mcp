@@ -142,10 +142,11 @@ def decode_cursor_state(
     Returns ``(state, None)`` on success — ``state`` is the cursor's decoded
     ``s`` payload, or ``None`` when ``cursor`` is empty/absent (a fresh,
     unpaginated call). Returns ``(None, error)`` when the cursor is malformed,
-    carries an unsupported version, or was issued by a different tool. Callers
-    project the returned state into their data-layer call: ``s['o']`` is the
-    resume offset (browse page / links), ``s['scan_at']`` the walk resume id,
-    and ``s['ai']`` the archive identity to verify against.
+    carries an unsupported version, was issued by a different tool, or carries
+    no usable resume offset. Callers project the returned state into their
+    data-layer call: ``s['o']`` is the resume offset (browse page / links),
+    ``s['scan_at']`` the walk resume id, and ``s['ai']`` the archive identity
+    to verify against.
     """
     if cursor is None or not str(cursor).strip():
         return None, None
@@ -172,7 +173,50 @@ def decode_cursor_state(
             ),
             context=str(exc),
         )
-    return dict(payload["s"]), None
+    state = dict(payload["s"])
+    # ``Cursor.decode`` validates the envelope but not the contents of ``s``,
+    # and every consumer coerces a missing offset to 0 — so a rebuilt or
+    # field-dropped cursor was served as a fresh page 1 while the caller
+    # believed it had advanced. Reject it the way ``cursor_decode`` does for
+    # simple mode. Walk cursors name the position ``scan_at``.
+    offset = state.get("o", state.get("scan_at"))
+    if not isinstance(offset, int) or isinstance(offset, bool) or offset < 0:
+        return None, tool_error(
+            operation="cursor_decode",
+            message=(
+                "The `cursor` payload's `s.o` (offset) is missing or invalid. "
+                "Drop the `cursor` and call again with an explicit `offset` "
+                "(or no pagination arg)."
+            ),
+            context=f"expected_tool={expected_tool}",
+        )
+    return state, None
+
+
+def effective_limit(
+    limit: Optional[int], state: Optional[Dict[str, Any]], default: int
+) -> int:
+    """Resolve the page size for a call that may be resuming from a cursor.
+
+    An explicit ``limit`` always wins, so a caller can deliberately change
+    page size mid-run. Otherwise the size the cursor was issued under
+    (``s['l']``) is honoured: an opaque-cursor client replaying ``next_cursor``
+    without repeating ``limit`` would otherwise silently revert to the
+    wrapper's default, turning a deliberate two-row page into a hundred-row
+    one. Anything other than a positive int in ``s['l']`` — a hand-built
+    cursor can carry anything — falls back to ``default``.
+    """
+    if limit is not None:
+        return limit
+    if state is not None:
+        cursor_limit = state.get("l")
+        if (
+            isinstance(cursor_limit, int)
+            and not isinstance(cursor_limit, bool)
+            and cursor_limit >= 1
+        ):
+            return cursor_limit
+    return default
 
 
 def cursor_context_mismatch(

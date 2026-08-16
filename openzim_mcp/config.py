@@ -293,6 +293,22 @@ class QueryRewriteConfig(BaseModel):
         ),
     )
 
+    @field_validator("misspelling_map_path", "misspelling_exclusion_path")
+    @classmethod
+    def normalize_data_path(cls, v: Path | None) -> Path | None:
+        """Resolve a data-file override and reject one that isn't readable.
+
+        The rewrite loader reads these lazily on the first query, so a
+        typo'd path would otherwise surface as a mid-request failure (or,
+        before the override was honored at all, as silence).
+        """
+        if v is None:
+            return None
+        resolved = Path(v).expanduser().resolve()
+        if not resolved.is_file():
+            raise ValueError(f"query_rewrite data file not found: {resolved}")
+        return resolved
+
 
 class LoggingConfig(BaseModel):
     """Logging configuration."""

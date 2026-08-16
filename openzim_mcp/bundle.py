@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import logging
 import re
+from itertools import groupby
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, Optional, cast
 
@@ -109,8 +110,20 @@ def _loose_escaped_text(text: str) -> str:
     H1). Allowing an optional backslash before each character matches the
     escaped and unescaped forms alike. Used only by the relaxed fallback, so
     the larger pattern is paid only for headings the strict match missed.
+
+    A run of literal backslashes gets one bounded quantifier rather than a
+    per-character optional escape: the surrounding inline-markup class also
+    accepts backslashes, so per-character units let the engine split a run of
+    n backslashes 2**n ways and backtrack for hours before conceding a miss.
     """
-    return "".join(r"\\?" + re.escape(ch) for ch in text)
+    parts: list[str] = []
+    for is_backslash, group in groupby(text, key=lambda ch: ch == "\\"):
+        chars = "".join(group)
+        if is_backslash:
+            parts.append(rf"\\{{{len(chars)},{2 * len(chars)}}}")
+        else:
+            parts.append("".join(r"\\?" + re.escape(ch) for ch in chars))
+    return "".join(parts)
 
 
 def _resolve_entry_html(

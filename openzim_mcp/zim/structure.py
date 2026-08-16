@@ -750,15 +750,17 @@ class _StructureMixin:
             # heading start so the caller sees the child's lead prose
             # only — same shape as the requested narrow contract,
             # just bumped one level down.
-            heading_len = (
-                len(section.get("title", "")) + len("#" * section["level"]) + 4
-            )
-            # Only widen when the following section really is a child —
-            # a near-empty section followed by a same-level (or higher)
-            # sibling must keep its own narrow slice rather than return
-            # the sibling's heading and lead prose.
+            # The measured slice starts at ``char_start``, the section's
+            # BODY offset (``heading_start`` is the heading line), so the
+            # budget covers stray whitespace only and must not scale with
+            # the title's length — otherwise a long-titled section
+            # swallows a genuine lead paragraph. Only widen when the
+            # following section really is a child, too: a near-empty
+            # section followed by a same-level (or higher) sibling must
+            # keep its own narrow slice rather than return the sibling's
+            # heading and lead prose.
             if (
-                narrowed_end - section["char_start"] <= heading_len + 20
+                narrowed_end - section["char_start"] <= 20
                 and first_following_idx is not None
                 and sections[first_following_idx]["level"] > section["level"]
             ):

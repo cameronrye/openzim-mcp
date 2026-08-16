@@ -606,6 +606,13 @@ def _heading_visible_text(heading: Tag) -> str:
         return str(heading.get_text()).strip()
     parts: List[str] = []
     for s in heading.find_all(string=True):
+        # ``find_all(string=True)`` yields ``Comment`` nodes as well —
+        # the ``get_text()`` branch above drops them, and html2text never
+        # renders them, so keeping them here would make the heading text
+        # unmatchable against the rendered markdown. Same guard as
+        # ``_join_cell_text``.
+        if isinstance(s, Comment):
+            continue
         if any(id(parent) in unwanted_ids for parent in s.parents):
             continue
         parts.append(str(s))

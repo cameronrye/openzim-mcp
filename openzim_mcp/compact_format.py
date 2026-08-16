@@ -16,6 +16,7 @@ import logging
 import re
 from typing import Any, Dict, Optional
 
+from .content_processor import _strip_dangling_bold, _truncate_before_dangling_link
 from .exceptions import RegexTimeoutError
 from .intent_parser import safe_regex_sub
 
@@ -236,7 +237,14 @@ class _CompactFormatMixin:
             snippet = m.group(2)
             if len(snippet) <= max_chars:
                 return m.group(0)
-            return m.group(1) + snippet[:max_chars].rstrip() + "..."
+            # Same repairs ``create_snippet`` runs at its own cut sites:
+            # the cap can land inside a markdown link or inside a
+            # ``**bold**`` run (a query highlight, or a compact-mode
+            # infobox ``**Label:**`` line), leaving malformed markdown.
+            body = _strip_dangling_bold(
+                _truncate_before_dangling_link(snippet[:max_chars].rstrip())
+            )
+            return m.group(1) + body + "..."
 
         try:
             return safe_regex_sub(cls._SEARCH_SNIPPETS_RE, _trim, text)

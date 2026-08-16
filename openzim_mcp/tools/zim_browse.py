@@ -12,6 +12,7 @@ from ..responses import tool_error
 from ._common import (
     cursor_context_mismatch,
     decode_cursor_state,
+    effective_limit,
     enforce_rate_limit,
     load_description,
     tool_error_response,
@@ -106,7 +107,7 @@ def register(server: "OpenZimMcpServer") -> None:
                     eff_assets = cursor_assets
 
             if mode == "page":
-                eff_limit = limit if limit is not None else 50
+                eff_limit = effective_limit(limit, state, 50)
                 if state is not None:
                     return await ops.browse_namespace_data(
                         zim_file_path,
@@ -127,7 +128,7 @@ def register(server: "OpenZimMcpServer") -> None:
             # mode == "walk" — v2 walk takes the decoded cursor-state dict
             # directly (``scan_at`` resume id + limit), so callers never have
             # to round-trip through base64 themselves.
-            eff_limit = limit if limit is not None else 200
+            eff_limit = effective_limit(limit, state, 200)
             if state is not None:
                 # Walk cursors encode the resume entry id under the wire key
                 # ``o`` (see the walkers in zim/namespace.py), which

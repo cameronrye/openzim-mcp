@@ -148,6 +148,13 @@ class SimpleToolsHandler(
         """
         self.zim_operations = zim_operations
         self.intent_parser = IntentParser()
+        # Bind the Sub-D-2 rule-2 data files from config so an operator's
+        # curated misspelling map / exclusions list is actually loaded —
+        # pydantic accepted and stored both paths but nothing ever read them.
+        IntentParser.bind_data_paths(
+            zim_operations.config.query_rewrite.misspelling_map_path,
+            zim_operations.config.query_rewrite.misspelling_exclusion_path,
+        )
         # In-memory telemetry counters surface via ``get_server_health``.
         # Each branch in ``handle_zim_query`` that is interesting for
         # tuning the heuristics (meta-guidance, hallucinated paths, regex
@@ -373,7 +380,13 @@ class SimpleToolsHandler(
             ):
                 _v = params.get(_key)
                 if isinstance(_v, str) and _v:
-                    _v_clean = IntentParser._strip_trailing_politeness(_v).strip()
+                    # ``preserve_topic``: these fields ARE the operand, so a
+                    # value that is entirely a topic-shaped politeness word
+                    # (``tack``, ``cheers``) must survive — emptying it hands
+                    # the guards below a topic they then reject.
+                    _v_clean = IntentParser._strip_trailing_politeness(
+                        _v, preserve_topic=True
+                    ).strip()
                     if _v_clean != _v:
                         params[_key] = _v_clean
             # ``entries`` is a list of entry-path strings (from

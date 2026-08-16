@@ -224,6 +224,13 @@ def get_error_config(error: Exception) -> ErrorConfig | None:
     if isinstance(error, OpenZimMcpSecurityError):
         return ERROR_CONFIGS[OpenZimMcpSecurityError]
 
+    # Same ordering hazard: ``validate_zim_file``'s most common rejection is
+    # "File does not exist: <path>", which the "does not exist" pattern below
+    # would route to the entry-level not-found template — five steps telling
+    # the caller to browse and search inside an archive that was never opened.
+    if isinstance(error, OpenZimMcpArchivePathError):
+        return ERROR_CONFIGS[OpenZimMcpArchivePathError]
+
     # Specific failure modes detectable from the message take priority.
     if "entry not found" in message or "does not exist" in message:
         return NOT_FOUND_ERROR_CONFIG
