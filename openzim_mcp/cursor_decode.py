@@ -44,6 +44,11 @@ class CursorDecodeResult:
     tool: Optional[str] = None
     ep: Optional[str] = None
     k: Optional[str] = None
+    # The page size the cursor was issued under (``s.l``). ``None`` when the
+    # cursor carries none, or carries something that is not a positive int —
+    # in both cases the handler's own default wins. See the projection in
+    # ``decode_offset_cursor`` for why simple mode needs this at all.
+    limit: Optional[int] = None
 
 
 def decode_offset_cursor(
@@ -117,6 +122,26 @@ def decode_offset_cursor(
                 context=f"cursor={token[:64]}",
             )
         result = CursorDecodeResult(offset=decoded_offset)
+        # Project the page size the cursor was issued under.
+        #
+        # Every cursor this server mints encodes it as ``s.l``, and the
+        # ADVANCED arm honours it through ``tools/_common.effective_limit``.
+        # Simple mode did not, so a client replaying ``next_cursor`` — which
+        # is literally what the rendered footer instructs — silently got the
+        # handler's default page size instead of the one it asked for: a
+        # 3-row ``walk namespace`` page came back as 200 rows.
+        #
+        # Same validation as ``effective_limit``: a hand-built cursor can
+        # carry anything, and anything other than a positive int falls back to
+        # the handler default rather than erroring. ``bool`` is excluded
+        # because ``True`` is an ``int`` that would read as a 1-row page.
+        cursor_limit = state.get("l")
+        if (
+            isinstance(cursor_limit, int)
+            and not isinstance(cursor_limit, bool)
+            and cursor_limit >= 1
+        ):
+            result.limit = cursor_limit
         # P3-D7 (live-MCP sweep): stash the cursor's ``s.ns``
         # so namespace-bound handlers (``_handle_browse`` /
         # ``_handle_walk_namespace``) can reject mismatches.

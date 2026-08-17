@@ -24,6 +24,7 @@ from . import compact_renderers
 from .article_body import _ArticleBodyMixin
 from .chain_detection import _ChainMixin
 from .compact_format import _CompactFormatMixin
+from .constants import CANONICAL_TITLE_MATCH_SNIPPET
 from .cursor_decode import decode_offset_cursor
 from .disambiguation import _DisambiguationMixin
 from .exceptions import (
@@ -592,6 +593,14 @@ class SimpleToolsHandler(
                 options["_cursor_ep"] = cursor_result.ep
             if cursor_result.k:
                 options["_cursor_k"] = cursor_result.k
+            # Honour the page size the cursor was issued under, but only when
+            # the caller did not state one — the same precedence the advanced
+            # arm applies in ``tools/_common.effective_limit`` (explicit limit
+            # > cursor's ``l`` > handler default). Without this, replaying the
+            # ``next_cursor`` the footer advertises silently resized the page
+            # to whatever default the intent handler happens to carry.
+            if cursor_result.limit is not None and options.get("limit") is None:
+                options["limit"] = cursor_result.limit
         # Normalize hallucinated ``zim_file_path`` BEFORE branching to the
         # synthesize pipeline. Small models pass bare filenames
         # (``"wikipedia.zim"``) or article titles (``"Big Rapids,
@@ -2787,7 +2796,7 @@ class SimpleToolsHandler(
         synthetic = {
             "path": promoted_path,
             "title": promoted["title"],
-            "snippet": "(canonical title match)",
+            "snippet": CANONICAL_TITLE_MATCH_SNIPPET,
         }
         # The canonical row is an EXTRA, not a replacement for a ranked hit.
         #
@@ -3324,7 +3333,7 @@ class SimpleToolsHandler(
                     canonical_row: Dict[str, Any] = {
                         "path": canonical_path,
                         "title": canonical.get("title") or top_title,
-                        "snippet": "(canonical title match)",
+                        "snippet": CANONICAL_TITLE_MATCH_SNIPPET,
                     }
                     # ``SearchHit`` is a TypedDict; cast satisfies
                     # the type-checker since the synthetic row carries

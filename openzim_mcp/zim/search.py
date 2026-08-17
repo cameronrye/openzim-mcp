@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, cast
 from libzim.reader import Archive  # type: ignore[import-untyped]
 
 import openzim_mcp.zim_operations as _zim_ops_mod
+from openzim_mcp.constants import CANONICAL_TITLE_MATCH_SNIPPET
 from openzim_mcp.exceptions import (
     OpenZimMcpArchiveError,
     OpenZimMcpValidationError,
@@ -320,7 +321,7 @@ def _format_filtered_response(
         # ``_format_search_text`` so filtered-search results that pick
         # up the splice (post-a11 H2) use the same shape as plain search.
         snippet = result.get("snippet", "")
-        if snippet == "(canonical title match)":
+        if snippet == CANONICAL_TITLE_MATCH_SNIPPET:
             parts.append("Match type: canonical title match\n\n")
         else:
             parts.append(f"Snippet: {snippet}\n\n")
@@ -984,7 +985,7 @@ class _SearchMixin:
             # badge instead so callers don't pipe the sentinel into
             # downstream snippet processing.
             snippet = result.get("snippet", "")
-            if snippet == "(canonical title match)":
+            if snippet == CANONICAL_TITLE_MATCH_SNIPPET:
                 result_text += "Match type: canonical title match\n\n"
             else:
                 result_text += f"Snippet: {snippet}\n\n"
@@ -1246,7 +1247,7 @@ class _SearchMixin:
         synthetic_canonical: Dict[str, Any] = {
             "path": canonical_path,
             "title": canonical["title"],
-            "snippet": "(canonical title match)",
+            "snippet": CANONICAL_TITLE_MATCH_SNIPPET,
             # The renderer needs ``namespace`` / ``content_type`` so
             # derive them from the requested filter and the canonical
             # path's prefix. Defaults match the plain-search shape for

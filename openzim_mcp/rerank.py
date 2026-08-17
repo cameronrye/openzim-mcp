@@ -16,6 +16,8 @@ import that the reverse direction would create.
 import contextvars
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
+from .constants import CANONICAL_TITLE_MATCH_SNIPPET
+
 # Names this module deliberately exports to ``simple_tools`` (the reranker
 # telemetry contract + the mixin). Declaring it documents the cross-module
 # export the docstring describes and tells static analysis these module-level
@@ -150,23 +152,40 @@ class _RerankMixin:
             self._record_rerank_event(_RERANKER_SKIPPED_NO_RESULTS)
             return payload
 
-        if limit is not None and limit > 0:
-            # The caller's page size wins; rerank only REORDERS it. Applying
-            # ``final_top_k`` as a second cap here truncated ``results`` while
-            # ``page_info``/``next_cursor`` still described the full page, so
-            # the rendered footer advanced past the cut rows and they became
-            # permanently unreachable.
-            effective_top_k = limit
-        else:
-            # No caller limit: the page the backend already sized wins for
-            # the same reason — capping at ``final_top_k`` here reintroduced
-            # the exact desync the branch above fixed (results truncated
-            # below what page_info/next_cursor describe).
-            effective_top_k = len(candidates)
+        # Hold the canonical-splice row out of the comparison entirely.
+        #
+        # It does not come from the ranked stream — the title index put it
+        # there — and it carries no snippet, only the sentinel placeholder.
+        # ``BGEReranker.rerank`` scores ``snippet or path`` as the passage, so
+        # leaving it in hands the cross-encoder that placeholder as if it were
+        # article text. Against any real query it loses to every genuine hit
+        # (measured -5.5 vs +4.6 on the shipped corpus), so the row the splice
+        # exists to surface FIRST was sorted last and then cut off the page.
+        # Pinning keeps it where the splice deliberately placed it.
+        pinned = [
+            c for c in candidates if c.get("snippet") == CANONICAL_TITLE_MATCH_SNIPPET
+        ]
+        rerankable = [
+            c for c in candidates if c.get("snippet") != CANONICAL_TITLE_MATCH_SNIPPET
+        ]
+        if not rerankable:
+            self._record_rerank_event(_RERANKER_SKIPPED_NO_RESULTS)
+            return payload
+
+        # Rerank REORDERS the page; it is never a second cap. Sizing the cut
+        # from ``limit`` was safe only while ``len(candidates) == limit``. Since
+        # the canonical splice stopped trimming, a spliced page ships
+        # ``limit + 1`` rows, so a ``limit``-sized cut deleted one — restoring,
+        # one statement after the splice, the very unreachable-row defect that
+        # change removed (``page_info``/``next_cursor`` still describe the full
+        # page, so the rendered footer advances past the cut row). Size the cut
+        # from the list actually handed to us instead; ``limit`` is already
+        # honoured by whoever built the page.
+        effective_top_k = len(rerankable)
 
         reranked = reranker.rerank(
             query=query,
-            candidates=candidates,
+            candidates=rerankable,
             top_k=effective_top_k,
         )
         # BGEReranker.rerank's skip paths (the short-query gate and the
@@ -179,7 +198,7 @@ class _RerankMixin:
         if not (reranked and "rerank_score" in reranked[0]):
             self._record_rerank_event(_RERANKER_SKIPPED_PASSTHROUGH)
             return payload
-        payload = {**payload, results_key: reranked}
+        payload = {**payload, results_key: [*pinned, *reranked]}
         self._record_rerank_event(_RERANKER_ENGAGED)
         return payload
 
