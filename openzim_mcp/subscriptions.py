@@ -191,21 +191,39 @@ class MtimeWatcher:
         # delivers events by exact string match against the URIs the client
         # subscribed with.
         #
-        # BOTH spellings are published when they differ, because both READ:
-        # ``UriTemplate.match`` percent-decodes before matching, so a client
-        # that built ``zim://my archive`` from the ``zim://files`` listing gets
-        # a successful ``resources/read`` and will naturally subscribe with the
-        # same string. Publishing only the encoded form leaves that client
-        # subscribed to a URI nothing ever fires on — a silent stale read for
-        # the life of the stream, made worse by the hour-long resource TTL.
-        # Exact-string delivery means a client sees only the spelling it asked
-        # for, so the extra publish is a no-op for everyone else.
+        # EVERY spelling that READS must also NOTIFY, because a client
+        # subscribes with whatever string it successfully read from, and SDK
+        # delivery is exact-string (``event_matches`` does ``event.uri in
+        # uris``). A spelling that reads but never fires leaves that client on
+        # a URI nothing publishes to — silence on every replacement, made a
+        # stale-for-an-hour read by ``archive_read_ttl_ms``.
+        #
+        # Two independent axes make four spellings, all of which read:
+        #
+        # * ENCODING — ``UriTemplate.match`` percent-decodes before matching,
+        #   so ``zim://my archive`` reads, while a client expanding the
+        #   advertised ``zim://{name}`` template by RFC 6570 produces
+        #   ``zim://my%20archive``. ``quote(..., safe="")`` keeps the same
+        #   unreserved set the template expansion uses.
+        # * EXTENSION — ``_resolve_zim_name`` matches on ``Path(f["path"]).stem
+        #   == name OR f["name"] == name``, and ``f["name"]`` (what the
+        #   ``zim://files`` listing advertises) carries the ``.zim`` suffix. So
+        #   a client that builds its URI from that listing rather than from the
+        #   template description reads ``zim://wikipedia.zim`` just fine.
+        #
+        # Deduplicated, so an unreserved stem still publishes each URI exactly
+        # once. Exact-string delivery means a client sees only the spelling it
+        # asked for, so the extra publishes are a no-op for everyone else.
         for path in changed:
-            stem = Path(path).stem
-            encoded = quote(stem, safe="")
-            await self._on_change(f"zim://{encoded}", CHANGE_REPLACED)
-            if encoded != stem:
-                await self._on_change(f"zim://{stem}", CHANGE_REPLACED)
+            candidate = Path(path)
+            published: set[str] = set()
+            for spelling in (candidate.stem, candidate.name):
+                for form in (quote(spelling, safe=""), spelling):
+                    uri = f"zim://{form}"
+                    if uri in published:
+                        continue
+                    published.add(uri)
+                    await self._on_change(uri, CHANGE_REPLACED)
         self._snapshot = new_snap
 
     async def _loop(self) -> None:

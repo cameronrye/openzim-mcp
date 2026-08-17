@@ -575,6 +575,61 @@ def select_main_content(soup: BeautifulSoup) -> BeautifulSoup:
     return soup
 
 
+def _unwanted_descendant_ids(heading: Tag) -> set:
+    """Ids of ``UNWANTED_HTML_SELECTORS`` subtrees inside ``heading``.
+
+    Shared by :func:`_heading_visible_text` and :func:`_heading_line_text`
+    so both reason about the same excluded set — a heading's ``[edit]``
+    link must be invisible to the locator and to the display text alike.
+    """
+    unwanted_ids: set = set()
+    for selector in UNWANTED_HTML_SELECTORS:
+        try:
+            for el in heading.select(selector):
+                unwanted_ids.add(id(el))
+        except (SelectorSyntaxError, NotImplementedError) as exc:
+            # The only two failures soupsieve raises from ``select``: a
+            # malformed selector, and a pseudo-class the installed engine
+            # does not implement. One unusable selector must not cost the
+            # heading its whole cleanup, but a bare ``except Exception``
+            # would also swallow the diagnostic — a typo in
+            # UNWANTED_HTML_SELECTORS looks exactly like a selector that
+            # legitimately matched nothing.
+            logger.debug("heading cleanup skipped selector %r: %s", selector, exc)
+            continue
+    return unwanted_ids
+
+
+def _heading_line_text(heading: Tag) -> str:
+    """Visible heading text up to the first ``<br>``, or ``""`` if none.
+
+    html2text turns a ``<br>`` inside a heading into a real newline and
+    pushes everything after it onto the *following* markdown line, while
+    :func:`_heading_visible_text` concatenates the whole subtree into one
+    string. Every matcher in ``bundle._compute_section_offsets`` is
+    line-anchored (``^#+ ...$`` under ``re.MULTILINE``), so none of them
+    can bridge that break and the heading — with its entire section — was
+    dropped from the bundle.
+
+    Returning ``""`` for a heading with no ``<br>`` keeps this a strictly
+    additive fallback: callers use the full text as before and only reach
+    for this when the break is what defeated them.
+    """
+    if heading.find("br") is None:
+        return ""
+    unwanted_ids = _unwanted_descendant_ids(heading)
+    parts: List[str] = []
+    for node in heading.descendants:
+        if isinstance(node, Tag) and node.name == "br":
+            break
+        if not isinstance(node, NavigableString) or isinstance(node, Comment):
+            continue
+        if any(id(parent) in unwanted_ids for parent in node.parents):
+            continue
+        parts.append(str(node))
+    return "".join(parts).strip()
+
+
 def _heading_visible_text(heading: Tag) -> str:
     """Heading text as the rendered markdown will show it.
 
@@ -619,7 +674,9 @@ def _heading_visible_text(heading: Tag) -> str:
     return "".join(parts).strip()
 
 
-def _build_headings(soup: BeautifulSoup) -> List[Dict[str, Any]]:
+def _build_headings(
+    soup: BeautifulSoup, include_line_text: bool = False
+) -> List[Dict[str, Any]]:
     """Collect headings (h1-h6) in document order with disambiguated anchors.
 
     Iterating level-first would group all h1s before any h2 even when they
@@ -632,6 +689,13 @@ def _build_headings(soup: BeautifulSoup) -> List[Dict[str, Any]]:
     anchors unique. Mirror that. Explicit author-provided ids
     (``id_source != "slug"``) pass through untouched — disambiguating real
     anchors would silently break cross-page links.
+
+    ``include_line_text`` adds a ``line_text`` key carrying
+    :func:`_heading_line_text` for headings broken by a ``<br>``. It is
+    opt-in because this dict is also the wire payload of
+    ``zim_get(view="structure")`` — only ``bundle``, which has to *locate*
+    the heading in rendered markdown, needs the extra field, and the
+    client-facing shape must not change to serve it.
     """
     headings: List[Dict[str, Any]] = []
     slug_counts: Dict[str, int] = {}
@@ -647,15 +711,18 @@ def _build_headings(soup: BeautifulSoup) -> List[Dict[str, Any]]:
             slug_counts[anchor_id] = count
             if count > 1:
                 anchor_id = f"{anchor_id}_{count}"
-        headings.append(
-            {
-                "level": int(heading.name[1]),
-                "text": text,
-                "id": anchor_id,
-                "id_source": id_source,
-                "position": len(headings),
-            }
-        )
+        entry: Dict[str, Any] = {
+            "level": int(heading.name[1]),
+            "text": text,
+            "id": anchor_id,
+            "id_source": id_source,
+            "position": len(headings),
+        }
+        if include_line_text:
+            line_text = _heading_line_text(heading)
+            if line_text and line_text != text:
+                entry["line_text"] = line_text
+        headings.append(entry)
     return headings
 
 

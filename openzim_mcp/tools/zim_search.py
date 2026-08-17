@@ -471,6 +471,48 @@ async def _handle_title_mode(
     return _merge_promotion_into_title_results(raw, promoted, effective_limit)
 
 
+# ``_meta`` keys that describe the SOURCE rather than the rendered page, so
+# they survive a promotion rewrite. Everything else in the envelope — chars,
+# tokens_est, truncated — is a measurement of the payload and must be taken
+# again once ``results`` has been replaced.
+_PROMOTION_CARRIED_META_KEYS = (
+    "detected_type",
+    "detection_confidence",
+    "preset_applied",
+)
+
+
+def _refresh_promotion_meta(
+    out: dict, raw_meta: dict, *, carry_recovery_hints: bool
+) -> None:
+    """Re-measure ``out`` and restamp the envelope after a promotion rewrite.
+
+    ``attach_meta`` recomputes ``chars`` / ``tokens_est`` from the payload as
+    it now stands (sans ``_meta``), which is the whole point: the inherited
+    envelope was measured before ``results`` was replaced, so it described
+    bytes that never went on the wire. A caller sizing its context window
+    from ``tokens_est`` was under-reserving by more than 2x on the empty-page
+    branch, where a zero-row page with suggestions became a one-row hit.
+
+    ``carry_recovery_hints`` is False for the empty-page branch, where pass 3
+    established that a promoted canonical is a confident hit and must not
+    carry the zero-result ``reason`` / ``suggestions`` alongside the answer.
+    """
+    from ..meta import attach_meta
+
+    carried = {
+        key: raw_meta[key]
+        for key in _PROMOTION_CARRIED_META_KEYS
+        if raw_meta.get(key) is not None
+    }
+    if carry_recovery_hints:
+        for key in ("reason", "suggestions"):
+            if raw_meta.get(key) is not None:
+                carried[key] = raw_meta[key]
+    attach_meta(out, **carried)
+    out["_meta"]["promotion_applied"] = True
+
+
 def _merge_promotion_into_title_results(
     raw: dict, promoted: Optional[dict], limit: int = _TITLE_DEFAULT_LIMIT
 ) -> dict:
@@ -507,18 +549,20 @@ def _merge_promotion_into_title_results(
         page_info = out.get("page_info")
         if isinstance(page_info, dict):
             out["page_info"] = {**page_info, "returned_count": 1}
-        meta = {**raw.get("_meta", {}), "promotion_applied": True}
-        # The raw page's "0_hits" verdict is stale once promotion answered.
-        meta.pop("reason", None)
-        # So are its suggestions. ``_assemble_find_response`` fills
+        # The raw page's "0_hits" verdict is stale once promotion answered, and
+        # so are its suggestions. ``_assemble_find_response`` fills
         # ``suggestions`` only for the no-results and fuzzy-hit cases, and its
         # stated contract is that a confident hit carries none "so confident
         # matches aren't muddled by alt-spelling noise". Promotion produces
         # exactly such a hit — a canonical title-index match — so leaving the
         # zero-result recovery hints attached would hand the model "did you
         # mean X?" alongside the answer it asked for.
-        meta.pop("suggestions", None)
-        out["_meta"] = meta
+        #
+        # The size fields are stale too, and for the same reason: they measured
+        # an empty page. Re-measure rather than inherit.
+        _refresh_promotion_meta(
+            out, dict(raw.get("_meta", {}) or {}), carry_recovery_hints=False
+        )
         return out
     top = matches[0]
     top_path = top.get("entry_path") or top.get("path")
@@ -545,5 +589,12 @@ def _merge_promotion_into_title_results(
     page_info = out.get("page_info")
     if isinstance(page_info, dict):
         out["page_info"] = {**page_info, "returned_count": len(results)}
-    out["_meta"] = {**raw.get("_meta", {}), "promotion_applied": True}
+    # ``results`` was just rewritten (hoist + re-trim), so the inherited
+    # ``chars`` / ``tokens_est`` no longer describe what ships. Recovery hints
+    # are carried here — unlike the empty-page branch above, this page had real
+    # matches, so any ``suggestions`` came from the fuzzy-hit case and still
+    # describe the query rather than a zero-result recovery.
+    _refresh_promotion_meta(
+        out, dict(raw.get("_meta", {}) or {}), carry_recovery_hints=True
+    )
     return out

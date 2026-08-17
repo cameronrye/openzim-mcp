@@ -448,11 +448,35 @@ def build_starlette_app(server: "OpenZimMcpServer") -> Starlette:
     )
 
 
+# How long uvicorn waits for open connections to drain on SIGTERM/SIGINT
+# before force-closing them.
+#
+# Load-bearing, not tuning. uvicorn's default is ``None`` — wait forever —
+# and a ``subscriptions/listen`` stream never ends on its own: the SDK's SSE
+# loop emits keepalive pings until the *client* disconnects. So a single
+# subscribed client made this process unkillable by SIGTERM, and shutdown
+# never reached the ASGI lifespan — which is where ``lifespan_with_watcher``
+# stops the MtimeWatcher. ``docker stop`` burned its full grace period and
+# then SIGKILLed, and SIGKILL skips ``atexit``, discarding the cache
+# persistence save registered in ``OpenZimMcpCache.__init__``.
+#
+# Five seconds sits inside Docker's 10s default stop timeout (and any
+# sane Kubernetes ``terminationGracePeriodSeconds``), so termination is
+# clean rather than killed.
+SHUTDOWN_GRACE_SECONDS = 5
+
+
 def _default_uvicorn_runner(app: Starlette, host: str, port: int) -> None:
     """Run the given Starlette app under uvicorn (blocking)."""
     import uvicorn
 
-    config = uvicorn.Config(app, host=host, port=port, log_level="info")
+    config = uvicorn.Config(
+        app,
+        host=host,
+        port=port,
+        log_level="info",
+        timeout_graceful_shutdown=SHUTDOWN_GRACE_SECONDS,
+    )
     uvicorn.Server(config).run()
 
 

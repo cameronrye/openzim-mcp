@@ -354,9 +354,17 @@ async def test_watcher_publishes_one_event_for_an_unreserved_stem(
 ) -> None:
     """A stem needing no encoding must not be published twice.
 
-    The dual publish above is conditional on the two spellings differing. If it
-    were unconditional, every ordinary archive would deliver each replacement
-    twice to the same subscriber.
+    The multi-spelling publish is deduplicated. If it were not, every
+    ordinary archive would deliver each replacement twice to the same
+    subscriber, because the encoded and raw forms of an unreserved stem are
+    the same string.
+
+    Two events are still expected, not one: the stem and the ``.zim``
+    filename are *distinct* URIs that both read (``_resolve_zim_name``
+    accepts either, and the ``zim://files`` listing advertises the
+    filename), so both must notify. No subscriber sees both — delivery is
+    exact-string, so each client hears only the spelling it subscribed
+    with.
     """
     from openzim_mcp.subscriptions import MtimeWatcher
 
@@ -376,7 +384,12 @@ async def test_watcher_publishes_one_event_for_an_unreserved_stem(
     finally:
         await watcher.stop()
 
-    assert events == [("zim://wikipedia_en", "replaced")]
+    assert events == [
+        ("zim://wikipedia_en", "replaced"),
+        ("zim://wikipedia_en.zim", "replaced"),
+    ]
+    # The invariant this test exists for: no URI is published more than once.
+    assert len(events) == len(set(events))
 
 
 @pytest.mark.asyncio

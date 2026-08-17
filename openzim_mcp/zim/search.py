@@ -1021,7 +1021,19 @@ class _SearchMixin:
                 if next_cursor is None:
                     # Limited path that doesn't know the next-page boundary
                     # precisely; advance by what we actually returned.
-                    next_offset = offset + len(results)
+                    #
+                    # ``len(results)`` is the wrong count once the canonical
+                    # splice has prepended a synthetic row: that row came from
+                    # the title index, not the ranked stream, so counting it
+                    # here would advance one slot too far and skip a real hit.
+                    # ``source_consumed`` (set by
+                    # ``_splice_title_match_into_search``) is the ranked-row
+                    # count; absent on every unspliced payload, which then
+                    # falls back to the row count as before.
+                    consumed = page_info.get("source_consumed")
+                    if not isinstance(consumed, int) or isinstance(consumed, bool):
+                        consumed = len(results)
+                    next_offset = offset + consumed
             result_text += (
                 f"Showing {offset + 1}-{offset + len(results)} "
                 f"of {total_text} — "

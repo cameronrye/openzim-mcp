@@ -201,6 +201,14 @@ def _build_link_buckets(links_dict: Dict[str, Any]) -> LinkBuckets:
 _MD_LINK_RE = re.compile(r"!?\[([^\]]*)\]\([^)]*\)")
 
 
+# Emphasis-shaped underscore runs: those leading or trailing a word, which
+# is the only position html2text emits them in for ``<i>``/``<em>``. An
+# underscore *between* two alphanumerics (``snake_case``) is literal text and
+# must survive — a blanket ``replace("_", "")`` would make the two sides of
+# the comparison disagree for any heading whose text really carries one.
+_MD_EMPHASIS_UNDERSCORE_RE = re.compile(r"(?<![^\W_])_+|_+(?![^\W_])")
+
+
 def _strip_md_inline_decorations(line: str) -> str:
     """Reduce an html2text heading line to its visible text.
 
@@ -208,6 +216,16 @@ def _strip_md_inline_decorations(line: str) -> str:
     links), drops emphasis/code markers, unescapes backslash-escaped
     punctuation, and collapses whitespace — the same visible text
     ``_heading_visible_text`` produces from the soup side.
+
+    ``_`` is html2text's marker for ``<i>``/``<em>``, and dropping only
+    ``*``/backtick left it in: Wikipedia italicises the work title in the
+    H1 of every article about a film, book, album, or newspaper
+    (``<h1><i>2040</i> (film)</h1>`` renders as ``#  _2040_ (film)``), so
+    this comparison saw ``'_2040_ (film)'`` against ``'2040 (film)'``, the
+    locator missed, and the article's only heading — with its whole
+    section — was dropped from the bundle. Applied to both sides of the
+    comparison (see :func:`_match_decorated_heading_line`), so the
+    word-boundary rule cannot desynchronise them.
     """
     prev = None
     while prev != line:
@@ -215,6 +233,7 @@ def _strip_md_inline_decorations(line: str) -> str:
         line = _MD_LINK_RE.sub(r"\1", line)
     line = line.replace("*", "").replace("`", "")
     line = re.sub(r"\\(.)", r"\1", line)
+    line = _MD_EMPHASIS_UNDERSCORE_RE.sub("", line)
     return " ".join(line.split())
 
 
@@ -223,12 +242,61 @@ def _match_decorated_heading_line(
 ) -> Optional[re.Match]:
     """Last-resort heading locator: scan ``#`` lines of the right level and
     compare their link-stripped visible text against the heading text."""
-    wanted = " ".join(text.split())
+    # Normalise the soup side through the SAME reduction as the rendered
+    # side. Only then is the emphasis-underscore rule above symmetric: a
+    # heading whose text legitimately ends in ``_`` loses it on both sides
+    # and still matches, instead of matching on neither.
+    wanted = _strip_md_inline_decorations(text)
     line_re = re.compile(rf"^{'#' * level} (.+?)\s*$", re.MULTILINE)
     for m in line_re.finditer(rendered_markdown, cursor):
         if _strip_md_inline_decorations(m.group(1)) == wanted:
             return m
     return None
+
+
+def _locate_heading_text(
+    rendered_markdown: str, level: int, text: str, cursor: int
+) -> Optional[re.Match]:
+    """Run the strict → relaxed → decorated matcher cascade for one spelling.
+
+    Split out so a heading can be retried under a second spelling (see
+    ``line_text`` in :func:`_compute_section_offsets`) without duplicating
+    the cascade or reordering it.
+    """
+    # Strict pattern first; relaxed fallback covers html2text decorating
+    # the heading text with inline markup (italics, bold, code spans)
+    # that the soup-level get_text() stripped — without the fallback
+    # those sections are silently absent from the bundle and
+    # ``get_section`` returns "not found".
+    strict = re.compile(
+        rf"^{'#' * level} {re.escape(text)}\s*$",
+        re.MULTILINE,
+    )
+    match = strict.search(rendered_markdown, cursor)
+    if match is None:
+        # H17: the relaxed pattern previously read
+        # ``[^\n]*{re.escape(text)}[^\n]*$`` — a substring match that
+        # accidentally picked up a heading like ``## Notes and See also``
+        # when the bundle was probing for ``See also``. Constrain the
+        # prefix/suffix to inline-markup characters html2text actually
+        # emits (``*``, ``_``, ``` ` ```, backslashes, whitespace) so
+        # the relaxed branch only catches decorated-heading cases, not
+        # any heading containing the text anywhere.
+        # Inline markup (``**bold**`` etc.) is tolerated as a prefix/suffix
+        # wrapper; ``_loose_escaped_text`` additionally tolerates html2text's
+        # backslash-escaped interior punctuation (e.g. ``1\.`` for ``1.``).
+        _MD_INLINE = r"[ \t\*_`\\]*"
+        relaxed = re.compile(
+            rf"^{'#' * level} {_MD_INLINE}{_loose_escaped_text(text)}"
+            rf"{_MD_INLINE}\s*$",
+            re.MULTILINE,
+        )
+        match = relaxed.search(rendered_markdown, cursor)
+    if match is None:
+        # Inline links in the heading (``## [Linked](X) part``) carry
+        # brackets and a URL the relaxed character class can't cover.
+        match = _match_decorated_heading_line(rendered_markdown, level, text, cursor)
+    return match
 
 
 def _compute_section_offsets(
@@ -261,41 +329,19 @@ def _compute_section_offsets(
         id_source = h.get("id_source", "slug")
         if not text or not section_id:
             continue
-        # Strict pattern first; relaxed fallback covers html2text decorating
-        # the heading text with inline markup (italics, bold, code spans)
-        # that the soup-level get_text() stripped — without the fallback
-        # those sections are silently absent from the bundle and
-        # ``get_section`` returns "not found".
-        strict = re.compile(
-            rf"^{'#' * level} {re.escape(text)}\s*$",
-            re.MULTILINE,
-        )
-        match = strict.search(rendered_markdown, cursor)
+        match = _locate_heading_text(rendered_markdown, level, text, cursor)
         if match is None:
-            # H17: the relaxed pattern previously read
-            # ``[^\n]*{re.escape(text)}[^\n]*$`` — a substring match that
-            # accidentally picked up a heading like ``## Notes and See also``
-            # when the bundle was probing for ``See also``. Constrain the
-            # prefix/suffix to inline-markup characters html2text actually
-            # emits (``*``, ``_``, ``` ` ```, backslashes, whitespace) so
-            # the relaxed branch only catches decorated-heading cases, not
-            # any heading containing the text anywhere.
-            # Inline markup (``**bold**`` etc.) is tolerated as a prefix/suffix
-            # wrapper; ``_loose_escaped_text`` additionally tolerates html2text's
-            # backslash-escaped interior punctuation (e.g. ``1\.`` for ``1.``).
-            _MD_INLINE = r"[ \t\*_`\\]*"
-            relaxed = re.compile(
-                rf"^{'#' * level} {_MD_INLINE}{_loose_escaped_text(text)}"
-                rf"{_MD_INLINE}\s*$",
-                re.MULTILINE,
-            )
-            match = relaxed.search(rendered_markdown, cursor)
-        if match is None:
-            # Inline links in the heading (``## [Linked](X) part``) carry
-            # brackets and a URL the relaxed character class can't cover.
-            match = _match_decorated_heading_line(
-                rendered_markdown, level, text, cursor
-            )
+            # A ``<br>`` inside the heading becomes a real newline in the
+            # rendered markdown, so only the text BEFORE it stays on the
+            # heading line while ``text`` carries the whole subtree. Every
+            # matcher above is line-anchored and none can bridge that, so
+            # retry with the pre-break spelling ``_build_headings`` recorded
+            # (absent unless the heading actually contains a ``<br>``).
+            line_text = _normalize_heading_text(h.get("line_text", ""))
+            if line_text and line_text != text:
+                match = _locate_heading_text(
+                    rendered_markdown, level, line_text, cursor
+                )
         if match is None:
             logger.warning(
                 "Bundle: could not locate heading %r (level %d) in rendered markdown",
@@ -424,7 +470,7 @@ def extract_entry_bundle(
     # ``_extract_infobox`` decomposes the infobox, preserving the prior order
     # in which links were extracted ahead of infobox removal.
     content_root = select_main_content(soup)
-    headings = _build_headings(content_root)
+    headings = _build_headings(content_root, include_line_text=True)
     raw_links = content_processor.extract_html_links(str(content_root))
     link_buckets = _build_link_buckets(raw_links)
     infobox = _extract_infobox(content_root, content_processor)
