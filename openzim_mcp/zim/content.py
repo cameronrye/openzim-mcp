@@ -477,10 +477,21 @@ class _ContentMixin:
         # entirely, which is the whole point of caching here. The stat token
         # (mtime_ns:size) invalidates the entry when the archive is replaced
         # in place (archive_stat_token contract).
+        #
+        # ``v3`` because the stat token only covers the ARCHIVE changing, not
+        # this server changing what it renders from an unchanged archive.
+        # 3.0.0 does exactly that — the empty ``M/<key>`` fallback, the
+        # boundary-whitespace fix and ``_meta.more_at_offset`` all alter the
+        # cached value — so an operator upgrading with
+        # ``persistence_enabled`` would have kept being served the 2.7.0
+        # rendering until the TTL expired, with every fix inert on precisely
+        # the entries it was written for. Same rule the bundle and
+        # browse-namespace prefixes already follow. Both ``entry:`` keys must
+        # stay byte-identical; see the sibling in ``_get_zim_entry_from_archive``.
         from openzim_mcp.bundle import archive_stat_token
 
         cache_key = (
-            f"entry:{validated_path}:{archive_stat_token(validated_path)}:"
+            f"entry:v3:{validated_path}:{archive_stat_token(validated_path)}:"
             f"{entry_path}:{max_content_length}:{content_offset}:compact={compact}"
         )
         cached_result = self.cache.get(cache_key)
@@ -539,7 +550,7 @@ class _ContentMixin:
         from openzim_mcp.bundle import archive_stat_token
 
         cache_key = (
-            f"entry:{validated_path}:{archive_stat_token(validated_path)}:"
+            f"entry:v3:{validated_path}:{archive_stat_token(validated_path)}:"
             f"{entry_path}:{max_content_length}:{content_offset}:compact={compact}"
         )
         cached_result = self.cache.get(cache_key)

@@ -53,7 +53,12 @@ logger = logging.getLogger(__name__)
 # was written for. Same reasoning as the v2c bump above; the rule is that a
 # change to what a bundle CONTAINS needs a new prefix, not just a change to
 # its shape.
-_BUNDLE_KEY_PREFIX = "bundle:v2e"
+# v2e -> v2f: the eighth pass fixed two more ways a real heading failed to be
+# located — inline markup abutting the text beside it, and a link to a
+# parenthetically-disambiguated article — so affected articles gain sections
+# they previously lacked. Same rule as the bumps above: a change to what a
+# bundle CONTAINS needs a new prefix.
+_BUNDLE_KEY_PREFIX = "bundle:v2f"
 
 
 def archive_stat_token(validated_path: Any) -> str:
@@ -211,7 +216,18 @@ def _build_link_buckets(links_dict: Dict[str, Any]) -> LinkBuckets:
 # (``## [Linked](X) part``). The relaxed character-class pattern in
 # ``_compute_section_offsets`` can't tolerate the brackets/URL, so headings
 # containing an inline link were dropped from the bundle entirely.
-_MD_LINK_RE = re.compile(r"!?\[([^\]]*)\]\([^)]*\)")
+# ``(?:[^()\n\\]|\\.)*`` rather than ``[^)]*``: html2text backslash-escapes
+# parens inside a link target, so a heading linking to a
+# parenthetically-disambiguated article — ``Mercury_\(mythology\)``, which is
+# most disambiguated Wikipedia titles — stopped the old pattern at the first
+# ``)`` and left ``Mercury (mythology) "Mercury (mythology)")`` behind. That
+# never matches the soup-side visible text, so the heading was dropped, its
+# section vanished from the bundle, and the PRECEDING section's slice ran on
+# through it and swallowed its body. Each character belongs to exactly one
+# branch, so the alternation is ReDoS-safe — the same form
+# ``compact_format._MARKDOWN_LINK_RE`` already adopted for the CodeQL
+# ``py/redos`` finding.
+_MD_LINK_RE = re.compile(r"!?\[([^\]]*)\]\((?:[^()\n\\]|\\.)*\)")
 
 
 # Emphasis-shaped underscore runs: those leading or trailing a word, which

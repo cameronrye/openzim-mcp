@@ -755,7 +755,7 @@ class _NamespaceMixin:
         from openzim_mcp.bundle import archive_stat_token
 
         cache_key = (
-            f"browse_ns_data:v2d:{validated_path}:"
+            f"browse_ns_data:v2e:{validated_path}:"
             f"{archive_stat_token(validated_path)}:{namespace}:"
             f"{limit}:{offset}:assets={include_assets}"
         )

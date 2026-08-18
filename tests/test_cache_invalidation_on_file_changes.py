@@ -140,8 +140,8 @@ _CONTENT_CACHE_CASES = [
     (
         "browse_ns_data",
         lambda zo, p: zo.browse_namespace_data(p, "A", 50, 0),
-        lambda vp: f"browse_ns_data:v2d:{vp}:A:50:0:assets=False",
-        lambda vp, tok: f"browse_ns_data:v2d:{vp}:{tok}:A:50:0:assets=False",
+        lambda vp: f"browse_ns_data:v2e:{vp}:A:50:0:assets=False",
+        lambda vp, tok: f"browse_ns_data:v2e:{vp}:{tok}:A:50:0:assets=False",
     ),
     (
         # An explicit limit is passed so the key is not affected by the
@@ -174,8 +174,8 @@ _CONTENT_CACHE_CASES = [
         # the key clear of the ``None -> default`` resolution.
         "entry",
         lambda zo, p: zo.get_zim_entry(p, "A/Test", 1000, 0),
-        lambda vp: f"entry:{vp}:A/Test:1000:0:compact=False",
-        lambda vp, tok: f"entry:{vp}:{tok}:A/Test:1000:0:compact=False",
+        lambda vp: f"entry:v3:{vp}:A/Test:1000:0:compact=False",
+        lambda vp, tok: f"entry:v3:{vp}:{tok}:A/Test:1000:0:compact=False",
     ),
     (
         "entry_data",

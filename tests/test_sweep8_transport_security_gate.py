@@ -16,6 +16,7 @@ other middlewares stops anything.
 from __future__ import annotations
 
 import gc
+from pathlib import Path
 from typing import Any, List
 
 import httpx
@@ -26,12 +27,10 @@ from openzim_mcp import http_app
 from openzim_mcp.config import OpenZimMcpConfig
 from openzim_mcp.server import OpenZimMcpServer
 
-_ALLOWED = "test_data/zim-testing-suite/withns"
 
-
-def _build_app(**overrides: Any):
+def _build_app(allowed: str, **overrides: Any):
     cfg = OpenZimMcpConfig(
-        allowed_directories=[_ALLOWED],
+        allowed_directories=[allowed],
         transport="http",
         host="127.0.0.1",
         port=8791,
@@ -52,8 +51,8 @@ def _session_manager() -> StreamableHTTPSessionManager:
 
 
 @pytest.mark.asyncio
-async def test_rejected_origin_allocates_no_session() -> None:
-    _server, app = _build_app()
+async def test_rejected_origin_allocates_no_session(tmp_path: Path) -> None:
+    _server, app = _build_app(str(tmp_path))
     manager = _session_manager()
 
     transport = httpx.ASGITransport(app=app)
@@ -80,9 +79,9 @@ async def test_rejected_origin_allocates_no_session() -> None:
 
 
 @pytest.mark.asyncio
-async def test_health_endpoints_stay_reachable() -> None:
+async def test_health_endpoints_stay_reachable(tmp_path: Path) -> None:
     """The gate must not shadow the probes the deployment guide documents."""
-    _server, app = _build_app()
+    _server, app = _build_app(str(tmp_path))
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(
         transport=transport, base_url="http://127.0.0.1:8791"
