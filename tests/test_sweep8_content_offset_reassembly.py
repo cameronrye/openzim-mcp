@@ -11,6 +11,7 @@ together — "word00001word00002" — with no indication anything was lost.
 from __future__ import annotations
 
 import re
+from pathlib import Path
 
 import pytest
 
@@ -22,8 +23,10 @@ _NEXT_OFFSET = re.compile(r"content_offset=(\d+)")
 
 
 @pytest.fixture
-def processor() -> ContentProcessor:
-    return ContentProcessor(OpenZimMcpConfig(allowed_directories=["/tmp"]))
+def processor(tmp_path: Path) -> ContentProcessor:
+    # A real directory, not a "/tmp" literal: on Windows that resolves to
+    # "D:\tmp", which does not exist, and config validation rejects it.
+    return ContentProcessor(OpenZimMcpConfig(allowed_directories=[str(tmp_path)]))
 
 
 def _page_through(processor: ContentProcessor, body: str, page: int) -> str:
@@ -135,7 +138,9 @@ class TestMetadataEntryPaginationOffset:
     and the two fields disagreed with each other.
     """
 
-    def test_content_chars_matches_the_shared_slice_length(self) -> None:
+    def test_content_chars_matches_the_shared_slice_length(
+        self, tmp_path: Path
+    ) -> None:
         from unittest.mock import MagicMock
 
         from openzim_mcp.content_processor import ContentProcessor, paged_slice_length
@@ -147,7 +152,7 @@ class TestMetadataEntryPaginationOffset:
         class _Stub(_ContentMixin):
             def __init__(self) -> None:
                 self.content_processor = ContentProcessor(
-                    OpenZimMcpConfig(allowed_directories=["/tmp"])
+                    OpenZimMcpConfig(allowed_directories=[str(tmp_path)])
                 )
 
         stub = _Stub()
