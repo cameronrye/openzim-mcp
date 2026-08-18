@@ -40,7 +40,20 @@ logger = logging.getLogger(__name__)
 # v2d: SectionMeta grew ``heading_start`` — cached v2c bundles lack the
 # field, so the narrow-slice fix would silently keep serving the child
 # heading until TTL expiry without the key bump.
-_BUNDLE_KEY_PREFIX = "bundle:v2d"
+#
+# v2e: the heading LOCATOR changed, so the same entry now yields sections a
+# v2d bundle does not contain — an H1 whose title html2text italicises
+# (``#  _2040_ (film)``) and a heading split across two lines by a ``<br>``
+# were both dropped before. Nothing else in the key encodes the extractor's
+# behaviour: it is keyed on the archive path, mtime, size, entry and render
+# mode, all unchanged by a code fix. So without this bump an operator running
+# with ``persistence_enabled`` restores a snapshot written by the previous
+# release and keeps getting ``heading_count: 0`` for every affected article
+# until the TTL expires — the fix silently inert on exactly the entries it
+# was written for. Same reasoning as the v2c bump above; the rule is that a
+# change to what a bundle CONTAINS needs a new prefix, not just a change to
+# its shape.
+_BUNDLE_KEY_PREFIX = "bundle:v2e"
 
 
 def archive_stat_token(validated_path: Any) -> str:
