@@ -1465,7 +1465,20 @@ class ContentProcessor:
         if not content or len(content) <= max_length:
             return content
 
-        truncated = content[:max_length].strip()
+        # Strip the trailing whitespace for presentation but hand it to the
+        # NEXT page rather than deleting it: ``next_offset`` below advances by
+        # what was actually emitted, not by ``max_length``. Stripping both ends
+        # while advancing the full page size dropped one run of whitespace at
+        # every page boundary, so a caller following the footer's own
+        # ``content_offset`` instruction and concatenating the pages got the
+        # words on either side fused together.
+        #
+        # Leading whitespace is still trimmed at the top of the article, where
+        # there is no preceding page for it to belong to; on later pages it is
+        # exactly the boundary whitespace the previous page deferred.
+        raw = content[:max_length]
+        lead = len(raw) - len(raw.lstrip()) if current_offset == 0 else 0
+        truncated = raw[lead:].rstrip()
         # A11 post-a11 M4: prefer the caller-supplied pre-slice length;
         # fall back to a computed approximation that still beats the
         # previous "len(post-slice content)" bug. Either way the
@@ -1484,7 +1497,7 @@ class ContentProcessor:
         # (A1) so the hint is actionable. ``current_offset`` lets
         # paginated reads compute the next offset relative to where
         # this slice STARTED in the original article.
-        next_offset = current_offset + max_length
+        next_offset = current_offset + lead + len(truncated)
 
         if paginatable:
             # NO thousands separator here: unlike the human-readable counts
