@@ -607,6 +607,11 @@ async def test_tick_publishes_a_filename_that_is_not_valid_utf8(
     replaced = [uri for uri, kind in events if kind == CHANGE_REPLACED]
     assert "zim://wiki%FF" in replaced, replaced
     assert "zim://wiki%FF.zim" in replaced, replaced
+    # Only wire-representable spellings go out: a URI carrying the lone
+    # surrogate cannot be JSON-encoded, so publishing it would move the crash
+    # onto the subscriber's notification stream.
+    for uri in replaced:
+        uri.encode("utf-8")
 
 
 @pytest.mark.asyncio
@@ -728,8 +733,37 @@ async def test_removed_path_memory_is_bounded(tmp_path: Path) -> None:
     await watcher._tick()
 
     assert len(watcher._removed_paths) == _MAX_REMEMBERED_REMOVALS
-    # Oldest evicted first, so the most recent removals are the ones kept.
-    assert f"/w/{overshoot - 1}.zim" in watcher._removed_paths
+
+
+@pytest.mark.asyncio
+async def test_a_later_removal_evicts_an_earlier_one(tmp_path: Path) -> None:
+    """Eviction is oldest-first, so the newest removal always survives.
+
+    The recency guarantee is between passes, not within one: a single tick
+    diffs a *set* of removed paths whose iteration order is arbitrary, so
+    which of them survives a full memory is not something to assert on.
+    """
+    from openzim_mcp.subscriptions import _MAX_REMEMBERED_REMOVALS, MtimeWatcher
+
+    async def emit(uri: str, change_type: str) -> None:
+        pass
+
+    watcher = MtimeWatcher([str(tmp_path)], interval=100, on_change=emit)
+    # Pass one fills the memory to capacity exactly.
+    watcher._snapshot = {
+        f"/w/{i}.zim": (1.0, 1) for i in range(_MAX_REMEMBERED_REMOVALS)
+    }
+    watcher._scan = lambda: {}  # type: ignore[method-assign]
+    await watcher._tick()
+    assert len(watcher._removed_paths) == _MAX_REMEMBERED_REMOVALS
+
+    # Pass two removes one more; it must displace an older entry, not bounce.
+    latecomer = "/w/latecomer.zim"
+    watcher._snapshot = {latecomer: (1.0, 1)}
+    await watcher._tick()
+
+    assert latecomer in watcher._removed_paths
+    assert len(watcher._removed_paths) == _MAX_REMEMBERED_REMOVALS
 
 
 @pytest.mark.asyncio

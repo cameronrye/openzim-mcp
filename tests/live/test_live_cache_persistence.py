@@ -18,7 +18,7 @@ import signal
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 import pytest
 
@@ -247,18 +247,19 @@ def test_sigterm_persists_the_cache(zim_dir: Path, tmp_path: Path) -> None:
         _recv_until(proc, 7)
 
         proc.send_signal(signal.SIGTERM)
+        returncode: Optional[int] = None
         try:
             returncode = proc.wait(timeout=15)
         except subprocess.TimeoutExpired:  # pragma: no cover
             proc.kill()
             proc.wait()
-            pytest.fail("SIGTERM did not stop the server within 15s")
     finally:
         for stream in (proc.stdin, proc.stdout, proc.stderr):
             if stream is not None:
                 with contextlib.suppress(Exception):
                     stream.close()
 
+    assert returncode is not None, "SIGTERM did not stop the server within 15s"
     assert returncode == 128 + int(
         signal.SIGTERM
     ), f"expected a normal exit reporting the signal, got {returncode}"

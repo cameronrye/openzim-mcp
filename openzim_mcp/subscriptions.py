@@ -113,7 +113,20 @@ def _uri_spellings(path: str) -> list[str]:
     candidate = Path(path)
     spellings: list[str] = []
     for spelling in (candidate.stem, candidate.name):
-        for form in (quote(spelling, safe="", errors="surrogateescape"), spelling):
+        forms = [quote(spelling, safe="", errors="surrogateescape")]
+        # The unencoded spelling only goes out if it can survive JSON
+        # serialization. The percent-encoded form always can; the raw form of
+        # a name the filesystem stores as non-UTF-8 carries lone surrogates,
+        # and encoding those raises — which would move the same crash from
+        # this watcher onto the notification path, where it takes the
+        # subscriber's stream down instead of the poller.
+        try:
+            spelling.encode("utf-8")
+        except UnicodeEncodeError:
+            pass
+        else:
+            forms.append(spelling)
+        for form in forms:
             uri = f"zim://{form}"
             if uri not in spellings:
                 spellings.append(uri)

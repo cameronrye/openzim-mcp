@@ -78,7 +78,9 @@ def _article_namespace(proc: Any, zim: Path) -> str:
         )
         if page.get("results"):
             return namespace
-    pytest.skip("Archive exposes no article namespace (tried A and C)")
+    # ``return`` on a ``NoReturn`` call: ``pytest.skip`` raises, but spelling
+    # the exit explicitly keeps every path of this function an explicit return.
+    return pytest.skip("Archive exposes no article namespace (tried A and C)")
 
 
 def _discover_article_paths(proc: Any, zim: Path, limit: int = 25) -> List[str]:
@@ -124,7 +126,7 @@ def _article_with_sections(proc: Any, zim: Path) -> tuple[str, str]:
         for heading in toc.get("toc") or []:
             if isinstance(heading, dict) and heading.get("section_id"):
                 return entry_path, heading["section_id"]
-    pytest.skip("No article with a discoverable section in this archive")
+    return pytest.skip("No article with a discoverable section in this archive")
 
 
 # ---------------------------------------------------------------------------
