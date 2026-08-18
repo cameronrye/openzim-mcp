@@ -28,6 +28,7 @@ from typing import (
 from libzim.reader import Archive  # type: ignore[import-untyped]
 
 import openzim_mcp.zim_operations as _zim_ops_mod
+from openzim_mcp.content_processor import paged_slice_length
 from openzim_mcp.exceptions import (
     OpenZimMcpArchiveError,
     OpenZimMcpValidationError,
@@ -940,7 +941,7 @@ class _ContentMixin:
         # overshooting by the note length. When not truncated the whole
         # post-offset body is served, so the slice length is ``len(content)``
         # and no continuation offset is emitted anyway.
-        content_chars = max_content_length if was_truncated else len(content)
+        content_chars = paged_slice_length(content, max_content_length, content_offset)
         content = truncated_content
 
         payload: Dict[str, Any] = {
@@ -1335,7 +1336,7 @@ class _ContentMixin:
         # See the note at the sibling site above: the appended truncation note
         # makes a length comparison unreliable, so key on the cap instead.
         was_truncated = len(content) > max_content_length
-        content_chars = max_content_length if was_truncated else len(content)
+        content_chars = paged_slice_length(content, max_content_length, content_offset)
 
         payload["content"] = truncated_content
         if mime:

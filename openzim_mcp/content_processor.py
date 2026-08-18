@@ -858,6 +858,26 @@ def _build_sections(soup: BeautifulSoup) -> List[Dict[str, Union[str, int]]]:
     return sections
 
 
+def paged_slice_length(content: str, max_length: int, current_offset: int = 0) -> int:
+    """Characters of ``content`` that one page consumes.
+
+    The single definition of how far a page advances, so the human-readable
+    ``content_offset=N`` hint in the body and the machine-readable
+    ``_meta.more_at_offset`` cannot drift apart — they did, and the copy that
+    drifted silently glued the words on either side of a page boundary
+    together. Both are derived from this.
+
+    Trailing whitespace is emitted by neither page but consumed by neither
+    either: it belongs to the next one. Leading whitespace is consumed only at
+    the very top of the article, where no preceding page can own it.
+    """
+    if not content or len(content) <= max_length:
+        return len(content)
+    raw = content[:max_length]
+    lead = len(raw) - len(raw.lstrip()) if current_offset == 0 else 0
+    return lead + len(raw[lead:].rstrip())
+
+
 class ContentProcessor:
     """Handles HTML to text conversion and content processing."""
 
@@ -1479,6 +1499,7 @@ class ContentProcessor:
         raw = content[:max_length]
         lead = len(raw) - len(raw.lstrip()) if current_offset == 0 else 0
         truncated = raw[lead:].rstrip()
+        consumed = paged_slice_length(content, max_length, current_offset)
         # A11 post-a11 M4: prefer the caller-supplied pre-slice length;
         # fall back to a computed approximation that still beats the
         # previous "len(post-slice content)" bug. Either way the
@@ -1497,7 +1518,7 @@ class ContentProcessor:
         # (A1) so the hint is actionable. ``current_offset`` lets
         # paginated reads compute the next offset relative to where
         # this slice STARTED in the original article.
-        next_offset = current_offset + lead + len(truncated)
+        next_offset = current_offset + consumed
 
         if paginatable:
             # NO thousands separator here: unlike the human-readable counts

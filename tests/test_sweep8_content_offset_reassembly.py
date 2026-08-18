@@ -72,3 +72,95 @@ def test_leading_whitespace_is_trimmed_once_at_the_top(
     at offset 0 costs no interior character."""
     body = "   " + " ".join(f"word{i:05d}" for i in range(30))
     assert _page_through(processor, body, 25) == body.lstrip()
+
+
+class TestMachineReadableOffsetAgrees:
+    """``_meta.more_at_offset`` must advance exactly as the body hint does.
+
+    The two were computed independently — the body hint inside
+    ``truncate_content`` and ``_content_chars`` in ``zim/content.py`` — so
+    fixing one left the other gluing words together at every boundary, and a
+    client following the structured field got different text from one
+    following the prose. Both now derive from ``paged_slice_length``.
+    """
+
+    def test_slice_length_matches_the_body_hint(
+        self, processor: ContentProcessor
+    ) -> None:
+        from openzim_mcp.content_processor import paged_slice_length
+
+        body = " ".join(f"word{i:05d}" for i in range(40))
+        page = 20
+        offset = 0
+        while True:
+            rendered = processor.truncate_content(
+                body[offset:],
+                page,
+                current_offset=offset,
+                paginatable=True,
+                original_total=len(body),
+            )
+            hint = _NEXT_OFFSET.search(rendered)
+            if not hint:
+                break
+            expected = offset + paged_slice_length(body[offset:], page, offset)
+            assert int(hint.group(1)) == expected
+            offset = expected
+
+    def test_untruncated_body_consumes_everything(
+        self, processor: ContentProcessor
+    ) -> None:
+        from openzim_mcp.content_processor import paged_slice_length
+
+        body = "short body"
+        assert paged_slice_length(body, 1000, 0) == len(body)
+        assert paged_slice_length("", 1000, 0) == 0
+
+    def test_trailing_whitespace_is_deferred_not_consumed(self) -> None:
+        from openzim_mcp.content_processor import paged_slice_length
+
+        # The page ends mid-gap; the gap belongs to the next page.
+        assert paged_slice_length("aa   bb", 4, 10) == 2
+        # At the top of the article, leading whitespace is consumed.
+        assert paged_slice_length("  aabb", 4, 0) == 4
+
+
+class TestMetadataEntryPaginationOffset:
+    """The payload builders must publish the same advance the body hint uses.
+
+    ``_content_chars`` becomes ``_meta.more_at_offset``, which is what a
+    programmatic client pages by. It was computed as the raw page size while
+    the body hint had been corrected to the stripped one, so the structured
+    field still skipped the boundary whitespace and glued words together —
+    and the two fields disagreed with each other.
+    """
+
+    def test_content_chars_matches_the_shared_slice_length(self) -> None:
+        from unittest.mock import MagicMock
+
+        from openzim_mcp.content_processor import ContentProcessor, paged_slice_length
+        from openzim_mcp.zim.content import _ContentMixin
+
+        body = " ".join(f"word{i:05d}" for i in range(40))
+        page = 20
+
+        class _Stub(_ContentMixin):
+            def __init__(self) -> None:
+                self.content_processor = ContentProcessor(
+                    OpenZimMcpConfig(allowed_directories=["/tmp"])
+                )
+
+        stub = _Stub()
+        archive = MagicMock()
+        item = MagicMock()
+        item.content = body.encode()
+        item.mimetype = "text/plain"
+        archive.get_metadata_item.return_value = item
+
+        payload, ok = stub._get_metadata_entry_data(archive, "M/Description", page, 0)
+
+        assert ok
+        assert payload["_content_chars"] == paged_slice_length(body, page, 0)
+        # The boundary lands on a space, so the raw page size is the wrong
+        # answer and must not be what ships.
+        assert payload["_content_chars"] != page
