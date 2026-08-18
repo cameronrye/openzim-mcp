@@ -5,6 +5,7 @@ from __future__ import annotations
 import pathlib
 from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple
 
+from ..constants import MAX_SEARCH_RESULT_LIMIT
 from ..responses import ToolErrorPayload, tool_error
 from ..security import sanitize_context_for_error
 
@@ -204,7 +205,11 @@ def effective_limit(
     without repeating ``limit`` would otherwise silently revert to the
     wrapper's default, turning a deliberate two-row page into a hundred-row
     one. Anything other than a positive int in ``s['l']`` — a hand-built
-    cursor can carry anything — falls back to ``default``.
+    cursor can carry anything — falls back to ``default``, and so does
+    anything larger than the largest page the server will ever mint. The
+    per-tool cap is only checked against an *explicit* limit, so without an
+    upper bound here a request carrying nothing but a forged cursor could name
+    any page size it liked.
     """
     if limit is not None:
         return limit
@@ -213,7 +218,7 @@ def effective_limit(
         if (
             isinstance(cursor_limit, int)
             and not isinstance(cursor_limit, bool)
-            and cursor_limit >= 1
+            and 1 <= cursor_limit <= MAX_SEARCH_RESULT_LIMIT
         ):
             return cursor_limit
     return default

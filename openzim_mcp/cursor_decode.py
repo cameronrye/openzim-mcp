@@ -24,6 +24,7 @@ import logging
 from dataclasses import dataclass
 from typing import AbstractSet, Optional, Union
 
+from .constants import MAX_SEARCH_RESULT_LIMIT
 from .responses import ToolErrorPayload, tool_error
 from .text_utils import tokenize_for_relevance
 
@@ -135,11 +136,21 @@ def decode_offset_cursor(
         # carry anything, and anything other than a positive int falls back to
         # the handler default rather than erroring. ``bool`` is excluded
         # because ``True`` is an ``int`` that would read as a 1-row page.
+        #
+        # The upper bound matters as much as the lower one. Every tool checks
+        # an explicit ``limit`` against its cap, but that check only runs when
+        # the caller passes one — a request carrying nothing but a cursor
+        # skipped it, and ``search_zim_file_data`` has no range check of its
+        # own, so ``min(limit, total_results - offset)`` became the entire
+        # match set. Cursors are unsigned base64 JSON, so one forged request
+        # could ask a full Wikipedia archive for millions of rows, each an
+        # archive lookup plus a snippet render. The server never mints a page
+        # larger than this cap, so nothing legitimate is turned away.
         cursor_limit = state.get("l")
         if (
             isinstance(cursor_limit, int)
             and not isinstance(cursor_limit, bool)
-            and cursor_limit >= 1
+            and 1 <= cursor_limit <= MAX_SEARCH_RESULT_LIMIT
         ):
             result.limit = cursor_limit
         # P3-D7 (live-MCP sweep): stash the cursor's ``s.ns``
