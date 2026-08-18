@@ -167,12 +167,15 @@ class MtimeWatcher:
         # change-detection comment in ``_tick`` for the false-positive vs.
         # false-negative trade-off.
         self._snapshot: dict[str, tuple[float, int]] = {}
-        # Paths seen removed on an earlier pass, newest last. Replacing a
-        # large archive is ``rm`` then a copy that runs for minutes, so the
-        # file is absent across many polls and comes back as an *add* rather
-        # than a change — see ``_tick``. Bounded because a path removed and
-        # never restored would otherwise sit here for the process lifetime.
-        self._removed_paths: OrderedDict[str, None] = OrderedDict()
+        # Paths seen removed on an earlier pass, newest last, each carrying the
+        # ``(mtime, size)`` it last had. Replacing a large archive is ``rm``
+        # then a copy that runs for minutes, so the file is absent across many
+        # polls and comes back as an *add* rather than a change — see
+        # ``_tick``. The stored stat is what tells a real replacement from a
+        # file that merely went away and came back identical. Bounded because a
+        # path removed and never restored would otherwise sit here for the
+        # process lifetime.
+        self._removed_paths: OrderedDict[str, tuple[float, int]] = OrderedDict()
         # Whether the most recent ``_scan`` walked every directory. A scan
         # that lost one to an OSError returns a snapshot indistinguishable
         # from a mass deletion; see ``_tick``.
@@ -258,10 +261,24 @@ class MtimeWatcher:
             )
         }
         # A path that comes back after an earlier pass saw it removed is a
-        # replacement that straddled the poll window, not a new archive.
+        # replacement that straddled the poll window, not a new archive — but
+        # only if its content actually differs from what left. A directory can
+        # lose its whole listing without any error: an NFS or CIFS mount
+        # dropping, a Docker volume being remounted, a CSI volume re-attaching.
+        # The directory stays readable and simply lists empty, so a guard keyed
+        # on ``OSError`` never sees it. Comparing the stat the path had when it
+        # vanished against the one it has now settles both cases without having
+        # to detect the flap: a mount that returns intact brings every file
+        # back byte-identical and publishes nothing, while a genuine ``rm`` +
+        # ``cp`` of new content changes mtime, size, or both.
+        #
         # Computed here but not consumed until every publish below has
         # succeeded — see the bookkeeping at the end of this method.
-        reappeared = {p for p in added if p in self._removed_paths}
+        reappeared = {
+            p
+            for p in added
+            if p in self._removed_paths and self._removed_paths[p] != new_snap[p]
+        }
         # Directory listing changes → zim://files
         if added or removed:
             await self._on_change("zim://files", CHANGE_LIST_CHANGED)
@@ -318,7 +335,10 @@ class MtimeWatcher:
         # interval, so it must not have consumed the state that retry needs.
         # Deleting ``reappeared`` up front meant the retry no longer recognised
         # the reappearance and the client's ``resources/updated`` was lost.
-        for path in reappeared:
+        # Every path that came back is consumed, including the ones whose stat
+        # matched: they are present again, so the memory entry is spent either
+        # way.
+        for path in added:
             self._removed_paths.pop(path, None)
         # Only trust removals from a scan that actually saw every directory.
         # An unreadable one drops all its archives from the snapshot at once,
@@ -330,7 +350,7 @@ class MtimeWatcher:
         if self._last_scan_complete:
             for path in removed:
                 self._removed_paths.pop(path, None)
-                self._removed_paths[path] = None
+                self._removed_paths[path] = self._snapshot[path]
             while len(self._removed_paths) > _MAX_REMEMBERED_REMOVALS:
                 self._removed_paths.popitem(last=False)
         self._snapshot = new_snap

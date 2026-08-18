@@ -849,3 +849,64 @@ async def test_failed_publish_leaves_the_reappearance_replayable(
     assert "zim://archive" in [
         uri for uri, kind in events if kind == CHANGE_REPLACED
     ], events
+
+
+@pytest.mark.asyncio
+async def test_mount_flap_does_not_announce_every_archive_as_replaced(
+    tmp_path: Path,
+) -> None:
+    """A directory that lists empty and comes back unchanged publishes nothing.
+
+    The ordinary way a watched directory loses its contents is not an
+    exception: an NFS/CIFS mount dropping, a Docker volume being remounted, a
+    CSI volume re-attaching. The directory stays perfectly readable and simply
+    lists empty, so a completeness guard keyed on ``OSError`` never fires.
+    Every archive is then recorded as removed and announced as replaced when
+    the mount returns — while nothing on disk changed at all.
+    """
+    from openzim_mcp.subscriptions import CHANGE_REPLACED, MtimeWatcher
+
+    events: list[tuple[str, str]] = []
+
+    async def emit(uri: str, change_type: str) -> None:
+        events.append((uri, change_type))
+
+    live = {f"{tmp_path}/archive{i}.zim": (1000.0 + i, 10 + i) for i in range(5)}
+    watcher = MtimeWatcher([str(tmp_path)], interval=100, on_change=emit)
+    watcher._snapshot = dict(live)
+
+    # The mount drops: readable, empty, no error.
+    watcher._scan = lambda: {}  # type: ignore[method-assign]
+    await watcher._tick()
+
+    # It comes back with every file byte-identical.
+    events.clear()
+    watcher._scan = lambda: dict(live)  # type: ignore[method-assign]
+    await watcher._tick()
+
+    assert [e for e in events if e[1] == CHANGE_REPLACED] == [], events
+
+
+@pytest.mark.asyncio
+async def test_reappearing_with_new_content_still_announces_replacement(
+    tmp_path: Path,
+) -> None:
+    """The straddling `rm` + `cp` of *new* content must still be published."""
+    from openzim_mcp.subscriptions import CHANGE_REPLACED, MtimeWatcher
+
+    events: list[tuple[str, str]] = []
+
+    async def emit(uri: str, change_type: str) -> None:
+        events.append((uri, change_type))
+
+    raw = str(tmp_path / "archive.zim")
+    watcher = MtimeWatcher([str(tmp_path)], interval=100, on_change=emit)
+    watcher._snapshot = {raw: (1000.0, 10)}
+    watcher._scan = lambda: {}  # type: ignore[method-assign]
+    await watcher._tick()
+
+    events.clear()
+    watcher._scan = lambda: {raw: (2000.0, 99)}  # type: ignore[method-assign]
+    await watcher._tick()
+
+    assert "zim://archive" in [u for u, k in events if k == CHANGE_REPLACED], events
