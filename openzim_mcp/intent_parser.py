@@ -1400,6 +1400,15 @@ class IntentParser:
     # Scaffolding words of the intent phrases — verbs, question words,
     # determiners, connectors. A query built only from these carries no
     # operand for the intent to act on.
+    #
+    # It has to cover the scaffolding of EVERY phrase that reaches a
+    # greedy-tail extractor, not just the ``tell me about`` family. It held
+    # ``structure`` / ``section`` / ``toc`` but not ``outline`` / ``table`` /
+    # ``contents``, so ``outline of tack`` left ``outline of`` behind, which
+    # read as topic-bearing; the guard stayed silent, the politeness strip ate
+    # the operand, and the extractor anchored on the last keyword and returned
+    # ``entry_path='of'``. Adding a word here can only make the guard fire
+    # MORE often, and firing means keeping the query the user typed.
     _NON_TOPIC_TOKENS = frozenset(
         {
             "a",
@@ -1408,6 +1417,9 @@ class IntentParser:
             "and",
             "are",
             "article",
+            "browse",
+            "called",
+            "contents",
             "define",
             "describe",
             "display",
@@ -1420,26 +1432,41 @@ class IntentParser:
             "from",
             "get",
             "give",
+            "heading",
+            "headings",
             "in",
             "info",
             "information",
             "is",
+            "linking",
             "links",
+            "list",
+            "lists",
+            "locate",
             "me",
+            "named",
             "of",
             "on",
+            "outline",
+            "outlines",
             "page",
             "read",
+            "related",
+            "retrieve",
             "search",
             "section",
+            "sections",
             "show",
             "structure",
             "summarize",
             "summary",
+            "table",
             "tell",
             "the",
+            "titled",
             "to",
             "toc",
+            "walk",
             "was",
             "were",
             "what",
