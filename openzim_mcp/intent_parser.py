@@ -821,10 +821,25 @@ def _trim_entry_token(token: str) -> str:
     closing paren goes only when it has no opener inside the token, so a
     parenthesised aside (``see A/Foo)``) is trimmed while a disambiguated
     title (``A/Mercury_(planet)``) keeps its own parens.
+
+    A trailing apostrophe follows the same balance rule. Quoting the paths —
+    ``get entries 'A/Foo' and 'A/Bar'`` — is an obvious thing to type, and the
+    opening quote is excluded by the namespace lookbehind while the closing
+    one is inside the suffix class, so every quoted path arrived at
+    ``get_entries`` as ``A/Foo'`` and resolved to nothing. An odd count means
+    the token closes a quote that opened outside it; an even one means the
+    apostrophes are the title's own (``A/Rock_'n'_Roll``), which must survive.
     """
     token = token.rstrip(".?,;:!")
-    while token.endswith(")") and token.count("(") < token.count(")"):
-        token = token[:-1].rstrip(".?,;:!")
+    peeled = True
+    while peeled:
+        peeled = False
+        while token.endswith(")") and token.count("(") < token.count(")"):
+            token = token[:-1].rstrip(".?,;:!")
+            peeled = True
+        if token.endswith("'") and token.count("'") % 2 == 1:
+            token = token[:-1].rstrip(".?,;:!")
+            peeled = True
     return token
 
 
