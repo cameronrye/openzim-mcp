@@ -154,6 +154,23 @@ class ZimEntryResource(Resource):
         # HTTP/SSE clients don't stall on each other.
         try:
             mime, raw = await asyncio.to_thread(_sync_read)
+        except KeyError as exc:
+            # libzim signals a missing entry with a bare ``KeyError('Cannot
+            # find entry')``. Being neither ``MCPError`` nor an
+            # ``OpenZimMcpArchiveError``, it fell through to the SDK, which
+            # replaced it with "Error reading resource <uri>" under
+            # ``-32603`` — an internal-error code that invites a retry, for a
+            # request that will never succeed, with no mention of which entry
+            # was missing. The sibling archive-not-found case a few lines
+            # below already answers ``-32602`` naming the archive; a missing
+            # entry is the same class of caller mistake.
+            raise MCPError(
+                code=INVALID_PARAMS,
+                message=(
+                    f"Entry not found: {self.entry_path!r} is not in "
+                    f"{Path(self.archive_path).stem!r}."
+                ),
+            ) from exc
         except OpenZimMcpArchiveError as exc:
             # SDK v2's ``read_resource`` forwards only ``MCPError`` verbatim;
             # every other exception type is replaced by a generic "Error

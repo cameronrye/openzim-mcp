@@ -215,6 +215,55 @@ class TestPerEntryResource:
             await rm.get_resource("zim://nonexistent/entry/A%2FMissing", ctx)
 
     @pytest.mark.asyncio
+    async def test_missing_entry_is_invalid_params_naming_the_entry(
+        self, server, ctx: Context, monkeypatch
+    ):
+        """A missing entry names itself instead of reading as a server fault.
+
+        libzim signals one with a bare ``KeyError('Cannot find entry')``.
+        Being neither ``MCPError`` nor ``OpenZimMcpArchiveError``, it fell
+        through to the SDK, which replaced it with "Error reading resource
+        <uri>" under ``-32603`` — an internal-error code inviting a retry, for
+        a request that can never succeed, and no mention of which entry was
+        missing. ``test_unknown_zim_file_raises`` above pins the same contract
+        one level up, for the archive.
+        """
+        from mcp.shared.exceptions import MCPError
+        from mcp_types import INVALID_PARAMS
+
+        from openzim_mcp.tools import resource_tools
+
+        server.zim_operations.list_zim_files_data = MagicMock(
+            return_value=[{"path": "/zim/wiki.zim", "name": "wiki.zim"}]
+        )
+        server.path_validator.validate_path = MagicMock(return_value="/zim/wiki.zim")
+        server.path_validator.validate_zim_file = MagicMock(
+            return_value="/zim/wiki.zim"
+        )
+
+        archive = MagicMock()
+        archive.get_entry_by_path.side_effect = KeyError("Cannot find entry")
+
+        class FakeCtx:
+            def __enter__(self_inner):
+                return archive
+
+            def __exit__(self_inner, *exc):
+                return False
+
+        monkeypatch.setattr(resource_tools, "zim_archive", lambda *a, **k: FakeCtx())
+
+        rm = server.mcp._resource_manager
+        resource = await rm.get_resource("zim://wiki/entry/A%2FMissing", ctx)
+        with pytest.raises(MCPError) as excinfo:
+            await resource.read()
+
+        assert excinfo.value.error.code == INVALID_PARAMS
+        message = excinfo.value.error.message
+        assert "A/Missing" in message, message
+        assert "wiki" in message, message
+
+    @pytest.mark.asyncio
     async def test_literal_slash_does_not_route(self, server, ctx: Context):
         """Unencoded '/' in the path doesn't match the template.
 
