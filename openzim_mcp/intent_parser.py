@@ -563,6 +563,13 @@ def _extract_search_all(query: str, params: Dict[str, Any]) -> None:
     Hence the determiner/quantifier bridge, ``archives`` alongside
     ``files``/``zims``, and the optional ``for``.
 
+    ``zim`` is matched as a *qualifier* ahead of the head noun as well as a
+    head noun in its own right. Without that, ``zims?`` claimed the ``zim`` in
+    ``search all zim files for X`` and the alternation stopped there, leaving
+    ``files for X`` as the cross-archive search terms — the head noun and the
+    preposition both polluting the BM25 query for the most natural way there
+    is to say this.
+
     The lazy ``^.*?`` in the substitution is a known ReDoS vector on
     adversarial input, so wrap it in the standard timeout helper and
     fall back to the raw query on timeout — better to search a slightly
@@ -573,7 +580,7 @@ def _extract_search_all(query: str, params: Dict[str, Any]) -> None:
             lambda: re.sub(
                 r"^.*?(search\s+(all|every(thing|where)?|across)"
                 r"\s+((the|all|of|my|our|your|loaded|available)\s+)*"
-                r"(files?|zims?|archives?)?\s*(for\s+)?)",
+                r"(\.?zim\s+)?(files?|zims?|archives?)?\s*(for\s+)?)",
                 "",
                 query,
                 flags=re.IGNORECASE,
@@ -1117,7 +1124,12 @@ class IntentParser:
         ),
         # search_all - very specific
         (
-            r"\bsearch\s+(all|every(thing|where)?|across)\s+(files?|zims?)?\b",
+            # ``(\.?zim\s+)?`` lets ``zim``/``.zim`` qualify the head noun
+            # ("search all zim files for X"). Without it the alternation below
+            # claimed the qualifier, and the extractor's matching group has to
+            # stay at least this wide or the head noun leaks into the terms.
+            r"\bsearch\s+(all|every(thing|where)?|across)"
+            r"\s+(\.?zim\s+)?(files?|zims?)?\b",
             "search_all",
             0.95,
             10,

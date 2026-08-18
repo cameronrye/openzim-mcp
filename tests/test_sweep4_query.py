@@ -283,6 +283,13 @@ _SEARCH_ALL_VARIANTS = [
     "search across archives for photosynthesis",
     "search all files photosynthesis",
     "search everywhere photosynthesis",
+    # "zim" qualifying a head noun: the cue noun alternation matched the
+    # qualifier and stopped, leaving the head noun in the search terms.
+    "search all zim files for photosynthesis",
+    "search all zim file for photosynthesis",
+    "search all zim archives for photosynthesis",
+    "search all .zim files for photosynthesis",
+    "search across all zim files for photosynthesis",
 ]
 
 
