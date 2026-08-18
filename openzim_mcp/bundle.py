@@ -261,9 +261,29 @@ def _match_decorated_heading_line(
     # and still matches, instead of matching on neither.
     wanted = _strip_md_inline_decorations(text)
     line_re = re.compile(rf"^{'#' * level} (.+?)\s*$", re.MULTILINE)
-    for m in line_re.finditer(rendered_markdown, cursor):
+    candidates = list(line_re.finditer(rendered_markdown, cursor))
+    for m in candidates:
         if _strip_md_inline_decorations(m.group(1)) == wanted:
             return m
+    # Last resort within the last resort: compare with the spaces removed.
+    #
+    # html2text emits a space after emphasis it closes even when the source
+    # had none, so ``<h2><b>Foo</b>bar</h2>`` renders as ``## **Foo** bar``
+    # while the soup side reads ``Foobar``. The decoration-stripped forms are
+    # then ``'Foo bar'`` and ``'Foobar'`` and the exact pass above misses, so
+    # the section is dropped from the bundle entirely — ``view="toc"`` never
+    # lists it and ``zim_get_section`` answers ``section_not_found`` for it.
+    # Code spans do not gain the space, which is why a ``<code>`` fixture
+    # matches either way and this went unnoticed.
+    #
+    # Only reached when the section would otherwise be lost, and the two
+    # sides still have to agree on every non-space character, so this cannot
+    # promote a match the exact pass would have rejected on content.
+    squashed = wanted.replace(" ", "")
+    if squashed:
+        for m in candidates:
+            if _strip_md_inline_decorations(m.group(1)).replace(" ", "") == squashed:
+                return m
     return None
 
 
