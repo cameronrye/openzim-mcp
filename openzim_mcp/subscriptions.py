@@ -37,6 +37,7 @@ per-stream half is restored here — see :func:`install_bounded_listen_handler`.
 import asyncio
 import contextlib
 import logging
+from collections import OrderedDict
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Awaitable, Callable, Iterable, Optional
 from urllib.parse import quote
@@ -73,6 +74,52 @@ MAX_SUBSCRIPTION_URI_LENGTH = 2048
 OnChange = Callable[[str, str], Awaitable[None]]
 
 
+# How many removed paths to remember when watching for a replacement that
+# straddles the poll window. Generous next to any real archive directory, and
+# bounded so churn cannot grow it without limit.
+_MAX_REMEMBERED_REMOVALS = 1024
+
+
+def _uri_spellings(path: str) -> list[str]:
+    """Return every ``zim://`` spelling of ``path`` that a client can read from.
+
+    EVERY spelling that READS must also NOTIFY, because a client subscribes
+    with whatever string it successfully read from, and SDK delivery is
+    exact-string (``event_matches`` does ``event.uri in uris``). A spelling
+    that reads but never fires leaves that client on a URI nothing publishes
+    to — silence on every replacement, made a stale-for-an-hour read by
+    ``resource_cache_ttl_seconds``.
+
+    Two independent axes make four spellings, all of which read:
+
+    * ENCODING — ``UriTemplate.match`` percent-decodes before matching, so
+      ``zim://my archive`` reads, while a client expanding the advertised
+      ``zim://{name}`` template by RFC 6570 produces ``zim://my%20archive``.
+      ``quote(..., safe="")`` keeps the same unreserved set the template
+      expansion uses. ``errors="surrogateescape"`` percent-encodes the original
+      bytes of a filename that is not valid UTF-8, which ``Path.glob`` hands
+      back as lone surrogates and ``quote`` otherwise refuses — a raise that
+      landed inside the polling task, where nothing retrieves it.
+    * EXTENSION — ``_resolve_zim_name`` matches on ``Path(f["path"]).stem ==
+      name OR f["name"] == name``, and ``f["name"]`` (what the ``zim://files``
+      listing advertises) carries the ``.zim`` suffix. So a client that builds
+      its URI from that listing rather than from the template description
+      reads ``zim://wikipedia.zim`` just fine.
+
+    Deduplicated in order, so an unreserved stem still publishes each URI
+    exactly once. Exact-string delivery means a client sees only the spelling
+    it asked for, so the extra publishes are a no-op for everyone else.
+    """
+    candidate = Path(path)
+    spellings: list[str] = []
+    for spelling in (candidate.stem, candidate.name):
+        for form in (quote(spelling, safe="", errors="surrogateescape"), spelling):
+            uri = f"zim://{form}"
+            if uri not in spellings:
+                spellings.append(uri)
+    return spellings
+
+
 class MtimeWatcher:
     """Polls allowed dirs and fires events when ``.zim`` files change.
 
@@ -107,6 +154,12 @@ class MtimeWatcher:
         # change-detection comment in ``_tick`` for the false-positive vs.
         # false-negative trade-off.
         self._snapshot: dict[str, tuple[float, int]] = {}
+        # Paths seen removed on an earlier pass, newest last. Replacing a
+        # large archive is ``rm`` then a copy that runs for minutes, so the
+        # file is absent across many polls and comes back as an *add* rather
+        # than a change — see ``_tick``. Bounded because a path removed and
+        # never restored would otherwise sit here for the process lifetime.
+        self._removed_paths: OrderedDict[str, None] = OrderedDict()
         self._task: Optional[asyncio.Task[None]] = None
         self._stop_event = asyncio.Event()
 
@@ -181,6 +234,16 @@ class MtimeWatcher:
                 or new_snap[p][1] != self._snapshot[p][1]  # size
             )
         }
+        # A path that comes back after an earlier pass saw it removed is a
+        # replacement that straddled the poll window, not a new archive.
+        reappeared = {p for p in added if p in self._removed_paths}
+        for path in reappeared:
+            del self._removed_paths[path]
+        for path in removed:
+            self._removed_paths.pop(path, None)
+            self._removed_paths[path] = None
+        while len(self._removed_paths) > _MAX_REMEMBERED_REMOVALS:
+            self._removed_paths.popitem(last=False)
         # Directory listing changes → zim://files
         if added or removed:
             await self._on_change("zim://files", CHANGE_LIST_CHANGED)
@@ -214,16 +277,24 @@ class MtimeWatcher:
         # Deduplicated, so an unreserved stem still publishes each URI exactly
         # once. Exact-string delivery means a client sees only the spelling it
         # asked for, so the extra publishes are a no-op for everyone else.
-        for path in changed:
-            candidate = Path(path)
-            published: set[str] = set()
-            for spelling in (candidate.stem, candidate.name):
-                for form in (quote(spelling, safe=""), spelling):
-                    uri = f"zim://{form}"
-                    if uri in published:
-                        continue
-                    published.add(uri)
-                    await self._on_change(uri, CHANGE_REPLACED)
+        #
+        # ``reappeared`` joins ``changed`` here. Replacing a large archive is
+        # ``rm`` followed by a copy that runs for minutes, so the file is
+        # absent for many poll intervals: one pass sees it removed and a later
+        # one sees it added, and it never lands in ``changed`` at all. The
+        # client holding a ``resourceSubscriptions`` entry for that exact URI
+        # — the one that asked to be told about replacements — was then the
+        # only one that heard nothing, and ``resource_cache_ttl_seconds`` kept
+        # its stale read valid for an hour afterwards.
+        #
+        # A path appearing for the first time stays listing-only, which is the
+        # split this release documents: appearing or disappearing is
+        # ``resources/list_changed``, replacement in place is
+        # ``resources/updated``. Removals stay listing-only too — an
+        # ``updated`` invites a re-read, and there is nothing left to read.
+        for path in sorted(changed | reappeared):
+            for uri in _uri_spellings(path):
+                await self._on_change(uri, CHANGE_REPLACED)
         self._snapshot = new_snap
 
     async def _loop(self) -> None:
@@ -237,7 +308,21 @@ class MtimeWatcher:
             await asyncio.sleep(self._interval)
             if self._stop_event.is_set():
                 return
-            await self._tick()
+            try:
+                await self._tick()
+            except Exception:
+                # A failing pass must not end change detection for the whole
+                # process. Letting it propagate killed the task, and the
+                # exception was never seen by anyone: the only place that
+                # awaits the task is ``stop()``, which suppresses it. The
+                # result was a server that had silently stopped notifying,
+                # serving reads that ``archive_read_ttl_ms`` keeps cached for
+                # an hour. Log it and take the next pass; a fault that
+                # persists reappears in the log every interval.
+                #
+                # ``CancelledError`` derives from ``BaseException``, so
+                # ``stop()`` still unwinds the loop as before.
+                logger.exception("Watcher pass failed; continuing to poll")
 
 
 async def publish_change(

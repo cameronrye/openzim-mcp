@@ -571,3 +571,162 @@ class TestSubscriptionCapabilityGate:
         caps = self._modern_caps(server)
         assert caps.resources.subscribe
         assert caps.resources.list_changed
+
+
+# ---------------------------------------------------------------------------
+# Watcher resilience: one archive must not be able to end change detection
+# for every other archive.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_tick_publishes_a_filename_that_is_not_valid_utf8(
+    tmp_path: Path,
+) -> None:
+    """A ``.zim`` whose name isn't valid UTF-8 still publishes its URI.
+
+    ``Path.glob`` hands back undecodable bytes as surrogate escapes, and
+    ``quote`` refuses to encode a lone surrogate. Percent-encoding the
+    original bytes is the answer the URI spec already gives.
+    """
+    from openzim_mcp.subscriptions import CHANGE_REPLACED, MtimeWatcher
+
+    events: list[tuple[str, str]] = []
+
+    async def emit(uri: str, change_type: str) -> None:
+        events.append((uri, change_type))
+
+    raw = str(tmp_path / b"wiki\xff.zim".decode("utf-8", "surrogateescape"))
+    watcher = MtimeWatcher([str(tmp_path)], interval=100, on_change=emit)
+    watcher._snapshot = {raw: (1.0, 10)}
+    # Same name, new mtime and size — the replacement case.
+    watcher._scan = lambda: {raw: (2.0, 20)}  # type: ignore[method-assign]
+
+    await watcher._tick()
+
+    replaced = [uri for uri, kind in events if kind == CHANGE_REPLACED]
+    assert "zim://wiki%FF" in replaced, replaced
+    assert "zim://wiki%FF.zim" in replaced, replaced
+
+
+@pytest.mark.asyncio
+async def test_loop_keeps_polling_after_a_tick_raises(tmp_path: Path) -> None:
+    """One failing pass must not end change detection for the process.
+
+    ``_loop`` used to let anything raised by ``_tick`` propagate out of the
+    task. Nothing retrieves that exception — ``stop()`` suppresses it — so a
+    single bad pass silently ended every notification the server would ever
+    send, and with a one-hour resource TTL subscribers read stale content for
+    an hour without a clue why.
+    """
+    from openzim_mcp.subscriptions import MtimeWatcher
+
+    calls: list[int] = []
+
+    async def emit(uri: str, change_type: str) -> None:  # pragma: no cover
+        pass
+
+    watcher = MtimeWatcher([str(tmp_path)], interval=0.01, on_change=emit)
+
+    async def boom() -> None:
+        calls.append(1)
+        raise RuntimeError("scan blew up")
+
+    watcher._tick = boom  # type: ignore[method-assign]
+    await watcher.start()
+    try:
+        for _ in range(50):
+            await asyncio.sleep(0.02)
+            if len(calls) >= 3:
+                break
+        assert len(calls) >= 3, f"loop stopped after {len(calls)} tick(s)"
+    finally:
+        await watcher.stop()
+
+
+@pytest.mark.asyncio
+async def test_reappearing_archive_publishes_updated_for_its_own_uri(
+    tmp_path: Path,
+) -> None:
+    """A file that vanishes and comes back notifies its URI, not just the list.
+
+    Replacing a large archive means ``rm`` then a copy that runs for minutes,
+    so the gap always straddles the 5-second poll: one pass sees the file gone
+    and one sees it back, and neither lands in ``changed``. A client holding a
+    ``resourceSubscriptions`` entry for ``zim://{name}`` heard nothing at all,
+    while ``resource_cache_ttl_seconds`` kept its stale read valid for an hour.
+    """
+    from openzim_mcp.subscriptions import (
+        CHANGE_LIST_CHANGED,
+        CHANGE_REPLACED,
+        MtimeWatcher,
+    )
+
+    events: list[tuple[str, str]] = []
+
+    async def emit(uri: str, change_type: str) -> None:
+        events.append((uri, change_type))
+
+    raw = str(tmp_path / "archive.zim")
+    watcher = MtimeWatcher([str(tmp_path)], interval=100, on_change=emit)
+
+    # Pass one: the file is gone mid-replacement.
+    watcher._snapshot = {raw: (1.0, 10)}
+    watcher._scan = lambda: {}  # type: ignore[method-assign]
+    await watcher._tick()
+    assert ("zim://files", CHANGE_LIST_CHANGED) in events
+
+    # Pass two: the copy finished and it is back with new content.
+    events.clear()
+    watcher._scan = lambda: {raw: (2.0, 99)}  # type: ignore[method-assign]
+    await watcher._tick()
+
+    assert ("zim://files", CHANGE_LIST_CHANGED) in events
+    replaced = [uri for uri, kind in events if kind == CHANGE_REPLACED]
+    assert "zim://archive" in replaced, replaced
+    assert "zim://archive.zim" in replaced, replaced
+
+
+@pytest.mark.asyncio
+async def test_first_appearance_stays_listing_only(tmp_path: Path) -> None:
+    """An archive nobody has seen before publishes only the listing change.
+
+    The reappearance handling must not blur the split this release draws:
+    appearing or disappearing is ``resources/list_changed``, replacement in
+    place is ``resources/updated``.
+    """
+    from openzim_mcp.subscriptions import CHANGE_REPLACED, MtimeWatcher
+
+    events: list[tuple[str, str]] = []
+
+    async def emit(uri: str, change_type: str) -> None:
+        events.append((uri, change_type))
+
+    watcher = MtimeWatcher([str(tmp_path)], interval=100, on_change=emit)
+    watcher._snapshot = {}
+    raw = str(tmp_path / "brand_new.zim")
+    watcher._scan = lambda: {raw: (1.0, 10)}  # type: ignore[method-assign]
+
+    await watcher._tick()
+
+    assert [kind for _, kind in events if kind == CHANGE_REPLACED] == [], events
+
+
+@pytest.mark.asyncio
+async def test_removed_path_memory_is_bounded(tmp_path: Path) -> None:
+    """Churn cannot grow the removed-path memory without limit."""
+    from openzim_mcp.subscriptions import _MAX_REMEMBERED_REMOVALS, MtimeWatcher
+
+    async def emit(uri: str, change_type: str) -> None:
+        pass
+
+    watcher = MtimeWatcher([str(tmp_path)], interval=100, on_change=emit)
+    overshoot = _MAX_REMEMBERED_REMOVALS + 50
+    watcher._snapshot = {f"/w/{i}.zim": (1.0, 1) for i in range(overshoot)}
+    watcher._scan = lambda: {}  # type: ignore[method-assign]
+
+    await watcher._tick()
+
+    assert len(watcher._removed_paths) == _MAX_REMEMBERED_REMOVALS
+    # Oldest evicted first, so the most recent removals are the ones kept.
+    assert f"/w/{overshoot - 1}.zim" in watcher._removed_paths
