@@ -14,6 +14,7 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import signal
 import subprocess
 import sys
 from pathlib import Path
@@ -204,3 +205,64 @@ def test_cache_persistence_survives_restart(zim_dir: Path, tmp_path: Path) -> No
         ), f"reload lost too many entries: had {size_before}, got {cache2['size']}"
     finally:
         _shutdown_stdio(proc2, graceful=False)
+
+
+def test_sigterm_persists_the_cache(zim_dir: Path, tmp_path: Path) -> None:
+    """A SIGTERM stop must leave the same persisted cache a graceful one does.
+
+    This is the ``docker stop`` path. Python's default SIGTERM disposition
+    kills the process without unwinding, so the atexit flush never ran and
+    every restart came up cold. The exit status must stay 143 (128+SIGTERM),
+    and the stop must be prompt — the stdio transport parks a worker thread
+    on a blocking read of stdin that nothing closes when the stop came from a
+    signal, so an unwind that waits for it hangs until the supervisor's
+    SIGKILL.
+    """
+    persistence_base = tmp_path / "oz-cache-sigterm"
+    persistence_file = persistence_base.with_suffix(".json")
+
+    env = os.environ.copy()
+    env["OPENZIM_MCP_CACHE__PERSISTENCE_ENABLED"] = "true"
+    env["OPENZIM_MCP_CACHE__PERSISTENCE_PATH"] = str(persistence_base)
+
+    zims = sorted(zim_dir.glob("*.zim"))
+    assert zims, "need at least one .zim"
+
+    proc = _spawn_stdio(zim_dir, env)
+    try:
+        _initialize(proc)
+        # Populate the cache with a real tool call.
+        _send(
+            proc,
+            {
+                "jsonrpc": "2.0",
+                "id": 7,
+                "method": "tools/call",
+                "params": {
+                    "name": "zim_metadata",
+                    "arguments": {"zim_file_path": str(zims[0])},
+                },
+            },
+        )
+        _recv_until(proc, 7)
+
+        proc.send_signal(signal.SIGTERM)
+        try:
+            returncode = proc.wait(timeout=15)
+        except subprocess.TimeoutExpired:  # pragma: no cover
+            proc.kill()
+            proc.wait()
+            pytest.fail("SIGTERM did not stop the server within 15s")
+    finally:
+        for stream in (proc.stdin, proc.stdout, proc.stderr):
+            if stream is not None:
+                with contextlib.suppress(Exception):
+                    stream.close()
+
+    assert returncode == 128 + int(
+        signal.SIGTERM
+    ), f"expected a normal exit reporting the signal, got {returncode}"
+    assert (
+        persistence_file.exists()
+    ), f"SIGTERM discarded the cache; expected {persistence_file}"
+    assert persistence_file.stat().st_size > 0
