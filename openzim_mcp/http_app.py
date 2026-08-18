@@ -480,6 +480,51 @@ def _default_uvicorn_runner(app: Starlette, host: str, port: int) -> None:
     uvicorn.Server(config).run()
 
 
+class TransportSecurityGateMiddleware(BaseHTTPMiddleware):
+    """Run the DNS-rebinding Host/Origin check *in front of* the SDK app.
+
+    The SDK does the same validation, but on the legacy branch it does it too
+    late to matter. Era routing sends any request without an
+    ``MCP-Protocol-Version`` header down the legacy path, and that path creates
+    the transport, registers it in the manager's session table and starts its
+    task *before* calling into the handler where Host/Origin is checked. So a
+    request answered ``403 Invalid Origin header`` has already allocated a
+    session and a live task — and nothing reaps them: the app builder exposes
+    no ``session_idle_timeout``, so the manager's idle-expiry branch is dead
+    and the table is only ever emptied by an explicit DELETE or process exit.
+
+    The default HTTP deployment is the exposed one: ``127.0.0.1`` with no token
+    (which ``check_safe_startup`` permits) and no CORS origins, so neither of
+    the other two middlewares stops anything. A page the user happens to visit
+    can ``fetch()`` the endpoint in a loop; every request is rejected and every
+    request leaks a session, until the process is killed for its memory.
+
+    Health endpoints are exempt for the same reason they are exempt from auth.
+    """
+
+    def __init__(self, app: ASGIApp, security: Any) -> None:
+        """Capture the resolved transport-security settings."""
+        super().__init__(app)
+        from mcp.server.transport_security import TransportSecurityMiddleware
+
+        self._validator = TransportSecurityMiddleware(security)
+
+    async def dispatch(
+        self,
+        request: Request,
+        call_next: Callable[[Request], Awaitable[Response]],
+    ) -> Response:
+        """Reject a request the SDK would reject, before it costs a session."""
+        if request.url.path in AUTH_EXEMPT_PATHS:
+            return await call_next(request)
+        error = await self._validator.validate_request(
+            request, is_post=request.method == "POST"
+        )
+        if error is not None:
+            return error
+        return await call_next(request)
+
+
 def serve_streamable_http(
     server: "OpenZimMcpServer",
     runner: Callable[[Starlette, str, int], None] = _default_uvicorn_runner,
@@ -525,6 +570,14 @@ def serve_streamable_http(
     # layer so 401 responses from the inner auth middleware still carry
     # Access-Control-Allow-Origin headers (otherwise browser JS clients
     # see an opaque CORS error instead of "401 unauthorized").
+    # Added FIRST, so it is the INNERMOST of the three: auth and CORS still
+    # get to answer first, but a request that clears them is Host/Origin
+    # checked here rather than after the SDK has already minted a session for
+    # it. See TransportSecurityGateMiddleware.
+    if server._transport_security is not None:
+        app.add_middleware(
+            TransportSecurityGateMiddleware, security=server._transport_security
+        )
     app.add_middleware(BearerTokenAuthMiddleware, config=server.config)
     apply_cors_middleware(app, server.config)
 
