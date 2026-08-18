@@ -160,6 +160,10 @@ class MtimeWatcher:
         # than a change — see ``_tick``. Bounded because a path removed and
         # never restored would otherwise sit here for the process lifetime.
         self._removed_paths: OrderedDict[str, None] = OrderedDict()
+        # Whether the most recent ``_scan`` walked every directory. A scan
+        # that lost one to an OSError returns a snapshot indistinguishable
+        # from a mass deletion; see ``_tick``.
+        self._last_scan_complete = True
         self._task: Optional[asyncio.Task[None]] = None
         self._stop_event = asyncio.Event()
 
@@ -196,6 +200,7 @@ class MtimeWatcher:
         watcher would never fire ``zim://files`` updates for them.
         """
         snap: dict[str, tuple[float, int]] = {}
+        complete = True
         for d in self._dirs:
             try:
                 for path in Path(d).glob("**/*.zim"):
@@ -204,7 +209,12 @@ class MtimeWatcher:
                             stat = path.stat()
                             snap[str(path)] = (stat.st_mtime, stat.st_size)
             except OSError:
+                # One unreadable directory drops every archive under it from
+                # the snapshot at once. ``_tick`` needs to know that happened
+                # so it does not mistake the gap for deletions.
+                complete = False
                 continue
+        self._last_scan_complete = complete
         return snap
 
     async def _tick(self) -> None:
@@ -236,14 +246,9 @@ class MtimeWatcher:
         }
         # A path that comes back after an earlier pass saw it removed is a
         # replacement that straddled the poll window, not a new archive.
+        # Computed here but not consumed until every publish below has
+        # succeeded — see the bookkeeping at the end of this method.
         reappeared = {p for p in added if p in self._removed_paths}
-        for path in reappeared:
-            del self._removed_paths[path]
-        for path in removed:
-            self._removed_paths.pop(path, None)
-            self._removed_paths[path] = None
-        while len(self._removed_paths) > _MAX_REMEMBERED_REMOVALS:
-            self._removed_paths.popitem(last=False)
         # Directory listing changes → zim://files
         if added or removed:
             await self._on_change("zim://files", CHANGE_LIST_CHANGED)
@@ -295,6 +300,26 @@ class MtimeWatcher:
         for path in sorted(changed | reappeared):
             for uri in _uri_spellings(path):
                 await self._on_change(uri, CHANGE_REPLACED)
+        # Bookkeeping last, for the same reason ``_snapshot`` is assigned last:
+        # a pass that dies mid-publish is retried wholesale on the next
+        # interval, so it must not have consumed the state that retry needs.
+        # Deleting ``reappeared`` up front meant the retry no longer recognised
+        # the reappearance and the client's ``resources/updated`` was lost.
+        for path in reappeared:
+            self._removed_paths.pop(path, None)
+        # Only trust removals from a scan that actually saw every directory.
+        # An unreadable one drops all its archives from the snapshot at once,
+        # which is indistinguishable from a mass deletion — recording those
+        # would make the next healthy pass see every archive "reappear" and
+        # publish a replacement for each, a storm from one transient stat
+        # failure. The listing notification above keeps its long-standing
+        # behaviour; only the replacement inference is withheld.
+        if self._last_scan_complete:
+            for path in removed:
+                self._removed_paths.pop(path, None)
+                self._removed_paths[path] = None
+            while len(self._removed_paths) > _MAX_REMEMBERED_REMOVALS:
+                self._removed_paths.popitem(last=False)
         self._snapshot = new_snap
 
     async def _loop(self) -> None:

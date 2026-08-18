@@ -730,3 +730,88 @@ async def test_removed_path_memory_is_bounded(tmp_path: Path) -> None:
     assert len(watcher._removed_paths) == _MAX_REMEMBERED_REMOVALS
     # Oldest evicted first, so the most recent removals are the ones kept.
     assert f"/w/{overshoot - 1}.zim" in watcher._removed_paths
+
+
+@pytest.mark.asyncio
+async def test_unreadable_directory_does_not_fabricate_replacements(
+    tmp_path: Path,
+) -> None:
+    """A directory that briefly fails to scan must not look like a mass delete.
+
+    ``_scan`` swallows an ``OSError`` per directory and returns a snapshot
+    missing everything under it, which is indistinguishable from every archive
+    being deleted at once. Recording those as removals meant the next
+    successful pass saw them all "reappear" and published a replacement for
+    every archive on the server — a notification storm, and a re-read of every
+    archive, caused by one transient stat failure.
+    """
+    from openzim_mcp.subscriptions import CHANGE_REPLACED, MtimeWatcher
+
+    events: list[tuple[str, str]] = []
+
+    async def emit(uri: str, change_type: str) -> None:
+        events.append((uri, change_type))
+
+    live = {f"{tmp_path}/a{i}.zim": (1.0, 10) for i in range(3)}
+    watcher = MtimeWatcher([str(tmp_path)], interval=100, on_change=emit)
+    watcher._snapshot = dict(live)
+
+    def failing_scan() -> dict:
+        watcher._last_scan_complete = False
+        return {}
+
+    watcher._scan = failing_scan  # type: ignore[method-assign]
+    await watcher._tick()
+
+    def good_scan() -> dict:
+        watcher._last_scan_complete = True
+        return dict(live)
+
+    events.clear()
+    watcher._scan = good_scan  # type: ignore[method-assign]
+    await watcher._tick()
+
+    assert [uri for uri, kind in events if kind == CHANGE_REPLACED] == [], events
+
+
+@pytest.mark.asyncio
+async def test_failed_publish_leaves_the_reappearance_replayable(
+    tmp_path: Path,
+) -> None:
+    """A pass that dies mid-publish must not consume the state it needs to retry.
+
+    ``_snapshot`` is only assigned once every publish succeeds, so a failed
+    pass is retried wholesale on the next interval. The removed-path memory
+    has to keep that same discipline: consuming it up front meant the retry no
+    longer recognised the reappearance, and the `resources/updated` the client
+    was waiting for was lost for good.
+    """
+    from openzim_mcp.subscriptions import CHANGE_REPLACED, MtimeWatcher
+
+    raw = str(tmp_path / "archive.zim")
+    attempts: list[int] = []
+    events: list[tuple[str, str]] = []
+
+    async def emit(uri: str, change_type: str) -> None:
+        if change_type == CHANGE_REPLACED and len(attempts) == 1:
+            raise RuntimeError("bus down")
+        events.append((uri, change_type))
+
+    watcher = MtimeWatcher([str(tmp_path)], interval=100, on_change=emit)
+    watcher._snapshot = {raw: (1.0, 10)}
+    watcher._scan = lambda: {}  # type: ignore[method-assign]
+    await watcher._tick()
+
+    watcher._scan = lambda: {raw: (2.0, 99)}  # type: ignore[method-assign]
+    attempts.append(1)
+    with pytest.raises(RuntimeError):
+        await watcher._tick()
+
+    # The retry the loop would make on the next interval.
+    attempts.append(2)
+    events.clear()
+    await watcher._tick()
+
+    assert "zim://archive" in [
+        uri for uri, kind in events if kind == CHANGE_REPLACED
+    ], events
