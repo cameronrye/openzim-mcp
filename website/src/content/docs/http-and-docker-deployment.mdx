@@ -152,7 +152,7 @@ curl -fsS http://localhost:8000/readyz
 The polling watcher (`MtimeWatcher`) is started via a wrapped lifespan handler so it works under streamable HTTP (the SDK's `streamable_http_app()` supplies its own lifespan; `add_event_handler('startup', …)` is silently a no-op).
 
 - Clients opt in with one long-lived `subscriptions/listen` request. A `.zim` appearing or disappearing publishes `notifications/resources/list_changed`; one replaced in place publishes `notifications/resources/updated` for `zim://{name}`.
-- `OPENZIM_MCP_SUBSCRIPTIONS_ENABLED=false` skips the watcher entirely; listen requests still succeed, they just never receive anything.
+- `OPENZIM_MCP_SUBSCRIPTIONS_ENABLED=false` skips the watcher entirely and withholds the capability: `resources.subscribe` and the `listChanged` flags read `false`, and `subscriptions/listen` fails with method-not-found rather than acknowledging a stream nothing would ever publish to.
 - `OPENZIM_MCP_WATCH_INTERVAL_SECONDS` (default 5, range 1–60) controls poll cadence.
 - Delivery is the SDK's: each listen stream is buffered independently, concurrent streams and per-stream backlog are both capped, and a stream whose client stops reading is ended. There is no replay — a client that loses its stream re-listens and re-reads.
 

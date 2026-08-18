@@ -15,14 +15,18 @@ only covers ``schema_version`` and ``archive_uuid`` and neither changed.
 
 Bumping ``SCHEMA_VERSION`` converts that silent wrong answer into the
 actionable error the module already emits for a stale sidecar: "Run
-`openzim-mcp build link-graph <path>` (rebuild it if the archive changed)".
-That is the module's stated "strict staleness decision".
+`openzim-mcp build link-graph <path>`". That is the module's stated "strict
+staleness decision" — and because the bump makes *every* pre-3.0.0 sidecar
+stale, that message has to name ``--force``, which the build requires
+whenever a sidecar file is already sitting next to the archive.
 """
 
 from __future__ import annotations
 
 import sqlite3
 from pathlib import Path
+
+import pytest
 
 from openzim_mcp.linkgraph.reader import LinkGraphReader, sidecar_path_for
 from openzim_mcp.linkgraph.schema import SCHEMA_VERSION
@@ -73,3 +77,44 @@ def test_current_sidecar_is_accepted(tmp_path: Path) -> None:
     reader = LinkGraphReader.open_for(str(archive), live_archive_uuid="u1")
     assert reader is not None
     reader.close()
+
+
+def test_stale_sidecar_message_tells_the_operator_about_force(tmp_path) -> None:
+    """The recovery command must work in the situation that produces it.
+
+    3.0.0 bumps ``SCHEMA_VERSION`` 2 -> 3, so every sidecar built before this
+    release is rejected and every affected operator sees this message. It told
+    them to run ``openzim-mcp build link-graph <archive>``, which exits 1 with
+    "sidecar already exists; pass --force to overwrite" whenever a sidecar file
+    is present — which, in this situation, it always is.
+    """
+    from unittest.mock import MagicMock, patch
+
+    from openzim_mcp.linkgraph.reader import LinkGraphUnavailable
+    from openzim_mcp.zim import structure as structure_mod
+
+    archive = tmp_path / "wiki.zim"
+    archive.write_bytes(b"stub")
+
+    ops = structure_mod._StructureMixin.__new__(structure_mod._StructureMixin)
+    ops._validate_zim_path = MagicMock(return_value=str(archive))  # type: ignore[method-assign]
+
+    fake_archive = MagicMock()
+    fake_archive.uuid = "uuid-1"
+    ctx = MagicMock()
+    ctx.__enter__ = MagicMock(return_value=fake_archive)
+    ctx.__exit__ = MagicMock(return_value=False)
+
+    with (
+        patch.object(structure_mod, "_zim_ops_mod") as zim_ops_mod,
+        patch(
+            "openzim_mcp.linkgraph.reader.LinkGraphReader.open_for", return_value=None
+        ),
+    ):
+        zim_ops_mod.zim_archive.return_value = ctx
+        with pytest.raises(LinkGraphUnavailable) as excinfo:
+            ops.get_inbound_links_data(str(archive), "A/Foo", limit=5, offset=0)
+
+    message = str(excinfo.value)
+    assert "--force" in message, message
+    assert "build link-graph" in message, message
