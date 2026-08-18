@@ -3,26 +3,54 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Optional
 
 import pytest
+
+from tests.live.conftest import usable_zims
 
 pytestmark = pytest.mark.live
 
 
+def _build_first_linked_archive(zims) -> Optional[tuple]:
+    """Build a sidecar for the first archive that yields edges.
+
+    ``zims[0]`` alone was not enough: the fixture corpus leads with
+    ``small.zim``, a two-entry archive whose articles link to nothing, so the
+    roundtrip asserted importance ranking over an empty edge table. Walk the
+    candidates and keep the first that actually has a link graph — the
+    behavior under test only exists once there are edges to rank.
+
+    Returns ``(archive, sidecar, stats, created_here)``, or None.
+    """
+    from openzim_mcp.linkgraph.builder import build_link_graph
+    from openzim_mcp.linkgraph.reader import sidecar_path_for
+
+    for archive in zims:
+        # Build directly to the sibling path the reader expects.
+        sidecar = sidecar_path_for(str(archive))
+        created_here = not Path(sidecar).exists()
+        stats = build_link_graph(str(archive), sidecar, force=True)
+        if stats.node_count > 0 and stats.edge_count > 0:
+            return archive, sidecar, stats, created_here
+        if created_here:
+            Path(sidecar).unlink(missing_ok=True)
+    return None
+
+
 def test_build_then_inbound_roundtrip(zim_dir, tmp_path) -> None:
     """Building a sidecar then querying inbound returns importance-ranked linkers."""
-    zims = sorted(zim_dir.glob("*.zim"))
+    zims = usable_zims(zim_dir)
     if not zims:
         pytest.skip("no ZIM test data available")
-    archive = zims[0]
 
-    from openzim_mcp.linkgraph.builder import build_link_graph
-    from openzim_mcp.linkgraph.reader import LinkGraphReader, sidecar_path_for
+    from openzim_mcp.linkgraph.reader import LinkGraphReader
 
-    # Build directly to the sibling path the reader expects.
-    sidecar = sidecar_path_for(str(archive))
-    created_here = not Path(sidecar).exists()
-    stats = build_link_graph(str(archive), sidecar, force=True)
+    built = _build_first_linked_archive(zims)
+    if built is None:
+        pytest.skip("no archive in the corpus produces a non-empty link graph")
+    archive, sidecar, stats, created_here = built
+
     try:
         assert stats.node_count > 0 and stats.edge_count > 0
 
@@ -54,7 +82,7 @@ def test_build_then_inbound_roundtrip(zim_dir, tmp_path) -> None:
 
 def test_inbound_absent_sidecar_is_graceful(zim_dir) -> None:
     """With no sidecar present, open_for reports absence (None), not an error."""
-    zims = sorted(zim_dir.glob("*.zim"))
+    zims = usable_zims(zim_dir)
     if not zims:
         pytest.skip("no ZIM test data available")
     from openzim_mcp.linkgraph.reader import LinkGraphReader, sidecar_path_for

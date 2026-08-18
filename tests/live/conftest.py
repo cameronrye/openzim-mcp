@@ -52,13 +52,49 @@ def _zim_dir() -> Path:
     return Path(os.environ.get("ZIM_TEST_DATA_DIR", str(Path.home() / "Developer/zim")))
 
 
+def usable_zims(d: Path) -> List[Path]:
+    """Return the archives in ``d`` that a test may legitimately assert on.
+
+    Excludes the ``invalid.*`` fixtures. The zim-testing-suite ships
+    deliberately-corrupt archives (truncated header, out-of-bounds cluster
+    pointer, bad mimetype in dirent) whose whole purpose is to be rejected,
+    and they sort ahead of every real archive — so any test that reached
+    for ``sorted(...)[0]`` was asserting real behavior against a file
+    engineered to have none.
+    """
+    return [f for f in sorted(d.glob("*.zim")) if not f.name.startswith("invalid.")]
+
+
+def resolve_zim_dir(d: Path) -> Optional[Path]:
+    """Resolve ``d`` to a directory holding usable archives, or None.
+
+    ``ZIM_TEST_DATA_DIR`` is read by two fixture families with different
+    layout expectations: ``tests/conftest.py`` wants the zim-testing-suite
+    *root* and reaches into ``withns/`` and ``nons/`` itself, while the live
+    fixtures want a flat directory of ``.zim`` files. Pointing the variable
+    at whichever layout one family wants used to strand the other. Accept
+    both by descending into the suite's subdirectories when the directory
+    named has no usable archive of its own.
+    """
+    if not d.is_dir():
+        return None
+    if usable_zims(d):
+        return d
+    for sub in ("withns", "nons"):
+        candidate = d / sub
+        if candidate.is_dir() and usable_zims(candidate):
+            return candidate
+    return None
+
+
 @pytest.fixture(scope="session")
 def zim_dir() -> Path:
     """Resolve the directory of ZIM files; skip if none present."""
     d = _zim_dir()
-    if not d.is_dir() or not list(d.glob("*.zim")):
+    resolved = resolve_zim_dir(d)
+    if resolved is None:
         pytest.skip(f"No .zim files found in {d}. Set ZIM_TEST_DATA_DIR to override.")
-    return d
+    return resolved
 
 
 @dataclass
