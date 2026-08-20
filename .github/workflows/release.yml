@@ -223,6 +223,73 @@ jobs:
         with:
           skip-existing: true
 
+  # The official MCP Registry entry (io.github.cameronrye/openzim-mcp) used to
+  # be advanced by hand with `mcp-publisher login github` (device-code OAuth),
+  # so it silently fell five releases behind PyPI. Publish from here instead:
+  # the GitHub OIDC token proves ownership of the io.github.cameronrye/*
+  # namespace, and server.json is already version-locked by release-please.
+  # This job is deliberately NOT a dependency of create-release — a registry
+  # outage must never block or empty a GitHub release.
+  publish-registry:
+    name: Publish to MCP Registry
+    runs-on: ubuntu-latest
+    needs: [validate-and-prepare, publish-pypi]
+    if: always() && needs.publish-pypi.result == 'success'
+    permissions:
+      id-token: write # GitHub OIDC login to the registry (io.github.* namespace)
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && (needs.validate-and-prepare.outputs.tag_name || github.event.inputs.tag) || github.ref }}
+
+      - name: Install mcp-publisher
+        run: |
+          set -euo pipefail
+          curl -sSL -o mcp-publisher.tar.gz \
+            "https://github.com/modelcontextprotocol/registry/releases/download/v1.8.1/mcp-publisher_linux_amd64.tar.gz"
+          echo "a06c9096dcb9727c13555b6be26c7effa707b01f06a4c561ba7a3635443cf2cc  mcp-publisher.tar.gz" | sha256sum -c -
+          tar -xzf mcp-publisher.tar.gz
+          test -x ./mcp-publisher
+          ./mcp-publisher --version
+
+      # The registry verifies the `mcp-name` marker against the LIVE PyPI
+      # description of packages[0].version, and PyPI can take a minute to
+      # serve a freshly uploaded release. Assert the version lockstep on the
+      # manual-tag path too, then wait for PyPI rather than racing it.
+      - name: Wait for PyPI to serve the released version
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ needs.validate-and-prepare.outputs.tag_name || github.event.inputs.tag }}"
+          else
+            TAG="${{ github.ref_name }}"
+          fi
+          VERSION="${TAG#v}"
+          SERVERJSON_VERSION=$(jq -r '.packages[0].version' server.json)
+          if [ "$SERVERJSON_VERSION" != "$VERSION" ]; then
+            echo "::error::server.json packages[0].version ($SERVERJSON_VERSION) != release $VERSION"
+            exit 1
+          fi
+          for attempt in $(seq 1 30); do
+            if curl -fsS "https://pypi.org/pypi/openzim-mcp/${VERSION}/json" >/dev/null; then
+              echo "PyPI serves openzim-mcp ${VERSION}"
+              exit 0
+            fi
+            echo "PyPI does not serve ${VERSION} yet (attempt ${attempt}/30)"
+            sleep 10
+          done
+          echo "::error::openzim-mcp ${VERSION} never appeared on PyPI"
+          exit 1
+
+      - name: Publish server.json
+        run: |
+          set -euo pipefail
+          ./mcp-publisher validate
+          ./mcp-publisher login github-oidc
+          ./mcp-publisher publish
+          ./mcp-publisher status
+
   create-release:
     name: Create GitHub Release
     runs-on: ubuntu-latest
