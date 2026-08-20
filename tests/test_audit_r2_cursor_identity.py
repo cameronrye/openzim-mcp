@@ -33,6 +33,15 @@ from openzim_mcp.security import PathValidator
 from openzim_mcp.simple_tools import SimpleToolsHandler
 from openzim_mcp.zim_operations import ZimOperations
 
+
+def _body(out: object) -> str:
+    """Readable body of a handler result: the ``message`` of a
+    ``ToolErrorPayload`` envelope, or the markdown string itself."""
+    if isinstance(out, dict):
+        return str(out.get("message", ""))
+    return str(out)
+
+
 MISMATCH_TITLE = "Cursor / Archive Mismatch"
 
 
@@ -83,10 +92,10 @@ class TestCrossArchiveCursorReplayRejected:
             str(archives["b"]),
             options={"cursor": cursor, "limit": 5},
         )
-        assert isinstance(out, str)
-        assert MISMATCH_TITLE in out, out[:400]
+        assert isinstance(out, dict), f"expected envelope, got {type(out)!r}: {out!r}"
+        assert MISMATCH_TITLE in _body(out), _body(out)[:400]
         # Pre-fix, archive B's namespace-A rows came back at A's offset.
-        assert "results" not in out
+        assert "results" not in _body(out)
 
     def test_browse_cursor_round_trips_on_issuing_archive(
         self,
@@ -104,7 +113,7 @@ class TestCrossArchiveCursorReplayRejected:
             options={"cursor": cursor, "limit": 5},
         )
         assert isinstance(out, str)
-        assert MISMATCH_TITLE not in out
+        assert MISMATCH_TITLE not in _body(out)
         assert "results" in out
 
     def test_search_cursor_from_other_archive_is_rejected(
@@ -122,8 +131,8 @@ class TestCrossArchiveCursorReplayRejected:
             str(archives["b"]),
             options={"cursor": cursor, "limit": 5},
         )
-        assert isinstance(out, str)
-        assert MISMATCH_TITLE in out, out[:400]
+        assert isinstance(out, dict), f"expected envelope, got {type(out)!r}: {out!r}"
+        assert MISMATCH_TITLE in _body(out), _body(out)[:400]
 
     def test_search_cursor_round_trips_on_issuing_archive(
         self,
@@ -141,7 +150,7 @@ class TestCrossArchiveCursorReplayRejected:
             options={"cursor": cursor, "limit": 5},
         )
         assert isinstance(out, str)
-        assert MISMATCH_TITLE not in out
+        assert MISMATCH_TITLE not in _body(out)
 
     def test_filtered_search_cursor_from_other_archive_is_rejected(
         self,
@@ -160,8 +169,8 @@ class TestCrossArchiveCursorReplayRejected:
             str(archives["b"]),
             options={"cursor": cursor, "limit": 5},
         )
-        assert isinstance(out, str)
-        assert MISMATCH_TITLE in out, out[:400]
+        assert isinstance(out, dict), f"expected envelope, got {type(out)!r}: {out!r}"
+        assert MISMATCH_TITLE in _body(out), _body(out)[:400]
 
     def test_filtered_search_cursor_round_trips_on_issuing_archive(
         self,
@@ -181,7 +190,7 @@ class TestCrossArchiveCursorReplayRejected:
             options={"cursor": cursor, "limit": 5},
         )
         assert isinstance(out, str)
-        assert MISMATCH_TITLE not in out
+        assert MISMATCH_TITLE not in _body(out)
 
     def test_browse_without_cursor_unaffected(
         self, handler: SimpleToolsHandler, archives: Dict[str, Path]
@@ -192,7 +201,7 @@ class TestCrossArchiveCursorReplayRejected:
             options={"limit": 5},
         )
         assert isinstance(out, str)
-        assert MISMATCH_TITLE not in out
+        assert MISMATCH_TITLE not in _body(out)
         assert "results" in out
 
 
@@ -226,7 +235,7 @@ class TestCursorArchiveGuardEdges:
             "browse namespace C", "/x.zim", options={"cursor": cursor, "limit": 5}
         )
         assert isinstance(out, str)
-        assert MISMATCH_TITLE not in out
+        assert MISMATCH_TITLE not in _body(out)
         assert ops.browse_namespace.called
 
     def test_foreign_identity_blocks_backend_call(self) -> None:
@@ -246,8 +255,8 @@ class TestCursorArchiveGuardEdges:
         out = handler.handle_zim_query(
             "browse namespace C", "/x.zim", options={"cursor": cursor, "limit": 5}
         )
-        assert isinstance(out, str)
-        assert MISMATCH_TITLE in out
+        assert isinstance(out, dict), f"expected envelope, got {type(out)!r}: {out!r}"
+        assert MISMATCH_TITLE in _body(out)
         assert not ops.browse_namespace.called
 
 
@@ -305,8 +314,8 @@ class TestLinksCursorEntryBinding:
                 "compact": True,
             },
         )
-        assert isinstance(out, str)
-        assert ENTRY_MISMATCH_TITLE in out, out[:400]
+        assert isinstance(out, dict), f"expected envelope, got {type(out)!r}: {out!r}"
+        assert ENTRY_MISMATCH_TITLE in _body(out), _body(out)[:400]
         assert not ops.extract_article_links_data.called
 
     def test_links_cursor_round_trips_across_case_and_underscores(self) -> None:
@@ -323,7 +332,7 @@ class TestLinksCursorEntryBinding:
             },
         )
         assert isinstance(out, str)
-        assert ENTRY_MISMATCH_TITLE not in out, out[:400]
+        assert ENTRY_MISMATCH_TITLE not in _body(out), _body(out)[:400]
         assert ops.extract_article_links_data.called
         # The cursor's ``k`` scopes its offset to that bucket: the internal
         # fetch resumes at 25 while the external fetch starts fresh.
@@ -347,6 +356,6 @@ class TestLinksCursorEntryBinding:
                 "compact": True,
             },
         )
-        assert isinstance(out, str)
-        assert MISMATCH_TITLE in out, out[:400]
+        assert isinstance(out, dict), f"expected envelope, got {type(out)!r}: {out!r}"
+        assert MISMATCH_TITLE in _body(out), _body(out)[:400]
         assert not ops.extract_article_links_data.called
