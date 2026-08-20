@@ -197,6 +197,21 @@ def test_d03_name_error_renders_a_not_found_template_pointing_at_paths() -> None
     assert not _omission_steps(config)
 
 
+def test_d03_name_error_template_is_two_whole_steps() -> None:
+    """Each step is written as a parenthesised pair of string literals so it
+    wraps at the line limit; a dropped comma between the pairs would silently
+    fuse both steps into one item that reads as two run-on sentences."""
+    from openzim_mcp.error_messages import ERROR_CONFIGS
+
+    steps = ERROR_CONFIGS[OpenZimMcpArchiveNameError].steps
+
+    assert len(steps) == 2, steps
+    assert steps[0].startswith("Use `zim_health()`"), steps[0]
+    assert steps[0].endswith("verbatim as `zim_file_path`"), steps[0]
+    assert steps[1].startswith("Relative names resolve"), steps[1]
+    assert steps[1].endswith("the `.zim` extension"), steps[1]
+
+
 def test_d03_ops_layer_prologue_accepts_a_bare_name(temp_dir: Path) -> None:
     """``_validate_zim_path`` is the prologue every domain mixin runs, so
     zim_metadata / zim_browse / zim_get all inherit the resolution."""
