@@ -13,6 +13,7 @@ reference at import time.
 """
 
 import logging
+import unicodedata
 import urllib.parse
 from dataclasses import dataclass
 from pathlib import Path
@@ -236,6 +237,36 @@ def _query_title_already_on_page(results: List[Dict[str, Any]], query: str) -> b
     return False
 
 
+# Shortest shared prefix that counts as a common stem in the relevance
+# proxy: ``diabet``/``diabetes`` and ``symptom``/``symptoms`` share one,
+# ``cat``/``catalogue`` do not.
+_RELEVANCE_STEM_MIN_LEN = 4
+
+
+def _fold_for_relevance(text: str) -> str:
+    """NFKD-fold ``text`` so ``Gödel`` tokenises as ``godel``, not ``del``."""
+    decomposed = unicodedata.normalize("NFKD", text)
+    return "".join(ch for ch in decomposed if not unicodedata.combining(ch))
+
+
+def _tokens_share_a_stem(query_tokens: set, result_tokens: set) -> bool:
+    """Whether any query token matches a result token modulo inflection.
+
+    Xapian's English stemmer and ``*`` wildcards both match on a stem,
+    so ``diabet*`` and ``symptoms`` legitimately retrieve ``Diabetes`` and
+    ``Symptom``. Accept an exact token or a shared prefix at least
+    ``_RELEVANCE_STEM_MIN_LEN`` long where one token extends the other.
+    """
+    if query_tokens & result_tokens:
+        return True
+    for q in query_tokens:
+        for r in result_tokens:
+            short, long_ = (q, r) if len(q) <= len(r) else (r, q)
+            if len(short) >= _RELEVANCE_STEM_MIN_LEN and long_.startswith(short):
+                return True
+    return False
+
+
 def _all_results_weakly_match(results: List[Dict[str, Any]], query: str) -> bool:
     """Return True iff NONE of the search results carry any query token.
 
@@ -246,18 +277,23 @@ def _all_results_weakly_match(results: List[Dict[str, Any]], query: str) -> bool
     on the response so the model can pivot (try alt spellings, broaden
     the query) rather than treat noisy results as authoritative.
 
+    Both sides are diacritic-folded and compared modulo a shared stem,
+    matching what Xapian itself did to produce the hits: ``diabet*`` and
+    ``Godel`` used to flag the very Diabetes / Gödel articles they asked
+    for, telling the model to distrust the best possible results.
+
     Returns False when ``results`` is empty (callers gate on
     ``total_results > 0`` so empty lists never reach this path; defensive).
     """
     if not results:
         return False
-    query_tokens = tokenize_for_relevance(query)
+    query_tokens = tokenize_for_relevance(_fold_for_relevance(query))
     if not query_tokens:
         return False
     for r in results:
         haystack = f"{r.get('path', '')} {r.get('title', '')}"
-        r_tokens = tokenize_for_relevance(haystack)
-        if query_tokens & r_tokens:
+        r_tokens = tokenize_for_relevance(_fold_for_relevance(haystack))
+        if _tokens_share_a_stem(query_tokens, r_tokens):
             return False
     return True
 

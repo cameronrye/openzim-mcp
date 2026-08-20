@@ -320,3 +320,53 @@ def test_d27_plain_fulltext_page_emits_each_page_once(tmp_path) -> None:
     clean, _ = _perform(["C/a.htm", "C/b.htm", "C/c.htm"], 2, 0)
     assert [r["path"] for r in clean["results"]] == ["C/a.htm", "C/b.htm"]
     assert "source_consumed" not in clean["page_info"]
+
+
+# ---------------------------------------------------------------------------
+# D28 — low_relevance must not flag hits Xapian matched by stem or fold
+# ---------------------------------------------------------------------------
+
+
+def test_d28_low_relevance_proxy_folds_diacritics_and_stems() -> None:
+    """``diabet*`` / ``Godel`` hits that ARE the topic are not low_relevance.
+
+    The relevance proxy compared exact ASCII lowercase tokens, so the
+    wildcard stem ``diabet`` never equalled ``diabetes`` and ``gödel``
+    tokenised to ``del``; the flag told the model to distrust the best
+    possible results. Compare modulo the same stemming/diacritic folding
+    Xapian applied: fold both sides and accept a shared stem prefix.
+    """
+    from openzim_mcp.zim.search import _all_results_weakly_match
+
+    diabetes_hits = [
+        {"path": "medlineplus.gov/diabetes.html", "title": "Diabetes | MedlinePlus"},
+        {"path": "medlineplus.gov/diabetestype2.html", "title": "Type 2 Diabetes"},
+    ]
+    assert _all_results_weakly_match(diabetes_hits, "diabet*") is False
+    # Inflection in the other direction (query longer than the title token).
+    assert (
+        _all_results_weakly_match(
+            [{"path": "C/Symptom", "title": "Symptom"}], "symptoms"
+        )
+        is False
+    )
+
+    godel_hits = [
+        {"path": "iep.utm.edu/lp-argue/", "title": "Lucas-Penrose Argument about Gödel"}
+    ]
+    assert _all_results_weakly_match(godel_hits, "Godel") is False
+    assert _all_results_weakly_match(godel_hits, "Gödel") is False
+
+    # Genuinely unrelated hits still trip the flag.
+    assert (
+        _all_results_weakly_match([{"path": "A/Banana", "title": "Banana"}], "insulin")
+        is True
+    )
+    # A short shared prefix is not a stem: ``cat`` must not vouch for
+    # ``catalogue``.
+    assert (
+        _all_results_weakly_match(
+            [{"path": "A/Catalogue", "title": "Catalogue"}], "cats"
+        )
+        is True
+    )
