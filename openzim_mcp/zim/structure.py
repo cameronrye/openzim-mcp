@@ -11,6 +11,7 @@ without changes.
 """
 
 import logging
+from contextlib import suppress
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, cast
 from urllib.parse import unquote
@@ -68,18 +69,23 @@ def _resolve_entry_spelling(archive: Any, path: str) -> Tuple[Optional[Any], str
     caller that cannot verify the target still keeps its best-effort edge
     rather than dropping it.
     """
-    try:
+    # Broad on purpose: libzim reports a miss as a bare ``KeyError`` and a
+    # corrupt cluster as ``RuntimeError``, and the probe's only job is to
+    # answer "does this spelling resolve?" — any failure means "no". Callers
+    # such as ``get_inbound_links_data`` rely on it never raising.
+    with suppress(Exception):
         return archive.get_entry_by_path(path), path
-    except Exception:  # noqa: BLE001 — libzim raises bare KeyError/RuntimeError
-        pass
     decoded = unquote(path)
     if decoded != path:
-        try:
+        with suppress(Exception):
             return archive.get_entry_by_path(decoded), decoded
-        except Exception:  # noqa: BLE001 — same
-            pass
     return None, path
 
+
+# Prefix shared by every servable article mimetype (``text/html`` and
+# ``text/html; charset=utf-8``). The structure views answer "is there
+# anything to parse?" with this one test.
+_HTML_MIME_PREFIX = "text/html"
 
 # Mimetype families that are never navigable articles. Used by
 # ``_StructureMixin._is_non_article_target`` so query-string / extensionless
@@ -576,7 +582,7 @@ class _StructureMixin:
             # entries, and the sibling TOC payload sets it; without it an
             # image entry's empty result was indistinguishable from an
             # article that simply has no links.
-            if not bundle["content_type"].startswith("text/html"):
+            if not bundle["content_type"].startswith(_HTML_MIME_PREFIX):
                 payload["message"] = (
                     f"Link extraction requires HTML content, "
                     f"got: {bundle['content_type']}"
@@ -726,7 +732,7 @@ class _StructureMixin:
                     ),
                 },
             )
-            if not bundle["content_type"].startswith("text/html"):
+            if not bundle["content_type"].startswith(_HTML_MIME_PREFIX):
                 payload["message"] = (
                     f"TOC extraction requires HTML content, "
                     f"got: {bundle['content_type']}"
@@ -830,7 +836,7 @@ class _StructureMixin:
             # — the bundle already knows — and point at the fetch that can
             # actually serve the entry.
             content_type = bundle["content_type"]
-            if not content_type.startswith("text/html"):
+            if not content_type.startswith(_HTML_MIME_PREFIX):
                 reason = "non_html"
                 message = (
                     f"Entry {entry_path!r} has no sections: it is not an HTML "
