@@ -277,11 +277,13 @@ class TestD22TocStructureMissingEntry:
         self, ops: ZimOperations, zim_path: str, method: str
     ) -> None:
         from openzim_mcp.error_messages import NOT_FOUND_ERROR_CONFIG, get_error_config
+        from openzim_mcp.exceptions import OpenZimMcpArchiveError
 
+        view = getattr(ops, method)
         with patch(ARCHIVE_CTX) as ctx:
             ctx.return_value.__enter__.return_value = _missing_entry_archive()
-            with pytest.raises(Exception) as excinfo:
-                getattr(ops, method)(zim_path, "A/Nope")
+            with pytest.raises(OpenZimMcpArchiveError, match="A/Nope") as excinfo:
+                view(zim_path, "A/Nope")
 
         err = excinfo.value
         assert "A/Nope" in str(err)
@@ -613,8 +615,10 @@ class TestD34OutboundResolvedPath:
                 zim_path, "iep.utm.edu/plato/", kind="media"
             )
 
-        assert external["results"] and all("path" not in r for r in external["results"])
-        assert media["results"] and all("path" not in r for r in media["results"])
+        assert external["results"]
+        assert all("path" not in r for r in external["results"])
+        assert media["results"]
+        assert all("path" not in r for r in media["results"])
 
 
 # ---------------------------------------------------------------------------
@@ -742,10 +746,13 @@ class TestD36OutboundMissingEntry:
         self, ops: ZimOperations, zim_path: str
     ) -> None:
         from openzim_mcp.error_messages import NOT_FOUND_ERROR_CONFIG, get_error_config
+        from openzim_mcp.exceptions import OpenZimMcpArchiveError
 
         with patch(ARCHIVE_CTX) as ctx:
             ctx.return_value.__enter__.return_value = _missing_entry_archive()
-            with pytest.raises(Exception) as excinfo:
+            with pytest.raises(
+                OpenZimMcpArchiveError, match="A/does-not-exist.html"
+            ) as excinfo:
                 ops.extract_article_links_data(zim_path, "A/does-not-exist.html")
 
         err = excinfo.value
@@ -981,12 +988,11 @@ class TestD40CursorArchiveMismatchCode:
             OpenZimMcpValidationError,
         )
 
+        direction = getattr(ops, method)
         with patch(ARCHIVE_CTX) as ctx:
             ctx.return_value.__enter__.return_value = _html_archive("<p>x</p>")
             with pytest.raises(OpenZimMcpCursorMismatchError) as excinfo:
-                getattr(ops, method)(
-                    zim_path, "Test", cursor_archive_identity="not-this-archive"
-                )
+                direction(zim_path, "Test", cursor_archive_identity="not-this-archive")
         # Still a validation error for callers that catch the broad class.
         assert isinstance(excinfo.value, OpenZimMcpValidationError)
         assert "archive" in str(excinfo.value)
@@ -1055,8 +1061,10 @@ class TestD41LimitBoundsDocumented:
             line for line in text.splitlines() if line.strip().startswith("limit")
         )
         block = text[text.index(limit_line) :]
-        assert "1-500" in block and "default 100" in block
-        assert "1-100" in block and "default 10" in block
+        assert "1-500" in block
+        assert "default 100" in block
+        assert "1-100" in block
+        assert "default 10" in block
 
     def test_documented_caps_match_behaviour(
         self, ops: ZimOperations, zim_path: str

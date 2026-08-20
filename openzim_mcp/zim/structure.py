@@ -11,8 +11,19 @@ without changes.
 """
 
 import logging
+from contextlib import suppress
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, cast
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Dict,
+    List,
+    NamedTuple,
+    Optional,
+    Tuple,
+    Union,
+    cast,
+)
 from urllib.parse import unquote
 
 from libzim.reader import Archive  # type: ignore[import-untyped]
@@ -68,18 +79,23 @@ def _resolve_entry_spelling(archive: Any, path: str) -> Tuple[Optional[Any], str
     caller that cannot verify the target still keeps its best-effort edge
     rather than dropping it.
     """
-    try:
+    # Broad on purpose: libzim reports a miss as a bare ``KeyError`` and a
+    # corrupt cluster as ``RuntimeError``, and the probe's only job is to
+    # answer "does this spelling resolve?" — any failure means "no". Callers
+    # such as ``get_inbound_links_data`` rely on it never raising.
+    with suppress(Exception):
         return archive.get_entry_by_path(path), path
-    except Exception:  # noqa: BLE001 — libzim raises bare KeyError/RuntimeError
-        pass
     decoded = unquote(path)
     if decoded != path:
-        try:
+        with suppress(Exception):
             return archive.get_entry_by_path(decoded), decoded
-        except Exception:  # noqa: BLE001 — same
-            pass
     return None, path
 
+
+# Prefix shared by every servable article mimetype (``text/html`` and
+# ``text/html; charset=utf-8``). The structure views answer "is there
+# anything to parse?" with this one test.
+_HTML_MIME_PREFIX = "text/html"
 
 # Mimetype families that are never navigable articles. Used by
 # ``_StructureMixin._is_non_article_target`` so query-string / extensionless
@@ -103,6 +119,67 @@ _ASSET_MIME_EXACT = frozenset(
     }
 )
 _ASSET_MIME_PREFIXES = ("image/", "video/", "audio/", "font/")
+
+_LINK_KINDS = frozenset({"internal", "external", "media"})
+
+
+def _resolve_outbound_item(archive: Any, item: Dict[str, Any]) -> None:
+    """Rewrite one outbound row's ``path`` to the servable spelling; fill ``title``.
+
+    The href the row was built from is percent-encoded, so a non-ASCII
+    target arrived here as ``A/El_Ni%C3%B1o`` — which both failed the title
+    lookup (leaving the raw path as the "title" placeholder) and, worse,
+    went out on the wire as a ``path`` the caller could not fetch.
+    ``_resolve_entry_spelling`` picks whichever spelling the archive serves.
+
+    A redirect stub is followed to its canonical target before the title is
+    read; ``title`` is left alone when nothing resolvable has one, so the
+    caller's placeholder survives. Raises whatever the archive raises — the
+    caller (``_resolve_outbound_titles``) treats any failure as "keep the
+    placeholder".
+    """
+    from openzim_mcp.zim.redirects import best_effort_redirect_chain
+
+    entry, spelling = _resolve_entry_spelling(archive, item["path"])
+    # ``is True``: the mock archives used across the test suite hand back
+    # MagicMock entries whose ``is_redirect`` is itself a truthy MagicMock.
+    if entry is not None and getattr(entry, "is_redirect", False) is True:
+        resolved = best_effort_redirect_chain(entry)
+        resolved_path = getattr(resolved, "path", None)
+        if isinstance(resolved_path, str) and resolved_path:
+            entry, spelling = resolved, resolved_path
+    item["path"] = spelling
+    title = getattr(entry, "title", None) if entry else None
+    if title:
+        item["title"] = title
+
+
+class _OutboundLinkBuckets(NamedTuple):
+    """One article's outbound links, split the way ``zim_links`` reports them.
+
+    Built by ``_StructureMixin._bucket_outbound_links`` from the cached
+    bundle's raw ``internal`` / ``external`` / ``media`` lists.
+    """
+
+    internal: List[Any]
+    """Cross-article links only: anchors and anchor-wrapped assets removed."""
+
+    external: List[Any]
+    media: List[Any]
+    """The page's own media rows plus anchor-wrapped assets (``type="asset"``)."""
+
+    anchor_count: int
+    """In-page ``#fragment`` links dropped from ``internal``."""
+
+    folded_targets: set[str]
+    """Entry paths of media rows that absorbed a same-target anchor."""
+
+    def for_kind(self, kind: str) -> List[Any]:
+        if kind == "internal":
+            return self.internal
+        if kind == "media":
+            return self.media
+        return self.external
 
 
 def _entry_not_found_error(entry_path: str) -> OpenZimMcpArchiveError:
@@ -344,6 +421,168 @@ class _StructureMixin:
                 f"Failed to extract article structure: {e}"
             ) from e
 
+    @staticmethod
+    def _validate_links_args(limit: int, offset: int, kind: str) -> None:
+        """Reject out-of-range ``extract_article_links_data`` arguments.
+
+        Caller-input validation surfaces as OpenZimMcpValidationError so the
+        tool layer can render a targeted validation message (separate from
+        archive-access errors).
+        """
+        if limit < 1 or limit > 500:
+            raise OpenZimMcpValidationError(
+                f"limit must be between 1 and 500 (provided: {limit})"
+            )
+        if offset < 0:
+            raise OpenZimMcpValidationError(
+                f"offset must be non-negative (provided: {offset})"
+            )
+        if kind not in _LINK_KINDS:
+            raise OpenZimMcpValidationError(
+                f"kind must be one of 'internal', 'external', 'media' "
+                f"(provided: {kind!r})"
+            )
+
+    @staticmethod
+    def _verify_links_cursor_identity(
+        cursor_archive_identity: Optional[str], validated_path: Path
+    ) -> None:
+        """Cursor integrity (Phase B #11).
+
+        A cursor issued for archive A must not be honoured when resubmitted
+        against archive B. No-op when the call carried no cursor.
+        """
+        if cursor_archive_identity is None:
+            return
+        from openzim_mcp.pagination import Cursor as _CursorClass
+        from openzim_mcp.pagination import (
+            CursorMismatchError,
+            archive_identity,
+        )
+
+        try:
+            _CursorClass.verify_archive_identity(
+                cast("Any", {"ai": cursor_archive_identity}),
+                expected=archive_identity(validated_path),
+                tool="extract_article_links",
+            )
+        except CursorMismatchError as e:
+            raise OpenZimMcpCursorMismatchError(str(e)) from e
+
+    def _media_target(self, link: Any, entry_path: str) -> Optional[str]:
+        """Entry path a media/anchor row's href resolves to, or ``None``."""
+        return self._resolve_link_to_entry_path(str(link.get("url", "")), entry_path)
+
+    def _bucket_outbound_links(self, bundle: Any) -> _OutboundLinkBuckets:
+        """Split the bundle's raw link lists into the reported categories.
+
+        BUG #6: the bundle 'internal' bucket carries BOTH real
+        cross-article links (type=='internal') and in-page '#anchor'
+        fragment links (type=='anchor'). Anchors are not navigation targets
+        and are dropped by the inbound link-graph builder, so exclude them
+        from the 'internal' kind's results/total and the internal count,
+        surfacing them under a separate 'anchor' count so outbound and
+        inbound agree on cross-article link totals.
+
+        zimit/warc2zim wraps an article's lead image (and figure links) in
+        ``<a href="…/plato.jpg">``, so the anchor classifier typed
+        image/font/script assets 'internal' and they inflated
+        ``category_totals.internal`` — while the related direction and the
+        sidecar builder both drop them via ``_is_non_article_target``. Apply
+        the same test here: assets move to the media bucket
+        (``type="asset"``, after the page's own ``<img>``-style rows) so
+        'internal' counts navigable articles consistently across directions.
+
+        R2-6: zimit's ``<a href="x.jpg"><img src="x.jpg">`` is ONE asset,
+        but the ``<img>`` already sits in the media bucket, so the
+        reclassified anchor doubled it (and the media total). Rule: an
+        anchor whose href resolves to the same entry path as an existing
+        media row is folded into that row — the richer ``image`` row
+        survives and inherits the anchor's fetchable ``path``. Anchors to a
+        genuinely different entry (full-size file vs thumbnail) keep their
+        own ``asset`` row.
+        """
+        entry_path: str = bundle["entry_path"]
+        internal_bucket: List[Any] = cast("List[Any]", bundle["links"]["internal"])
+        non_anchor_internal = [
+            lk
+            for lk in internal_bucket
+            if not (isinstance(lk, dict) and lk.get("type") == "anchor")
+        ]
+        anchor_count = len(internal_bucket) - len(non_anchor_internal)
+
+        media_rows: List[Any] = list(bundle["links"]["media"])
+        media_targets = {
+            t
+            for t in (
+                self._media_target(lk, entry_path)
+                for lk in media_rows
+                if isinstance(lk, dict)
+            )
+            if t
+        }
+        cross_article_internal: List[Any] = []
+        anchor_wrapped_assets: List[Any] = []
+        folded_targets: set[str] = set()
+        for lk in non_anchor_internal:
+            if isinstance(lk, dict) and self._is_non_article_target(
+                str(lk.get("url", ""))
+            ):
+                target = self._media_target(lk, entry_path)
+                if target and target in media_targets:
+                    folded_targets.add(target)
+                    continue
+                anchor_wrapped_assets.append({**lk, "type": "asset"})
+            else:
+                cross_article_internal.append(lk)
+        return _OutboundLinkBuckets(
+            internal=cross_article_internal,
+            external=cast("List[Any]", bundle["links"]["external"]),
+            media=media_rows + anchor_wrapped_assets,
+            anchor_count=anchor_count,
+            folded_targets=folded_targets,
+        )
+
+    def _resolve_page_paths(
+        self,
+        archive: Any,
+        kind: str,
+        page: List[Any],
+        folded_targets: set[str],
+        entry_path: str,
+    ) -> List[Any]:
+        """Attach a fetchable ``path`` to the rows of ``page`` that earn one.
+
+        ``url`` is the raw document-relative href (``../aristotl``) and
+        does not round-trip into ``zim_get`` or the other directions;
+        related/inbound already ship a resolved ``path``. Internal rows get
+        one here too — resolved against the SERVED entry (``entry_path`` is
+        post-redirect) and redirect-followed where the archive can verify
+        it. Fresh dicts: ``page`` aliases the cached bundle's rows.
+
+        Anchor-wrapped assets were ``<a href>``s, so they get the same
+        resolved ``path`` internal rows do — usable with
+        ``zim_get(binary=True)``. Media rows that absorbed such an anchor
+        get it too, so folding loses nothing. External rows pass through
+        untouched.
+        """
+        if kind == "internal":
+            return [self._with_resolved_path(archive, lk, entry_path) for lk in page]
+        if kind == "media":
+            return [
+                (
+                    self._with_resolved_path(archive, lk, entry_path)
+                    if isinstance(lk, dict)
+                    and (
+                        lk.get("type") == "asset"
+                        or self._media_target(lk, entry_path) in folded_targets
+                    )
+                    else lk
+                )
+                for lk in page
+            ]
+        return page
+
     def extract_article_links_data(
         self,
         zim_file_path: str,
@@ -384,155 +623,30 @@ class _StructureMixin:
             OpenZimMcpFileNotFoundError: If ZIM file not found.
             OpenZimMcpArchiveError: If link extraction fails.
         """
-        # Caller-input validation surfaces as OpenZimMcpValidationError so the
-        # tool layer can render a targeted validation message (separate from
-        # archive-access errors).
-        if limit < 1 or limit > 500:
-            raise OpenZimMcpValidationError(
-                f"limit must be between 1 and 500 (provided: {limit})"
-            )
-        if offset < 0:
-            raise OpenZimMcpValidationError(
-                f"offset must be non-negative (provided: {offset})"
-            )
-        if kind not in {"internal", "external", "media"}:
-            raise OpenZimMcpValidationError(
-                f"kind must be one of 'internal', 'external', 'media' "
-                f"(provided: {kind!r})"
-            )
+        self._validate_links_args(limit, offset, kind)
 
         reject_path_traversal(entry_path)
 
         # Validate and resolve file path
         validated_path = self._validate_zim_path(zim_file_path)
 
-        # Cursor integrity (Phase B #11): a cursor issued for archive A
-        # must not be honoured when resubmitted against archive B.
-        if cursor_archive_identity is not None:
-            from openzim_mcp.pagination import Cursor as _CursorClass
-            from openzim_mcp.pagination import (
-                CursorMismatchError,
-                archive_identity,
-            )
-
-            try:
-                _CursorClass.verify_archive_identity(
-                    cast("Any", {"ai": cursor_archive_identity}),
-                    expected=archive_identity(validated_path),
-                    tool="extract_article_links",
-                )
-            except CursorMismatchError as e:
-                raise OpenZimMcpCursorMismatchError(str(e)) from e
+        self._verify_links_cursor_identity(cursor_archive_identity, validated_path)
 
         try:
             with _zim_ops_mod.zim_archive(validated_path) as archive:
                 bundle = self._build_bundle(
                     archive, entry_path, validated_path=validated_path
                 )
-
-                # BUG #6: the bundle 'internal' bucket carries BOTH real
-                # cross-article links (type=='internal') and in-page
-                # '#anchor' fragment links (type=='anchor'). Anchors are not
-                # navigation targets and are dropped by the inbound
-                # link-graph builder, so exclude them from the 'internal'
-                # kind's results/total and the internal count, surfacing
-                # them under a separate 'anchor' count so outbound and
-                # inbound agree on cross-article link totals.
-                internal_bucket: List[Any] = cast(
-                    "List[Any]", bundle["links"]["internal"]
-                )
-                non_anchor_internal = [
-                    lk
-                    for lk in internal_bucket
-                    if not (isinstance(lk, dict) and lk.get("type") == "anchor")
-                ]
-                anchor_count = len(internal_bucket) - len(non_anchor_internal)
-
-                # zimit/warc2zim wraps an article's lead image (and figure
-                # links) in ``<a href="…/plato.jpg">``, so the anchor
-                # classifier typed image/font/script assets 'internal' and
-                # they inflated ``category_totals.internal`` — while the
-                # related direction and the sidecar builder both drop them
-                # via ``_is_non_article_target``. Apply the same test here:
-                # assets move to the media bucket (``type="asset"``, after
-                # the page's own ``<img>``-style rows) so 'internal' counts
-                # navigable articles consistently across directions.
-                #
-                # R2-6: zimit's ``<a href="x.jpg"><img src="x.jpg">`` is ONE
-                # asset, but the ``<img>`` already sits in the media bucket,
-                # so the reclassified anchor doubled it (and the media
-                # total). Rule: an anchor whose href resolves to the same
-                # entry path as an existing media row is folded into that
-                # row — the richer ``image`` row survives and inherits the
-                # anchor's fetchable ``path``. Anchors to a genuinely
-                # different entry (full-size file vs thumbnail) keep their
-                # own ``asset`` row.
-                def media_target(lk: Any) -> Optional[str]:
-                    return self._resolve_link_to_entry_path(
-                        str(lk.get("url", "")), bundle["entry_path"]
-                    )
-
-                media_rows: List[Any] = list(bundle["links"]["media"])
-                media_targets = {
-                    t
-                    for t in (
-                        media_target(lk) for lk in media_rows if isinstance(lk, dict)
-                    )
-                    if t
-                }
-                cross_article_internal: List[Any] = []
-                anchor_wrapped_assets: List[Any] = []
-                folded_targets: set[str] = set()
-                for lk in non_anchor_internal:
-                    if isinstance(lk, dict) and self._is_non_article_target(
-                        str(lk.get("url", ""))
-                    ):
-                        target = media_target(lk)
-                        if target and target in media_targets:
-                            folded_targets.add(target)
-                            continue
-                        anchor_wrapped_assets.append({**lk, "type": "asset"})
-                    else:
-                        cross_article_internal.append(lk)
-                media_links: List[Any] = media_rows + anchor_wrapped_assets
-
-                if kind == "internal":
-                    all_links_for_kind: List[Any] = cross_article_internal
-                elif kind == "media":
-                    all_links_for_kind = media_links
-                else:
-                    all_links_for_kind = cast("List[Any]", bundle["links"]["external"])
+                buckets = self._bucket_outbound_links(bundle)
+                all_links_for_kind = buckets.for_kind(kind)
                 total_for_kind = len(all_links_for_kind)
-                page = all_links_for_kind[offset : offset + limit]
-                if kind == "media":
-                    # Anchor-wrapped assets were ``<a href>``s, so they get
-                    # the same resolved ``path`` internal rows do — usable
-                    # with ``zim_get(binary=True)``. Media rows that absorbed
-                    # such an anchor get it too, so folding loses nothing.
-                    page = [
-                        (
-                            self._with_resolved_path(archive, lk, bundle["entry_path"])
-                            if isinstance(lk, dict)
-                            and (
-                                lk.get("type") == "asset"
-                                or media_target(lk) in folded_targets
-                            )
-                            else lk
-                        )
-                        for lk in page
-                    ]
-                if kind == "internal":
-                    # ``url`` is the raw document-relative href (``../aristotl``)
-                    # and does not round-trip into ``zim_get`` or the other
-                    # directions; related/inbound already ship a resolved
-                    # ``path``. Add one here too — resolved against the SERVED
-                    # entry (``bundle["entry_path"]`` is post-redirect) and
-                    # redirect-followed where the archive can verify it.
-                    # Fresh dicts: ``page`` aliases the cached bundle's rows.
-                    page = [
-                        self._with_resolved_path(archive, lk, bundle["entry_path"])
-                        for lk in page
-                    ]
+                page = self._resolve_page_paths(
+                    archive,
+                    kind,
+                    all_links_for_kind[offset : offset + limit],
+                    buckets.folded_targets,
+                    bundle["entry_path"],
+                )
             returned_count = len(page)
             last_index = offset + returned_count
             done = last_index >= total_for_kind
@@ -566,17 +680,17 @@ class _StructureMixin:
                     "returned_count": returned_count,
                 },
                 "category_totals": {
-                    "internal": len(cross_article_internal),
-                    "external": len(bundle["links"]["external"]),
-                    "media": len(media_links),
-                    "anchor": anchor_count,
+                    "internal": len(buckets.internal),
+                    "external": len(buckets.external),
+                    "media": len(buckets.media),
+                    "anchor": buckets.anchor_count,
                 },
             }
             # ``LinksResponse.message`` is documented as set for non-HTML
             # entries, and the sibling TOC payload sets it; without it an
             # image entry's empty result was indistinguishable from an
             # article that simply has no links.
-            if not bundle["content_type"].startswith("text/html"):
+            if not bundle["content_type"].startswith(_HTML_MIME_PREFIX):
                 payload["message"] = (
                     f"Link extraction requires HTML content, "
                     f"got: {bundle['content_type']}"
@@ -726,7 +840,7 @@ class _StructureMixin:
                     ),
                 },
             )
-            if not bundle["content_type"].startswith("text/html"):
+            if not bundle["content_type"].startswith(_HTML_MIME_PREFIX):
                 payload["message"] = (
                     f"TOC extraction requires HTML content, "
                     f"got: {bundle['content_type']}"
@@ -830,7 +944,7 @@ class _StructureMixin:
             # — the bundle already knows — and point at the fetch that can
             # actually serve the entry.
             content_type = bundle["content_type"]
-            if not content_type.startswith("text/html"):
+            if not content_type.startswith(_HTML_MIME_PREFIX):
                 reason = "non_html"
                 message = (
                     f"Entry {entry_path!r} has no sections: it is not an HTML "
@@ -1422,37 +1536,13 @@ class _StructureMixin:
         zero rows when fed back to ``direction="inbound"``, which indexes
         canonical paths.
         """
-        from openzim_mcp.zim.redirects import best_effort_redirect_chain
-
         if not outbound:
             return
         try:
             with _zim_ops_mod.zim_archive(Path(zim_file_path)) as archive:
                 for item in outbound:
                     try:
-                        # Also normalises ``item["path"]`` onto the spelling
-                        # the archive can actually serve. The href these were
-                        # built from is percent-encoded, so a non-ASCII target
-                        # arrived here as ``A/El_Ni%C3%B1o`` — which both
-                        # failed this title lookup (leaving the raw path as
-                        # the "title" placeholder) and, worse, went out on the
-                        # wire as a ``path`` the caller could not fetch.
-                        entry, spelling = _resolve_entry_spelling(archive, item["path"])
-                        # ``is True``: the mock archives used across the test
-                        # suite hand back MagicMock entries whose
-                        # ``is_redirect`` is itself a truthy MagicMock.
-                        if (
-                            entry is not None
-                            and getattr(entry, "is_redirect", False) is True
-                        ):
-                            resolved = best_effort_redirect_chain(entry)
-                            resolved_path = getattr(resolved, "path", None)
-                            if isinstance(resolved_path, str) and resolved_path:
-                                entry, spelling = resolved, resolved_path
-                        item["path"] = spelling
-                        title = getattr(entry, "title", None) if entry else None
-                        if title:
-                            item["title"] = title
+                        _resolve_outbound_item(archive, item)
                     except Exception as e:
                         logger.debug(f"title lookup for {item['path']} failed: {e}")
         except Exception as e:
