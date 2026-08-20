@@ -116,6 +116,15 @@ class LinkItem(TypedDict):
     and (for external links) ``domain``. Media entries carry ``url``,
     ``type``, ``alt``, and ``title``. All fields except ``url`` and ``type``
     are ``NotRequired`` because they're absent on at least one category.
+
+    ``url`` is the RAW href as written in the page — document-relative
+    (``../aristotl``, ``bloodglucose.html``) and kept verbatim for fidelity,
+    so it does not round-trip into ``zim_get``. Internal rows therefore also
+    carry ``path``: the href resolved against the served entry's directory
+    and, where the archive can verify the target, canonicalized through its
+    redirect chain — the same spelling ``direction="related"`` /
+    ``"inbound"`` use, and the one to pass to ``zim_get``. Best-effort: a
+    target the archive cannot verify keeps its path-normalized spelling.
     """
 
     url: str
@@ -124,6 +133,7 @@ class LinkItem(TypedDict):
     title: NotRequired[str]
     domain: NotRequired[str]
     alt: NotRequired[str]
+    path: NotRequired[str]
 
 
 class FileSummary(TypedDict):

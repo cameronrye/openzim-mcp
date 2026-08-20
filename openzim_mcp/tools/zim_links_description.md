@@ -33,6 +33,8 @@ PARAMETERS:
 RESPONSE:
   LinksResponse (outbound) or RelatedArticlesResponse (inbound /
   related). Outbound/inbound paginate; related is one ranked set.
+  Outbound rows keep the raw href as `url`; internal rows add `path`,
+  the resolved entry path to pass to `zim_get`.
   Outbound `category_totals.internal` excludes in-page `#anchor`
   links — those are counted separately as `category_totals.anchor`.
 

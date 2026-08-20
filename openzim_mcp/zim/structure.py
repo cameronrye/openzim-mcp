@@ -435,30 +435,45 @@ class _StructureMixin:
                     content_processor=self.content_processor,
                 )
 
-            # BUG #6: the bundle 'internal' bucket carries BOTH real
-            # cross-article links (type=='internal') and in-page '#anchor'
-            # fragment links (type=='anchor'). Anchors are not navigation
-            # targets and are dropped by the inbound link-graph builder, so
-            # exclude them from the 'internal' kind's results/total and the
-            # internal count, surfacing them under a separate 'anchor' count so
-            # outbound and inbound agree on cross-article link totals.
-            internal_bucket: List[Any] = cast("List[Any]", bundle["links"]["internal"])
-            cross_article_internal = [
-                lk
-                for lk in internal_bucket
-                if not (isinstance(lk, dict) and lk.get("type") == "anchor")
-            ]
-            anchor_count = len(internal_bucket) - len(cross_article_internal)
-
-            if kind == "internal":
-                all_links_for_kind: List[Any] = cross_article_internal
-            else:
-                all_links_for_kind = cast(
-                    "List[Any]",
-                    bundle["links"][kind],  # type: ignore[literal-required]
+                # BUG #6: the bundle 'internal' bucket carries BOTH real
+                # cross-article links (type=='internal') and in-page
+                # '#anchor' fragment links (type=='anchor'). Anchors are not
+                # navigation targets and are dropped by the inbound
+                # link-graph builder, so exclude them from the 'internal'
+                # kind's results/total and the internal count, surfacing
+                # them under a separate 'anchor' count so outbound and
+                # inbound agree on cross-article link totals.
+                internal_bucket: List[Any] = cast(
+                    "List[Any]", bundle["links"]["internal"]
                 )
-            total_for_kind = len(all_links_for_kind)
-            page = all_links_for_kind[offset : offset + limit]
+                cross_article_internal = [
+                    lk
+                    for lk in internal_bucket
+                    if not (isinstance(lk, dict) and lk.get("type") == "anchor")
+                ]
+                anchor_count = len(internal_bucket) - len(cross_article_internal)
+
+                if kind == "internal":
+                    all_links_for_kind: List[Any] = cross_article_internal
+                else:
+                    all_links_for_kind = cast(
+                        "List[Any]",
+                        bundle["links"][kind],  # type: ignore[literal-required]
+                    )
+                total_for_kind = len(all_links_for_kind)
+                page = all_links_for_kind[offset : offset + limit]
+                if kind == "internal":
+                    # ``url`` is the raw document-relative href (``../aristotl``)
+                    # and does not round-trip into ``zim_get`` or the other
+                    # directions; related/inbound already ship a resolved
+                    # ``path``. Add one here too — resolved against the SERVED
+                    # entry (``bundle["entry_path"]`` is post-redirect) and
+                    # redirect-followed where the archive can verify it.
+                    # Fresh dicts: ``page`` aliases the cached bundle's rows.
+                    page = [
+                        self._with_resolved_path(archive, lk, bundle["entry_path"])
+                        for lk in page
+                    ]
             returned_count = len(page)
             last_index = offset + returned_count
             done = last_index >= total_for_kind
@@ -1370,6 +1385,51 @@ class _StructureMixin:
         Find articles related to entry_path via outbound links.
         """
         return _json(self.get_related_articles_data(zim_file_path, entry_path, limit))
+
+    @staticmethod
+    def _canonical_target_path(archive: Any, target: str) -> str:
+        """Best-effort canonical spelling of a resolved link ``target``.
+
+        Tries the raw and percent-decoded spellings (``_resolve_entry_spelling``)
+        and, when the entry resolves to a redirect, walks the chain to the
+        served entry's path. Returns ``target`` unchanged when nothing in the
+        archive can verify it, so the caller keeps a best-effort path rather
+        than dropping the row. Same walk ``_parse_internal_link_edges`` uses
+        for the sidecar, so outbound rows, related rows, and the inbound index
+        all name one entry the same way.
+        """
+        from openzim_mcp.zim.redirects import best_effort_redirect_chain
+
+        try:
+            entry, spelling = _resolve_entry_spelling(archive, target)
+            # ``is True``: test-suite mock archives return MagicMock entries
+            # whose ``is_redirect`` is itself a truthy MagicMock.
+            if entry is not None and getattr(entry, "is_redirect", False) is True:
+                resolved_path = getattr(best_effort_redirect_chain(entry), "path", None)
+                if isinstance(resolved_path, str) and resolved_path:
+                    return resolved_path
+            return spelling
+        except Exception as e:  # pragma: no cover - defensive
+            logger.debug(f"canonical path for {target} failed: {e}")
+            return target
+
+    def _with_resolved_path(
+        self, archive: Any, link: Any, source_entry_path: str
+    ) -> Any:
+        """Return a copy of an outbound internal ``link`` row with ``path`` set.
+
+        ``path`` is the href resolved against the served entry's directory
+        and canonicalized through the archive; rows whose href cannot be
+        resolved (query-only, self-referential) are returned unchanged.
+        """
+        if not isinstance(link, dict):
+            return link
+        target = self._resolve_link_to_entry_path(
+            str(link.get("url", "")), source_entry_path
+        )
+        if not target:
+            return link
+        return {**link, "path": self._canonical_target_path(archive, target)}
 
     @staticmethod
     def _resolve_link_to_entry_path(url: str, source_entry_path: str) -> Optional[str]:

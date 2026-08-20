@@ -525,3 +525,93 @@ class TestD33RelatedFollowsRedirects:
         assert result["results"][0]["mention_count"] == 3
         assert result["results"][0]["title"].startswith("Aristotle")
         assert result["total"] == 1
+
+
+# ---------------------------------------------------------------------------
+# D34 — outbound internal rows carry a fetchable, resolved ``path``
+# ---------------------------------------------------------------------------
+
+PLATO_HTML = """\
+<html><body>
+<h1>Plato</h1>
+<p>See <a href="../aristotl">Aristotle</a> and
+<a href="../zenos-paradoxes">Zeno</a>; also <a href="#SH2a">below</a>
+and <a href="https://example.org/x">outside</a>.
+<img src="../wp-content/media/plato.jpg" alt="Plato"></p>
+</body></html>
+"""
+
+
+def _links_archive(
+    html: str, *, source: str, targets: dict[str, MagicMock]
+) -> MagicMock:
+    """Archive serving ``html`` at ``source`` plus the given target entries."""
+    page = _html_archive(html, title="Plato | IEP", entry_path=source)
+    page_entry = page.get_entry_by_path.return_value
+
+    def lookup(path: str) -> MagicMock:
+        if path == source:
+            return page_entry
+        if path in targets:
+            return targets[path]
+        raise KeyError("Cannot find entry")
+
+    archive = MagicMock()
+    archive.get_entry_by_path.side_effect = lookup
+    return archive
+
+
+def _redirect_pair() -> dict[str, MagicMock]:
+    target = MagicMock()
+    target.is_redirect = False
+    target.path = "iep.utm.edu/aristotle/"
+    target.title = "Aristotle | IEP"
+    stub = MagicMock()
+    stub.is_redirect = True
+    stub.path = "iep.utm.edu/aristotl"
+    stub.title = "iep.utm.edu/aristotl"
+    stub.get_redirect_entry.return_value = target
+    return {"iep.utm.edu/aristotl": stub, "iep.utm.edu/aristotle/": target}
+
+
+class TestD34OutboundResolvedPath:
+    """D34: ``url`` is the raw document-relative href and does not round-trip
+    into zim_get. Each internal row also carries ``path`` — resolved against
+    the served entry, redirect-followed when the archive can verify it."""
+
+    def test_internal_rows_carry_resolved_path(
+        self, ops: ZimOperations, zim_path: str
+    ) -> None:
+        archive = _links_archive(
+            PLATO_HTML, source="iep.utm.edu/plato/", targets=_redirect_pair()
+        )
+        with patch(ARCHIVE_CTX) as ctx:
+            ctx.return_value.__enter__.return_value = archive
+            data = ops.extract_article_links_data(
+                zim_path, "iep.utm.edu/plato/", kind="internal"
+            )
+
+        rows = {r["url"]: r for r in data["results"]}
+        assert set(rows) == {"../aristotl", "../zenos-paradoxes"}
+        # Raw href kept for fidelity; canonical post-redirect path added.
+        assert rows["../aristotl"]["path"] == "iep.utm.edu/aristotle/"
+        # Unverifiable target: best-effort path-normalized, still present.
+        assert rows["../zenos-paradoxes"]["path"] == "iep.utm.edu/zenos-paradoxes"
+
+    def test_external_and_media_rows_have_no_path(
+        self, ops: ZimOperations, zim_path: str
+    ) -> None:
+        archive = _links_archive(
+            PLATO_HTML, source="iep.utm.edu/plato/", targets=_redirect_pair()
+        )
+        with patch(ARCHIVE_CTX) as ctx:
+            ctx.return_value.__enter__.return_value = archive
+            external = ops.extract_article_links_data(
+                zim_path, "iep.utm.edu/plato/", kind="external"
+            )
+            media = ops.extract_article_links_data(
+                zim_path, "iep.utm.edu/plato/", kind="media"
+            )
+
+        assert external["results"] and all("path" not in r for r in external["results"])
+        assert media["results"] and all("path" not in r for r in media["results"])
