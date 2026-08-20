@@ -969,3 +969,41 @@ class TestD40CursorArchiveMismatchCode:
         assert result["operation"] == "cursor_context_mismatch"
         assert "different archive" in result["message"]
         assert "Input Validation Error" not in result["message"]
+
+
+# ---------------------------------------------------------------------------
+# D41 — per-direction limit caps and defaults are documented
+# ---------------------------------------------------------------------------
+
+
+class TestD41LimitBoundsDocumented:
+    """D41: outbound accepts 1-500 (default 100) while inbound/related accept
+    1-100 (default 10); the description said only 'Page size', so a client
+    that picked one page size hit direction-dependent validation errors it
+    could not have predicted from the contract."""
+
+    def test_description_states_per_direction_limits(self) -> None:
+        from openzim_mcp.tools._common import load_description
+
+        text = load_description("zim_links")
+        limit_line = next(
+            line for line in text.splitlines() if line.strip().startswith("limit")
+        )
+        block = text[text.index(limit_line) :]
+        assert "1-500" in block and "default 100" in block
+        assert "1-100" in block and "default 10" in block
+
+    def test_documented_caps_match_behaviour(
+        self, ops: ZimOperations, zim_path: str
+    ) -> None:
+        from openzim_mcp.exceptions import OpenZimMcpValidationError
+
+        with patch(ARCHIVE_CTX) as ctx:
+            ctx.return_value.__enter__.return_value = _html_archive("<p>x</p>")
+            ops.extract_article_links_data(zim_path, "Test", limit=500)
+            with pytest.raises(OpenZimMcpValidationError, match="1 and 500"):
+                ops.extract_article_links_data(zim_path, "Test", limit=501)
+            with pytest.raises(OpenZimMcpValidationError, match="1 and 100"):
+                ops.get_related_articles_data(zim_path, "Test", limit=101)
+            with pytest.raises(OpenZimMcpValidationError, match="1 and 100"):
+                ops.get_inbound_links_data(zim_path, "Test", limit=101)
