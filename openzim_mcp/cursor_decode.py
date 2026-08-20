@@ -24,6 +24,7 @@ import logging
 from dataclasses import dataclass
 from typing import AbstractSet, Optional, Union
 
+from .constants import MAX_SEARCH_RESULT_LIMIT
 from .responses import ToolErrorPayload, tool_error
 from .text_utils import tokenize_for_relevance
 
@@ -44,6 +45,11 @@ class CursorDecodeResult:
     tool: Optional[str] = None
     ep: Optional[str] = None
     k: Optional[str] = None
+    # The page size the cursor was issued under (``s.l``). ``None`` when the
+    # cursor carries none, or carries something that is not a positive int —
+    # in both cases the handler's own default wins. See the projection in
+    # ``decode_offset_cursor`` for why simple mode needs this at all.
+    limit: Optional[int] = None
 
 
 def decode_offset_cursor(
@@ -117,6 +123,36 @@ def decode_offset_cursor(
                 context=f"cursor={token[:64]}",
             )
         result = CursorDecodeResult(offset=decoded_offset)
+        # Project the page size the cursor was issued under.
+        #
+        # Every cursor this server mints encodes it as ``s.l``, and the
+        # ADVANCED arm honours it through ``tools/_common.effective_limit``.
+        # Simple mode did not, so a client replaying ``next_cursor`` — which
+        # is literally what the rendered footer instructs — silently got the
+        # handler's default page size instead of the one it asked for: a
+        # 3-row ``walk namespace`` page came back as 200 rows.
+        #
+        # Same validation as ``effective_limit``: a hand-built cursor can
+        # carry anything, and anything other than a positive int falls back to
+        # the handler default rather than erroring. ``bool`` is excluded
+        # because ``True`` is an ``int`` that would read as a 1-row page.
+        #
+        # The upper bound matters as much as the lower one. Every tool checks
+        # an explicit ``limit`` against its cap, but that check only runs when
+        # the caller passes one — a request carrying nothing but a cursor
+        # skipped it, and ``search_zim_file_data`` has no range check of its
+        # own, so ``min(limit, total_results - offset)`` became the entire
+        # match set. Cursors are unsigned base64 JSON, so one forged request
+        # could ask a full Wikipedia archive for millions of rows, each an
+        # archive lookup plus a snippet render. The server never mints a page
+        # larger than this cap, so nothing legitimate is turned away.
+        cursor_limit = state.get("l")
+        if (
+            isinstance(cursor_limit, int)
+            and not isinstance(cursor_limit, bool)
+            and 1 <= cursor_limit <= MAX_SEARCH_RESULT_LIMIT
+        ):
+            result.limit = cursor_limit
         # P3-D7 (live-MCP sweep): stash the cursor's ``s.ns``
         # so namespace-bound handlers (``_handle_browse`` /
         # ``_handle_walk_namespace``) can reject mismatches.

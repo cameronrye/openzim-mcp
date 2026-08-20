@@ -62,6 +62,19 @@ REGEX_TIMEOUT_SECONDS = TIMEOUTS.REGEX_SECONDS
 # Main page display
 DEFAULT_MAIN_PAGE_TRUNCATION = CONTENT.MAIN_PAGE_TRUNCATION
 
+# Sentinel ``snippet`` on the synthetic row that the canonical-title splice
+# prepends to a search page. The title index computes no snippet, so this
+# placeholder stands in — and the renderers key on it to emit a "Match type:
+# canonical title match" badge instead of a snippet line.
+#
+# It is a shared constant rather than a repeated literal because it is
+# load-bearing in three unrelated modules: the two splice sites that mint it
+# (simple_tools, zim.search), the two renderers that badge it, and the
+# reranker, which must NOT feed it to the cross-encoder as a passage — it
+# scores ``snippet or path``, and a placeholder scores far below every real
+# hit, sorting the row the splice exists to surface first into last place.
+CANONICAL_TITLE_MATCH_SNIPPET = "(canonical title match)"
+
 # Cache performance thresholds
 CACHE_LOW_HIT_RATE_THRESHOLD = CACHE_PERFORMANCE.LOW_HIT_RATE
 CACHE_HIGH_HIT_RATE_THRESHOLD = CACHE_PERFORMANCE.HIGH_HIT_RATE

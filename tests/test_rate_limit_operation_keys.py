@@ -251,11 +251,16 @@ async def test_batch_cost_is_clamped_to_the_bucket_capacity(
 
 
 @pytest.mark.asyncio
-async def test_oversize_batch_is_priced_at_the_batch_limit_not_caller_input(
+async def test_batch_pricing_tops_out_at_the_legal_maximum(
     spy_server: MagicMock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """``len(entry_paths)`` is unvalidated caller input; the data layer refuses
-    anything above ``MAX_BATCH_SIZE``, so pricing must not scale past it."""
+    """The largest dispatchable batch is priced at exactly its size.
+
+    ``len(entry_paths)`` above ``MAX_BATCH_SIZE`` never reaches the batch
+    debit anymore (rejected up front at the flat price — see
+    ``test_oversize_batch_is_rejected_cheaply``), so the legal maximum is
+    the pricing ceiling.
+    """
     from openzim_mcp.constants import MAX_BATCH_SIZE
     from openzim_mcp.tools.zim_get import register as register_zim_get
 
@@ -264,7 +269,9 @@ async def test_oversize_batch_is_priced_at_the_batch_limit_not_caller_input(
     register_zim_get(spy_server)
     fn = spy_server._tools_store["zim_get"]
     await _debit_only(
-        fn, zim_file_path="/x.zim", entry_paths=[f"A/{i}" for i in range(5000)]
+        fn,
+        zim_file_path="/x.zim",
+        entry_paths=[f"A/{i}" for i in range(MAX_BATCH_SIZE)],
     )
 
     assert (
@@ -334,6 +341,38 @@ async def test_rejected_batch_does_not_drain_the_bucket(
     # one token, so the pre-fix 20-token drain still fails this.
     assert consumed == pytest.approx(RATE_LIMIT_COSTS["get_zim_entries"], abs=0.5)
     assert _global_tokens(live_limiter_server) > 1
+
+    # ... and the next well-formed call still goes through.
+    allowed = await fn(zim_file_path="/x.zim", entry_path="A/Cat")
+    assert allowed.get("operation") != "rate_limited"
+
+
+@pytest.mark.asyncio
+async def test_oversize_batch_is_rejected_cheaply(
+    live_limiter_server: MagicMock,
+) -> None:
+    """A batch above MAX_BATCH_SIZE dispatches nothing — flat price only.
+
+    Pre-fix it paid the full clamped batch price (the whole bucket at
+    shipped defaults) and then ``get_entries_data`` rejected it before
+    reading a single entry — the exact zero-work/full-cost failure the
+    split debit exists to prevent — and surfaced a generic envelope
+    instead of a structured one.
+    """
+    from openzim_mcp.constants import MAX_BATCH_SIZE
+
+    fn = live_limiter_server._tools_store["zim_get"]
+    before = _global_tokens(live_limiter_server)
+
+    rejected = await fn(
+        zim_file_path="/x.zim",
+        entry_paths=[f"A/{i}" for i in range(MAX_BATCH_SIZE + 10)],
+    )
+    assert rejected["operation"] == "invalid_batch_size"
+    assert str(MAX_BATCH_SIZE) in rejected["message"]
+
+    consumed = before - _global_tokens(live_limiter_server)
+    assert consumed == pytest.approx(RATE_LIMIT_COSTS["get_zim_entries"], abs=0.5)
 
     # ... and the next well-formed call still goes through.
     allowed = await fn(zim_file_path="/x.zim", entry_path="A/Cat")

@@ -40,7 +40,7 @@ PARAMETERS:
                Silently ignored in other modes.
   content_type Only valid in mode="fulltext". Restricts search to
                one MIME bucket (e.g. "text/html").
-  limit        Maximum results (cap 1000; 50 for title/suggest).
+  limit        Max results; cap 50 title/suggest/cross_file, 100 filtered, else 1000.
   offset       Pagination offset (default 0); single-archive
                fulltext only.
   cursor       Unsupported; page fulltext via `offset`.

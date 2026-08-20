@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, cast
 from libzim.reader import Archive  # type: ignore[import-untyped]
 
 import openzim_mcp.zim_operations as _zim_ops_mod
+from openzim_mcp.constants import CANONICAL_TITLE_MATCH_SNIPPET
 from openzim_mcp.exceptions import (
     OpenZimMcpArchiveError,
     OpenZimMcpValidationError,
@@ -167,6 +168,63 @@ def _is_pseudo_namespace_entry(
     return any(title.startswith(p) for p in prefixes)
 
 
+def _suggestion_display_title(archive: Archive, path: str) -> str:
+    """Resolve a SuggestionSearcher candidate path to a re-issuable label.
+
+    Entry paths are only title-shaped on mwoffliner-style archives
+    (``C/Berlin``). zimit / warc2zim archives file entries under their
+    source URL, whose last segment is either empty
+    (``iep.utm.edu/plato/``) or an opaque filename (``a682878.html``) —
+    neither of which a model can feed back as a query. The entry's own
+    title is authoritative, so prefer it and fall back to the last
+    non-empty path segment only when the entry can't be resolved.
+
+    Returns ``""`` when no usable label exists; callers skip those
+    candidates rather than emit an empty suggestion.
+    """
+    try:
+        title = archive.get_entry_by_path(path).title
+    except Exception:
+        title = ""
+    if isinstance(title, str) and title.strip():
+        return title.strip()
+    segment = next((seg for seg in reversed(path.split("/")) if seg), "")
+    stem, dot, ext = segment.rpartition(".")
+    if dot and stem and 1 < len(ext) <= 5 and ext.isalnum():
+        # A bare filename is an identifier, not a query — better to drop
+        # the candidate than to hand back ``a682878.html``.
+        return ""
+    return segment
+
+
+def _query_title_already_on_page(results: List[Dict[str, Any]], query: str) -> bool:
+    """Whether a filtered hit already carries the queried title verbatim.
+
+    Site-scraped archives suffix every title with the site name
+    (``Plato | Internet Encyclopedia of Philosophy``), so the one entry
+    whose title matches a query *exactly* is whichever page happens to
+    carry a stripped title — a side page, not the article. Prepending
+    that canonical above a hit whose own title is the query under a site
+    suffix demotes the right answer. When such a hit is already on the
+    page the splice's goal is met, and the relevance order is the better
+    tiebreak between two entries claiming one name.
+
+    Only the prepend branch consults this: when the canonical is already
+    among the results, it and any exact-title hit are the same entry.
+    """
+    wanted = query.strip().lower()
+    if not wanted:
+        return False
+    for result in results:
+        if not isinstance(result, dict):
+            continue
+        title = str(result.get("title", ""))
+        head, sep, _tail = title.partition(" | ")
+        if (head if sep else title).strip().lower() == wanted:
+            return True
+    return False
+
+
 def _all_results_weakly_match(results: List[Dict[str, Any]], query: str) -> bool:
     """Return True iff NONE of the search results carry any query token.
 
@@ -263,7 +321,7 @@ def _format_filtered_response(
         # ``_format_search_text`` so filtered-search results that pick
         # up the splice (post-a11 H2) use the same shape as plain search.
         snippet = result.get("snippet", "")
-        if snippet == "(canonical title match)":
+        if snippet == CANONICAL_TITLE_MATCH_SNIPPET:
             parts.append("Match type: canonical title match\n\n")
         else:
             parts.append(f"Snippet: {snippet}\n\n")
@@ -436,7 +494,7 @@ class _SearchMixin:
         """Structured variant of ``search_zim_file``.
 
         Returns the raw search payload as a Python dict so MCP tool functions
-        and aggregators (``search_all``) can hand it straight to FastMCP's
+        and aggregators (``search_all``) can hand it straight to the SDK's
         structured-output path without the json.dumps + re-parse round trip
         the legacy string variant required.
 
@@ -587,13 +645,15 @@ class _SearchMixin:
                             # Cap at 2x the structured limit to give room for de-dup
                             # against the query itself; SuggestionSearcher results
                             # include exact matches that we don't want to surface.
-                            candidates = list(sugg.getResults(0, max(limit_n * 2, 5)))
+                            candidates = [
+                                _suggestion_display_title(archive, str(p))
+                                for p in sugg.getResults(0, max(limit_n * 2, 5))
+                            ]
                         q_lower = query.lower()
                         seen: set[str] = set()
-                        for cand_path in candidates:
-                            # SuggestionSearcher returns paths (e.g. "C/Berlin");
-                            # extract the title segment.
-                            title = cand_path.rsplit("/", 1)[-1]
+                        for candidate in candidates:
+                            if not candidate:
+                                continue
                             # M32: paths preserve title underscores
                             # (``Photosynthesis_(biology)``); humanize back
                             # to spaces so the rendered footer
@@ -602,7 +662,7 @@ class _SearchMixin:
                             # query. The lowercase de-dup key uses the
                             # humanized form so ``Foo_Bar`` and ``Foo Bar``
                             # collapse.
-                            title = title.replace("_", " ")
+                            title = candidate.replace("_", " ")
                             title_lower = title.lower()
                             if title_lower == q_lower or title_lower in seen:
                                 continue
@@ -925,7 +985,7 @@ class _SearchMixin:
             # badge instead so callers don't pipe the sentinel into
             # downstream snippet processing.
             snippet = result.get("snippet", "")
-            if snippet == "(canonical title match)":
+            if snippet == CANONICAL_TITLE_MATCH_SNIPPET:
                 result_text += "Match type: canonical title match\n\n"
             else:
                 result_text += f"Snippet: {snippet}\n\n"
@@ -962,7 +1022,19 @@ class _SearchMixin:
                 if next_cursor is None:
                     # Limited path that doesn't know the next-page boundary
                     # precisely; advance by what we actually returned.
-                    next_offset = offset + len(results)
+                    #
+                    # ``len(results)`` is the wrong count once the canonical
+                    # splice has prepended a synthetic row: that row came from
+                    # the title index, not the ranked stream, so counting it
+                    # here would advance one slot too far and skip a real hit.
+                    # ``source_consumed`` (set by
+                    # ``_splice_title_match_into_search``) is the ranked-row
+                    # count; absent on every unspliced payload, which then
+                    # falls back to the row count as before.
+                    consumed = page_info.get("source_consumed")
+                    if not isinstance(consumed, int) or isinstance(consumed, bool):
+                        consumed = len(results)
+                    next_offset = offset + consumed
             result_text += (
                 f"Showing {offset + 1}-{offset + len(results)} "
                 f"of {total_text} — "
@@ -1055,17 +1127,14 @@ class _SearchMixin:
         canonical_path = canonical["path"]
         # Namespace gate: when a namespace filter is in play, only
         # splice the canonical if its path lives in that namespace.
-        # New-scheme C has no path prefix; legacy / metadata namespaces
-        # use the ``X/`` prefix convention.
         if namespace:
             # Canonicalise long-form aliases ("content" -> "C") the same
             # way the delegated filtered search does, so equivalent
             # namespace spellings get the same splice.
             ns_letter = self._canonicalise_namespace(namespace.strip())
-            path_prefix = (
-                canonical_path.split("/", 1)[0] if "/" in canonical_path else "C"
-            )
-            if path_prefix != ns_letter:
+            if not self._canonical_in_namespace(
+                zim_file_path, canonical_path, ns_letter
+            ):
                 return _delegate()
         # Same content-type gate when applicable; the title-index probe
         # doesn't carry mimetype info, so skip the splice rather than
@@ -1083,6 +1152,34 @@ class _SearchMixin:
             display_query=display_query,
             canonical=canonical,
         )
+
+    def _canonical_in_namespace(
+        self, zim_file_path: str, canonical_path: str, ns_letter: str
+    ) -> bool:
+        """Whether the canonical hit's path lives in namespace ``ns_letter``.
+
+        New-scheme archives file every searchable entry in C and their paths
+        carry no namespace prefix, so prefix parsing would read
+        ``iep.utm.edu/plato/`` as namespace ``iep.utm.edu`` and reject a hit
+        the filtered scan itself admits (cf. ``_matches_cheap_namespace``).
+        Old-scheme archives keep the ``X/`` prefix convention. An archive we
+        can't open keeps the prefix reading rather than admitting everything.
+        """
+        try:
+            with _zim_ops_mod.zim_archive(
+                self._validate_zim_path(zim_file_path)
+            ) as archive:
+                has_new_scheme = bool(
+                    getattr(archive, "has_new_namespace_scheme", False)
+                )
+        except Exception as e:
+            logger.debug(f"Canonical namespace scheme probe failed: {e}")
+            has_new_scheme = False
+
+        if has_new_scheme:
+            return ns_letter == "C"
+        path_prefix = canonical_path.split("/", 1)[0] if "/" in canonical_path else "C"
+        return path_prefix == ns_letter
 
     def _splice_canonical_into_filtered(  # NOSONAR(python:S3776)
         self,
@@ -1150,7 +1247,7 @@ class _SearchMixin:
         synthetic_canonical: Dict[str, Any] = {
             "path": canonical_path,
             "title": canonical["title"],
-            "snippet": "(canonical title match)",
+            "snippet": CANONICAL_TITLE_MATCH_SNIPPET,
             # The renderer needs ``namespace`` / ``content_type`` so
             # derive them from the requested filter and the canonical
             # path's prefix. Defaults match the plain-search shape for
@@ -1190,7 +1287,7 @@ class _SearchMixin:
                     if isinstance(r, dict) and str(r.get("path", "")) == canonical_path
                 )
                 results = [promoted_existing, *reordered][:limit]
-            else:
+            elif not _query_title_already_on_page(results, query):
                 # Prepend WITHOUT trimming to ``limit``: pages at
                 # ``offset != 0`` bypass the splice and paginate the
                 # unspliced sequence, so trimming here would silently
@@ -1989,7 +2086,7 @@ class _SearchMixin:
         """Structured variant of ``get_search_suggestions``.
 
         Returns the result dict directly (not a JSON string) so MCP tools
-        can hand it straight to FastMCP's structured-content path.
+        can hand it straight to the SDK's structured-content path.
 
         ``get_search_suggestions`` is non-paginated (no cursor input,
         no offset), but the v2 Phase B contract still applies for
@@ -2025,7 +2122,7 @@ class _SearchMixin:
         from openzim_mcp.bundle import archive_stat_token
 
         cache_key = (
-            f"suggestions_data:v2b:{validated_path}:"
+            f"suggestions_data:v2c:{validated_path}:"
             f"{archive_stat_token(validated_path)}:{partial_query}:{limit}"
         )
         cached_result = self.cache.get(cache_key)
@@ -2539,8 +2636,6 @@ class _SearchMixin:
         title: str,
         path: str,
         partial_lower: str,
-        existing_paths: set,
-        existing_titles: set,
     ) -> bool:
         """Per-row predicate for the shortest-title Strategy B scan."""
         if not title or not path:
@@ -2548,8 +2643,6 @@ class _SearchMixin:
         if _is_pseudo_namespace_entry(path, title, extended=True):
             return False
         if not title.lower().startswith(partial_lower):
-            return False
-        if path in existing_paths or title.lower() in existing_titles:
             return False
         return True
 
@@ -2564,7 +2657,11 @@ class _SearchMixin:
         """Strategy B: pick the shortest prefix-matching title.
 
         Catches archives where the canonical bare entry didn't appear
-        alongside any parenthesised siblings.
+        alongside any parenthesised siblings. The minimum is taken over
+        ALL prefix matches, including the ones already on the page: when
+        the shortest is one of those there is no canonical gap to fill,
+        and promoting the next-shortest would rank a longer title above
+        the canonical (and trim a genuine suggestion off the end).
         """
         best: Optional[Tuple[str, str]] = None
         best_len = float("inf")
@@ -2573,14 +2670,14 @@ class _SearchMixin:
             if entry_info is None:
                 continue
             title, path = entry_info
-            if not self._is_shortest_title_candidate(
-                title, path, partial_lower, existing_paths, existing_titles
-            ):
+            if not self._is_shortest_title_candidate(title, path, partial_lower):
                 continue
             if len(title) < best_len:
                 best = (title, path)
                 best_len = len(title)
         if best is None:
+            return None
+        if best[1] in existing_paths or best[0].lower() in existing_titles:
             return None
         return {"text": best[0], "path": best[1], "type": "title_start_match"}
 
@@ -3022,7 +3119,7 @@ class _SearchMixin:
         """Structured variant of ``find_entry_by_title``.
 
         Returns the result dict directly (not a JSON string) so MCP tools
-        can hand it straight to FastMCP's structured-content path.
+        can hand it straight to the SDK's structured-content path.
 
         Implementation order:
           1. Direct path probe in C/ and A/ namespaces against a small set of

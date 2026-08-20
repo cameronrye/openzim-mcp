@@ -11,6 +11,7 @@ module directly for the timeout-guarded ``safe_regex_*`` helpers.
 
 import logging
 import re
+import threading
 from collections import Counter
 from contextlib import ExitStack
 from dataclasses import dataclass, field
@@ -23,6 +24,7 @@ from . import compact_renderers
 from .article_body import _ArticleBodyMixin
 from .chain_detection import _ChainMixin
 from .compact_format import _CompactFormatMixin
+from .constants import CANONICAL_TITLE_MATCH_SNIPPET
 from .cursor_decode import decode_offset_cursor
 from .disambiguation import _DisambiguationMixin
 from .exceptions import (
@@ -147,6 +149,13 @@ class SimpleToolsHandler(
         """
         self.zim_operations = zim_operations
         self.intent_parser = IntentParser()
+        # Bind the Sub-D-2 rule-2 data files from config so an operator's
+        # curated misspelling map / exclusions list is actually loaded —
+        # pydantic accepted and stored both paths but nothing ever read them.
+        IntentParser.bind_data_paths(
+            zim_operations.config.query_rewrite.misspelling_map_path,
+            zim_operations.config.query_rewrite.misspelling_exclusion_path,
+        )
         # In-memory telemetry counters surface via ``get_server_health``.
         # Each branch in ``handle_zim_query`` that is interesting for
         # tuning the heuristics (meta-guidance, hallucinated paths, regex
@@ -154,6 +163,11 @@ class SimpleToolsHandler(
         # named counter here. No PII; the dict is small enough to ship in
         # a health-check response. Process-local — restarts reset.
         self._telemetry: Counter[str] = Counter()
+        # ``handle_zim_query`` runs on ``asyncio.to_thread`` workers, and a
+        # key's FIRST increment routes through ``Counter.__missing__`` — a
+        # pure-Python preemption point where two threads can both read 0
+        # and both store 1.
+        self._telemetry_lock = threading.Lock()
 
     def _track(self, event: str) -> None:
         """Increment the named telemetry counter.
@@ -162,7 +176,8 @@ class SimpleToolsHandler(
         INFO log line per call so simple-mode operators (who don't have
         ``get_server_health``) can observe them in the server log.
         """
-        self._telemetry[event] += 1
+        with self._telemetry_lock:
+            self._telemetry[event] += 1
         if event in _INFO_LEVEL_TELEMETRY_EVENTS:
             logger.info("telemetry: %s", event)
 
@@ -366,7 +381,13 @@ class SimpleToolsHandler(
             ):
                 _v = params.get(_key)
                 if isinstance(_v, str) and _v:
-                    _v_clean = IntentParser._strip_trailing_politeness(_v).strip()
+                    # ``preserve_topic``: these fields ARE the operand, so a
+                    # value that is entirely a topic-shaped politeness word
+                    # (``tack``, ``cheers``) must survive — emptying it hands
+                    # the guards below a topic they then reject.
+                    _v_clean = IntentParser._strip_trailing_politeness(
+                        _v, preserve_topic=True
+                    ).strip()
                     if _v_clean != _v:
                         params[_key] = _v_clean
             # ``entries`` is a list of entry-path strings (from
@@ -572,6 +593,14 @@ class SimpleToolsHandler(
                 options["_cursor_ep"] = cursor_result.ep
             if cursor_result.k:
                 options["_cursor_k"] = cursor_result.k
+            # Honour the page size the cursor was issued under, but only when
+            # the caller did not state one — the same precedence the advanced
+            # arm applies in ``tools/_common.effective_limit`` (explicit limit
+            # > cursor's ``l`` > handler default). Without this, replaying the
+            # ``next_cursor`` the footer advertises silently resized the page
+            # to whatever default the intent handler happens to carry.
+            if cursor_result.limit is not None and options.get("limit") is None:
+                options["limit"] = cursor_result.limit
         # Normalize hallucinated ``zim_file_path`` BEFORE branching to the
         # synthesize pipeline. Small models pass bare filenames
         # (``"wikipedia.zim"``) or article titles (``"Big Rapids,
@@ -2767,27 +2796,42 @@ class SimpleToolsHandler(
         synthetic = {
             "path": promoted_path,
             "title": promoted["title"],
-            "snippet": "(canonical title match)",
+            "snippet": CANONICAL_TITLE_MATCH_SNIPPET,
         }
-        # DD4 (beta, second pass): trim back to the requested limit so
-        # the splice doesn't push the result count off by one. The
-        # previous prepend produced 4 results for ``limit=3``; the
-        # rendered header then read "showing 1-4" with limit=3, a
-        # contract inconsistency. Drop the last BM25 result to make
-        # room for the canonical splice; the dropped result is the
-        # lowest-ranked of the BM25 set, so the displacement carries
-        # the least information loss.
-        # H12: copy page_info before mutating returned_count — the nested dict
-        # is shared with the cached payload (shallow copy above only duplicated
-        # the top level).
+        # The canonical row is an EXTRA, not a replacement for a ranked hit.
+        #
+        # DD4 (beta, second pass) trimmed ``[synthetic, *results]`` back to
+        # ``limit`` to keep the rendered "showing 1-N" line consistent with
+        # the requested page size. That traded a cosmetic inconsistency for
+        # silent data loss: the trim dropped the last BM25 hit, but neither
+        # resume mechanism was told. The renderer still advertises
+        # ``offset + limit`` and ``next_cursor`` still encodes
+        # ``offset + <pre-splice returned_count>``, so the displaced hit fell
+        # between the end of page 1 and the start of page 2 — reachable by no
+        # advertised offset at all. (Observed on the shipped corpus: ``search
+        # for biomass fuel``, ``limit=3`` lost ``A/Aviation_biofuel``.)
+        #
+        # Prepending without trimming is also what the filtered sibling
+        # ``search_with_filters_with_canonical_splice`` already does — it
+        # renders "showing 1-4 ... pass offset=3" for the same query — so this
+        # brings the two splice paths onto one contract rather than inventing
+        # a third.
+        #
+        # H12: copy page_info before mutating it — the nested dict is shared
+        # with the cached payload (the shallow copy above only duplicated the
+        # top level).
         page_info = dict(payload.get("page_info") or {})
-        requested_limit = page_info.get("limit") or len(results)
-        spliced = [synthetic, *results][:requested_limit]
+        spliced = [synthetic, *results]
         payload["results"] = spliced
-        # Keep ``page_info.returned_count`` consistent with the spliced
-        # length so renderers don't claim to show more rows than they
-        # actually do.
+        # ``returned_count`` counts rendered rows, so it now includes the
+        # synthetic one. That makes it unusable as "how far through the ranked
+        # stream this page went", which is what a resume point needs — so
+        # record that separately. ``limit`` is deliberately left alone: the
+        # page consumed exactly ``len(results)`` ranked rows, so the
+        # renderer's ``offset + limit`` still lands on the first row this page
+        # did not show.
         page_info["returned_count"] = len(spliced)
+        page_info["source_consumed"] = len(results)
         payload["page_info"] = page_info
         return payload
 
@@ -3289,7 +3333,7 @@ class SimpleToolsHandler(
                     canonical_row: Dict[str, Any] = {
                         "path": canonical_path,
                         "title": canonical.get("title") or top_title,
-                        "snippet": "(canonical title match)",
+                        "snippet": CANONICAL_TITLE_MATCH_SNIPPET,
                     }
                     # ``SearchHit`` is a TypedDict; cast satisfies
                     # the type-checker since the synthetic row carries

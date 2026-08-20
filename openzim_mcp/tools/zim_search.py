@@ -37,6 +37,7 @@ rc0 sign-off: WIRED.
 
 from __future__ import annotations
 
+import asyncio
 from typing import TYPE_CHECKING, Any, Literal, Optional
 
 from ..constants import MAX_SEARCH_RESULT_LIMIT
@@ -63,6 +64,14 @@ _VALID_MODES = {"fulltext", "title", "suggest"}
 # envelope instead of a generic broad-except one.
 _CAPPED_LIMIT_MODES = {"title", "suggest"}
 _CAPPED_MODE_RESULT_LIMIT = 50
+
+# Fulltext's dispatch targets carry their own data-layer caps, mirrored here
+# for the same reason: ``search_all_data`` rejects ``limit_per_file`` > 50
+# and ``search_with_filters_data`` rejects ``limit`` > 100 (both in
+# ``zim/search.py``); only plain single-archive fulltext accepts the full
+# ``MAX_SEARCH_RESULT_LIMIT`` range.
+_CROSS_FILE_RESULT_LIMIT = 50
+_FILTERED_RESULT_LIMIT = 100
 
 # Page size title mode asks the data layer for when the caller omits ``limit``.
 _TITLE_DEFAULT_LIMIT = 10
@@ -124,11 +133,16 @@ def register(server: "OpenZimMcpServer") -> None:
                         f"`limit` must be a positive integer (provided: {limit})."
                     ),
                 )
-            max_limit = (
-                _CAPPED_MODE_RESULT_LIMIT
-                if mode in _CAPPED_LIMIT_MODES
-                else MAX_SEARCH_RESULT_LIMIT
-            )
+            if mode in _CAPPED_LIMIT_MODES:
+                max_limit = _CAPPED_MODE_RESULT_LIMIT
+            elif cross_file:
+                max_limit = _CROSS_FILE_RESULT_LIMIT
+            elif namespace is not None or content_type is not None:
+                # ``is not None`` matches the dispatch condition in
+                # ``_handle_fulltext_mode``, not truthiness.
+                max_limit = _FILTERED_RESULT_LIMIT
+            else:
+                max_limit = MAX_SEARCH_RESULT_LIMIT
             if limit is not None and limit > max_limit:
                 # Only single-archive fulltext paginates — recommending
                 # `offset` anywhere else points at the M28 rejection below.
@@ -444,12 +458,59 @@ async def _handle_title_mode(
 
     from ..topic_preprocessing import promote_topic_via_title_index
 
-    promoted = promote_topic_via_title_index(
+    # Promotion runs up to dozens of blocking libzim probes (archive open +
+    # SuggestionSearcher + redirect walks per tail/window probe, and empty
+    # probes are deliberately uncached). Offload like every other data-layer
+    # touch so the probe train doesn't hold the event loop.
+    promoted = await asyncio.to_thread(
+        promote_topic_via_title_index,
         zim_operations=server.zim_operations,
         zim_file_path=resolved_path,
         topic=preprocessed,
     )
     return _merge_promotion_into_title_results(raw, promoted, effective_limit)
+
+
+# ``_meta`` keys that describe the SOURCE rather than the rendered page, so
+# they survive a promotion rewrite. Everything else in the envelope — chars,
+# tokens_est, truncated — is a measurement of the payload and must be taken
+# again once ``results`` has been replaced.
+_PROMOTION_CARRIED_META_KEYS = (
+    "detected_type",
+    "detection_confidence",
+    "preset_applied",
+)
+
+
+def _refresh_promotion_meta(
+    out: dict, raw_meta: dict, *, carry_recovery_hints: bool
+) -> None:
+    """Re-measure ``out`` and restamp the envelope after a promotion rewrite.
+
+    ``attach_meta`` recomputes ``chars`` / ``tokens_est`` from the payload as
+    it now stands (sans ``_meta``), which is the whole point: the inherited
+    envelope was measured before ``results`` was replaced, so it described
+    bytes that never went on the wire. A caller sizing its context window
+    from ``tokens_est`` was under-reserving by more than 2x on the empty-page
+    branch, where a zero-row page with suggestions became a one-row hit.
+
+    ``carry_recovery_hints`` is False for the empty-page branch, where pass 3
+    established that a promoted canonical is a confident hit and must not
+    carry the zero-result ``reason`` / ``suggestions`` alongside the answer.
+    """
+    from ..meta import attach_meta
+
+    carried = {
+        key: raw_meta[key]
+        for key in _PROMOTION_CARRIED_META_KEYS
+        if raw_meta.get(key) is not None
+    }
+    if carry_recovery_hints:
+        for key in ("reason", "suggestions"):
+            if raw_meta.get(key) is not None:
+                carried[key] = raw_meta[key]
+    attach_meta(out, **carried)
+    out["_meta"]["promotion_applied"] = True
 
 
 def _merge_promotion_into_title_results(
@@ -475,7 +536,34 @@ def _merge_promotion_into_title_results(
     matches = raw.get("results", [])
     promoted_path = promoted.get("path") or promoted.get("entry_path")
     if not matches:
-        return raw
+        # An empty raw page is the case promotion exists for: filler-prose
+        # queries miss on the full phrase (reason="0_hits") while the
+        # tail/window probes resolve the canonical. Serve the promoted row
+        # as the page rather than discarding a resolved answer.
+        promoted_row = dict(promoted)
+        promoted_row.setdefault("score", 1.0)
+        out = dict(raw)  # copy-on-write: raw may be the H15-cached object
+        out["results"] = [promoted_row]
+        if "total" in out:
+            out["total"] = 1
+        page_info = out.get("page_info")
+        if isinstance(page_info, dict):
+            out["page_info"] = {**page_info, "returned_count": 1}
+        # The raw page's "0_hits" verdict is stale once promotion answered, and
+        # so are its suggestions. ``_assemble_find_response`` fills
+        # ``suggestions`` only for the no-results and fuzzy-hit cases, and its
+        # stated contract is that a confident hit carries none "so confident
+        # matches aren't muddled by alt-spelling noise". Promotion produces
+        # exactly such a hit — a canonical title-index match — so leaving the
+        # zero-result recovery hints attached would hand the model "did you
+        # mean X?" alongside the answer it asked for.
+        #
+        # The size fields are stale too, and for the same reason: they measured
+        # an empty page. Re-measure rather than inherit.
+        _refresh_promotion_meta(
+            out, dict(raw.get("_meta", {}) or {}), carry_recovery_hints=False
+        )
+        return out
     top = matches[0]
     top_path = top.get("entry_path") or top.get("path")
     if top_path == promoted_path:
@@ -501,5 +589,12 @@ def _merge_promotion_into_title_results(
     page_info = out.get("page_info")
     if isinstance(page_info, dict):
         out["page_info"] = {**page_info, "returned_count": len(results)}
-    out["_meta"] = {**raw.get("_meta", {}), "promotion_applied": True}
+    # ``results`` was just rewritten (hoist + re-trim), so the inherited
+    # ``chars`` / ``tokens_est`` no longer describe what ships. Recovery hints
+    # are carried here — unlike the empty-page branch above, this page had real
+    # matches, so any ``suggestions`` came from the fuzzy-hit case and still
+    # describe the query rather than a zero-result recovery.
+    _refresh_promotion_meta(
+        out, dict(raw.get("_meta", {}) or {}), carry_recovery_hints=True
+    )
     return out

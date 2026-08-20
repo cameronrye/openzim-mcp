@@ -8,12 +8,17 @@ aren't literal entry paths). 79 defects shipped across four batches,
 nearly all of them rooted in that mock/real divergence.
 
 This module pins live behavior for the Phase C retrieval primitives
-(``get_section``, ``get_related_articles``, ``synthesize``, namespace
-walks on new-scheme archives) so the next "wait, this worked in
+(``zim_get_section``, ``zim_links(direction="related")``, synthesis via
+``zim_query``, and namespace walks) so the next "wait, this worked in
 tests..." discovery doesn't slip through. Tests auto-skip when
 ``ZIM_TEST_DATA_DIR`` doesn't point at a directory containing a
 Wikipedia-shaped ``.zim`` file (same pattern as
 ``test_live_canonical_queries.py``).
+
+Entry paths, section ids and namespaces are all *discovered* from the
+archive under test rather than named literally. The literal versions
+(``A/Berlin``, namespace ``C``) matched no entry in the fixture corpus, so
+every assertion behind them decayed into a skip.
 
 Assertions are loose by design — they validate the *shape* of behavior
 (does ``get_section`` return non-empty body, does the citation contain
@@ -24,13 +29,13 @@ becoming a maintenance burden.
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, List, Optional
 
 import pytest
 
 from tests.live._stdio_helpers import call_tool as _call_tool
+from tests.live._stdio_helpers import structured as _structured
 
 pytestmark = pytest.mark.live
 
@@ -43,35 +48,85 @@ def _first_wikipedia_zim(zim_dir: Path) -> Optional[Path]:
     return None
 
 
-def _structured(result: Dict[str, Any]) -> Dict[str, Any]:
-    """Unwrap a tool payload from either envelope slot.
+def _require_wikipedia_zim(zim_dir: Path) -> Path:
+    """Return a wikipedia-shaped archive, or skip the test."""
+    zim = _first_wikipedia_zim(zim_dir)
+    if zim is None:
+        pytest.skip("No wikipedia*.zim found in ZIM_TEST_DATA_DIR")
+    return zim
 
-    No tool advertises an ``outputSchema`` any more, so nothing arrives in
-    ``structuredContent`` and every payload is JSON in a text block (see
-    ``openzim_mcp.tool_schemas``). ``zim_query`` was the last holdout — its
-    typed return annotation put ``SynthesizeResponse`` under
-    ``structuredContent["result"]`` until v2.6.0.
 
-    Reading only ``structuredContent`` silently yielded ``{}`` for the seven
-    schema-less tools, which turned every downstream assertion into a
-    comparison against an empty dict rather than a failure anyone could read.
-    Falling back to the text block keeps this helper agnostic to whether a
-    tool advertises a schema.
+def _article_namespace(proc: Any, zim: Path) -> str:
+    """Return a namespace that actually holds articles in ``zim``.
+
+    Old-scheme archives keep articles under ``A``; new-scheme archives put
+    everything under ``C``. Hard-coding either one turned "this archive uses
+    the other scheme" into a skip, which is how the cursor round-trip below
+    stopped running.
     """
-    inner = result.get("structuredContent")
-    if isinstance(inner, dict) and inner:
-        return inner.get("result", inner)
-    for block in result.get("content") or []:
-        text = block.get("text") if isinstance(block, dict) else None
-        if not isinstance(text, str):
-            continue
-        try:
-            parsed = json.loads(text)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(parsed, dict):
-            return parsed.get("result", parsed)
-    return {}
+    for namespace in ("A", "C"):
+        page = _structured(
+            _call_tool(
+                proc,
+                900,
+                "zim_browse",
+                zim_file_path=str(zim),
+                namespace=namespace,
+                mode="page",
+                limit=1,
+            )
+        )
+        if page.get("results"):
+            return namespace
+    # ``return`` on a ``NoReturn`` call: ``pytest.skip`` raises, but spelling
+    # the exit explicitly keeps every path of this function an explicit return.
+    return pytest.skip("Archive exposes no article namespace (tried A and C)")
+
+
+def _discover_article_paths(proc: Any, zim: Path, limit: int = 25) -> List[str]:
+    """Return real article paths from ``zim``.
+
+    The module used to address ``A/Berlin`` directly. That is not an entry in
+    every wikipedia-shaped archive — the climate-change mini corpus has no
+    Berlin — so every assertion behind it degraded into a skip. Discovering
+    the paths keeps the tests running on whatever archive is present.
+    """
+    namespace = _article_namespace(proc, zim)
+    page = _structured(
+        _call_tool(
+            proc,
+            901,
+            "zim_browse",
+            zim_file_path=str(zim),
+            namespace=namespace,
+            mode="page",
+            limit=limit,
+        )
+    )
+    return [
+        r["path"]
+        for r in (page.get("results") or [])
+        if isinstance(r, dict) and isinstance(r.get("path"), str)
+    ]
+
+
+def _article_with_sections(proc: Any, zim: Path) -> tuple[str, str]:
+    """Return ``(entry_path, section_id)`` for an article that has sections."""
+    for entry_path in _discover_article_paths(proc, zim):
+        toc = _structured(
+            _call_tool(
+                proc,
+                902,
+                "zim_get",
+                zim_file_path=str(zim),
+                entry_path=entry_path,
+                view="toc",
+            )
+        )
+        for heading in toc.get("toc") or []:
+            if isinstance(heading, dict) and heading.get("section_id"):
+                return entry_path, heading["section_id"]
+    return pytest.skip("No article with a discoverable section in this archive")
 
 
 # ---------------------------------------------------------------------------
@@ -84,47 +139,30 @@ def _structured(result: Dict[str, Any]) -> Dict[str, Any]:
 def test_get_section_returns_non_empty_body_for_canonical_topic(
     mcp_proc, zim_dir: Path
 ):
-    """get_section against a canonical Wikipedia article should return
-    a non-empty body whose char_count matches the slice length and
-    whose section_title is non-empty.
+    """zim_get_section against a real article should return a non-empty
+    body whose char_count matches the slice length and whose
+    section_title is non-empty.
 
     The bundle's section-offset computation has produced empty slices
     when section ranges collapse (C7 regression). This test guards
     that fix on real Wikipedia HTML.
     """
-    zim = _first_wikipedia_zim(zim_dir)
-    if zim is None:
-        pytest.skip("No wikipedia*.zim found in ZIM_TEST_DATA_DIR")
-    # Discover sections via get_table_of_contents first so we don't
-    # hard-code section_ids that the scraper output may have renamed.
-    toc_resp = _call_tool(
-        mcp_proc,
-        1,
-        "get_table_of_contents",
-        zim_file_path=str(zim),
-        entry_path="A/Berlin",
-    )
-    toc = _structured(toc_resp)
-    headings = toc.get("toc") or []
-    # First-non-empty heading is the target.
-    target_id: Optional[str] = None
-    for h in headings:
-        if isinstance(h, dict) and h.get("section_id"):
-            target_id = h["section_id"]
-            break
-    if not target_id:
-        pytest.skip("No sections discovered in A/Berlin (TOC empty)")
+    zim = _require_wikipedia_zim(zim_dir)
+    # Discover the article and section_id rather than hard-coding either, so
+    # the scraper renaming a section doesn't silently disable the assertions.
+    entry_path, target_id = _article_with_sections(mcp_proc, zim)
 
-    section_resp = _call_tool(
-        mcp_proc,
-        2,
-        "get_section",
-        zim_file_path=str(zim),
-        entry_path="A/Berlin",
-        section_id=target_id,
+    section = _structured(
+        _call_tool(
+            mcp_proc,
+            2,
+            "zim_get_section",
+            zim_file_path=str(zim),
+            entry_path=entry_path,
+            section_id=target_id,
+        )
     )
-    section = _structured(section_resp)
-    assert section.get("section_id") == target_id
+    assert section.get("section_id") == target_id, section
     body = section.get("content_markdown") or ""
     assert body, f"empty body for section_id={target_id!r}"
     assert section.get("char_count", 0) == len(body)
@@ -132,32 +170,31 @@ def test_get_section_returns_non_empty_body_for_canonical_topic(
 
 
 def test_get_section_unknown_id_returns_actionable_error(mcp_proc, zim_dir: Path):
-    """A non-existent section_id surfaces ``available_section_ids`` and
-    (Op5) a ``closest_match`` hint. The error envelope must be a
-    real ToolErrorPayload, not a markdown string."""
-    zim = _first_wikipedia_zim(zim_dir)
-    if zim is None:
-        pytest.skip("No wikipedia*.zim found in ZIM_TEST_DATA_DIR")
-    resp = _call_tool(
-        mcp_proc,
-        1,
-        "get_section",
-        zim_file_path=str(zim),
-        entry_path="A/Berlin",
-        section_id="Goegraphy",  # deliberate typo of "Geography"
+    """A non-existent section_id surfaces ``available_section_ids``.
+
+    The error envelope must be a real ToolErrorPayload, not a markdown
+    string.
+    """
+    zim = _require_wikipedia_zim(zim_dir)
+    entry_path, real_id = _article_with_sections(mcp_proc, zim)
+
+    payload = _structured(
+        _call_tool(
+            mcp_proc,
+            1,
+            "zim_get_section",
+            zim_file_path=str(zim),
+            entry_path=entry_path,
+            section_id=real_id + "_definitely_not_a_section",
+        )
     )
-    payload = _structured(resp)
     # ToolErrorPayload shape — ``error=True`` is the discriminator.
-    assert payload.get("error") is True
-    assert payload.get("operation") == "section_not_found"
-    extras = payload.get("extras") or {}
-    assert "available_section_ids" in extras
-    # Op5: closest_match is best-effort; present when difflib finds a
-    # similar ID, absent for completely unrelated IDs. Don't assert
-    # presence, but assert it's the right type if present.
-    closest = extras.get("closest_match")
-    if closest is not None:
-        assert isinstance(closest, str)
+    assert payload.get("error") is True, payload
+    assert payload.get("operation") == "section_not_found", payload
+    # The ids sit at the top level of the payload, not under an ``extras`` key.
+    available = payload.get("available_section_ids")
+    assert isinstance(available, list) and available, payload
+    assert real_id in available, payload
 
 
 # ---------------------------------------------------------------------------
@@ -233,81 +270,95 @@ def test_get_related_articles_ranks_by_mention_count(mcp_proc, zim_dir: Path):
     Mock-based tests could only assert "the field exists"; this asserts
     the ordering property against real article HTML.
     """
-    zim = _first_wikipedia_zim(zim_dir)
-    if zim is None:
-        pytest.skip("No wikipedia*.zim found in ZIM_TEST_DATA_DIR")
-    resp = _call_tool(
-        mcp_proc,
-        1,
-        "get_related_articles",
-        zim_file_path=str(zim),
-        entry_path="A/Berlin",
-        limit=10,
-    )
-    payload = _structured(resp)
-    if payload.get("error"):
-        pytest.skip(f"related errored: {payload}")
-    results = payload.get("results") or []
-    if len(results) < 2:
-        pytest.skip("Too few related articles to compare ranking")
-    prev = float("inf")
-    for r in results:
-        mc = r.get("mention_count")
-        if mc is None:
-            pytest.skip("mention_count missing — pre-D9 server?")
-        assert mc <= prev, f"mention_count not monotone: {results}"
-        prev = mc
+    zim = _require_wikipedia_zim(zim_dir)
+    paths = _discover_article_paths(mcp_proc, zim)
+    if not paths:
+        pytest.skip("Archive exposes no article entries")
+
+    # Walk candidates until one has enough related articles to rank; a single
+    # stub article with one outbound link says nothing about ordering.
+    for entry_path in paths:
+        payload = _structured(
+            _call_tool(
+                mcp_proc,
+                1,
+                "zim_links",
+                zim_file_path=str(zim),
+                entry_path=entry_path,
+                direction="related",
+                limit=10,
+            )
+        )
+        if payload.get("error"):
+            continue
+        results = payload.get("results") or []
+        if len(results) < 2:
+            continue
+        counts = [r.get("mention_count") for r in results if isinstance(r, dict)]
+        if any(c is None for c in counts):
+            pytest.skip("mention_count missing from related results")
+        assert counts == sorted(
+            counts, reverse=True
+        ), f"mention_count not monotone for {entry_path}: {counts}"
+        return
+    pytest.skip("No article with 2+ related articles to compare ranking")
 
 
 # ---------------------------------------------------------------------------
-# walk_namespace live coverage — new-scheme archives + cursor identity.
+# zim_browse(mode="walk") live coverage — cursor identity across pages.
 # ---------------------------------------------------------------------------
 
 
 def test_walk_namespace_cursor_round_trip(mcp_proc, zim_dir: Path):
-    """Calling walk_namespace twice (first page, then via cursor) returns
+    """Walking a namespace twice (first page, then via cursor) returns
     different result pages without raising on the cursor archive-identity
     check.
 
     H16 made the identity check unconditional; this verifies legitimate
     cursors continue to round-trip against the same archive.
     """
-    zim = _first_wikipedia_zim(zim_dir)
-    if zim is None:
-        pytest.skip("No wikipedia*.zim found in ZIM_TEST_DATA_DIR")
-    resp1 = _call_tool(
-        mcp_proc,
-        1,
-        "walk_namespace",
-        zim_file_path=str(zim),
-        namespace="C",
-        limit=10,
+    zim = _require_wikipedia_zim(zim_dir)
+    # Ask for the namespace this archive actually populates. Pinning "C"
+    # meant every old-scheme archive skipped instead of walking.
+    namespace = _article_namespace(mcp_proc, zim)
+    page1 = _structured(
+        _call_tool(
+            mcp_proc,
+            1,
+            "zim_browse",
+            zim_file_path=str(zim),
+            namespace=namespace,
+            mode="walk",
+            limit=10,
+        )
     )
-    page1 = _structured(resp1)
-    if page1.get("error"):
-        pytest.skip(f"walk errored: {page1}")
+    assert page1.get("error") is not True, page1
     cursor = page1.get("next_cursor")
     if not cursor:
-        pytest.skip("walk_namespace finished on first page; no cursor to test")
-    resp2 = _call_tool(
-        mcp_proc,
-        2,
-        "walk_namespace",
-        zim_file_path=str(zim),
-        namespace="C",
-        cursor=cursor,
-        limit=10,
+        pytest.skip("walk finished on the first page; no cursor to round-trip")
+    page2 = _structured(
+        _call_tool(
+            mcp_proc,
+            2,
+            "zim_browse",
+            zim_file_path=str(zim),
+            namespace=namespace,
+            mode="walk",
+            cursor=cursor,
+            limit=10,
+        )
     )
-    page2 = _structured(resp2)
     assert page2.get("error") is not True, page2
-    # Different paths between pages — both pages return real results.
     page1_paths = {
         r.get("path") for r in (page1.get("results") or []) if isinstance(r, dict)
     }
     page2_paths = {
         r.get("path") for r in (page2.get("results") or []) if isinstance(r, dict)
     }
-    if page1_paths and page2_paths:
-        # At least one path must be different — otherwise pagination is
-        # broken (returning the same page twice).
-        assert page1_paths != page2_paths
+    assert page1_paths, page1
+    assert page2_paths, page2
+    # Returning the same page twice means the cursor never advanced.
+    assert page1_paths != page2_paths
+    assert not (
+        page1_paths & page2_paths
+    ), f"walk pages overlap: {sorted(page1_paths & page2_paths)}"

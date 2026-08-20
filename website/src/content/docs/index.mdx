@@ -23,7 +23,7 @@ OpenZIM MCP provides **intelligent, structured access** that LLMs need:
 - **Smart retrieval** — automatic fallback from direct path access to search-derived term resolution, with archive-scoped path-mapping cache and bounded redirect-chain following.
 - **Batch retrieval** — `zim_get(entry_paths=[...])` fetches up to 50 entries in one call with per-entry success/error reporting.
 - **MCP prompts** — pre-built workflows (`/research`, `/summarize`, `/explore`) orchestrate multi-step ZIM operations.
-- **MCP resources** — `zim://files`, `zim://{name}`, `zim://{name}/entry/{path}` integrate with MCP-aware client browsers and `@`-mention pickers; subscribe for live update notifications.
+- **MCP resources** — `zim://files`, `zim://{name}`, `zim://{name}/entry/{path}` integrate with MCP-aware client browsers and `@`-mention pickers; open a `subscriptions/listen` stream for live change notifications.
 - **Binary content** — `zim_get(binary=True)` extracts PDFs, images, and other embedded media for multi-agent workflows.
 
 ### Operations & Security

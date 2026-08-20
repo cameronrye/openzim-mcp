@@ -13,6 +13,7 @@ without changes.
 import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, cast
+from urllib.parse import unquote
 
 from libzim.reader import Archive  # type: ignore[import-untyped]
 
@@ -44,6 +45,39 @@ if TYPE_CHECKING:
     )
 
 logger = logging.getLogger(__name__)
+
+
+def _resolve_entry_spelling(archive: Any, path: str) -> Tuple[Optional[Any], str]:
+    """Return ``(entry, spelling)`` for whichever spelling of ``path`` resolves.
+
+    ZIM stores entry paths as raw UTF-8 (``A/El_Niño``) while the ``<a href>``
+    in archived HTML is percent-encoded per RFC 3986 (``El_Ni%C3%B1o``).
+    ``_resolve_link_to_entry_path`` normalises the href but never decodes it,
+    so link targets for any article with a non-ASCII or reserved character in
+    its path came back in a spelling libzim cannot serve — unfetchable if the
+    caller passed it to ``zim_get``, and an unusable key in the inbound link
+    graph.
+
+    The RAW spelling is tried first and the decoded one only as a fallback,
+    because some archives genuinely store a literal ``%`` in a path (warc2zim
+    asset names such as ``I/Al_Gore%2C_2007.webp``); decoding unconditionally
+    would break the paths that already work.
+
+    Returns ``(None, path)`` unchanged when neither spelling resolves, so a
+    caller that cannot verify the target still keeps its best-effort edge
+    rather than dropping it.
+    """
+    try:
+        return archive.get_entry_by_path(path), path
+    except Exception:  # noqa: BLE001 — libzim raises bare KeyError/RuntimeError
+        pass
+    decoded = unquote(path)
+    if decoded != path:
+        try:
+            return archive.get_entry_by_path(decoded), decoded
+        except Exception:  # noqa: BLE001 — same
+            pass
+    return None, path
 
 
 # Mimetype families that are never navigable articles. Used by
@@ -142,7 +176,7 @@ class _StructureMixin:
         """Structured variant of ``get_article_structure``.
 
         Returns the result dict directly (not a JSON string) so MCP tools
-        can hand it straight to FastMCP's structured-content path.
+        can hand it straight to the SDK's structured-content path.
 
         Raises:
             OpenZimMcpFileNotFoundError: If ZIM file not found
@@ -277,7 +311,7 @@ class _StructureMixin:
         """Structured variant of ``extract_article_links``. v2 Phase B contract.
 
         Returns the result dict directly (not a JSON string) so MCP tools
-        can hand it straight to FastMCP's structured-content path.
+        can hand it straight to the SDK's structured-content path.
 
         v2 Phase B: ``kind`` is required-with-default. Each call returns
         exactly one category in ``results``; ``category_totals`` reports
@@ -481,7 +515,7 @@ class _StructureMixin:
         """Structured variant of ``get_table_of_contents``.
 
         Returns the result dict directly (not a JSON string) so MCP tools
-        can hand it straight to FastMCP's structured-content path.
+        can hand it straight to the SDK's structured-content path.
 
         Raises:
             OpenZimMcpFileNotFoundError: If ZIM file not found
@@ -750,15 +784,17 @@ class _StructureMixin:
             # heading start so the caller sees the child's lead prose
             # only — same shape as the requested narrow contract,
             # just bumped one level down.
-            heading_len = (
-                len(section.get("title", "")) + len("#" * section["level"]) + 4
-            )
-            # Only widen when the following section really is a child —
-            # a near-empty section followed by a same-level (or higher)
-            # sibling must keep its own narrow slice rather than return
-            # the sibling's heading and lead prose.
+            # The measured slice starts at ``char_start``, the section's
+            # BODY offset (``heading_start`` is the heading line), so the
+            # budget covers stray whitespace only and must not scale with
+            # the title's length — otherwise a long-titled section
+            # swallows a genuine lead paragraph. Only widen when the
+            # following section really is a child, too: a near-empty
+            # section followed by a same-level (or higher) sibling must
+            # keep its own narrow slice rather than return the sibling's
+            # heading and lead prose.
             if (
-                narrowed_end - section["char_start"] <= heading_len + 20
+                narrowed_end - section["char_start"] <= 20
                 and first_following_idx is not None
                 and sections[first_following_idx]["level"] > section["level"]
             ):
@@ -896,7 +932,7 @@ class _StructureMixin:
         """Structured variant of ``get_related_articles``.
 
         Returns the result dict directly (not a JSON string) so MCP tools
-        can hand it straight to FastMCP's structured-content path.
+        can hand it straight to the SDK's structured-content path.
 
         v2 Phase B contract: the response carries ``results`` /
         ``next_cursor`` / ``total`` / ``done`` / ``page_info`` plus the
@@ -1086,14 +1122,33 @@ class _StructureMixin:
         )
         from openzim_mcp.pagination import archive_identity
 
+        # Cursor integrity: an inbound cursor issued for archive A must not
+        # resume against archive B (same guard every other paginated surface
+        # applies — see extract_article_links_data above).
+        if cursor_archive_identity is not None:
+            from openzim_mcp.pagination import Cursor as _CursorClass
+            from openzim_mcp.pagination import CursorMismatchError
+
+            try:
+                _CursorClass.verify_archive_identity(
+                    cast("Any", {"ai": cursor_archive_identity}),
+                    expected=archive_identity(validated_path),
+                    tool="get_inbound_links",
+                )
+            except CursorMismatchError as e:
+                raise OpenZimMcpValidationError(str(e)) from e
+
         with _zim_ops_mod.zim_archive(Path(validated_str)) as archive:
             live_uuid = str(archive.uuid)
         reader = LinkGraphReader.open_for(validated_str, live_archive_uuid=live_uuid)
         if reader is None:
             raise LinkGraphUnavailable(
                 "Inbound links require a link-graph sidecar for this archive. "
-                f"Run `openzim-mcp build link-graph {validated_str}` "
-                "(rebuild it if the archive changed)."
+                f"Run `openzim-mcp build link-graph {validated_str}`. "
+                "If a sidecar file is already present it is stale — built for "
+                "a different archive revision or an older schema, which 3.0.0 "
+                "makes true of every sidecar built before it — and the build "
+                "refuses to overwrite without `--force`."
             )
         try:
             page = reader.query_inbound(entry_path, limit=limit, offset=offset)
@@ -1155,8 +1210,16 @@ class _StructureMixin:
             with _zim_ops_mod.zim_archive(Path(zim_file_path)) as archive:
                 for item in outbound:
                     try:
-                        entry = archive.get_entry_by_path(item["path"])
-                        title = getattr(entry, "title", None)
+                        # Also normalises ``item["path"]`` onto the spelling
+                        # the archive can actually serve. The href these were
+                        # built from is percent-encoded, so a non-ASCII target
+                        # arrived here as ``A/El_Ni%C3%B1o`` — which both
+                        # failed this title lookup (leaving the raw path as
+                        # the "title" placeholder) and, worse, went out on the
+                        # wire as a ``path`` the caller could not fetch.
+                        entry, spelling = _resolve_entry_spelling(archive, item["path"])
+                        item["path"] = spelling
+                        title = getattr(entry, "title", None) if entry else None
                         if title:
                             item["title"] = title
                     except Exception as e:
@@ -1318,11 +1381,17 @@ class _StructureMixin:
                 # back to the path-normalized target rather than dropping
                 # an otherwise-valid edge.
                 try:
-                    entry = archive.get_entry_by_path(target)
-                    resolved = best_effort_redirect_chain(entry)
-                    resolved_path = getattr(resolved, "path", None)
-                    if resolved_path:
-                        target = resolved_path
+                    # Percent-decode fallback first: the href these targets
+                    # come from is RFC 3986-encoded, so a non-ASCII article
+                    # arrives as ``A/El_Ni%C3%B1o`` and this lookup would miss
+                    # it entirely — indexing the edge under a key nothing can
+                    # fetch.
+                    entry, target = _resolve_entry_spelling(archive, target)
+                    if entry is not None:
+                        resolved = best_effort_redirect_chain(entry)
+                        resolved_path = getattr(resolved, "path", None)
+                        if resolved_path:
+                            target = resolved_path
                 except Exception as e:
                     logger.debug(f"redirect canonicalization for {target} failed: {e}")
             if target in seen or target == source_path:

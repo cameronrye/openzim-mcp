@@ -258,7 +258,7 @@ Yes, via the streamable HTTP transport. Pass `--transport http` and set `OPENZIM
 
 ### Can I subscribe to updates when ZIM files change?
 
-Yes. Subscribe to `zim://files` or `zim://{name}` and the server emits `notifications/resources/updated` whenever the directory contents change or a `.zim` file is replaced. Polling-based; configurable via `OPENZIM_MCP_WATCH_INTERVAL_SECONDS` (default 5s). See [Resources, prompts, and subscriptions](/openzim-mcp/docs/resources-prompts-subscriptions/).
+Yes, over the HTTP transport. Open a `subscriptions/listen` stream: ask for `resourcesListChanged` and you get `notifications/resources/list_changed` whenever a `.zim` appears or disappears; list an archive under `resourceSubscriptions` (`zim://{name}`) and you get `notifications/resources/updated` when that file is replaced. Polling-based; configurable via `OPENZIM_MCP_WATCH_INTERVAL_SECONDS` (default 5s). See [Resources, prompts, and subscriptions](/openzim-mcp/docs/resources-prompts-subscriptions/).
 
 ### Can I batch-fetch entries?
 

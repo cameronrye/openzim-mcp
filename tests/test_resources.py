@@ -4,9 +4,22 @@ import json
 from unittest.mock import MagicMock
 
 import pytest
+from mcp.server.mcpserver import Context
 
 from openzim_mcp.config import OpenZimMcpConfig
 from openzim_mcp.server import OpenZimMcpServer
+
+
+@pytest.fixture
+def ctx(server: OpenZimMcpServer) -> Context:
+    """Build the ``Context`` that SDK v2 requires on every resource lookup.
+
+    ``ResourceManager.get_resource`` takes a mandatory ``context`` in MCP 2.0
+    so templates can drive the multi-round-trip input flow. These resources
+    never request input, so a bare context bound to the server's own MCPServer
+    and subscription bus is enough to exercise the handlers.
+    """
+    return Context(mcp_server=server.mcp, subscriptions=server.subscription_bus)
 
 
 class TestZimFilesResource:
@@ -19,7 +32,7 @@ class TestZimFilesResource:
 
     def test_resources_registered(self, server: OpenZimMcpServer):
         """Test that zim://files and zim://{name} are registered on the server."""
-        # FastMCP exposes registered resources via internal state — the
+        # MCPServer exposes registered resources via internal state — the
         # public-facing assertion is that the server starts cleanly.
         assert server.mcp is not None
 
@@ -71,7 +84,7 @@ class TestZimFileOverviewResource:
 
 
 class TestZimFilesResourceHandler:
-    """Exercise the zim://files handler through the FastMCP resource manager."""
+    """Exercise the zim://files handler through the SDK resource manager."""
 
     @pytest.fixture
     def server(self, test_config: OpenZimMcpConfig) -> OpenZimMcpServer:
@@ -79,7 +92,7 @@ class TestZimFilesResourceHandler:
         return OpenZimMcpServer(test_config)
 
     @pytest.mark.asyncio
-    async def test_zim_files_returns_index(self, server):
+    async def test_zim_files_returns_index(self, server, ctx: Context):
         """Happy path: list_zim_files_data is rendered as JSON."""
         server.zim_operations.list_zim_files_data = MagicMock(
             return_value=[
@@ -87,19 +100,19 @@ class TestZimFilesResourceHandler:
             ]
         )
         rm = server.mcp._resource_manager
-        resource = await rm.get_resource("zim://files")
+        resource = await rm.get_resource("zim://files", ctx)
         body = await resource.read()
         data = json.loads(body)
         assert data[0]["path"] == "/zim/a.zim"
 
     @pytest.mark.asyncio
-    async def test_zim_files_returns_error_on_failure(self, server):
+    async def test_zim_files_returns_error_on_failure(self, server, ctx: Context):
         """If list_zim_files_data raises, the resource returns a JSON error envelope."""
         server.zim_operations.list_zim_files_data = MagicMock(
             side_effect=RuntimeError("boom")
         )
         rm = server.mcp._resource_manager
-        resource = await rm.get_resource("zim://files")
+        resource = await rm.get_resource("zim://files", ctx)
         body = await resource.read()
         data = json.loads(body)
         assert "error" in data
@@ -107,7 +120,7 @@ class TestZimFilesResourceHandler:
 
 
 class TestZimFileOverviewHandler:
-    """Exercise the zim://{name} handler via the FastMCP resource manager."""
+    """Exercise the zim://{name} handler via the SDK resource manager."""
 
     @pytest.fixture
     def server(self, test_config: OpenZimMcpConfig) -> OpenZimMcpServer:
@@ -115,20 +128,22 @@ class TestZimFileOverviewHandler:
         return OpenZimMcpServer(test_config)
 
     @pytest.mark.asyncio
-    async def test_overview_unknown_name_returns_error_envelope(self, server):
+    async def test_overview_unknown_name_returns_error_envelope(
+        self, server, ctx: Context
+    ):
         """Unknown name → error JSON listing available names."""
         server.zim_operations.list_zim_files_data = MagicMock(
             return_value=[{"path": "/zim/wiki.zim", "name": "wiki.zim"}]
         )
         rm = server.mcp._resource_manager
-        resource = await rm.get_resource("zim://nonexistent")
+        resource = await rm.get_resource("zim://nonexistent", ctx)
         body = await resource.read()
         data = json.loads(body)
         assert "error" in data
         assert "wiki" in data["error"]  # available names listed
 
     @pytest.mark.asyncio
-    async def test_overview_collects_partial_failures(self, server):
+    async def test_overview_collects_partial_failures(self, server, ctx: Context):
         """Each section is best-effort — failures surface as *_error fields."""
         server.zim_operations.list_zim_files_data = MagicMock(
             return_value=[{"path": "/zim/wiki.zim", "name": "wiki.zim"}]
@@ -144,7 +159,7 @@ class TestZimFileOverviewHandler:
         )
 
         rm = server.mcp._resource_manager
-        resource = await rm.get_resource("zim://wiki")
+        resource = await rm.get_resource("zim://wiki", ctx)
         body = await resource.read()
         data = json.loads(body)
         assert data["name"] == "wiki"
@@ -153,7 +168,7 @@ class TestZimFileOverviewHandler:
         assert data["main_page_error"] == "main page broke"
 
     @pytest.mark.asyncio
-    async def test_overview_truncates_long_main_page(self, server):
+    async def test_overview_truncates_long_main_page(self, server, ctx: Context):
         """Main page preview is trimmed to 2000 chars + truncation marker."""
         server.zim_operations.list_zim_files_data = MagicMock(
             return_value=[{"path": "/zim/wiki.zim", "name": "wiki.zim"}]
@@ -163,20 +178,20 @@ class TestZimFileOverviewHandler:
         server.zim_operations.get_main_page = MagicMock(return_value="x" * 5000)
 
         rm = server.mcp._resource_manager
-        resource = await rm.get_resource("zim://wiki")
+        resource = await rm.get_resource("zim://wiki", ctx)
         body = await resource.read()
         data = json.loads(body)
         assert len(data["main_page_preview"]) < 5000
         assert "truncated" in data["main_page_preview"]
 
     @pytest.mark.asyncio
-    async def test_overview_outer_exception_wraps_in_error(self, server):
+    async def test_overview_outer_exception_wraps_in_error(self, server, ctx: Context):
         """An exception in list_zim_files_data hits the outer try/except."""
         server.zim_operations.list_zim_files_data = MagicMock(
             side_effect=RuntimeError("listing exploded")
         )
         rm = server.mcp._resource_manager
-        resource = await rm.get_resource("zim://anything")
+        resource = await rm.get_resource("zim://anything", ctx)
         body = await resource.read()
         data = json.loads(body)
         assert "error" in data

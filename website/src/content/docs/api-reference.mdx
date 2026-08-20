@@ -11,7 +11,7 @@ OpenZIM MCP exposes three kinds of MCP surfaces:
 |---------|------------------------|---------------|
 | **Tools** (callable functions) | 8 | only `zim_query` exposed in Simple mode |
 | **Prompts** (slash-command workflows) | 3 | Advanced mode only |
-| **Resources** (URI-addressable data) | 3 templates + subscriptions | Advanced mode only (subscriptions additionally require the HTTP transport) |
+| **Resources** (URI-addressable data) | 3 templates + subscriptions | Advanced mode only (change notifications additionally require the HTTP transport) |
 
 In **Simple mode** (the default) only the `zim_query` natural-language tool is exposed. Pass `--mode advanced` (or set `OPENZIM_MCP_TOOL_MODE=advanced`) to expose all 8 specialized tools below.
 
@@ -23,7 +23,7 @@ v2.0.0 collapsed the prior 22-tool advanced surface into 8 consolidated tools. T
 
 Tools return one of:
 
-- **JSON payload responses** (most tools) — typed payloads (`SearchResponse`, `ArchiveMetadataResponse`, `ServerHealthResponse`, etc.) serialized as JSON **text** inside a `TextContent` block. All 8 tools are annotated `-> Any`, so FastMCP derives no `outputSchema` and **nothing arrives in `structuredContent`** — parse the text block as JSON.
+- **JSON payload responses** (most tools) — typed payloads (`SearchResponse`, `ArchiveMetadataResponse`, `ServerHealthResponse`, etc.) serialized as JSON **text** inside a `TextContent` block. All 8 tools are annotated `-> Any`, so the SDK derives no `outputSchema` and **nothing arrives in `structuredContent`** — parse the text block as JSON.
 - **Markdown-string responses** — `zim_get` (single-entry mode) returns a rendered string with `Title:`, `Path:`, `Type:` lines, then a `## Content` block.
 - **Tool errors** — every tool catches exceptions and returns a structured `ToolErrorPayload` (`{error: true, operation, message, context?}`) rather than raising. The exception is `zim_query` on its default path: handler-side failures there return markdown guidance instead of an envelope, so they carry `isError: false`; only its argument rejections and its `synthesize=True` refusals produce one. There is no `status` key and no `hint` key. Only `error`, `operation`, and `message` are guaranteed; individual failures may merge extra self-correction keys into the same envelope (a `section_not_found` error, for example, also carries `available_section_ids`, `available_section_ids_truncated`, `available_section_ids_total`, and `closest_match`). The envelope arrives as JSON text in the response's `content` — no tool advertises an `outputSchema`, so nothing lands in `structuredContent` — and `openzim_mcp/mcp_envelope.py` recognises it on the way out and sets `isError: true` on the `CallToolResult`. Path entries inside errors are redacted to `...filename.zim` form so the canonical allowed-directory layout is never leaked.
 
@@ -52,7 +52,7 @@ zim_query(
 ) -> Any
 ```
 
-**At runtime** the tool returns a string for ordinary calls (markdown for every intent except `list available ZIM files`, which embeds a JSON array in the string), a `SynthesizeResponse` dict when `synthesize=True`, and a `ToolErrorPayload` dict when it rejects an argument, hits the rate limit, cannot decode a `cursor`, or the synthesize pipeline fails. The `-> Any` annotation is deliberate — it keeps FastMCP from deriving an `outputSchema`.
+**At runtime** the tool returns a string for ordinary calls (markdown for every intent except `list available ZIM files`, which embeds a JSON array in the string), a `SynthesizeResponse` dict when `synthesize=True`, and a `ToolErrorPayload` dict when it rejects an argument, hits the rate limit, cannot decode a `cursor`, or the synthesize pipeline fails. The `-> Any` annotation is deliberate — it keeps the SDK from deriving an `outputSchema`.
 
 | Parameter | Type | Default | Notes |
 |-----------|------|---------|-------|
@@ -260,7 +260,9 @@ zim_links(
 
 `cursor` / `offset` apply to `"outbound"` and `"inbound"`; `"related"` returns a single ranked set and rejects a `cursor`.
 
-`direction="inbound"` requires the link-graph sidecar to be built first: `openzim-mcp build link-graph <archive>.zim` walks the archive once and writes `<archive>.zim.linkgraph.sqlite` next to it (`--force` overwrites an existing sidecar; `--output PATH` relocates it). When the sidecar is absent or stale (the archive's UUID no longer matches the one recorded at build time — i.e. it was rebuilt or replaced), `zim_links` returns a structured `inbound_sidecar_unavailable` error rather than failing.
+`direction="inbound"` requires the link-graph sidecar to be built first: `openzim-mcp build link-graph <archive>.zim` walks the archive once and writes `<archive>.zim.linkgraph.sqlite` next to it (`--force` overwrites an existing sidecar; `--output PATH` relocates it). When the sidecar is absent or stale, `zim_links` returns a structured `inbound_sidecar_unavailable` error rather than failing. A sidecar is stale when the archive's UUID no longer matches the one recorded at build time (it was rebuilt or replaced), or when its schema version predates the running server's.
+
+**3.0.0 invalidates every sidecar built by 2.x.** Edge targets are now stored under the path the archive can actually serve rather than the raw percent-encoded href, so the schema version was bumped and older sidecars are rejected on load. Rebuild each one with `openzim-mcp build link-graph --force <archive>.zim`; `--force` is required because the old file is still sitting next to the archive. Until then `direction="inbound"` returns `inbound_sidecar_unavailable`, and no other direction is affected.
 
 Relative hrefs are resolved against the source entry's directory; redirects are followed to resolved paths; the content namespace is identified correctly on domain-scheme archives; self-referential refs are rejected.
 
@@ -389,9 +391,9 @@ Overview of one ZIM file: metadata, namespace breakdown, and main-page preview (
 Single entry served with native MIME type:
 
 - HTML / text entries → `text/html`, `text/plain`, `application/json`, etc., body as text.
-- Binary entries (images, PDFs) → appropriate MIME, body as raw bytes (FastMCP base64-wraps).
+- Binary entries (images, PDFs) → appropriate MIME, body as raw bytes (the SDK base64-wraps).
 
-**Encoding requirement:** clients MUST URL-encode `/` as `%2F` in the `{path}` segment because FastMCP's URI template engine treats `/` as a segment separator. Example:
+**Encoding requirement:** clients MUST URL-encode `/` as `%2F` in the `{path}` segment because the SDK's URI template engine treats `/` as a segment separator. Example:
 
 ```
 zim://wikipedia_en/entry/A%2FClimate_change
@@ -403,12 +405,12 @@ A literal slash will fail to route. See the [Resources, prompts & subscriptions 
 
 ## Resource subscriptions
 
-Under the HTTP transport (`--transport http`), clients can subscribe to `zim://files` or `zim://{name}` and receive `notifications/resources/updated` whenever:
+Clients open one long-lived `subscriptions/listen` stream naming the notification kinds they want (`resources/subscribe` was removed by the 2026-07-28 revision). Under the HTTP transport (`--transport http`) the server then publishes:
 
-- A `.zim` file is added to or removed from an allowed directory (`zim://files`)
-- A specific `.zim` file's mtime or size changes (`zim://{name}`)
+- `notifications/resources/list_changed` when a `.zim` file is added to or removed from an allowed directory — request it with `resourcesListChanged: true`
+- `notifications/resources/updated` for `zim://{name}` when that `.zim` file's mtime or size changes — request it with `resourceSubscriptions: ["zim://{name}"]`
 
-On stdio and SSE the subscribe handlers are not registered and the capability is not advertised.
+`subscriptions/listen` is served only where the file watcher can run — the HTTP transport with subscriptions enabled. On stdio and SSE the capability is not advertised and a listen request fails with method-not-found instead of acknowledging a stream that would stay silent.
 
 Configuration:
 
@@ -416,6 +418,7 @@ Configuration:
 |---------|---------|-------|
 | `OPENZIM_MCP_SUBSCRIPTIONS_ENABLED` | `true` | master switch |
 | `OPENZIM_MCP_WATCH_INTERVAL_SECONDS` | `5` | 1–60 |
+| `OPENZIM_MCP_RESOURCE_CACHE_TTL_SECONDS` | `3600` | 0–86400; read TTL for `zim://{name}` overviews (entry reads keep the watcher-bounded TTL), `0` disables |
 
 See [Resources, prompts & subscriptions](/openzim-mcp/docs/resources-prompts-subscriptions/) for full client-side examples.
 

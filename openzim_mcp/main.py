@@ -1,8 +1,13 @@
 """Main entry point for OpenZIM MCP server."""
 
 import argparse
+import contextlib
 import logging
+import os
+import signal
 import sys
+from types import FrameType
+from typing import Optional
 
 from pydantic import ValidationError as PydanticValidationError
 
@@ -12,6 +17,59 @@ from .exceptions import OpenZimMcpConfigurationError
 from .server import OpenZimMcpServer
 
 logger = logging.getLogger(__name__)
+
+
+def _raise_system_exit(signum: int, _frame: Optional[FrameType]) -> None:
+    """Turn a termination signal into an ordinary interpreter shutdown."""
+    raise SystemExit(128 + signum)
+
+
+def install_termination_handler() -> None:
+    """Make SIGTERM unwind the interpreter instead of killing it outright.
+
+    Python's default SIGTERM disposition terminates the process without
+    unwinding, so ``atexit`` never runs — and ``atexit`` is where
+    ``OpenZimMcpCache`` flushes its persistence file. Every SIGTERM-based
+    stop (``docker stop``, a Kubernetes pod eviction, systemd) therefore
+    discarded the cache and forced the next start to be cold, despite
+    ``persistence_enabled``. Raising ``SystemExit`` unwinds the server
+    instead, and ``main`` finishes the job explicitly.
+
+    This also covers the HTTP transport, which looked safe but is not:
+    uvicorn installs its own handler for the graceful ASGI shutdown, then
+    restores the previous one and re-raises the signal to report the right
+    exit status. With the default disposition restored that re-raise killed
+    the process; with this handler restored it unwinds instead, so the flush
+    happens after uvicorn has finished its own shutdown rather than instead
+    of it.
+
+    ``signal.signal`` rejects a non-main thread, so an embedding harness that
+    imports and calls ``main`` off-thread keeps working without the handler.
+    """
+    with contextlib.suppress(ValueError, OSError):
+        signal.signal(signal.SIGTERM, _raise_system_exit)
+
+
+def _flush_and_exit(server: OpenZimMcpServer, code: int) -> None:
+    """Persist the cache, then leave without waiting on the reader thread.
+
+    ``atexit`` cannot be relied on here even though the interpreter is now
+    unwinding: the stdio transport parks a worker thread on a blocking read
+    of stdin, and nothing closes stdin when the stop came from a signal. That
+    thread never finishes, so interpreter finalization waits on it forever —
+    turning a process that used to die instantly into one that hangs until
+    the supervisor's SIGKILL, which is worse than the bug being fixed.
+
+    So the flush is done explicitly through ``cache.shutdown`` (which also
+    deregisters the now-redundant atexit handlers) and the process leaves via
+    ``os._exit``. Everything with cleanup worth running has already run:
+    ``server.run()`` returned, and the ASGI lifespan — where the watcher is
+    stopped — completed with it.
+    """
+    with contextlib.suppress(Exception):
+        server.cache.shutdown()
+    logging.shutdown()
+    os._exit(code)
 
 
 def _build_arg_parser() -> argparse.ArgumentParser:
@@ -150,9 +208,18 @@ def main() -> None:
 
         # ``OpenZimMcpServer.run()`` derives the wire transport from
         # ``config.transport`` directly (translating our short name 'http'
-        # to FastMCP's 'streamable-http'); calling without an argument keeps
+        # to the SDK's 'streamable-http'); calling without an argument keeps
         # the configured transport and the runtime transport in sync.
-        server.run()
+        # Before ``run()`` blocks: a SIGTERM arriving at any point after this
+        # unwinds the interpreter so the cache's atexit flush actually runs.
+        install_termination_handler()
+
+        try:
+            server.run()
+        except SystemExit as exc:
+            # The signal path. ``server.run()`` has unwound; finish the
+            # shutdown the default disposition used to skip entirely.
+            _flush_and_exit(server, exc.code if isinstance(exc.code, int) else 0)
 
     except OpenZimMcpConfigurationError as e:
         print(f"Configuration error: {e}", file=sys.stderr)

@@ -40,9 +40,16 @@ def test_edges_has_anchor_text_column(tmp_path) -> None:
     assert cols == {"target_id", "source_id", "anchor_text"}
 
 
-def test_schema_version_is_2() -> None:
-    """SCHEMA_VERSION equals 2."""
-    assert SCHEMA_VERSION == 2
+def test_schema_version_is_3() -> None:
+    """SCHEMA_VERSION equals 3.
+
+    Bumped from 2 when edge targets started being stored in the spelling the
+    archive can serve (decoded) rather than the raw percent-encoded href. The
+    table shapes did not change, so a v2 file still loads — which is exactly
+    why the version has to move: without it the reader accepts a sidecar whose
+    non-ASCII targets no caller can look up any more.
+    """
+    assert SCHEMA_VERSION == 3
 
 
 def test_apply_build_pragmas_runs_without_error() -> None:

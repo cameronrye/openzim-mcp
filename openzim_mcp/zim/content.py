@@ -28,6 +28,7 @@ from typing import (
 from libzim.reader import Archive  # type: ignore[import-untyped]
 
 import openzim_mcp.zim_operations as _zim_ops_mod
+from openzim_mcp.content_processor import paged_slice_length
 from openzim_mcp.exceptions import (
     OpenZimMcpArchiveError,
     OpenZimMcpValidationError,
@@ -99,6 +100,44 @@ _STYLE_HEADING_TOKENS: Dict[str, Tuple[str, ...]] = {
 }
 
 
+def _render_offset_and_body(payload: Dict[str, Any]) -> Tuple[str, str]:
+    """Render the ``Content Offset:`` line and the body for an entry payload.
+
+    Shared by :func:`_render_entry_payload_text` and the ``M/<key>`` metadata
+    presenter, which render the same two facts and must render them the same
+    way. They were copies once, and the copy silently drifted — the metadata
+    side lost the empty-value fallback, so a genuinely empty value printed as a
+    bare ``## Content`` heading and nothing else, reading as "this entry has no
+    content" rather than "this value is empty". Keeping one builder is what
+    makes that class of drift impossible rather than merely fixed.
+
+    Returns ``(offset_line, body)``. ``offset_line`` is ``""`` when no positive
+    offset was applied and already carries its trailing newline otherwise, so
+    callers concatenate it unconditionally.
+    """
+    offset_past_end = bool(payload.get("content_offset_past_end"))
+    offset_line = ""
+    # ``content_offset`` / ``total_chars`` are present exactly when a
+    # positive offset was applied by the payload builder.
+    if "content_offset" in payload:
+        content_offset = payload["content_offset"]
+        total_length = payload["total_chars"]
+        if offset_past_end:
+            offset_line = (
+                f"Content Offset: {content_offset} is past the end of the "
+                f"{total_length:,}-character body — no content at this offset.\n"
+            )
+        else:
+            offset_line = (
+                f"Content Offset: {content_offset} of {total_length:,} characters\n"
+            )
+    if offset_past_end:
+        body = "(No content — offset beyond end of body)"
+    else:
+        body = payload["content"] or "(No content)"
+    return offset_line, body
+
+
 def _render_entry_payload_text(payload: Dict[str, Any]) -> str:
     """Render a ``_build_entry_payload`` dict as the legacy markdown text.
 
@@ -116,27 +155,8 @@ def _render_entry_payload_text(payload: Dict[str, Any]) -> str:
     else:
         result_text += f"Path: {payload['path']}\n"
     result_text += f"Type: {payload.get('content_type') or 'Unknown'}\n"
-    offset_past_end = bool(payload.get("content_offset_past_end"))
-    # ``content_offset`` / ``total_chars`` are present exactly when a
-    # positive offset was applied by the payload builder.
-    if "content_offset" in payload:
-        content_offset = payload["content_offset"]
-        total_length = payload["total_chars"]
-        if offset_past_end:
-            result_text += (
-                f"Content Offset: {content_offset} is past the end of the "
-                f"{total_length:,}-character body — no content at this offset.\n"
-            )
-        else:
-            result_text += (
-                f"Content Offset: {content_offset} of {total_length:,} characters\n"
-            )
-    result_text += "## Content\n\n"
-    if offset_past_end:
-        result_text += "(No content — offset beyond end of body)"
-    else:
-        result_text += payload["content"] or "(No content)"
-    return result_text
+    offset_line, body = _render_offset_and_body(payload)
+    return f"{result_text}{offset_line}## Content\n\n{body}"
 
 
 def _heading_matches(title: str, tokens: Tuple[str, ...]) -> bool:
@@ -457,10 +477,21 @@ class _ContentMixin:
         # entirely, which is the whole point of caching here. The stat token
         # (mtime_ns:size) invalidates the entry when the archive is replaced
         # in place (archive_stat_token contract).
+        #
+        # ``v3`` because the stat token only covers the ARCHIVE changing, not
+        # this server changing what it renders from an unchanged archive.
+        # 3.0.0 does exactly that — the empty ``M/<key>`` fallback, the
+        # boundary-whitespace fix and ``_meta.more_at_offset`` all alter the
+        # cached value — so an operator upgrading with
+        # ``persistence_enabled`` would have kept being served the 2.7.0
+        # rendering until the TTL expired, with every fix inert on precisely
+        # the entries it was written for. Same rule the bundle and
+        # browse-namespace prefixes already follow. Both ``entry:`` keys must
+        # stay byte-identical; see the sibling in ``_get_zim_entry_from_archive``.
         from openzim_mcp.bundle import archive_stat_token
 
         cache_key = (
-            f"entry:{validated_path}:{archive_stat_token(validated_path)}:"
+            f"entry:v3:{validated_path}:{archive_stat_token(validated_path)}:"
             f"{entry_path}:{max_content_length}:{content_offset}:compact={compact}"
         )
         cached_result = self.cache.get(cache_key)
@@ -519,7 +550,7 @@ class _ContentMixin:
         from openzim_mcp.bundle import archive_stat_token
 
         cache_key = (
-            f"entry:{validated_path}:{archive_stat_token(validated_path)}:"
+            f"entry:v3:{validated_path}:{archive_stat_token(validated_path)}:"
             f"{entry_path}:{max_content_length}:{content_offset}:compact={compact}"
         )
         cached_result = self.cache.get(cache_key)
@@ -556,7 +587,7 @@ class _ContentMixin:
         """Structured variant of ``get_zim_entry``.
 
         Returns the entry dict directly (path/title/content/content_type)
-        so MCP tools can hand it to FastMCP's structured-content path.
+        so MCP tools can hand it to the SDK's structured-content path.
         Honours the same smart-retrieval and path-mapping logic as the
         legacy text variant.
 
@@ -921,7 +952,7 @@ class _ContentMixin:
         # overshooting by the note length. When not truncated the whole
         # post-offset body is served, so the slice length is ``len(content)``
         # and no continuation offset is emitted anyway.
-        content_chars = max_content_length if was_truncated else len(content)
+        content_chars = paged_slice_length(content, max_content_length, content_offset)
         content = truncated_content
 
         payload: Dict[str, Any] = {
@@ -956,7 +987,7 @@ class _ContentMixin:
         """Structured variant of ``get_entries``.
 
         Returns the result dict directly (not a JSON string) so MCP tools
-        can hand it straight to FastMCP's structured-content path.
+        can hand it straight to the SDK's structured-content path.
 
         Per-entry partial success: one failure does not abort the batch.
         Each result carries the input ``index`` so callers can correlate
@@ -1237,10 +1268,15 @@ class _ContentMixin:
             # Error payloads carry the requested path in ``path`` and the
             # diagnostic message in ``content``.
             return f"# {payload['path']}\n\n{payload['content']}", False
+        # Offset accounting and the body come from the renderer the regular
+        # entry surface uses, not a copy of it: a tail slice must not read as
+        # the complete value, a past-end offset must not read as "the value is
+        # empty", and an empty value must not read as "no content here".
+        offset_line, body = _render_offset_and_body(payload)
         return (
             f"# {payload['title']}\n\nRequested Path: {payload['path']}\n"
-            f"Type: {payload.get('content_type') or 'unknown'}\n"
-            f"## Content\n\n{payload['content']}"
+            f"Type: {payload.get('content_type') or 'Unknown'}\n"
+            f"{offset_line}## Content\n\n{body}"
         ), True
 
     def _get_metadata_entry_data(
@@ -1311,7 +1347,7 @@ class _ContentMixin:
         # See the note at the sibling site above: the appended truncation note
         # makes a length comparison unreliable, so key on the cap instead.
         was_truncated = len(content) > max_content_length
-        content_chars = max_content_length if was_truncated else len(content)
+        content_chars = paged_slice_length(content, max_content_length, content_offset)
 
         payload["content"] = truncated_content
         if mime:
@@ -1380,7 +1416,7 @@ class _ContentMixin:
         """Structured variant of ``get_binary_entry``.
 
         Returns the result dict directly (not a JSON string) so MCP tools
-        can hand it straight to FastMCP's structured-content path. The
+        can hand it straight to the SDK's structured-content path. The
         ``data`` field, when populated, remains a base64-encoded string.
 
         Args:
@@ -1590,7 +1626,7 @@ class _ContentMixin:
         """Structured variant of ``get_entry_summary``.
 
         Returns the result dict directly (not a JSON string) so MCP tools
-        can hand it straight to FastMCP's structured-content path.
+        can hand it straight to the SDK's structured-content path.
 
         Raises:
             OpenZimMcpFileNotFoundError: If ZIM file not found

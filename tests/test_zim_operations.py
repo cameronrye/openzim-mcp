@@ -1631,7 +1631,9 @@ class TestZimOperations:
         stat_token = archive_stat_token(validated_path)
 
         # Test get_zim_entry cache hit (lines 283-284)
-        cache_key = f"entry:{validated_path}:{stat_token}:A/Test:1000:0:compact=False"
+        cache_key = (
+            f"entry:v3:{validated_path}:{stat_token}:A/Test:1000:0:compact=False"
+        )
         zim_operations.cache.set(cache_key, "cached entry content")
 
         result = zim_operations.get_zim_entry(str(zim_file), "A/Test", 1000)
@@ -1653,7 +1655,7 @@ class TestZimOperations:
         # stores the post-attach payload. Key bumped v2b -> v2c when
         # new-scheme C browse began filtering _zim_static infra assets.
         cache_key = (
-            f"browse_ns_data:v2d:{validated_path}:{stat_token}:A:50:0:assets=False"
+            f"browse_ns_data:v2e:{validated_path}:{stat_token}:A:50:0:assets=False"
         )
         cached_browse = {"cached": "browse", "_meta": {"chars": 1}}
         zim_operations.cache.set(cache_key, cached_browse)

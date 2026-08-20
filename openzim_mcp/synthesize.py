@@ -1393,11 +1393,14 @@ _LIST_ARTICLE_PREFIX_RE = re.compile(
 # discography). Match each suffix as a whole-word path component so
 # ``Discography`` alone doesn't sweep the canonical
 # ``Music_industry_discography`` article — the suffix has to come at
-# the tail of the path.
+# the tail of the path. Only tails that CANNOT name a canonical topic
+# belong here: a bare ``_awards``/``_honors`` tail is the name of the
+# institution article (``Academy_Awards``, ``Kennedy_Center_Honors``),
+# so award catalogs are matched in their multi-word form instead.
 _LIST_ARTICLE_SUFFIX_RE = re.compile(
     r"_(?:discography|filmography|videography|bibliography|"
-    r"awards|honors|appearances|albums|singles|recordings|"
-    r"appearances_and_filmography)$",
+    r"appearances_and_filmography|awards_and_nominations|"
+    r"awards_and_honou?rs|honou?rs_and_awards)$",
     re.IGNORECASE,
 )
 
@@ -1423,11 +1426,16 @@ def _is_list_article(hit: dict) -> bool:
     them to the back of the top_n.
     """
     path = hit.get("path") or ""
-    if _LIST_ARTICLE_PREFIX_RE.match(path):
+    # Old-scheme archives return the namespace as a path prefix
+    # (``A/List_of_songs_about_Berlin``); the anchored rules read the
+    # article name, so strip a leading 1–2 character namespace.
+    head, _, rest = path.partition("/")
+    name = rest if rest and len(head) <= 2 else path
+    if _LIST_ARTICLE_PREFIX_RE.match(name):
         return True
-    if _LIST_ARTICLE_STEM_RE.match(path):
+    if _LIST_ARTICLE_STEM_RE.match(name):
         return True
-    if _LIST_ARTICLE_SUFFIX_RE.search(path):
+    if _LIST_ARTICLE_SUFFIX_RE.search(name):
         return True
     return False
 
@@ -1609,8 +1617,15 @@ def _demote_list_articles(
     """
     if not top_hits:
         return top_hits
-    non_list = [t for t in top_hits if not _is_list_article(t[1])]
-    list_hits = [t for t in top_hits if _is_list_article(t[1])]
+
+    def _demotable(hit: dict) -> bool:
+        # A title-index promotion is an explicit ranking decision made one
+        # stage earlier; the heuristic must not undo it (same exemption
+        # the cross-archive floor makes).
+        return not hit.get("promoted") and _is_list_article(hit)
+
+    non_list = [t for t in top_hits if not _demotable(t[1])]
+    list_hits = [t for t in top_hits if _demotable(t[1])]
     if not list_hits:
         return top_hits
     return non_list + list_hits

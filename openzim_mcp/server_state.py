@@ -197,6 +197,14 @@ def _build_health_report(
 ) -> Union[HealthStatus, ToolErrorPayload]:
     try:
         cache_stats = server.cache.stats()
+        if _redact_diagnostics(server) and "persistence_path" in cache_stats:
+            # The cache file is a host path no client can hand back to a tool,
+            # so it follows the PID/directory masking rather than the
+            # ``loaded_archives`` exemption (see _redact_diagnostics).
+            cache_stats = dict(cache_stats)
+            cache_stats["persistence_path"] = sanitize_path_for_error(
+                str(cache_stats["persistence_path"])
+            )
         recommendations: List[str] = []
         warnings: List[str] = []
         health_checks: Dict[str, Any] = {

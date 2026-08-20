@@ -19,8 +19,9 @@ from .error_messages import (
 )
 from .exceptions import OpenZimMcpConfigurationError
 from .instructions import instructions_for
-from .mcp_envelope import EnvelopeAwareFastMCP
+from .mcp_envelope import EnvelopeAwareMCPServer
 from .rate_limiter import RateLimiter
+from .sdk_compat import install_ping_keepalive_shim
 from .security import (
     PathValidator,
     redact_paths_in_message,
@@ -31,6 +32,11 @@ from .tools import register_phase_f_tools
 from .zim_operations import ZimOperations
 
 logger = logging.getLogger(__name__)
+
+# TTL for results derived purely from the startup registration tables. One hour
+# is a cache-lifetime choice, not a claim about the process: the tables cannot
+# change without a restart, and a restart gives clients a new connection.
+_STATIC_LIST_TTL_MS = 60 * 60 * 1000
 
 # Identity advertised in ``serverInfo``. The docs site is the project's public
 # face — a client that surfaces a "learn more" link should land users on
@@ -54,7 +60,7 @@ _LOOPBACK_TRANSPORT_HOSTS = (
 
 
 def _build_transport_allowed_hosts(configured_hosts: list[str]) -> list[str]:
-    """Build FastMCP Host allow-list entries from configured hostnames.
+    """Build SDK Host allow-list entries from configured hostnames.
 
     The MCP SDK matcher (``mcp.server.transport_security``) accepts a request
     whose ``Host`` is ``base_host:port`` only when the allow-list holds a
@@ -99,12 +105,57 @@ def _is_loopback_literal(host: str) -> bool:
     return host.strip().lower() in {"127.0.0.1", "localhost", "::1", "[::1]"}
 
 
+def _cache_hints(config: OpenZimMcpConfig) -> dict:
+    """Freshness hints for the 2026-07-28 ``CacheableResult`` fields.
+
+    Clients cache a result for ``ttlMs`` and may re-serve it without asking
+    again, so each value is a promise about how stale an answer may get.
+
+    The list endpoints and ``server/discover`` describe the *registration*
+    tables, which are built once at startup from ``tool_mode`` and never change
+    while the process runs — nothing short of a restart can invalidate them, so
+    they get a long TTL. That is also what makes them worth caching: a stable
+    tool block is what earns a client's prompt-cache hits.
+
+    ``resources/read`` is capped at the watcher's polling interval instead,
+    because this hint is per *method* and that one method serves both a sealed
+    archive and ``zim://files``, a live directory scan. The floor belongs to
+    the mutable member: bounding it by the poll interval means a cached read is
+    never staler than the server's own detection latency.
+
+    That floor is the *fallback*, not the whole story. ``zim://{name}``
+    overview reads carry a much longer TTL, stamped per URI by
+    ``EnvelopeAwareMCPServer._handle_read_resource`` — the SDK fills only
+    fields a handler left unset, so a handler's explicit ``ttl_ms`` wins over
+    the value here. Everything else lands on this one: ``zim://files``,
+    per-entry reads (no ``resources/updated`` is ever published for an entry
+    URI), and overview bodies that report an error.
+
+    ``cacheScope`` is ``private`` throughout: these payloads embed
+    server-local absolute paths and configuration, so a shared intermediary
+    must not serve one tenant's response to another.
+    """
+    from mcp.server import CacheHint
+
+    static_hint = CacheHint(ttl_ms=_STATIC_LIST_TTL_MS, scope="private")
+    return {
+        "server/discover": static_hint,
+        "tools/list": static_hint,
+        "prompts/list": static_hint,
+        "resources/list": static_hint,
+        "resources/templates/list": static_hint,
+        "resources/read": CacheHint(
+            ttl_ms=config.watch_interval_seconds * 1000, scope="private"
+        ),
+    }
+
+
 def _build_transport_security(
     config: OpenZimMcpConfig,
 ) -> tuple[Any, Optional[str]]:
     """Build SDK transport-security settings for an HTTP bind (returns settings + warning).
 
-    Closes the gap where FastMCP, constructed without a ``host`` kwarg, defaults
+    Closes the gap where MCPServer, run without a ``host`` kwarg, defaults
     its DNS-rebinding allow-list to loopback only — so a non-loopback bind
     (0.0.0.0 or a fixed LAN IP) that passes the auth safe-startup check then
     421-rejects every MCP request because the real ``Host`` header is not in the
@@ -189,6 +240,9 @@ class OpenZimMcpServer:
         Args:
             config: Server configuration
         """
+        # SDK 2.0.0 rejects keepalive pings on 2026-07-28 connections
+        # (python-sdk#3273); patch its method tables before serving anything.
+        install_ping_keepalive_shim()
         self.config = config
 
         # Track server start so health reports can show real uptime instead
@@ -231,10 +285,9 @@ class OpenZimMcpServer:
         # unconditionally.
         self.simple_tools_handler = SimpleToolsHandler(self.zim_operations)
 
-        # Initialize MCP server. FastMCP itself doesn't accept a version
-        # kwarg, but the underlying lowlevel Server does — set it after
-        # construction so MCP `serverInfo.version` advertises openzim-mcp's
-        # version rather than the SDK's default.
+        # Initialize MCP server. ``version`` is a constructor kwarg on the v2
+        # SDK, so `serverInfo.version` advertises openzim-mcp's version rather
+        # than the SDK default (which is the empty string).
         #
         # When sitting behind a reverse proxy or Tailscale serve, the
         # public hostname differs from the bind interface and the SDK's
@@ -252,43 +305,76 @@ class OpenZimMcpServer:
         # SDK's ``allowed_origins`` because they encode the same trust
         # decision: an origin we let into CORS is one we let past the
         # rebinding check.
-        # ``instructions`` rides in the initialize response — once per session,
-        # not once per tools/list — so cross-tool routing guidance lives there
-        # instead of being duplicated across the tool descriptions.
+        # ``instructions`` is advertised through ``server/discover`` (the
+        # stateless protocol's replacement for the initialize handshake), so
+        # cross-tool routing guidance lives there instead of being duplicated
+        # across the tool descriptions.
+        #
+        # Transport security is no longer a constructor kwarg on the v2 SDK —
+        # it is passed to the ASGI app builder at serve time. Resolve it here
+        # anyway so a misconfigured allow-list is reported during startup
+        # rather than on the first request.
+        self._transport_security: Any = None
+        if config.transport == "http":
+            self._transport_security, host_warning = _build_transport_security(config)
+            if host_warning:
+                logger.warning(host_warning)
+
+        # Subscription support is HTTP-only: the MtimeWatcher that emits
+        # update notifications only runs under the HTTP lifespan (see
+        # http_app.serve_streamable_http). Handing the server a bus in stdio
+        # mode would advertise a capability we silently can't honor.
+        #
+        # The bus is the SDK's own fan-out for `subscriptions/listen`: it owns
+        # the listener registry and the per-connection delivery that this
+        # project previously hand-rolled against ServerSession internals.
+        self.subscription_bus = None
+        if config.subscriptions_enabled and config.transport == "http":
+            from mcp.server.subscriptions import InMemorySubscriptionBus
+
+            self.subscription_bus = InMemorySubscriptionBus()
+
         # ``website_url`` and ``icons`` ride in ``serverInfo``. Without them a
         # registry listing or client UI has nothing to show beyond a bare name
         # string. Both are served over https from the published docs site: an
         # icon fetched over plain http would be blocked as mixed content in any
-        # browser-based client.
-        fastmcp_kwargs: dict = {
-            "instructions": instructions_for(config.tool_mode),
-            "website_url": PROJECT_WEBSITE_URL,
-            "icons": [Icon(src=PROJECT_ICON_URL, mimeType="image/svg+xml")],
-        }
-        if config.transport == "http":
-            transport_security, host_warning = _build_transport_security(config)
-            fastmcp_kwargs["transport_security"] = transport_security
-            if host_warning:
-                logger.warning(host_warning)
-        self.mcp = EnvelopeAwareFastMCP(config.server_name, **fastmcp_kwargs)
-        self.mcp._mcp_server.version = __version__
-        self._register_tools()
-
-        # Subscription support is HTTP-only: the MtimeWatcher that emits
-        # update notifications only runs under the HTTP lifespan (see
-        # http_app.serve_streamable_http). Wiring handlers in stdio mode
-        # would advertise a capability we silently can't honor.
-        self.subscriber_registry = None
-        if config.subscriptions_enabled and config.transport == "http":
-            from .subscriptions import (
-                SubscriberRegistry,
-                patch_capabilities_to_advertise_subscribe,
-                register_subscription_handlers,
+        # browser-based client. ``title`` and ``description`` are the v2-only
+        # remainder of the same identity surface — the display name a client
+        # shows instead of the machine ``name``, and the one-liner next to it.
+        self.mcp = EnvelopeAwareMCPServer(
+            config.server_name,
+            title="OpenZIM MCP",
+            description=(
+                "Enables AI models to access and search ZIM format "
+                "knowledge bases offline"
+            ),
+            website_url=PROJECT_WEBSITE_URL,
+            icons=[Icon(src=PROJECT_ICON_URL, mime_type="image/svg+xml")],
+            instructions=instructions_for(config.tool_mode),
+            version=__version__,
+            subscriptions=self.subscription_bus,
+            cache_hints=_cache_hints(config),
+            archive_read_ttl_ms=config.resource_cache_ttl_seconds * 1000,
+        )
+        if self.subscription_bus is None:
+            # Withholding the bus is not enough to withhold the capability:
+            # the SDK substitutes its own private bus for ``None`` and
+            # registers ``subscriptions/listen`` unconditionally, and the
+            # modern capability derivation reports ``resources.subscribe``
+            # and every ``listChanged`` flag purely from that handler's
+            # presence. Drop the handler so the advertisement stays honest
+            # and a listen request fails fast with method-not-found instead
+            # of acking a stream that nothing will ever publish to.
+            self.mcp._lowlevel_server._request_handlers.pop(
+                "subscriptions/listen", None
             )
+        else:
+            # Bound the one dimension the SDK's handler leaves open: the
+            # client-supplied URI set it holds for the stream's lifetime.
+            from .subscriptions import install_bounded_listen_handler
 
-            self.subscriber_registry = SubscriberRegistry()
-            register_subscription_handlers(self.mcp, self.subscriber_registry)
-            patch_capabilities_to_advertise_subscribe(self.mcp)
+            install_bounded_listen_handler(self.mcp, self.subscription_bus)
+        self._register_tools()
 
         logger.info(
             f"OpenZIM MCP server initialized successfully in {config.tool_mode} mode"
@@ -396,7 +482,7 @@ class OpenZimMcpServer:
             >>> server = OpenZimMcpServer(config)
             >>> server.run()  # uses config.transport
         """
-        # 'http' is our short name for FastMCP's 'streamable-http' wire value.
+        # 'http' is our short name for the SDK's 'streamable-http' wire value.
         config_transport: Literal["stdio", "sse", "streamable-http"] = (
             "streamable-http"
             if self.config.transport == "http"
@@ -429,15 +515,23 @@ class OpenZimMcpServer:
 
                 http_app.serve_streamable_http(self)
             else:
+                run_kwargs: dict[str, Any] = {}
                 if transport == "sse":
                     from . import http_app
 
                     http_app.check_safe_startup(self.config)
-                    # FastMCP's SSE path reads host/port from settings; mirror
-                    # them from config so --host/--port take effect.
-                    self.mcp.settings.host = self.config.host
-                    self.mcp.settings.port = self.config.port
-                self.mcp.run(transport=transport)
+                    # The v2 SDK has no settings object: the SSE path takes
+                    # host/port (and transport security) as run() kwargs, which
+                    # it forwards to run_sse_async. HTTP+SSE is deprecated by
+                    # the 2026-07-28 revision but still served by the SDK, so
+                    # it keeps working here rather than being dropped as a
+                    # side effect of the SDK upgrade.
+                    run_kwargs = {
+                        "host": self.config.host,
+                        "port": self.config.port,
+                        "transport_security": self._transport_security,
+                    }
+                self.mcp.run(transport=transport, **run_kwargs)
         except KeyboardInterrupt:
             logger.info("Server shutdown requested")
         except Exception as e:

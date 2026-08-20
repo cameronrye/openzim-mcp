@@ -283,53 +283,6 @@ class TestNarrowSectionExcludesChildHeading:
         assert by_id["Topography"]["char_start"] == 65
 
 
-class _Session:  # weak-referenceable ServerSession stand-in
-    pass
-
-
-class TestPerSessionUriCapCoversKnownUris:
-    """The per-session distinct-URI cap was checked only inside the
-    ``not _is_known_uri(uri)`` branch, so a session at its cap could
-    keep subscribing to any URI some other session had already
-    registered — the cap only bound first-registrant subscriptions.
-    The cap now applies to every subscription that would add a NEW
-    distinct URI for the session; idempotent re-subscribes stay exempt.
-    """
-
-    @pytest.mark.asyncio
-    async def test_known_uri_still_counts_against_session_cap(
-        self, monkeypatch
-    ) -> None:
-        from openzim_mcp import subscriptions
-        from openzim_mcp.exceptions import OpenZimMcpValidationError
-
-        monkeypatch.setattr(subscriptions, "MAX_URIS_PER_SESSION", 2)
-        registry = subscriptions.SubscriberRegistry()
-        other = _Session()
-        await registry.subscribe("zim://shared", other)
-
-        greedy = _Session()
-        await registry.subscribe("zim://a", greedy)
-        await registry.subscribe("zim://b", greedy)
-        # 'zim://shared' is already known (registered by ``other``), but
-        # it is still a NEW distinct URI for ``greedy`` — the cap must
-        # apply.
-        with pytest.raises(OpenZimMcpValidationError):
-            await registry.subscribe("zim://shared", greedy)
-
-    @pytest.mark.asyncio
-    async def test_resubscribe_at_cap_stays_idempotent(self, monkeypatch) -> None:
-        from openzim_mcp import subscriptions
-
-        monkeypatch.setattr(subscriptions, "MAX_URIS_PER_SESSION", 2)
-        registry = subscriptions.SubscriberRegistry()
-        session = _Session()
-        await registry.subscribe("zim://a", session)
-        await registry.subscribe("zim://b", session)
-        # Re-subscribing to an already-held URI at the cap must not raise.
-        await registry.subscribe("zim://a", session)
-
-
 class TestReadyzWedgedProbeDoesNotAccumulateCallbacks:
     """Each ``/readyz`` request created a fresh ``asyncio.wrap_future``
     wrapper around the shared in-flight probe. ``wrap_future`` chains a

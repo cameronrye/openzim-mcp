@@ -11,6 +11,7 @@ import logging
 from functools import partial
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union, cast
 
+from .meta import attach_meta
 from .zim_operations import ZimOperations
 
 if TYPE_CHECKING:
@@ -795,11 +796,19 @@ class AsyncZimOperations:
                 "has_fulltext_index": metadata_resp.get("has_fulltext_index"),
                 "has_title_index": metadata_resp.get("has_title_index"),
             },
-            "_meta": {},
         }
         counter_breakdown = metadata_resp.get("counter_breakdown")
         if counter_breakdown:
             result["counter_breakdown"] = counter_breakdown
+        # The archive-type annotations are computed by the source metadata
+        # call and ride its envelope; carry them onto the combined one so
+        # they stay reachable on the Phase F surface.
+        source_meta: Dict[str, Any] = dict(metadata_resp.get("_meta", {}) or {})
+        attach_meta(
+            result,
+            detected_type=source_meta.get("detected_type"),
+            detection_confidence=source_meta.get("detection_confidence"),
+        )
         return cast("ArchiveMetadataResponse", result)
 
     async def get_archive_validation_data(
@@ -844,9 +853,10 @@ class AsyncZimOperations:
             asyncio.to_thread(_build_configuration_report, server),
             asyncio.to_thread(self._ops.list_zim_files_data, None),
         )
-        return {
-            "health": health,  # type: ignore[typeddict-item]
-            "configuration": configuration,  # type: ignore[typeddict-item]
-            "loaded_archives": loaded_archives,  # type: ignore[typeddict-item]
-            "_meta": {},
+        result: Dict[str, Any] = {
+            "health": health,
+            "configuration": configuration,
+            "loaded_archives": loaded_archives,
         }
+        attach_meta(result)
+        return cast("ServerHealthResponse", result)

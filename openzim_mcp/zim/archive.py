@@ -604,7 +604,7 @@ class ZimOperations(
         """Structured variant of ``get_zim_metadata``.
 
         Returns the metadata dict directly (not a JSON string) so MCP
-        tools can hand it straight to FastMCP's structured-content path.
+        tools can hand it straight to the SDK's structured-content path.
 
         Raises:
             OpenZimMcpFileNotFoundError: If ZIM file not found
@@ -1175,7 +1175,7 @@ class ZimOperations(
         """Structured variant of ``get_main_page``.
 
         Returns the entry dict directly (path/title/content/content_type)
-        so MCP tools can hand it to FastMCP's structured-content path.
+        so MCP tools can hand it to the SDK's structured-content path.
 
         Raises:
             OpenZimMcpFileNotFoundError: If ZIM file not found

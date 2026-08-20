@@ -219,5 +219,5 @@ def test_builder_writes_anchor_text_and_builder_version(tmp_path: Path) -> None:
     assert anchors == [("see Tgt",)]
     meta = dict(conn.execute("SELECT key, value FROM meta"))
     assert meta["builder_version"] == openzim_mcp.__version__
-    assert meta["schema_version"] == "2"
+    assert meta["schema_version"] == "3"
     conn.close()
