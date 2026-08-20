@@ -44,8 +44,50 @@ _UNICODE_TOKEN_RE = re.compile(r"[^\W_]+", re.UNICODE)
 # ``:`` / ``(`` (``Kant, Immanuel: Aesthetics`` → ``Immanuel Kant:
 # Aesthetics``) so the candidate-extends-topic rule still sees the name
 # as its prefix.
-_SITE_SUFFIX_RE = re.compile(r"\s*\|[^|]*$")
-_INVERTED_NAME_RE = re.compile(r"^\s*([^,:(|]+?)\s*,\s*([^,:(|]+?)\s*(?=$|[:(])")
+#
+# Both splits were regexes (``\s*\|[^|]*$`` and
+# ``^\s*([^,:(|]+?)\s*,\s*([^,:(|]+?)\s*(?=$|[:(])``) whose adjacent
+# quantifiers all accept whitespace, so a long run of spaces in a title made
+# them backtrack polynomially (SonarCloud S8786 — tens of seconds on a 20k-
+# space title). The same splits as plain string code are linear.
+
+# Characters that end the first-name half of a ``Last, First`` title; what
+# follows is kept verbatim as the inverted form's tail.
+_INVERSION_TAIL_STARTERS = frozenset(":(")
+# Characters a ``Last`` / ``First`` half can never contain.
+_FORBIDDEN_IN_LAST_NAME = frozenset(":(|")
+_FORBIDDEN_IN_FIRST_NAME = frozenset(",|")
+
+
+def _strip_site_suffix(candidate: str) -> str:
+    """``candidate`` with a trailing ``| <Site>`` removed (split on the LAST
+    pipe) and surrounding whitespace trimmed."""
+    head, sep, _site = candidate.rpartition("|")
+    return (head if sep else candidate).strip()
+
+
+def _invert_name(stripped: str) -> Optional[str]:
+    """``Last, First[: rest]`` → ``First Last[: rest]``, or ``None`` when
+    ``stripped`` is not that shape.
+
+    The halves sit around the FIRST comma. The first-name half runs to the
+    first ``:`` / ``(`` (kept verbatim as the tail) or to the end. A second
+    comma or a pipe inside the name, or a ``:`` / ``(`` in the last-name
+    half, means this is a list or a plain ``Title: Subtitle`` rather than
+    a ``Last, First`` title, and nothing is inverted.
+    """
+    last, comma, rest = stripped.partition(",")
+    last = last.strip()
+    if not comma or not last or _FORBIDDEN_IN_LAST_NAME & set(last):
+        return None
+    cut = next(
+        (i for i, ch in enumerate(rest) if ch in _INVERSION_TAIL_STARTERS),
+        len(rest),
+    )
+    first, tail = rest[:cut].strip(), rest[cut:]
+    if not first or _FORBIDDEN_IN_FIRST_NAME & set(first):
+        return None
+    return f"{first} {last}{tail}"
 
 
 def _candidate_forms(candidate: str) -> Iterator[str]:
@@ -53,15 +95,13 @@ def _candidate_forms(candidate: str) -> Iterator[str]:
     spellings (deduplicated, original first)."""
     seen = {candidate}
     yield candidate
-    stripped = _SITE_SUFFIX_RE.sub("", candidate).strip()
+    stripped = _strip_site_suffix(candidate)
     if stripped and stripped not in seen:
         seen.add(stripped)
         yield stripped
-    m = _INVERTED_NAME_RE.match(stripped)
-    if m:
-        inverted = f"{m.group(2)} {m.group(1)}{stripped[m.end():]}"
-        if inverted not in seen:
-            yield inverted
+    inverted = _invert_name(stripped)
+    if inverted and inverted not in seen:
+        yield inverted
 
 
 def _tokens_strong_match(topic_tokens: tuple, cand_tokens: tuple) -> bool:

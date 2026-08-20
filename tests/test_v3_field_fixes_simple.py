@@ -9,6 +9,7 @@ regression is recognisable without the report.
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 from typing import Any, Dict, List
 from unittest.mock import MagicMock, Mock, patch
@@ -27,7 +28,7 @@ from openzim_mcp.mcp_envelope import is_tool_error_envelope
 from openzim_mcp.pagination import Cursor, archive_identity
 from openzim_mcp.security import PathValidator
 from openzim_mcp.simple_tools import IntentParser, SimpleToolsHandler
-from openzim_mcp.title_promotion import is_strong_title_match
+from openzim_mcp.title_promotion import _candidate_forms, is_strong_title_match
 from openzim_mcp.zim_operations import ZimOperations
 
 
@@ -486,6 +487,81 @@ class TestD49InvertedTitleStrongMatch:
         assert "plain rendered list" not in out
         assert "Multiple articles match" in out
         assert "iep.utm.edu/kantview/" in out
+
+
+class TestD49CandidateForms:
+    """The suffix strip and the ``Last, First`` inversion behind
+    ``is_strong_title_match`` were regexes whose adjacent quantifiers all
+    accepted whitespace, so a long run of spaces made them backtrack
+    polynomially (SonarCloud S8786). They are plain string splits now; this
+    pins the exact spellings each candidate expands to, so the rewrite
+    cannot drift from what the matcher was tuned against.
+    """
+
+    @pytest.mark.parametrize(
+        ("candidate", "forms"),
+        [
+            # URL-shaped paths: no suffix, no comma — only themselves.
+            ("medlineplus.gov/diabetes.html", ["medlineplus.gov/diabetes.html"]),
+            ("iep.utm.edu/kant/", ["iep.utm.edu/kant/"]),
+            # Site suffix alone.
+            ("Measles | MedlinePlus", ["Measles | MedlinePlus", "Measles"]),
+            # ``Last, First | Site`` expands to all three spellings.
+            (
+                "Kant, Immanuel" + IEP_SUFFIX,
+                ["Kant, Immanuel" + IEP_SUFFIX, "Kant, Immanuel", "Immanuel Kant"],
+            ),
+            # The ``:`` / ``(`` tail is kept verbatim after the swapped name.
+            (
+                "Kant, Immanuel: Aesthetics" + IEP_SUFFIX,
+                [
+                    "Kant, Immanuel: Aesthetics" + IEP_SUFFIX,
+                    "Kant, Immanuel: Aesthetics",
+                    "Immanuel Kant: Aesthetics",
+                ],
+            ),
+            (
+                "Kant, Immanuel (1724-1804)",
+                ["Kant, Immanuel (1724-1804)", "Immanuel Kant(1724-1804)"],
+            ),
+            # Whitespace around the comma is optional on both sides.
+            ("Kant,Immanuel", ["Kant,Immanuel", "Immanuel Kant"]),
+            (
+                "Kant, Immanuel : Ethics",
+                ["Kant, Immanuel : Ethics", "Immanuel Kant: Ethics"],
+            ),
+            # A multi-comma list, a ``:`` in the last-name half, and a plain
+            # ``Title: Subtitle`` are not names — nothing is inverted.
+            ("Smith, John, Jr., Sr.", ["Smith, John, Jr., Sr."]),
+            ("Kant: Ethics, Immanuel", ["Kant: Ethics, Immanuel"]),
+            (
+                "Kant: Aesthetics" + IEP_SUFFIX,
+                ["Kant: Aesthetics" + IEP_SUFFIX, "Kant: Aesthetics"],
+            ),
+            # Only the LAST pipe is a site suffix; one left inside the name
+            # blocks the inversion.
+            (
+                "Kant, Immanuel | Foo | IEP",
+                ["Kant, Immanuel | Foo | IEP", "Kant, Immanuel | Foo"],
+            ),
+            # An empty half never inverts.
+            (", Immanuel", [", Immanuel"]),
+            ("Kant,", ["Kant,"]),
+            ("", [""]),
+        ],
+    )
+    def test_forms(self, candidate: str, forms: List[str]) -> None:
+        assert list(_candidate_forms(candidate)) == forms
+
+    def test_whitespace_run_is_linear(self) -> None:
+        # 20k spaces kept the old regexes backtracking for tens of seconds;
+        # a string split finishes in microseconds.
+        pathological = " " * 20_000 + "," + " " * 20_000
+        start = time.perf_counter()
+        forms = list(_candidate_forms(pathological))
+        elapsed = time.perf_counter() - start
+        assert forms == [pathological, ","]
+        assert elapsed < 1.0, f"candidate expansion took {elapsed:.2f}s"
 
 
 # ---------------------------------------------------------------------------
