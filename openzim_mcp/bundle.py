@@ -357,6 +357,16 @@ def _compute_section_offsets(
     Headings in _build_headings() carry key 'id' (the resolved anchor slug).
     We search rendered_markdown in document order from the last cursor position
     so repeated identical headings are disambiguated correctly.
+
+    Section ids are made unique here as well. ``_build_headings`` suffixes
+    colliding *slugs* but deliberately passes author-provided anchors
+    through untouched, so an archive that reuses an anchor name (the IEP
+    has ``<a name="SH4b">`` twice on ~1% of articles) produced two TOC
+    nodes with the same ``section_id`` — and ``get_section`` resolved both
+    to the first. ``section_id`` is the tool's fetch handle, so the second
+    and later occurrences get the same ``_2``/``_3`` ordinal the slug path
+    uses. Only the repeats are renamed: the first occurrence keeps the real
+    anchor, so in-archive ``#SH4b`` links still land where they did.
     """
     sections: list[SectionMeta] = []
     cursor = 0
@@ -413,6 +423,10 @@ def _compute_section_offsets(
         cursor = match.end()
 
     md_len = len(rendered_markdown)
+    # Every id the document declares, so a generated ``X_2`` can never
+    # collide with a heading that genuinely carries that anchor.
+    declared_ids = {m[4] for m in matches}
+    emitted_ids: set[str] = set()
     for i, (
         level,
         text,
@@ -440,6 +454,16 @@ def _compute_section_offsets(
         # ship a degenerate SectionMeta.
         if char_end <= char_start:
             continue
+
+        if section_id in emitted_ids:
+            ordinal = 2
+            while (
+                f"{section_id}_{ordinal}" in emitted_ids
+                or f"{section_id}_{ordinal}" in declared_ids
+            ):
+                ordinal += 1
+            section_id = f"{section_id}_{ordinal}"
+        emitted_ids.add(section_id)
 
         while parent_stack and parent_stack[-1][0] >= level:
             parent_stack.pop()

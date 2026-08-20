@@ -101,3 +101,53 @@ class TestD18SectionMissingEntry:
         assert "KeyError" not in result["message"]
         # The guidance must point at path correction, not retries.
         assert "spelling" in result["message"].lower()
+
+
+# ---------------------------------------------------------------------------
+# D19 — duplicate explicit anchors must yield unique, fetchable section ids
+# ---------------------------------------------------------------------------
+
+DUPLICATE_ANCHOR_HTML = """\
+<html><body>
+<h1>Thrasymachus</h1>
+<p>Lead paragraph.</p>
+<h2 id="SH4b">b. Secondary Sources</h2>
+<p>Books about Thrasymachus.</p>
+<h2 id="SH4b">Author Information</h2>
+<p>Written by a scholar.</p>
+</body></html>
+"""
+
+
+class TestD19DuplicateAnchorIds:
+    """D19: when an archive reuses an anchor name, the second heading gets a
+    disambiguated id so every TOC node is fetchable and no id silently
+    resolves to the wrong section. The first occurrence keeps its anchor."""
+
+    def test_toc_ids_are_unique_and_first_anchor_is_preserved(
+        self, ops: ZimOperations, zim_path: str
+    ) -> None:
+        with patch(ARCHIVE_CTX) as ctx:
+            ctx.return_value.__enter__.return_value = _html_archive(
+                DUPLICATE_ANCHOR_HTML
+            )
+            toc = ops.get_table_of_contents_data(zim_path, "Test")
+
+        ids = [node["section_id"] for node in toc["toc"][0]["children"]]
+        assert ids == ["SH4b", "SH4b_2"]
+        assert len(set(ids)) == len(ids)
+
+    def test_second_id_fetches_second_section(
+        self, ops: ZimOperations, zim_path: str
+    ) -> None:
+        with patch(ARCHIVE_CTX) as ctx:
+            ctx.return_value.__enter__.return_value = _html_archive(
+                DUPLICATE_ANCHOR_HTML
+            )
+            first = ops.get_section_data(zim_path, "Test", section_id="SH4b")
+            second = ops.get_section_data(zim_path, "Test", section_id="SH4b_2")
+
+        assert first["section_title"] == "b. Secondary Sources"
+        assert "Books about" in first["content_markdown"]
+        assert second["section_title"] == "Author Information"
+        assert "Written by" in second["content_markdown"]
