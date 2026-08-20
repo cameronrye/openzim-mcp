@@ -14,10 +14,11 @@ PARAMETERS:
   section_id           REQUIRED. The TOC id (e.g. "History",
                        "Early_life") of the section.
   max_chars            Optional char cap on the section body.
-  compact              Default True. WIRED (v2.5 #18): compact=True
-                       collapses oversized tables to placeholders;
-                       compact=False returns the unrendered section body
-                       with full pipe-delimited tables.
+  compact              Default True: oversized tables collapse to
+                       placeholders and link markup is stripped — the
+                       same slice shape as zim_get(compact=True).
+                       compact=False returns the raw section body with
+                       full pipe-delimited tables and links.
   compact_budget       Named profile ("tiny"/"small"/"medium"/"large")
                        or raw integer char cap. Inert at v2.x (reserved
                        for surface uniformity with `zim_query`).

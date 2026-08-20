@@ -151,3 +151,48 @@ class TestD19DuplicateAnchorIds:
         assert "Books about" in first["content_markdown"]
         assert second["section_title"] == "Author Information"
         assert "Written by" in second["content_markdown"]
+
+
+# ---------------------------------------------------------------------------
+# D20 — compact=True section text must match zim_get's compact article text
+# ---------------------------------------------------------------------------
+
+LINKED_HTML = """\
+<html><body>
+<h1>Diabetes</h1>
+<p>Lead paragraph.</p>
+<h2 id="what-is-diabetes">What is diabetes?</h2>
+<p>Diabetes raises your <a href="bloodglucose.html">blood glucose</a>,
+also called <a href="sugar.html">blood sugar</a>, above normal.</p>
+</body></html>
+"""
+
+
+class TestD20CompactLinkParity:
+    """D20: both compact surfaces promise the same slice shape, so a
+    compact section body must be link-stripped exactly like the compact
+    article body — and therefore be a substring of it."""
+
+    def test_compact_section_is_substring_of_compact_article(
+        self, ops: ZimOperations, zim_path: str
+    ) -> None:
+        with patch(ARCHIVE_CTX) as ctx:
+            ctx.return_value.__enter__.return_value = _html_archive(LINKED_HTML)
+            article = ops.get_zim_entry_data(zim_path, "Test", compact=True)
+            section = ops.get_section_data(
+                zim_path, "Test", section_id="what-is-diabetes", compact=True
+            )
+
+        body = section["content_markdown"]
+        assert "](" not in body, body
+        assert "blood glucose" in body
+        assert body.strip() in article["content"]
+        assert section["char_count"] == len(body)
+
+    def test_raw_section_keeps_links(self, ops: ZimOperations, zim_path: str) -> None:
+        with patch(ARCHIVE_CTX) as ctx:
+            ctx.return_value.__enter__.return_value = _html_archive(LINKED_HTML)
+            section = ops.get_section_data(
+                zim_path, "Test", section_id="what-is-diabetes", compact=False
+            )
+        assert "](bloodglucose.html)" in section["content_markdown"]

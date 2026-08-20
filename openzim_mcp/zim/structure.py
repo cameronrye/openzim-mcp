@@ -27,7 +27,7 @@ from openzim_mcp.meta import attach_meta
 from openzim_mcp.pagination import Cursor
 from openzim_mcp.responses import ToolErrorPayload, tool_error
 from openzim_mcp.zim._ops_base import _json
-from openzim_mcp.zim.content import reject_path_traversal
+from openzim_mcp.zim.content import _strip_markdown_links_shared, reject_path_traversal
 
 if TYPE_CHECKING:
     from openzim_mcp.cache import OpenZimMcpCache
@@ -858,6 +858,18 @@ class _StructureMixin:
             else:
                 char_end = narrowed_end
         full_body = bundle["rendered_markdown"][section["char_start"] : char_end]
+        # ``compact=True`` promises the ``zim_get(compact=True)`` slice shape.
+        # The bundle's compact rendering carries the table placeholders but
+        # not the link strip — ``zim_get`` applies that in the content layer
+        # after rendering — so on link-heavy archives a compact section
+        # shipped ~65% more characters than the same prose fetched as an
+        # article, and was never a substring of it. Strip here, BEFORE
+        # measuring, so ``char_count`` / ``total_chars`` / ``truncated``
+        # describe the text actually served (the same rule zim_get follows).
+        # The bundle itself is left untouched: its offsets index the
+        # unstripped markdown that TOC/structure/summary slice.
+        if compact:
+            full_body = _strip_markdown_links_shared(full_body)
         cap = (
             max_chars
             if max_chars is not None
