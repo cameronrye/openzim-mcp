@@ -840,65 +840,116 @@ class _SearchMixin:
             to decide whether the response is safe to cache. The payload
             shape is documented on ``search_zim_file_data``.
         """
-        from openzim_mcp.pagination import Cursor, archive_identity
-
         query_obj = _zim_ops_mod.Query().set_query(query)
         searcher = _zim_ops_mod.Searcher(archive)
         search = searcher.search(query_obj)
 
         total_results = search.getEstimatedMatches()
 
-        if total_results == 0:
-            return (
-                {
-                    "query": query,
-                    "results": [],
-                    "next_cursor": None,
-                    "total": 0,
-                    "done": True,
-                    "page_info": {
-                        "offset": offset,
-                        "limit": limit,
-                        "returned_count": 0,
-                    },
-                },
-                0,
+        if total_results == 0 or offset >= total_results:
+            return self._empty_search_page(
+                query, limit=limit, offset=offset, total_results=total_results
             )
 
-        if offset >= total_results:
-            return (
-                {
-                    "query": query,
-                    "results": [],
-                    "next_cursor": None,
-                    "total": total_results,
-                    "done": True,
-                    "page_info": {
-                        "offset": offset,
-                        "limit": limit,
-                        "returned_count": 0,
-                    },
-                },
-                total_results,
+        results, consumed, exhausted = self._collect_distinct_hits(
+            search,
+            archive,
+            query,
+            limit=limit,
+            offset=offset,
+            total_results=total_results,
+            snippet_length=snippet_length,
+            max_paragraphs=max_paragraphs,
+            validated_path=validated_path,
+        )
+
+        returned_count = len(results)
+        last_index = offset + consumed
+        done = last_index >= total_results or exhausted
+        page_info: Dict[str, Any] = {
+            "offset": offset,
+            "limit": limit,
+            "returned_count": returned_count,
+        }
+        if consumed != returned_count:
+            page_info["source_consumed"] = consumed
+        next_cursor: Optional[str] = None
+        if not done:
+            next_cursor = self._search_page_cursor(
+                query, limit=limit, last_index=last_index, validated_path=validated_path
             )
 
+        return (
+            {
+                "query": query,
+                "results": results,
+                "next_cursor": next_cursor,
+                "total": total_results,
+                "done": done,
+                "page_info": page_info,
+            },
+            total_results,
+        )
+
+    @staticmethod
+    def _empty_search_page(
+        query: str, *, limit: int, offset: int, total_results: int
+    ) -> Tuple[Dict[str, Any], int]:
+        """The ``_perform_search`` page when there is nothing to return —
+        no matches at all, or an ``offset`` past the last one: empty
+        results, no cursor, ``done``."""
+        return (
+            {
+                "query": query,
+                "results": [],
+                "next_cursor": None,
+                "total": total_results,
+                "done": True,
+                "page_info": {
+                    "offset": offset,
+                    "limit": limit,
+                    "returned_count": 0,
+                },
+            },
+            total_results,
+        )
+
+    def _collect_distinct_hits(
+        self,
+        search: Any,
+        archive: Archive,
+        query: str,
+        *,
+        limit: int,
+        offset: int,
+        total_results: int,
+        snippet_length: Optional[int],
+        max_paragraphs: Optional[int],
+        validated_path: Optional[Path],
+    ) -> Tuple[List[Dict[str, Any]], int, bool]:
+        """Pull ranked rows from ``search`` until the page holds ``limit``
+        distinct pages or the stream ends.
+
+        warc2zim stores query-string variants of a page as separate entries
+        (``quiz.htm`` and ``quiz.htm?quiz=1``), and Xapian ranks them side
+        by side — a MedlinePlus page of 40 carried 19 duplicates. Collapse
+        on the canonical path, as the filtered scanner does. Page-scoped
+        (not scan-scoped) so ``offset`` stays a plain ranked-row offset and
+        a high offset never triggers a scan from zero; the rows actually
+        consumed are reported in ``page_info.source_consumed`` so a client
+        resumes at ``offset + source_consumed``.
+
+        Returns ``(rows, consumed, exhausted)``. ``total_results`` is
+        Xapian's ESTIMATE and can exceed the real hit count; when
+        ``getResults`` hands back fewer entries than requested the real
+        stream is exhausted, and the caller must treat the page as done —
+        trusting the estimate here re-minted the same cursor forever
+        (empty page, done=False, offset unchanged: a livelock for
+        contract-following clients).
+        """
         results: List[Dict[str, Any]] = []
-        # warc2zim stores query-string variants of a page as separate entries
-        # (``quiz.htm`` and ``quiz.htm?quiz=1``), and Xapian ranks them side
-        # by side — a MedlinePlus page of 40 carried 19 duplicates. Collapse
-        # on the canonical path, as the filtered scanner does, and keep
-        # pulling ranked rows until the page holds ``limit`` distinct pages.
-        # Page-scoped (not scan-scoped) so ``offset`` stays a plain ranked-row
-        # offset and a high offset never triggers a scan from zero; the rows
-        # actually consumed are reported in ``page_info.source_consumed`` so
-        # a client resumes at ``offset + source_consumed``.
         seen_canonical: set[str] = set()
         consumed = 0
-        # ``total_results`` is Xapian's ESTIMATE and can exceed the real hit
-        # count. When ``getResults`` hands back fewer entries than requested,
-        # the real stream is exhausted — treating the estimate as authoritative
-        # here re-minted the same cursor forever (empty page, done=False,
-        # offset unchanged: a livelock for contract-following clients).
         exhausted = False
         while len(results) < limit and not exhausted:
             want = min(limit - len(results), total_results - offset - consumed)
@@ -924,50 +975,35 @@ class _SearchMixin:
                         validated_path=validated_path,
                     )
                 )
+        return results, consumed, exhausted
 
-        returned_count = len(results)
-        last_index = offset + consumed
-        done = last_index >= total_results or exhausted
-        page_info: Dict[str, Any] = {
-            "offset": offset,
-            "limit": limit,
-            "returned_count": returned_count,
+    @staticmethod
+    def _search_page_cursor(
+        query: str, *, limit: int, last_index: int, validated_path: Optional[Path]
+    ) -> str:
+        """Mint the continuation cursor for a not-yet-done search page.
+
+        Post-a20 P1-D1 / post-a21 P1-D5 contract: any tool whose cursor
+        state carries ``"q"`` must also appear in
+        ``simple_tools.SimpleToolsHandler._Q_EMITTING_CURSOR_TOOLS`` so the
+        dispatcher's q-overlap guard knows to run for legitimate pagination
+        AND to skip when a cursor's ``t`` claims a non-q-emitting tool. Add
+        a new ``Cursor.encode`` callsite here? Update that set in lockstep —
+        the post-a21 ``TestP1D5QEmittingCursorToolsDrift`` regression pins
+        the contract via a parametric scan of these encode sites.
+        """
+        from openzim_mcp.pagination import Cursor, archive_identity
+
+        cursor_state: Dict[str, Any] = {
+            "o": last_index,
+            "l": limit,
+            "q": query,
         }
-        if consumed != returned_count:
-            page_info["source_consumed"] = consumed
-        next_cursor: Optional[str] = None
-        if not done:
-            # Post-a20 P1-D1 / post-a21 P1-D5 contract: any tool whose
-            # cursor state carries ``"q"`` must also appear in
-            # ``simple_tools.SimpleToolsHandler._Q_EMITTING_CURSOR_TOOLS``
-            # so the dispatcher's q-overlap guard knows to run for
-            # legitimate pagination AND to skip when a cursor's ``t``
-            # claims a non-q-emitting tool. Add a new ``Cursor.encode``
-            # callsite here? Update that set in lockstep — the post-a21
-            # ``TestP1D5QEmittingCursorToolsDrift`` regression pins the
-            # contract via a parametric scan of these encode sites.
-            cursor_state: Dict[str, Any] = {
-                "o": last_index,
-                "l": limit,
-                "q": query,
-            }
-            if validated_path is not None:
-                cursor_state["ai"] = archive_identity(validated_path)
-            next_cursor = Cursor.encode(
-                tool="search_zim_file",
-                state=cast("Any", cursor_state),
-            )
-
-        return (
-            {
-                "query": query,
-                "results": results,
-                "next_cursor": next_cursor,
-                "total": total_results,
-                "done": done,
-                "page_info": page_info,
-            },
-            total_results,
+        if validated_path is not None:
+            cursor_state["ai"] = archive_identity(validated_path)
+        return Cursor.encode(
+            tool="search_zim_file",
+            state=cast("Any", cursor_state),
         )
 
     def _search_result_row(

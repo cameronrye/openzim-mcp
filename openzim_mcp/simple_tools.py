@@ -896,9 +896,13 @@ class SimpleToolsHandler(
             return result
 
         except Exception as e:
-            # Single-line log: a ``zim_file_path`` with an embedded LF is
-            # echoed verbatim by the validator (R2-3).
-            logger.error("Error handling zim_query: %s", sanitize_control_chars(str(e)))
+            # Single-line message: a ``zim_file_path`` with an embedded LF is
+            # echoed verbatim by the validator (R2-3). ``exception`` keeps the
+            # traceback — this is the catch-all, so the frame that raised is
+            # the only thing that tells a generic failure apart from a bug.
+            logger.exception(
+                "Error handling zim_query: %s", sanitize_control_chars(str(e))
+            )
             # Sanitize both the query and error text to avoid leaking
             # absolute filesystem paths back to the MCP client.
             safe_query = sanitize_context_for_error(query)

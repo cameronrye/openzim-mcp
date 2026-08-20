@@ -1609,7 +1609,8 @@ class TestP3D7CursorNamespaceMismatch:
         )
         # D51: handler-edge cursor rejections travel as the cursor_decode
         # envelope, the same shape as the dispatcher's ``ai`` / ``q`` errors.
-        assert isinstance(out, dict) and out.get("operation") == "cursor_decode"
+        assert isinstance(out, dict)
+        assert out.get("operation") == "cursor_decode"
         assert "Namespace Mismatch" in out["message"]
 
     def test_walk_namespace_rejects_cursor_for_different_namespace(self) -> None:
@@ -1633,7 +1634,8 @@ class TestP3D7CursorNamespaceMismatch:
         )
         # D51: handler-edge cursor rejections travel as the cursor_decode
         # envelope, the same shape as the dispatcher's ``ai`` / ``q`` errors.
-        assert isinstance(out, dict) and out.get("operation") == "cursor_decode"
+        assert isinstance(out, dict)
+        assert out.get("operation") == "cursor_decode"
         assert "Namespace Mismatch" in out["message"]
 
     def test_matching_namespace_cursor_passes_through(self) -> None:
