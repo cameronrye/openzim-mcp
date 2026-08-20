@@ -63,26 +63,43 @@ def test_related_paths_are_fetchable(ops_and_zim) -> None:
     ), f"related targets not fetchable from their own archive: {unresolvable}"
 
 
+def _served_path(zim: str, path: str) -> str:
+    """The spelling the archive actually serves for ``path``.
+
+    Related rows carry the canonical (post-redirect) path so they agree with
+    the inbound link graph; in this corpus ``A/El_Niño`` is a redirect, so
+    the row names its target. Resolve it here rather than hardcoding, so the
+    test states the contract ("decoded, and fetchable as-is") not the data.
+    """
+    import libzim.reader as lr
+
+    entry = lr.Archive(zim).get_entry_by_path(path)
+    while entry.is_redirect:
+        entry = entry.get_redirect_entry()
+    return str(entry.path)
+
+
 def test_non_ascii_target_is_decoded(ops_and_zim) -> None:
     """The concrete case: El Niño arrives decoded, not percent-encoded."""
     ops, zim = ops_and_zim
     result = ops.get_related_articles_data(zim, _SOURCE, limit=10)
     paths = [row.get("path") for row in (result.get("results") or [])]
-    assert "A/El_Niño" in paths, paths
-    assert "A/El_Ni%C3%B1o" not in paths
+    assert _served_path(zim, "A/El_Niño") in paths, paths
+    assert not any("%C3%B1" in p for p in paths), paths
 
 
 def test_decoded_target_carries_a_real_title(ops_and_zim) -> None:
     """Title resolution failed alongside the path, leaving a placeholder."""
     ops, zim = ops_and_zim
     result = ops.get_related_articles_data(zim, _SOURCE, limit=10)
+    expected = _served_path(zim, "A/El_Niño")
     row = next(
-        (r for r in (result.get("results") or []) if r.get("path") == "A/El_Niño"),
+        (r for r in (result.get("results") or []) if r.get("path") == expected),
         None,
     )
     assert row is not None
     # The placeholder is the path itself; a resolved title is anything else.
-    assert row.get("title") not in (None, "", "A/El_Niño")
+    assert row.get("title") not in (None, "", expected)
 
 
 def test_related_path_round_trips_into_zim_get(ops_and_zim) -> None:
