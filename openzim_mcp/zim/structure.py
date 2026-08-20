@@ -20,6 +20,7 @@ from libzim.reader import Archive  # type: ignore[import-untyped]
 import openzim_mcp.zim_operations as _zim_ops_mod
 from openzim_mcp.exceptions import (
     OpenZimMcpArchiveError,
+    OpenZimMcpCursorMismatchError,
     OpenZimMcpFileNotFoundError,
     OpenZimMcpValidationError,
 )
@@ -27,7 +28,7 @@ from openzim_mcp.meta import attach_meta
 from openzim_mcp.pagination import Cursor
 from openzim_mcp.responses import ToolErrorPayload, tool_error
 from openzim_mcp.zim._ops_base import _json
-from openzim_mcp.zim.content import reject_path_traversal
+from openzim_mcp.zim.content import _strip_markdown_links_shared, reject_path_traversal
 
 if TYPE_CHECKING:
     from openzim_mcp.cache import OpenZimMcpCache
@@ -104,6 +105,26 @@ _ASSET_MIME_EXACT = frozenset(
 _ASSET_MIME_PREFIXES = ("image/", "video/", "audio/", "font/")
 
 
+def _entry_not_found_error(entry_path: str) -> OpenZimMcpArchiveError:
+    """Typed not-found error for a missing ``entry_path``.
+
+    libzim reports a miss as a bare ``KeyError('Cannot find entry')``. Left
+    unwrapped it reaches the tool wrappers' broad ``except`` and renders as
+    a generic "Operation Failed / KeyError" envelope advising retries and a
+    health check; wrapped as a generic archive error it renders as
+    "verify the ZIM file is not corrupted". Neither points at the one thing
+    actually wrong — the path. The "Entry not found" phrasing is what
+    ``error_messages.get_error_config`` pattern-matches onto the focused
+    *Resource Not Found* template, the same envelope ``zim_get`` produces
+    for the identical miss.
+    """
+    return OpenZimMcpArchiveError(
+        f"Entry not found: '{entry_path}'. Double-check the spelling and "
+        "path (entry paths are case-sensitive), or use "
+        "`zim_search(mode='title')` to locate the entry."
+    )
+
+
 def _section_preview(
     md: str, char_start: int, char_end: int, preview_chars: int
 ) -> str:
@@ -170,6 +191,37 @@ class _StructureMixin:
         ) -> Tuple[Any, str]:
             """Resolve via ``ZimOperations`` on the concrete coordinator."""
 
+    def _build_bundle(
+        self,
+        archive: Archive,
+        entry_path: str,
+        *,
+        validated_path: Path,
+        compact: bool = True,
+    ) -> Any:
+        """``get_or_build_bundle`` with the libzim miss surfaced as not-found.
+
+        Every bundle consumer in this mixin (structure / TOC / links /
+        section) used to let the lookup ``KeyError`` escape into a broad
+        ``except Exception`` that re-labelled it an extraction failure.
+        Converting it here, at the single place the lookup happens, keeps
+        all four surfaces on the same not-found classification as
+        ``zim_get``.
+        """
+        from openzim_mcp.bundle import get_or_build_bundle
+
+        try:
+            return get_or_build_bundle(
+                archive,
+                entry_path,
+                cache=self.cache,
+                validated_path=validated_path,
+                content_processor=self.content_processor,
+                compact=compact,
+            )
+        except KeyError as e:
+            raise _entry_not_found_error(entry_path) from e
+
     def get_article_structure_data(
         self, zim_file_path: str, entry_path: str
     ) -> "ArticleStructureResponse":
@@ -230,8 +282,6 @@ class _StructureMixin:
         validated_path: "Optional[Path]" = None,
     ) -> "ArticleStructureResponse":
         """Extract structure from article content via bundle."""
-        from openzim_mcp.bundle import get_or_build_bundle
-
         if validated_path is None:
             # Falling back to Path(entry_path) makes the bundle cache key
             # archive-agnostic — the same key collides across every ZIM
@@ -242,12 +292,8 @@ class _StructureMixin:
             )
 
         try:
-            bundle = get_or_build_bundle(
-                archive,
-                entry_path,
-                cache=self.cache,
-                validated_path=validated_path,
-                content_processor=self.content_processor,
+            bundle = self._build_bundle(
+                archive, entry_path, validated_path=validated_path
             )
 
             md = bundle["rendered_markdown"]
@@ -376,44 +422,85 @@ class _StructureMixin:
                     tool="extract_article_links",
                 )
             except CursorMismatchError as e:
-                raise OpenZimMcpValidationError(str(e)) from e
+                raise OpenZimMcpCursorMismatchError(str(e)) from e
 
         try:
-            from openzim_mcp.bundle import get_or_build_bundle
-
             with _zim_ops_mod.zim_archive(validated_path) as archive:
-                bundle = get_or_build_bundle(
-                    archive,
-                    entry_path,
-                    cache=self.cache,
-                    validated_path=validated_path,
-                    content_processor=self.content_processor,
+                bundle = self._build_bundle(
+                    archive, entry_path, validated_path=validated_path
                 )
 
-            # BUG #6: the bundle 'internal' bucket carries BOTH real
-            # cross-article links (type=='internal') and in-page '#anchor'
-            # fragment links (type=='anchor'). Anchors are not navigation
-            # targets and are dropped by the inbound link-graph builder, so
-            # exclude them from the 'internal' kind's results/total and the
-            # internal count, surfacing them under a separate 'anchor' count so
-            # outbound and inbound agree on cross-article link totals.
-            internal_bucket: List[Any] = cast("List[Any]", bundle["links"]["internal"])
-            cross_article_internal = [
-                lk
-                for lk in internal_bucket
-                if not (isinstance(lk, dict) and lk.get("type") == "anchor")
-            ]
-            anchor_count = len(internal_bucket) - len(cross_article_internal)
-
-            if kind == "internal":
-                all_links_for_kind: List[Any] = cross_article_internal
-            else:
-                all_links_for_kind = cast(
-                    "List[Any]",
-                    bundle["links"][kind],  # type: ignore[literal-required]
+                # BUG #6: the bundle 'internal' bucket carries BOTH real
+                # cross-article links (type=='internal') and in-page
+                # '#anchor' fragment links (type=='anchor'). Anchors are not
+                # navigation targets and are dropped by the inbound
+                # link-graph builder, so exclude them from the 'internal'
+                # kind's results/total and the internal count, surfacing
+                # them under a separate 'anchor' count so outbound and
+                # inbound agree on cross-article link totals.
+                internal_bucket: List[Any] = cast(
+                    "List[Any]", bundle["links"]["internal"]
                 )
-            total_for_kind = len(all_links_for_kind)
-            page = all_links_for_kind[offset : offset + limit]
+                non_anchor_internal = [
+                    lk
+                    for lk in internal_bucket
+                    if not (isinstance(lk, dict) and lk.get("type") == "anchor")
+                ]
+                anchor_count = len(internal_bucket) - len(non_anchor_internal)
+                # zimit/warc2zim wraps an article's lead image (and figure
+                # links) in ``<a href="…/plato.jpg">``, so the anchor
+                # classifier typed image/font/script assets 'internal' and
+                # they inflated ``category_totals.internal`` — while the
+                # related direction and the sidecar builder both drop them
+                # via ``_is_non_article_target``. Apply the same test here:
+                # assets move to the media bucket (``type="asset"``, after
+                # the page's own ``<img>``-style rows) so 'internal' counts
+                # navigable articles consistently across directions.
+                cross_article_internal: List[Any] = []
+                anchor_wrapped_assets: List[Any] = []
+                for lk in non_anchor_internal:
+                    if isinstance(lk, dict) and self._is_non_article_target(
+                        str(lk.get("url", ""))
+                    ):
+                        anchor_wrapped_assets.append({**lk, "type": "asset"})
+                    else:
+                        cross_article_internal.append(lk)
+                media_links: List[Any] = (
+                    list(bundle["links"]["media"]) + anchor_wrapped_assets
+                )
+
+                if kind == "internal":
+                    all_links_for_kind: List[Any] = cross_article_internal
+                elif kind == "media":
+                    all_links_for_kind = media_links
+                else:
+                    all_links_for_kind = cast("List[Any]", bundle["links"]["external"])
+                total_for_kind = len(all_links_for_kind)
+                page = all_links_for_kind[offset : offset + limit]
+                if kind == "media":
+                    # Anchor-wrapped assets were ``<a href>``s, so they get
+                    # the same resolved ``path`` internal rows do — usable
+                    # with ``zim_get(binary=True)``.
+                    page = [
+                        (
+                            self._with_resolved_path(archive, lk, bundle["entry_path"])
+                            if isinstance(lk, dict) and lk.get("type") == "asset"
+                            else lk
+                        )
+                        for lk in page
+                    ]
+                if kind == "internal":
+                    # ``url`` is the raw document-relative href (``../aristotl``)
+                    # and does not round-trip into ``zim_get`` or the other
+                    # directions; related/inbound already ship a resolved
+                    # ``path``. Add one here too — resolved against the SERVED
+                    # entry (``bundle["entry_path"]`` is post-redirect) and
+                    # redirect-followed where the archive can verify it.
+                    # Fresh dicts: ``page`` aliases the cached bundle's rows.
+                    page = [
+                        self._with_resolved_path(archive, lk, bundle["entry_path"])
+                        for lk in page
+                    ]
             returned_count = len(page)
             last_index = offset + returned_count
             done = last_index >= total_for_kind
@@ -449,10 +536,19 @@ class _StructureMixin:
                 "category_totals": {
                     "internal": len(cross_article_internal),
                     "external": len(bundle["links"]["external"]),
-                    "media": len(bundle["links"]["media"]),
+                    "media": len(media_links),
                     "anchor": anchor_count,
                 },
             }
+            # ``LinksResponse.message`` is documented as set for non-HTML
+            # entries, and the sibling TOC payload sets it; without it an
+            # image entry's empty result was indistinguishable from an
+            # article that simply has no links.
+            if not bundle["content_type"].startswith("text/html"):
+                payload["message"] = (
+                    f"Link extraction requires HTML content, "
+                    f"got: {bundle['content_type']}"
+                )
 
             logger.info(
                 f"Extracted links for: {entry_path} "
@@ -572,8 +668,6 @@ class _StructureMixin:
         validated_path: "Optional[Path]" = None,
     ) -> "TableOfContentsResponse":
         """Extract hierarchical table of contents from article via bundle."""
-        from openzim_mcp.bundle import get_or_build_bundle
-
         if validated_path is None:
             # Same archive-binding requirement as
             # _extract_article_structure_data — without a real archive
@@ -583,12 +677,8 @@ class _StructureMixin:
             )
 
         try:
-            bundle = get_or_build_bundle(
-                archive,
-                entry_path,
-                cache=self.cache,
-                validated_path=validated_path,
-                content_processor=self.content_processor,
+            bundle = self._build_bundle(
+                archive, entry_path, validated_path=validated_path
             )
 
             payload: "TableOfContentsResponse" = cast(
@@ -693,21 +783,47 @@ class _StructureMixin:
 
         Returns a ToolErrorPayload if the section_id is not found in the bundle.
         """
-        from openzim_mcp.bundle import get_or_build_bundle
-
-        bundle = get_or_build_bundle(
-            archive,
-            entry_path,
-            cache=self.cache,
-            validated_path=validated_path,
-            content_processor=self.content_processor,
-            compact=compact,
+        bundle = self._build_bundle(
+            archive, entry_path, validated_path=validated_path, compact=compact
         )
 
         section_idx = next(
             (i for i, s in enumerate(bundle["sections"]) if s["id"] == section_id),
             None,
         )
+        if section_idx is None and not bundle["sections"]:
+            # The entry cannot have sections at all, so the wrong-id advice
+            # below ("list the IDs with view='toc'") would only send the
+            # caller on a round-trip that confirms the same thing. Say why
+            # — the bundle already knows — and point at the fetch that can
+            # actually serve the entry.
+            content_type = bundle["content_type"]
+            if not content_type.startswith("text/html"):
+                reason = "non_html"
+                message = (
+                    f"Entry {entry_path!r} has no sections: it is not an HTML "
+                    f"article (content_type: {content_type}). Sections exist "
+                    "only for HTML entries; fetch it with `zim_get` "
+                    "(`binary=True` for media)."
+                )
+            else:
+                reason = "no_headings"
+                message = (
+                    f"Entry {entry_path!r} has no sections: the article "
+                    "contains no headings. Read the whole body with "
+                    "`zim_get(view='full')`."
+                )
+            return tool_error(
+                operation="section_not_found",
+                message=message,
+                extras={
+                    "reason": reason,
+                    "content_type": content_type,
+                    "available_section_ids": [],
+                    "available_section_ids_truncated": False,
+                    "available_section_ids_total": 0,
+                },
+            )
         if section_idx is None:
             # M25: cap the returned ID list. A long Wikipedia article
             # (United States, World War II) carries 80-150 section IDs;
@@ -720,14 +836,26 @@ class _StructureMixin:
             # Op5: surface the lexically-closest match so a fat-fingered
             # ID hint ("Goegraphy" → "Geography") gives the model a
             # direct retry path instead of forcing it to scan the IDs.
+            # Compare case-folded: difflib is case-sensitive, and a pure case
+            # variant of a short anchor id (``sh2d`` vs ``SH2d``) scores 0.5
+            # — under the cutoff — so the easiest typo to repair got no
+            # suggestion at all. Fold both sides, then map back to the real
+            # id (first occurrence wins if two ids fold together).
             closest: Optional[str] = None
             try:
                 import difflib as _difflib
 
-                candidates = _difflib.get_close_matches(
-                    section_id, all_ids, n=1, cutoff=0.6
-                )
-                closest = candidates[0] if candidates else None
+                folded: Dict[str, str] = {}
+                for sid in all_ids:
+                    folded.setdefault(sid.casefold(), sid)
+                wanted = section_id.casefold()
+                if wanted in folded:
+                    closest = folded[wanted]
+                else:
+                    candidates = _difflib.get_close_matches(
+                        wanted, list(folded), n=1, cutoff=0.6
+                    )
+                    closest = folded[candidates[0]] if candidates else None
             except Exception:
                 closest = None
             extras: Dict[str, Any] = {
@@ -814,6 +942,18 @@ class _StructureMixin:
             else:
                 char_end = narrowed_end
         full_body = bundle["rendered_markdown"][section["char_start"] : char_end]
+        # ``compact=True`` promises the ``zim_get(compact=True)`` slice shape.
+        # The bundle's compact rendering carries the table placeholders but
+        # not the link strip — ``zim_get`` applies that in the content layer
+        # after rendering — so on link-heavy archives a compact section
+        # shipped ~65% more characters than the same prose fetched as an
+        # article, and was never a substring of it. Strip here, BEFORE
+        # measuring, so ``char_count`` / ``total_chars`` / ``truncated``
+        # describe the text actually served (the same rule zim_get follows).
+        # The bundle itself is left untouched: its offsets index the
+        # unstripped markdown that TOC/structure/summary slice.
+        if compact:
+            full_body = _strip_markdown_links_shared(full_body)
         cap = (
             max_chars
             if max_chars is not None
@@ -1033,19 +1173,40 @@ class _StructureMixin:
             # Rank: frequency descending, ties broken by first-appearance
             # order (Counter.most_common preserves insertion order for
             # equal counts).
-            for target, count in target_counts.most_common(limit):
-                outbound.append(
-                    {
-                        "path": target,
-                        # Placeholder; resolved via archive lookup below
-                        # under a single archive open so we don't pay one
-                        # open per result.
-                        "title": target,
-                        "link_text": first_text.get(target, ""),
-                        "mention_count": count,
-                    }
-                )
-            self._resolve_outbound_titles(validated_str, outbound)
+            ranked: List[Dict[str, Any]] = [
+                {
+                    "path": target,
+                    # Placeholder; resolved via archive lookup below
+                    # under a single archive open so we don't pay one
+                    # open per result.
+                    "title": target,
+                    "link_text": first_text.get(target, ""),
+                    "mention_count": count,
+                }
+                for target, count in target_counts.most_common()
+            ]
+            # Resolve BEFORE slicing to ``limit``: title resolution also
+            # canonicalizes redirect spellings, so two hrefs that redirect
+            # to one entry must merge into one row (summed mention_count)
+            # rather than ship as two rows whose paths disagree with what
+            # ``direction="inbound"`` indexes. Slicing first would also
+            # leave the page short whenever a merge happened inside it.
+            self._resolve_outbound_titles(validated_str, ranked)
+            merged: Dict[str, Dict[str, Any]] = {}
+            for row in ranked:
+                canonical = row["path"]
+                if canonical in (entry_path, resolved_source):
+                    # A redirect spelling of the source article itself.
+                    continue
+                if canonical in merged:
+                    merged[canonical]["mention_count"] += row["mention_count"]
+                else:
+                    merged[canonical] = row
+            # ``sorted`` is stable, so equal counts keep their first-
+            # appearance order from ``most_common``.
+            outbound = sorted(merged.values(), key=lambda r: -r["mention_count"])[
+                :limit
+            ]
         except OpenZimMcpArchiveError as e:
             # Partial-success contract: an archive- or extraction-level
             # failure surfaces as an empty result with an error string,
@@ -1098,11 +1259,18 @@ class _StructureMixin:
         tool layer renders that as a structured error). Phase-B five-key
         contract; paginated.
 
-        ``entry_path`` is looked up in the sidecar exactly as passed — the
-        sidecar stores scheme-native paths (prefix-less on new-scheme
-        archives, ``C/``-prefixed on old-scheme), and the runtime caller
-        passes the archive-native path the search/get tools already use, so
-        no namespace munging is applied here.
+        ``entry_path`` is first resolved against the live archive: it must
+        exist (a path the archive cannot serve raises the same not-found
+        error the outbound direction raises, instead of a silent
+        ``total=0`` indistinguishable from "genuinely no inbound links"),
+        and a redirect spelling is canonicalized through its chain because
+        the sidecar builder indexes canonical targets — looked up verbatim,
+        ``iep.utm.edu/plato`` returned 0 while ``iep.utm.edu/plato/`` had
+        106 linkers. No namespace munging is applied: the sidecar stores
+        scheme-native paths and the caller passes the archive-native path
+        the search/get tools already use. The caller's spelling is echoed
+        as ``entry_path`` (cursor ``ep`` matching relies on it); the
+        canonical one is reported as ``resolved_path`` when it differs.
         """
         if limit < 1 or limit > 100:
             raise OpenZimMcpValidationError(
@@ -1136,10 +1304,17 @@ class _StructureMixin:
                     tool="get_inbound_links",
                 )
             except CursorMismatchError as e:
-                raise OpenZimMcpValidationError(str(e)) from e
+                raise OpenZimMcpCursorMismatchError(str(e)) from e
 
         with _zim_ops_mod.zim_archive(Path(validated_str)) as archive:
             live_uuid = str(archive.uuid)
+            entry, _spelling = _resolve_entry_spelling(archive, entry_path)
+            if entry is None:
+                raise _entry_not_found_error(entry_path)
+            # Class-qualified: the helper is static, and the unit tests drive
+            # this method through a stub ``self`` exposing only the seams it
+            # already needed.
+            lookup_path = _StructureMixin._canonical_target_path(archive, entry_path)
         reader = LinkGraphReader.open_for(validated_str, live_archive_uuid=live_uuid)
         if reader is None:
             raise LinkGraphUnavailable(
@@ -1151,7 +1326,7 @@ class _StructureMixin:
                 "refuses to overwrite without `--force`."
             )
         try:
-            page = reader.query_inbound(entry_path, limit=limit, offset=offset)
+            page = reader.query_inbound(lookup_path, limit=limit, offset=offset)
         finally:
             reader.close()
 
@@ -1191,6 +1366,8 @@ class _StructureMixin:
                 "returned_count": returned,
             },
         }
+        if lookup_path != entry_path:
+            payload["resolved_path"] = lookup_path
         return cast("RelatedArticlesResponse", attach_meta(payload, reason=None))
 
     @staticmethod
@@ -1199,11 +1376,22 @@ class _StructureMixin:
     ) -> None:
         """Fill in each outbound entry's ``title`` from its archive title.
 
-        Single archive open shared across all entries (limit ≤ 100). On any
-        per-entry lookup failure the title stays at its placeholder (path)
-        so callers always see a non-empty string. A failure to open the
-        archive at all is also non-fatal — leave placeholders in place.
+        Single archive open shared across all entries. On any per-entry
+        lookup failure the title stays at its placeholder (path) so callers
+        always see a non-empty string. A failure to open the archive at all
+        is also non-fatal — leave placeholders in place.
+
+        Redirect entries are followed to their canonical target (the same
+        best-effort walk the sidecar builder uses), and ``item["path"]`` is
+        rewritten to the canonical path. zimit archives give a redirect
+        stub its own path string as its title, so reading the stub's title
+        "succeeded" with junk — every related row on the IEP read
+        ``title == path`` — and the pre-redirect path it shipped yielded
+        zero rows when fed back to ``direction="inbound"``, which indexes
+        canonical paths.
         """
+        from openzim_mcp.zim.redirects import best_effort_redirect_chain
+
         if not outbound:
             return
         try:
@@ -1218,6 +1406,17 @@ class _StructureMixin:
                         # the "title" placeholder) and, worse, went out on the
                         # wire as a ``path`` the caller could not fetch.
                         entry, spelling = _resolve_entry_spelling(archive, item["path"])
+                        # ``is True``: the mock archives used across the test
+                        # suite hand back MagicMock entries whose
+                        # ``is_redirect`` is itself a truthy MagicMock.
+                        if (
+                            entry is not None
+                            and getattr(entry, "is_redirect", False) is True
+                        ):
+                            resolved = best_effort_redirect_chain(entry)
+                            resolved_path = getattr(resolved, "path", None)
+                            if isinstance(resolved_path, str) and resolved_path:
+                                entry, spelling = resolved, resolved_path
                         item["path"] = spelling
                         title = getattr(entry, "title", None) if entry else None
                         if title:
@@ -1238,6 +1437,51 @@ class _StructureMixin:
         Find articles related to entry_path via outbound links.
         """
         return _json(self.get_related_articles_data(zim_file_path, entry_path, limit))
+
+    @staticmethod
+    def _canonical_target_path(archive: Any, target: str) -> str:
+        """Best-effort canonical spelling of a resolved link ``target``.
+
+        Tries the raw and percent-decoded spellings (``_resolve_entry_spelling``)
+        and, when the entry resolves to a redirect, walks the chain to the
+        served entry's path. Returns ``target`` unchanged when nothing in the
+        archive can verify it, so the caller keeps a best-effort path rather
+        than dropping the row. Same walk ``_parse_internal_link_edges`` uses
+        for the sidecar, so outbound rows, related rows, and the inbound index
+        all name one entry the same way.
+        """
+        from openzim_mcp.zim.redirects import best_effort_redirect_chain
+
+        try:
+            entry, spelling = _resolve_entry_spelling(archive, target)
+            # ``is True``: test-suite mock archives return MagicMock entries
+            # whose ``is_redirect`` is itself a truthy MagicMock.
+            if entry is not None and getattr(entry, "is_redirect", False) is True:
+                resolved_path = getattr(best_effort_redirect_chain(entry), "path", None)
+                if isinstance(resolved_path, str) and resolved_path:
+                    return resolved_path
+            return spelling
+        except Exception as e:  # pragma: no cover - defensive
+            logger.debug(f"canonical path for {target} failed: {e}")
+            return target
+
+    def _with_resolved_path(
+        self, archive: Any, link: Any, source_entry_path: str
+    ) -> Any:
+        """Return a copy of an outbound internal ``link`` row with ``path`` set.
+
+        ``path`` is the href resolved against the served entry's directory
+        and canonicalized through the archive; rows whose href cannot be
+        resolved (query-only, self-referential) are returned unchanged.
+        """
+        if not isinstance(link, dict):
+            return link
+        target = self._resolve_link_to_entry_path(
+            str(link.get("url", "")), source_entry_path
+        )
+        if not target:
+            return link
+        return {**link, "path": self._canonical_target_path(archive, target)}
 
     @staticmethod
     def _resolve_link_to_entry_path(url: str, source_entry_path: str) -> Optional[str]:

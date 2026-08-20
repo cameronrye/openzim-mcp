@@ -65,7 +65,12 @@ async def test_dispatches_to_get_section_data(
     fn, _ = server._tools_store["zim_get_section"]
     await fn(zim_file_path="/x.zim", entry_path="A/Cat", section_id="History")
     ops.get_section_data.assert_awaited_once_with(
-        "/x.zim", "A/Cat", "History", max_chars=None, compact=True
+        "/x.zim",
+        "A/Cat",
+        "History",
+        max_chars=None,
+        include_subsections=True,
+        compact=True,
     )
 
 
@@ -84,7 +89,12 @@ async def test_forwards_compact_false(
         compact=False,
     )
     ops.get_section_data.assert_awaited_once_with(
-        "/x.zim", "A/Cat", "History", max_chars=None, compact=False
+        "/x.zim",
+        "A/Cat",
+        "History",
+        max_chars=None,
+        include_subsections=True,
+        compact=False,
     )
 
 
