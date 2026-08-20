@@ -474,3 +474,79 @@ class TestD49InvertedTitleStrongMatch:
         assert "plain rendered list" not in out
         assert "Multiple articles match" in out
         assert "iep.utm.edu/kantview/" in out
+
+
+# ---------------------------------------------------------------------------
+# D50: get_zim_entries rejects the archive's own domain-shaped paths
+# ---------------------------------------------------------------------------
+
+
+class TestD50GetEntriesAcceptsDomainPaths:
+    """Every other response prints ``Path: medlineplus.gov/measles.html``,
+    but the batch extractor only accepted single-letter-namespace tokens,
+    so pasting those paths back produced "Missing Entry Paths" with an
+    example (``C/Photosynthesis``) that teaches a shape this archive
+    does not print.
+    """
+
+    @pytest.mark.parametrize(
+        ("query", "expected"),
+        [
+            (
+                "get articles medlineplus.gov/measles.html, medlineplus.gov/rubella.html",
+                ["medlineplus.gov/measles.html", "medlineplus.gov/rubella.html"],
+            ),
+            (
+                "fetch entries iep.utm.edu/kantview/ and iep.utm.edu/kantaest/",
+                ["iep.utm.edu/kantview/", "iep.utm.edu/kantaest/"],
+            ),
+            # Namespace-prefixed and domain-shaped paths may be mixed.
+            (
+                "get entries C/Photosynthesis and medlineplus.gov/measles.html",
+                ["C/Photosynthesis", "medlineplus.gov/measles.html"],
+            ),
+            # A ZIM filename is still not an entry path.
+            (
+                "fetch entries A/Foo and A/Bar from wikipedia.zim",
+                ["A/Foo", "A/Bar"],
+            ),
+            # libzim paths are case-sensitive: a mixed-case zimit path must
+            # survive Rule 1's lowercasing the way ``A/...`` paths already do.
+            (
+                "get articles en.wikipedia.org/wiki/Immanuel_Kant and "
+                "en.wikipedia.org/wiki/Georg_Hegel",
+                [
+                    "en.wikipedia.org/wiki/Immanuel_Kant",
+                    "en.wikipedia.org/wiki/Georg_Hegel",
+                ],
+            ),
+        ],
+    )
+    def test_extracts_domain_shaped_paths(
+        self, query: str, expected: List[str]
+    ) -> None:
+        intent, params, _ = IntentParser.parse_intent(query)
+        assert intent == "get_zim_entries"
+        assert params.get("entries") == expected
+
+    def test_batch_fetch_reaches_the_backend(self) -> None:
+        handler, mock = _handler_with()
+        mock.get_entries.return_value = "two entries"
+        out = handler.handle_zim_query(
+            "get articles medlineplus.gov/measles.html, medlineplus.gov/rubella.html",
+            zim_file_path="/zims/test.zim",
+        )
+        assert "Missing Entry Paths" not in out
+        entries = mock.get_entries.call_args.args[0]
+        assert [e["entry_path"] for e in entries] == [
+            "medlineplus.gov/measles.html",
+            "medlineplus.gov/rubella.html",
+        ]
+
+    def test_missing_paths_example_teaches_both_shapes(self) -> None:
+        handler, _ = _handler_with()
+        out = handler.handle_zim_query("get articles", zim_file_path="/zims/test.zim")
+        assert "Missing Entry Paths" in out
+        assert "C/Photosynthesis" in out
+        assert "medlineplus.gov/measles.html" in out
+        assert "Path:" in out, "should point at the Path: lines other responses print"

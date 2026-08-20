@@ -4028,11 +4028,18 @@ class SimpleToolsHandler(
     ) -> str:
         entry_paths = params.get("entries") or []
         if not entry_paths:
+            # D50: teach both path shapes. zimit / warc2zim archives
+            # store domain-shaped paths, and that is what every other
+            # response's ``Path:`` line prints for them — pasting those
+            # back must work, and the example must show the shape the
+            # loaded archive actually uses.
             return (
                 "**Missing Entry Paths**\n\n"
                 "I couldn't extract entry paths from your query. "
-                "Use namespace/path syntax, e.g., "
-                "'fetch entries C/Photosynthesis C/Cell_biology'."
+                "Paste the `Path:` values other responses print, e.g., "
+                "'fetch entries C/Photosynthesis C/Cell_biology' or "
+                "'get articles medlineplus.gov/measles.html, "
+                "medlineplus.gov/rubella.html'."
             )
         entries = [
             {"zim_file_path": zim_file_path, "entry_path": p} for p in entry_paths

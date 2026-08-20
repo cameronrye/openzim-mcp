@@ -94,6 +94,17 @@ _SEARCH_VERB = r"(?:^\s*query|search|find|look)"
 # exempt case-sensitive paths from Tier-1 Rule 1's lowercasing.
 _NAMESPACE_PREFIXED_RE = re.compile(r"^[A-Za-z]/")
 
+# D50: the path shape zimit / warc2zim archives store and this tool prints
+# (``Path: medlineplus.gov/measles.html``, ``iep.utm.edu/kantview/``): a
+# dotted host, then ``/``, then the page path. The host must contain a dot
+# so a bare ZIM filename (``wikipedia.zim`` — no slash) and slashed prose
+# (``and/or``, ``km/h``) stay excluded. Shares the suffix class of the
+# namespace-prefixed shape. ``_restore_nonascii_case`` exempts it from
+# Rule 1's lowercasing for the same reason it exempts ``A/...``: libzim's
+# path lookup is case-sensitive.
+_DOMAIN_PATH_BODY = r"[A-Za-z0-9][A-Za-z0-9\-]*(?:\.[A-Za-z0-9\-]+)+/"
+_DOMAIN_PATH_RE = re.compile(rf"^{_DOMAIN_PATH_BODY}")
+
 
 def _strip_quote_pair(value: str) -> str:
     """Peel a single surrounding matched quote-pair from ``value`` and
@@ -876,7 +887,17 @@ def _extract_get_zim_entries(query: str, params: Dict[str, Any]) -> None:
     # paths (``M/Illustration_48x48@1``), ``A/C++``, apostrophes. A narrower
     # class truncated those at the first offending character and shipped the
     # stump to ``get_entries`` as if the caller had typed it.
-    entries = safe_regex_findall(r"(?<![A-Za-z0-9])[A-Za-z]/[\w\-./%()@+'~*]+", query)
+    #
+    # D50: zimit / warc2zim archives store domain-shaped paths
+    # (``medlineplus.gov/measles.html``) and that is what this tool's own
+    # ``Path:`` lines print for them, so the batch intent must accept that
+    # shape alongside the single-letter namespace one. The lookbehind
+    # still anchors the token start; the dotted host keeps ``wikipedia.zim``
+    # (no slash) and ``and/or`` (no dot) excluded.
+    entries = safe_regex_findall(
+        rf"(?<![A-Za-z0-9])(?:[A-Za-z]/|{_DOMAIN_PATH_BODY})[\w\-./%()@+'~*]+",
+        query,
+    )
     if entries:
         params["entries"] = [_trim_entry_token(e) for e in entries]
 
@@ -1714,7 +1735,11 @@ class IntentParser:
             if (
                 not isinstance(value, str)
                 or not value
-                or (value.isascii() and not _NAMESPACE_PREFIXED_RE.match(value))
+                or (
+                    value.isascii()
+                    and not _NAMESPACE_PREFIXED_RE.match(value)
+                    and not _DOMAIN_PATH_RE.match(value)
+                )
             ):
                 return value
             idx = lowered.find(value)
