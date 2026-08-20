@@ -1451,6 +1451,7 @@ class ContentProcessor:
         current_offset: int = 0,
         paginatable: bool = True,
         original_total: Optional[int] = None,
+        batch_item: bool = False,
     ) -> str:
         """
         Truncate content to maximum length with informative message.
@@ -1486,6 +1487,12 @@ class ContentProcessor:
                 read "total of N characters of body content" using the
                 post-slice length, so paginated reads under-reported
                 the article's length by ``current_offset`` chars.
+            batch_item: When True, the continuation hint points at a
+                single-entry ``entry_path`` call. Batch mode rejects
+                ``content_offset`` (``zim_get`` returns
+                ``invalid_path_combination``), so the default ``Pass
+                content_offset=N`` tail was advice the emitting mode
+                could not act on.
 
         Returns:
             Truncated content with metadata
@@ -1534,7 +1541,15 @@ class ContentProcessor:
         # this slice STARTED in the original article.
         next_offset = current_offset + consumed
 
-        if paginatable:
+        if batch_item:
+            # Batch entries are first-page only and the batch branch rejects
+            # ``content_offset``; the working recovery is a single-entry call.
+            tail = (
+                " Batch entries return their first page only; for the rest, "
+                "re-fetch this path with a single-entry `entry_path` call and "
+                f"`content_offset={next_offset}`."
+            )
+        elif paginatable:
             # NO thousands separator here: unlike the human-readable counts
             # below, this value is copied back verbatim into the typed
             # ``content_offset`` parameter, and "100,000" is not a valid int

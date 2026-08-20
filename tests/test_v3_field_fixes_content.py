@@ -360,3 +360,71 @@ async def test_zim_get_forwards_max_content_length_to_main_page(
     mock_ops.get_main_page_data.assert_awaited_once_with(
         "/x.zim", compact=False, max_content_length=200
     )
+
+
+# ---------------------------------------------------------------------------
+# D12 / D13 — batch items: clean body, and a footer batch mode can act on
+# ---------------------------------------------------------------------------
+
+_LONG_ARTICLE_HTML = (
+    "<html><body><article><h1>Diabetes</h1><p>"
+    + ("Diabetes is a long-term condition in which blood sugar runs high. " * 60)
+    + "</p></article></body></html>"
+)
+
+
+@patch("openzim_mcp.zim_operations.Archive")
+def test_batch_footer_points_at_single_entry_paging(
+    mock_archive: MagicMock, ops: ZimOperations, zim_file: Path
+) -> None:
+    """D12: batch mode rejects content_offset, yet truncated batch bodies told
+    the caller to pass it — unusable advice in the mode that emitted it."""
+    path = "medlineplus.gov/diabetes.html"
+    mock_archive.return_value = _archive_with(
+        {path: _html_entry(path, "Diabetes", _LONG_ARTICLE_HTML)}
+    )
+
+    result = ops.get_entries_data(
+        [{"zim_file_path": str(zim_file), "entry_path": path}],
+        max_content_length=300,
+    )
+
+    item = result["results"][0]
+    assert item["success"] is True, item
+    content = item["content"]
+    assert "[Content truncated" in content
+    assert "Pass `content_offset=" not in content, content
+    # The working recovery: a single-entry call on this path, with the
+    # offset where this slice ended (299 here — the boundary space is
+    # deferred to the next page, so the hint is not simply the cap).
+    assert "single-entry `entry_path` call" in content
+    assert "`content_offset=299`" in content
+
+
+@patch("openzim_mcp.zim_operations.Archive")
+def test_batch_item_content_is_the_clean_body(
+    mock_archive: MagicMock, ops: ZimOperations, zim_file: Path
+) -> None:
+    """D13: each batch item embedded the legacy ``# title / Path: / Type: /
+    ## Content`` document; the description promises full bodies, and the
+    item already carries entry_path."""
+    path = "medlineplus.gov/diabetes.html"
+    mock_archive.return_value = _archive_with(
+        {path: _html_entry(path, "Diabetes", _LONG_ARTICLE_HTML)}
+    )
+
+    batch = ops.get_entries_data(
+        [{"zim_file_path": str(zim_file), "entry_path": path}],
+        max_content_length=300,
+    )
+    single = ops.get_zim_entry_data(str(zim_file), path, max_content_length=300)
+
+    content = batch["results"][0]["content"]
+    assert "## Content" not in content
+    assert "\nPath: " not in content
+    assert "\nType: " not in content
+    # Same body slice as the single-entry branch; only the footer differs.
+    batch_body = content.partition("\n\n... [Content truncated")[0]
+    single_body = single["content"].partition("\n\n... [Content truncated")[0]
+    assert batch_body == single_body
+    assert batch_body.startswith("# Diabetes")

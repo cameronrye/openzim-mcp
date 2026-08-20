@@ -592,6 +592,61 @@ class _ContentMixin:
         logger.info(f"Retrieved entry: {entry_path}")
         return result
 
+    def _get_batch_entry_body(
+        self,
+        archive: Archive,
+        validated_path: Path,
+        entry_path: str,
+        max_content_length: int,
+        *,
+        compact: bool = False,
+    ) -> str:
+        """Resolve one batch entry and return its clean body text.
+
+        Batch items used to carry the legacy rendered document (``# title``
+        / ``Path:`` / ``Type:`` / ``## Content`` header block) while the
+        single-entry branch serves the bare body with path/title as
+        separate fields. The item already identifies the entry through
+        ``entry_path``, so the batch surface now serves the same body the
+        structured payload builder produces — first page, with the
+        batch-specific truncation footer.
+
+        Own cache namespace (``entry_batch``) because the body differs from
+        both the legacy text (``entry:v3``) and the single-entry dict
+        (``entry_data``) renderings of the same entry.
+        """
+        from openzim_mcp.bundle import archive_stat_token
+
+        cache_key = (
+            f"entry_batch:v1:{validated_path}:{archive_stat_token(validated_path)}:"
+            f"{entry_path}:{max_content_length}:compact={compact}"
+        )
+        cached = self.cache.get(cache_key)
+        if cached is not None:
+            return cast(str, cached)
+
+        payload, content_ok = self._smart_retrieve_entry(
+            archive,
+            entry_path,
+            validated_path,
+            build=lambda actual_path: self._build_entry_payload(
+                archive,
+                actual_path,
+                entry_path,
+                max_content_length,
+                0,
+                compact=compact,
+                batch_item=True,
+            ),
+            fetch_metadata=lambda: self._get_metadata_entry_data(
+                archive, entry_path, max_content_length, 0
+            ),
+        )
+        body = str(payload.get("content") or "")
+        if content_ok:
+            self.cache.set(cache_key, body)
+        return body
+
     def get_zim_entry_data(
         self,
         zim_file_path: str,
@@ -895,6 +950,7 @@ class _ContentMixin:
         content_offset: int = 0,
         *,
         compact: bool = False,
+        batch_item: bool = False,
     ) -> Tuple[Dict[str, Any], bool, str]:
         """Construct the dict payload for a resolved entry.
 
@@ -902,7 +958,9 @@ class _ContentMixin:
         checks), content extraction, compact link-stripping, and
         offset/truncation accounting. The legacy text surface
         (``_get_entry_content_direct``) renders this payload via
-        ``_render_entry_payload_text``.
+        ``_render_entry_payload_text``. ``batch_item`` selects the
+        truncation footer batch mode can act on (see
+        ``ContentProcessor.truncate_content``).
         """
         entry = archive.get_entry_by_path(actual_path)
 
@@ -974,6 +1032,7 @@ class _ContentMixin:
             max_content_length,
             current_offset=content_offset,
             original_total=total_length,
+            batch_item=batch_item,
         )
         # Compare against the cap, NOT the rendered lengths: ``truncate_content``
         # appends a ~150-char truncation note, so ``len(truncated) < len(content)``
@@ -1119,12 +1178,11 @@ class _ContentMixin:
                             # entry slips through D12 by hiding inside a
                             # batched request.
                             reject_path_traversal(entry_path)
-                            content = self._get_zim_entry_from_archive(
+                            content = self._get_batch_entry_body(
                                 archive,
                                 validated_path,
                                 entry_path,
                                 max_content_length,
-                                0,
                                 compact=compact,
                             )
                             results.append(
