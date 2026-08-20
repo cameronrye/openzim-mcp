@@ -235,6 +235,27 @@ class EnvelopeAwareMCPServer(MCPServer):
             return result
         return result.model_copy(update={"ttl_ms": self._archive_read_ttl_ms})
 
+    async def run_stdio_async(self) -> None:
+        """Serve stdio through the frame-answering wrapper in ``sdk_compat``.
+
+        Body-identical to the SDK's ``run_stdio_async`` except for the
+        transport context manager: the SDK's stdio server hands undecodable
+        lines to a dispatcher that drops them silently, and the wrapper
+        answers them with the JSON-RPC error the spec requires. Retire with
+        the wrapper (see ``sdk_compat`` for the canary).
+        """
+        from .sdk_compat import stdio_server_answering_malformed_frames
+
+        async with stdio_server_answering_malformed_frames() as (
+            read_stream,
+            write_stream,
+        ):
+            await self._lowlevel_server.run(
+                read_stream,
+                write_stream,
+                self._lowlevel_server.create_initialization_options(),
+            )
+
     async def get_prompt(
         self,
         name: str,

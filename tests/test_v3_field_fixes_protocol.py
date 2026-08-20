@@ -12,8 +12,13 @@ Defect ids refer to the 2026-08-19 field report:
 - D55: legacy-era ``prompts/get`` errors rode the SDK's ``code=0`` catch-all.
 - D57: prompt error text leaked pydantic boilerplate,
   ``register_prompts.<locals>`` paths and Python ``set`` reprs.
+- D56: the stdio transport silently dropped malformed JSON, batch arrays and
+  invalid request frames — no ``-32700`` / ``-32600`` was ever written.
 """
 
+import io
+import json
+import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, AsyncIterator
@@ -21,9 +26,10 @@ from typing import Any, AsyncIterator
 import anyio
 import pytest
 from mcp import ClientSession
+from mcp.server.stdio import stdio_server
 from mcp.shared.exceptions import MCPError
 from mcp.shared.memory import create_client_server_memory_streams
-from mcp_types import INTERNAL_ERROR, INVALID_PARAMS
+from mcp_types import INTERNAL_ERROR, INVALID_PARAMS, INVALID_REQUEST, PARSE_ERROR
 
 from openzim_mcp.config import OpenZimMcpConfig
 from openzim_mcp.server import OpenZimMcpServer
@@ -227,3 +233,195 @@ async def test_missing_arguments_are_listed_in_stable_order(tmp_path: Path) -> N
 
     assert "{'" not in error.message and "'}" not in error.message
     assert error.message.index("entry_path") < error.message.index("zim_file_path")
+
+
+# --------------------------------------------------------------------------
+# D56 — stdio: malformed frames get a JSON-RPC error, not silence
+# --------------------------------------------------------------------------
+
+_LEGACY_OPENING = [
+    json.dumps(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-11-25",
+                "capabilities": {},
+                "clientInfo": {"name": "probe", "version": "0"},
+            },
+        }
+    ),
+    json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized"}),
+]
+
+_MODERN_META = {
+    "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+    "io.modelcontextprotocol/clientCapabilities": {},
+}
+_MODERN_OPENING = [
+    json.dumps(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "ping",
+            "params": {"_meta": _MODERN_META},
+        }
+    ),
+]
+
+_NOT_JSON = "{ this is not json"
+_BATCH = json.dumps(
+    [
+        {"jsonrpc": "2.0", "id": 2, "method": "ping"},
+        {"jsonrpc": "2.0", "id": 3, "method": "ping"},
+    ]
+)
+_NO_JSONRPC_MEMBER = json.dumps({"id": 4, "method": "ping"})
+_BARE_STRING = json.dumps("just a string")
+
+
+def _ping(request_id: int, *, modern: bool) -> str:
+    frame: dict[str, Any] = {"jsonrpc": "2.0", "id": request_id, "method": "ping"}
+    if modern:
+        frame["params"] = {"_meta": _MODERN_META}
+    return json.dumps(frame)
+
+
+def _plug_std_streams(monkeypatch: pytest.MonkeyPatch, frames: list[str]) -> io.BytesIO:
+    """Point ``sys.stdin``/``sys.stdout`` at in-memory bytes and return stdout.
+
+    ``stdio_server()`` probes ``sys.stdin.buffer.fileno()`` to decide whether
+    to claim fd 0/1; a ``BytesIO`` raises ``UnsupportedOperation`` there, so
+    the SDK serves the wire from the in-memory buffers in place — the exact
+    production code path, minus the descriptor surgery.
+    """
+    stdin_bytes = io.BytesIO("".join(f + "\n" for f in frames).encode())
+    stdout_bytes = io.BytesIO()
+    monkeypatch.setattr(sys, "stdin", io.TextIOWrapper(stdin_bytes, encoding="utf-8"))
+    monkeypatch.setattr(sys, "stdout", io.TextIOWrapper(stdout_bytes, encoding="utf-8"))
+    return stdout_bytes
+
+
+def _responses(stdout_bytes: io.BytesIO) -> list[dict[str, Any]]:
+    return [
+        json.loads(line)
+        for line in stdout_bytes.getvalue().decode().splitlines()
+        if line.strip()
+    ]
+
+
+async def _serve_stdio(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, frames: list[str]
+) -> list[dict[str, Any]]:
+    """Everything the server writes to stdout for ``frames`` then EOF."""
+    config = OpenZimMcpConfig(allowed_directories=[str(tmp_path)], tool_mode="advanced")
+    server = OpenZimMcpServer(config)
+    stdout_bytes = _plug_std_streams(monkeypatch, frames)
+    with anyio.fail_after(20):
+        await server.mcp.run_stdio_async()
+    return _responses(stdout_bytes)
+
+
+def _by_id(responses: list[dict[str, Any]], request_id: Any) -> list[dict[str, Any]]:
+    return [r for r in responses if "id" in r and r["id"] == request_id]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("modern", [False, True], ids=["legacy", "modern"])
+async def test_stdio_answers_malformed_frames(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, modern: bool
+) -> None:
+    """D56: parse failures are -32700 with id null, bad requests -32600.
+
+    A hand-rolled client waiting on ids 2-4 used to hang until its own
+    timeout: the SDK's stdio reader forwards an undecodable line as a bare
+    ``Exception`` item and the dispatcher drops it at debug level. The
+    following well-formed ping must still be answered.
+    """
+    opening = _MODERN_OPENING if modern else _LEGACY_OPENING
+    responses = await _serve_stdio(
+        monkeypatch,
+        tmp_path,
+        [
+            *opening,
+            _NOT_JSON,
+            _BATCH,
+            _NO_JSONRPC_MEMBER,
+            _BARE_STRING,
+            _ping(5, modern=modern),
+        ],
+    )
+
+    errors = [r["error"] for r in responses if "error" in r]
+    null_id_errors = [r["error"] for r in _by_id(responses, None)]
+
+    assert [e["code"] for e in null_id_errors].count(PARSE_ERROR) == 1
+    # The batch and the bare string: -32600, id null (no id can be recovered).
+    assert [e["code"] for e in null_id_errors].count(INVALID_REQUEST) == 2
+    # The object that carried a usable id gets it echoed back.
+    (no_jsonrpc,) = _by_id(responses, 4)
+    assert no_jsonrpc["error"]["code"] == INVALID_REQUEST
+    # Nothing else went wrong, and good traffic is unaffected.
+    assert len(errors) == 4
+    (ping,) = _by_id(responses, 5)
+    assert "result" in ping
+
+
+@pytest.mark.asyncio
+async def test_stdio_batch_rejection_says_why(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """D56: batches were removed in MCP 2025-06-18; the error should say so."""
+    responses = await _serve_stdio(
+        monkeypatch, tmp_path, [*_LEGACY_OPENING, _BATCH, _ping(5, modern=False)]
+    )
+
+    (batch_error,) = [r["error"] for r in _by_id(responses, None)]
+    assert batch_error["code"] == INVALID_REQUEST
+    assert "batch" in batch_error["message"].lower()
+
+
+@pytest.mark.asyncio
+async def test_stdio_ignores_blank_lines(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A blank line carries no request anyone waits on; answering it would
+    turn a client's keepalive newlines into a stream of -32700s."""
+    responses = await _serve_stdio(
+        monkeypatch, tmp_path, [*_LEGACY_OPENING, "", "   ", _ping(5, modern=False)]
+    )
+
+    assert [r for r in responses if "error" in r] == []
+    (ping,) = _by_id(responses, 5)
+    assert "result" in ping
+
+
+@pytest.mark.asyncio
+async def test_canary_sdk_stdio_still_drops_malformed_frames(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Fails the day the locked SDK answers malformed stdio frames itself.
+
+    This runs the SDK's own ``stdio_server`` under the lowlevel server —
+    ``MCPServer.run_stdio_async`` minus the repo's relay — and pins the
+    silence the relay exists to fill. When this fails: delete
+    ``stdio_server_answering_malformed_frames`` from ``sdk_compat.py``, the
+    ``run_stdio_async`` override in ``mcp_envelope.py``, and this test. Keep
+    the wire tests above — they assert the behavior either way.
+    """
+    config = OpenZimMcpConfig(allowed_directories=[str(tmp_path)], tool_mode="advanced")
+    low = OpenZimMcpServer(config).mcp._lowlevel_server
+    stdout_bytes = _plug_std_streams(
+        monkeypatch, [*_LEGACY_OPENING, _NOT_JSON, _BATCH, _ping(5, modern=False)]
+    )
+
+    with anyio.fail_after(20):
+        async with stdio_server() as (read_stream, write_stream):
+            await low.run(
+                read_stream, write_stream, low.create_initialization_options()
+            )
+
+    responses = _responses(stdout_bytes)
+    assert [r for r in responses if "error" in r] == []
+    assert len(_by_id(responses, 5)) == 1
