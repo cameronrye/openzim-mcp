@@ -292,6 +292,12 @@ _LEADING_INTENT_KEYWORDS_RE = re.compile(
 # (rare but possible) are untouched.
 _TAIL_LEADING_CONTENTS_RE = re.compile(r"^contents\s+", re.IGNORECASE)
 
+# D48: ``get (the) article about X`` anchors on ``article`` and leaves
+# ``about X`` as the tail; ``about`` is a bridge word, not part of the
+# title, so peel it. Only ``about`` — ``on`` / ``for`` / ``of`` open real
+# titles far too often (``On the Origin of Species``) to be safe.
+_TAIL_LEADING_ABOUT_RE = re.compile(r"^about\s+", re.IGNORECASE)
+
 
 def _extract_entry_path_keyworded(query: str, params: Dict[str, Any]) -> None:
     """Shared extractor for get_article / structure / links / toc / summary.
@@ -405,6 +411,11 @@ def _extract_entry_path_keyworded(query: str, params: Dict[str, Any]) -> None:
         # tail = ``contents X``. Peel the leading ``contents`` so the
         # downstream resolver sees ``X``.
         cleaned = _TAIL_LEADING_CONTENTS_RE.sub("", tail, count=1).strip()
+        if cleaned and cleaned != tail:
+            tail = cleaned
+        # D48: ``get the article about X`` -> tail ``about X``; drop the
+        # bridge word so the title probe sees ``X``.
+        cleaned = _TAIL_LEADING_ABOUT_RE.sub("", tail, count=1).strip()
         if cleaned and cleaned != tail:
             tail = cleaned
         # Post-v2.0.0 D-E: peel a surrounding quote pair so an
@@ -1130,9 +1141,15 @@ class IntentParser:
             0.9,
             8,
         ),
-        # Get article - common words
+        # Get article - common words. D48: tolerate a determiner between
+        # the verb and the noun (``get the article about X``) — the
+        # natural phrasing otherwise fell to the search fallback with the
+        # whole sentence as terms, ``**the**`` highlighted in every
+        # snippet. Same tolerance ``_LEADING_INTENT_KEYWORDS_RE`` and the
+        # section patterns already grant their verbs.
         (
-            r"\b(get|show|read|display|fetch)\s+(article|entry|page)\b",
+            r"\b(get|show|read|display|fetch)\s+"
+            r"(?:(?:the|an?|this|that)\s+)?(article|entry|page)\b",
             "get_article",
             0.75,
             5,

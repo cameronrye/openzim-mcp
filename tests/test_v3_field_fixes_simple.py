@@ -15,7 +15,7 @@ from unittest.mock import MagicMock, Mock
 import pytest
 
 from openzim_mcp.pagination import Cursor
-from openzim_mcp.simple_tools import SimpleToolsHandler
+from openzim_mcp.simple_tools import IntentParser, SimpleToolsHandler
 
 
 def _weak_results() -> List[Dict[str, Any]]:
@@ -354,3 +354,47 @@ class TestD47OffsetExclusionsDocumented:
         assert "suggestions for" in block
         assert "find article titled" in block
         assert "limit" in block, "must tell the caller what to do instead"
+
+
+# ---------------------------------------------------------------------------
+# D48: "get the article about X" leaked command scaffolding into search terms
+# ---------------------------------------------------------------------------
+
+
+class TestD48GetArticleDeterminerAndAbout:
+    """``get the article about Immanuel Kant`` fell to the generic search
+    fallback with the WHOLE sentence as terms (``**the**`` highlighted in
+    the snippets) because the get_article pattern required verb/noun
+    adjacency and nothing peeled the ``about`` bridge.
+    """
+
+    @pytest.mark.parametrize(
+        ("query", "expected_path"),
+        [
+            ("get the article about Immanuel Kant", "immanuel kant"),
+            ("get the article Immanuel Kant", "immanuel kant"),
+            ("show an entry about Photosynthesis", "photosynthesis"),
+            ("get article about Photosynthesis", "photosynthesis"),
+            ("fetch the page on Photosynthesis", "on photosynthesis"),
+            # Title-internal prepositions are still preserved (H6).
+            ("get the article Lord of the Rings", "lord of the rings"),
+        ],
+    )
+    def test_routes_to_get_article_with_clean_path(
+        self, query: str, expected_path: str
+    ) -> None:
+        intent, params, _ = IntentParser.parse_intent(query)
+        assert intent == "get_article", query
+        assert params.get("entry_path", "").lower() == expected_path
+
+    def test_handler_fetches_the_article_instead_of_searching(self) -> None:
+        handler, mock = _handler_with()
+        mock.get_zim_entry.return_value = "# Immanuel Kant\n\nbody"
+        out = handler.handle_zim_query(
+            "get the article about Immanuel Kant", zim_file_path="/zims/test.zim"
+        )
+        assert mock.get_zim_entry.called
+        assert mock.get_zim_entry.call_args.args[1].lower() == "immanuel kant"
+        assert not mock.search_zim_file.called
+        assert not mock.search_zim_file_data.called
+        assert "body" in out
