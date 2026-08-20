@@ -171,7 +171,8 @@ def test_d62_initialize_still_opens_a_session_and_delete_terminates_it(
     assert session_id
     assert session_id in _sessions(server)
     payload = _sse_result(resp.text)
-    assert payload is not None and "result" in payload, resp.text
+    assert payload is not None, resp.text
+    assert "result" in payload, resp.text
     assert payload["result"]["serverInfo"]
 
     with_session = {**LEGACY_HEADERS, "Mcp-Session-Id": session_id}
@@ -185,7 +186,8 @@ def test_d62_initialize_still_opens_a_session_and_delete_terminates_it(
     resp = client.post("/mcp", json=TOOLS_LIST_BODY, headers=with_session)
     assert resp.status_code == 200, resp.text
     payload = _sse_result(resp.text)
-    assert payload is not None and payload["result"]["tools"], resp.text
+    assert payload is not None, resp.text
+    assert payload["result"]["tools"], resp.text
 
     resp = client.delete("/mcp", headers=with_session)
     assert resp.status_code == 200, resp.text
@@ -324,4 +326,5 @@ def test_d63_deployment_doc_scopes_the_options_auth_claim_to_non_preflight() -> 
     assert "preflight" in auth_section
     # The scoped claim: preflight is the carve-out, by design, via outer CORS.
     assert "OPENZIM_MCP_CORS_ORIGINS" in auth_section
-    assert "without" in auth_section and "token" in auth_section
+    assert "without" in auth_section
+    assert "token" in auth_section
