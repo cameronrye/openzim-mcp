@@ -1457,5 +1457,5 @@ class ZimOperations(
             return resolved, resolved.path
         raise OpenZimMcpArchiveError(
             f"Entry not found: '{entry_path}'. "
-            f"Try using search_zim_file() to find available entries."
+            f"Try using zim_search() to find available entries."
         ) from None

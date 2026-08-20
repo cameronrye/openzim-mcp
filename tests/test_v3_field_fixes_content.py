@@ -110,3 +110,102 @@ def test_literal_percent_path_is_not_decoded_away(
     result = ops.get_zim_entry_data(str(zim_file), literal)
     assert result["path"] == literal
     assert "requested_path" not in result
+
+
+# ---------------------------------------------------------------------------
+# D08 — not-found guidance must name tools the v3 surface actually exposes
+# ---------------------------------------------------------------------------
+
+_STALE_TOOL_NAMES = ("search_zim_file", "browse_namespace")
+
+
+def _assert_names_real_tools(message: str) -> None:
+    for stale in _STALE_TOOL_NAMES:
+        assert stale not in message, message
+    assert "zim_search" in message or "zim_health" in message, message
+
+
+@patch("openzim_mcp.zim_operations.Archive")
+def test_entry_not_found_guidance_names_real_tools(
+    mock_archive: MagicMock, ops: ZimOperations, zim_file: Path
+) -> None:
+    """D08: the ladder's not-found text pointed at pre-v3 helper names."""
+    from openzim_mcp.exceptions import OpenZimMcpArchiveError
+
+    mock_archive.return_value = _archive_with({})
+    with patch.object(ops, "_find_entry_by_search", MagicMock(return_value=None)):
+        with pytest.raises(OpenZimMcpArchiveError) as exc:
+            ops.get_zim_entry_data(str(zim_file), "medlineplus.gov/nope.html")
+    _assert_names_real_tools(str(exc.value))
+    assert "zim_browse" in str(exc.value)
+
+
+@patch("openzim_mcp.zim_operations.Archive")
+def test_search_fallback_failure_guidance_names_real_tools(
+    mock_archive: MagicMock, ops: ZimOperations, zim_file: Path
+) -> None:
+    from openzim_mcp.exceptions import OpenZimMcpArchiveError
+
+    mock_archive.return_value = _archive_with({})
+    boom = MagicMock(side_effect=RuntimeError("xapian down"))
+    with patch.object(ops, "_find_entry_by_search", boom):
+        with pytest.raises(OpenZimMcpArchiveError) as exc:
+            ops.get_zim_entry_data(str(zim_file), "medlineplus.gov/nope.html")
+    _assert_names_real_tools(str(exc.value))
+
+
+@patch("openzim_mcp.zim_operations.Archive")
+def test_file_level_failure_guidance_names_real_tools(
+    mock_archive: MagicMock, ops: ZimOperations, zim_file: Path
+) -> None:
+    from openzim_mcp.exceptions import OpenZimMcpArchiveError
+
+    mock_archive.return_value = _archive_with({})
+    with patch.object(ops, "_smart_retrieve_entry", MagicMock(side_effect=ValueError)):
+        with pytest.raises(OpenZimMcpArchiveError) as data_exc:
+            ops.get_zim_entry_data(str(zim_file), "A/x")
+        with pytest.raises(OpenZimMcpArchiveError) as text_exc:
+            ops.get_zim_entry(str(zim_file), "A/x")
+    _assert_names_real_tools(str(data_exc.value))
+    _assert_names_real_tools(str(text_exc.value))
+
+
+@patch("openzim_mcp.zim_operations.zim_archive")
+def test_binary_not_found_guidance_names_real_tools(
+    mock_zim_archive: MagicMock, ops: ZimOperations, zim_file: Path
+) -> None:
+    from openzim_mcp.exceptions import OpenZimMcpArchiveError
+
+    mock_zim_archive.return_value.__enter__.return_value = _archive_with({})
+    with patch.object(ops, "_find_entry_by_search", MagicMock(return_value=None)):
+        with pytest.raises(OpenZimMcpArchiveError) as exc:
+            ops.get_binary_entry_data(str(zim_file), "I/nope.png")
+    _assert_names_real_tools(str(exc.value))
+
+
+def test_resolve_with_fallback_guidance_names_real_tools(ops: ZimOperations) -> None:
+    from openzim_mcp.exceptions import OpenZimMcpArchiveError
+
+    with patch.object(ops, "_find_entry_by_search", MagicMock(return_value=None)):
+        with pytest.raises(OpenZimMcpArchiveError) as exc:
+            ops._resolve_entry_with_fallback(_archive_with({}), "A/nope")
+    _assert_names_real_tools(str(exc.value))
+
+
+@patch("openzim_mcp.zim_operations.Archive")
+def test_simple_mode_sanitizer_still_strips_reworded_guidance(
+    mock_archive: MagicMock, ops: ZimOperations, zim_file: Path
+) -> None:
+    """zim_query has no zim_search/zim_browse either; its leak sanitizer must
+    keep stripping the backend sentence after the rewording."""
+    from openzim_mcp.exceptions import OpenZimMcpArchiveError
+    from openzim_mcp.simple_tools import SimpleToolsHandler
+
+    mock_archive.return_value = _archive_with({})
+    with patch.object(ops, "_find_entry_by_search", MagicMock(return_value=None)):
+        with pytest.raises(OpenZimMcpArchiveError) as exc:
+            ops.get_zim_entry_data(str(zim_file), "medlineplus.gov/nope.html")
+    stripped = SimpleToolsHandler._BACKEND_API_LEAK_RE.sub("", str(exc.value))
+    assert "zim_search" not in stripped
+    assert "zim_browse" not in stripped
+    assert "Entry not found" in stripped

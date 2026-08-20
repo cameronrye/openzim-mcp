@@ -534,7 +534,7 @@ class _ContentMixin:
             raise OpenZimMcpArchiveError(
                 f"Entry retrieval failed for '{entry_path}': {e}. "
                 f"This may be due to file access issues or ZIM file corruption. "
-                f"Try using search_zim_file() to verify the file is accessible."
+                f"Try using zim_health() to verify the archive is loaded and readable."
             ) from e
 
     def _get_zim_entry_from_archive(
@@ -662,7 +662,7 @@ class _ContentMixin:
             raise OpenZimMcpArchiveError(
                 f"Entry retrieval failed for '{entry_path}': {e}. "
                 f"This may be due to file access issues or ZIM file corruption. "
-                f"Try using search_zim_file() to verify the file is accessible."
+                f"Try using zim_health() to verify the archive is loaded and readable."
             ) from e
 
         # ``_truncated`` / ``_total_chars`` / ``_content_chars`` are internal
@@ -825,8 +825,8 @@ class _ContentMixin:
                     raise OpenZimMcpArchiveError(
                         f"Entry not found: '{entry_path}'. "
                         f"The entry path may not exist in this ZIM file. "
-                        f"Try using search_zim_file() to find available entries, "
-                        f"or browse_namespace() to explore the file structure."
+                        f"Try using zim_search() to find available entries, "
+                        f"or zim_browse() to explore the archive's namespaces."
                     )
             except OpenZimMcpArchiveError:
                 # Re-raise our custom errors with guidance
@@ -842,7 +842,7 @@ class _ContentMixin:
                     f"Direct access failed: {direct_error}. "
                     f"Search-based fallback failed: {search_error}. "
                     f"The entry may not exist or the path format may be incorrect. "
-                    f"Try using search_zim_file() to find the correct entry path."
+                    f"Try using zim_search() to find the correct entry path."
                 ) from search_error
 
     def _get_entry_data_from_archive(
@@ -1523,8 +1523,8 @@ class _ContentMixin:
                     else:
                         raise OpenZimMcpArchiveError(
                             f"Entry not found: '{entry_path}'. "
-                            f"Try using search_zim_file() to find available entries, "
-                            f"or browse_namespace() to explore the file structure."
+                            f"Try using zim_search() to find available entries, "
+                            f"or zim_browse() to explore the archive's namespaces."
                         )
 
                 # Resolve the redirect chain — libzim raises RuntimeError on
