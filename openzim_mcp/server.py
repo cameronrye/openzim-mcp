@@ -417,8 +417,14 @@ class OpenZimMcpServer:
         base_message = redact_paths_in_message(str(error))
         sanitized_context = sanitize_context_for_error(context)
 
-        # Check for known error types using externalized config
-        config = get_error_config(error)
+        # Check for known error types using externalized config. The tool
+        # name and a lazy archive counter let archive-path advice name only
+        # the recovery steps this tool can honour (D02).
+        config = get_error_config(
+            error,
+            operation=operation,
+            count_archives=lambda: len(self.zim_operations.list_zim_files_data()),
+        )
         if config:
             return format_error_message(
                 config, operation, sanitized_context, base_message

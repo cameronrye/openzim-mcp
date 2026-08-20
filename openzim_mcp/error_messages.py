@@ -5,8 +5,9 @@ This module centralizes all error message templates, making it easier to
 maintain consistent error messages and potentially support localization.
 """
 
-from dataclasses import dataclass
-from typing import Dict, List, Type
+import logging
+from dataclasses import dataclass, replace
+from typing import Callable, Dict, List, Optional, Type
 
 from .exceptions import (
     OpenZimMcpArchiveError,
@@ -17,6 +18,8 @@ from .exceptions import (
     OpenZimMcpSecurityError,
     OpenZimMcpValidationError,
 )
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -66,13 +69,16 @@ ERROR_CONFIGS: Dict[Type[OpenZimMcpError], ErrorConfig] = {
     # "Path is not a file" / "File is not a ZIM file" / "Failed to resolve file
     # path" resolve to no template at all. It also deserves better guidance
     # than the input-validation steps: nothing is wrong with the arguments.
+    # The "omit `zim_file_path`" step is NOT part of this base list: only the
+    # tools in ``_ARCHIVE_OMITTABLE_OPERATIONS`` accept omission, and
+    # auto-select only works with exactly one archive loaded, so the step is
+    # composed per call by ``get_error_config``.
     OpenZimMcpArchivePathError: ErrorConfig(
         title="Archive Not Available",
         issue="The ZIM archive itself could not be opened.",
         steps=[
             'Use `zim_query("list available ZIM files")` to see the real paths',
             "Pass one of those paths verbatim as `zim_file_path`",
-            "Omit `zim_file_path` entirely to auto-select the only archive",
             "Confirm the file is a readable `.zim` file, not a directory",
         ],
     ),
@@ -97,6 +103,60 @@ ERROR_CONFIGS: Dict[Type[OpenZimMcpError], ErrorConfig] = {
         ],
     ),
 }
+
+# Tools whose input schema declares ``zim_file_path`` as optional. Every other
+# advanced tool (zim_get, zim_get_section, zim_links, zim_browse, zim_metadata)
+# marks it required, so "omit it" advice there sends the caller straight into a
+# raw pydantic "Field required" rejection.
+_ARCHIVE_OMITTABLE_OPERATIONS = frozenset({"zim_query", "zim_search", "zim_health"})
+
+
+def _archive_path_config(
+    base: ErrorConfig,
+    operation: Optional[str],
+    count_archives: Optional[Callable[[], int]],
+) -> ErrorConfig:
+    """Compose the archive-path template's recovery steps for one tool.
+
+    The omission step is advertised only to tools that can honour it, and
+    only claims auto-select when exactly one archive is loaded. ``count_archives``
+    is a zero-arg callable so the (filesystem-walking) listing runs only on
+    this error path; a failing or absent counter degrades to conditional
+    wording rather than a false promise.
+    """
+    if operation not in _ARCHIVE_OMITTABLE_OPERATIONS:
+        return base
+
+    count: Optional[int] = None
+    if count_archives is not None:
+        try:
+            count = int(count_archives())
+        except Exception as exc:  # noqa: BLE001 — advice must never raise
+            logger.debug("Archive count unavailable for error advice: %s", exc)
+            count = None
+
+    if count is None:
+        extra = (
+            "Omit `zim_file_path` entirely to auto-select when exactly one "
+            "archive is loaded"
+        )
+    elif count == 1:
+        extra = "Omit `zim_file_path` entirely to auto-select the only loaded archive"
+    elif count == 0:
+        extra = (
+            "No ZIM files are loaded — check the allowed directories via `zim_health()`"
+        )
+    else:
+        extra = (
+            f"{count} archives are loaded, so `zim_file_path` must name one of them "
+            "(auto-select needs exactly one)"
+        )
+    # Insert after "pass one of those paths verbatim" so the list still reads
+    # list → pick → (omit) → confirm.
+    steps = list(base.steps)
+    steps.insert(2, extra)
+    return replace(base, steps=steps)
+
 
 # Permission-related error configuration
 PERMISSION_ERROR_CONFIG = ErrorConfig(
@@ -197,7 +257,12 @@ def format_generic_error(
     )
 
 
-def get_error_config(error: Exception) -> ErrorConfig | None:
+def get_error_config(
+    error: Exception,
+    *,
+    operation: Optional[str] = None,
+    count_archives: Optional[Callable[[], int]] = None,
+) -> ErrorConfig | None:
     """Get the error configuration for an exception type.
 
     Message-pattern checks run first so a specific failure mode (entry not
@@ -208,6 +273,11 @@ def get_error_config(error: Exception) -> ErrorConfig | None:
 
     Args:
         error: The exception to get configuration for
+        operation: The tool that is rendering the error (``zim_get``, ...).
+            Lets archive-path advice name only recovery steps that tool can
+            honour — see ``_archive_path_config``.
+        count_archives: Zero-arg callable returning the number of loaded
+            archives; consulted only for archive-path errors.
 
     Returns:
         ErrorConfig if found, None otherwise
@@ -229,7 +299,9 @@ def get_error_config(error: Exception) -> ErrorConfig | None:
     # would route to the entry-level not-found template — five steps telling
     # the caller to browse and search inside an archive that was never opened.
     if isinstance(error, OpenZimMcpArchivePathError):
-        return ERROR_CONFIGS[OpenZimMcpArchivePathError]
+        return _archive_path_config(
+            ERROR_CONFIGS[OpenZimMcpArchivePathError], operation, count_archives
+        )
 
     # Specific failure modes detectable from the message take priority.
     if "entry not found" in message or "does not exist" in message:
