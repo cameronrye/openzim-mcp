@@ -84,7 +84,8 @@ def test_missing_archive_is_not_rendered_as_an_invalid_argument(
     # v3 field fix D58: the catch-all's archive-level failure is a failure
     # and travels as the structured error envelope; the recovery markdown
     # that lists the real archives is its ``message``.
-    assert isinstance(out, dict) and out.get("operation") == "zim_path_not_found"
+    assert isinstance(out, dict)
+    assert out.get("operation") == "zim_path_not_found"
     body = out["message"]
     assert "**Invalid Request**" not in body, body[:500]
     assert "smaller `limit`" not in body, body[:500]

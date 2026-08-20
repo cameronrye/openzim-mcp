@@ -191,7 +191,8 @@ class TestP1D1DispatcherQMismatchSkipsNonQEmittingTools:
             options={"compact": True, "cursor": cursor_token},
         )
         assert "shares no terms" not in _body(out)
-        assert isinstance(out, dict) and out.get("operation") == "cursor_decode"
+        assert isinstance(out, dict)
+        assert out.get("operation") == "cursor_decode"
         assert "Cursor / Tool Mismatch" in _body(out)
         assert "browse_namespace" in _body(out)
         assert "search_zim_file" in _body(out)
@@ -212,7 +213,8 @@ class TestP1D1DispatcherQMismatchSkipsNonQEmittingTools:
             options={"compact": True, "cursor": cursor_token},
         )
         assert "shares no terms" not in _body(out)
-        assert isinstance(out, dict) and out.get("operation") == "cursor_decode"
+        assert isinstance(out, dict)
+        assert out.get("operation") == "cursor_decode"
         assert "Cursor / Tool Mismatch" in _body(out)
         assert "extract_article_links" in _body(out)
         assert "search_zim_file" in _body(out)
@@ -236,7 +238,8 @@ class TestP1D1DispatcherQMismatchSkipsNonQEmittingTools:
             options={"compact": True, "cursor": cursor_token},
         )
         assert "shares no terms" not in _body(out)
-        assert isinstance(out, dict) and out.get("operation") == "cursor_decode"
+        assert isinstance(out, dict)
+        assert out.get("operation") == "cursor_decode"
         assert "Cursor / Tool Mismatch" in _body(out)
         assert "walk_namespace" in _body(out)
         assert "search_with_filters" in _body(out)
@@ -1096,7 +1099,8 @@ class TestPD24FileNotFoundRecoveryHint:
         # v3 field fix D58: a path-resolution failure is a failure — it now
         # travels as the structured error envelope (isError at the MCP
         # layer) with the PD2-4 recovery markdown in ``message``.
-        assert isinstance(out, dict) and out.get("operation") == "zim_path_not_found"
+        assert isinstance(out, dict)
+        assert out.get("operation") == "zim_path_not_found"
         # New error shape.
         assert "**ZIM File Not Found**" in _body(out)
         # Real paths surfaced.

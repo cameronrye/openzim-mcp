@@ -913,7 +913,8 @@ class TestR24SuggestionsContinuationIsReal:
         assert out["page_info"]["total_is_lower_bound"] is True
         assert out["_meta"]["reason"] == "suggestion_total_is_lower_bound"
         hint = out["_meta"]["hint"]
-        assert "limit" in hint and "50" in hint, hint
+        assert "limit" in hint, hint
+        assert "50" in hint, hint
         assert "offset" in hint, "must say why offset is not the continuation"
 
     def test_exactly_limit_matches_is_done(
@@ -1053,7 +1054,8 @@ class TestR24FindByTitleDoesNotClaimCompleteness:
         assert out["done"] is False
         assert out["page_info"]["total_is_lower_bound"] is True
         hint = out["_meta"]["hint"]
-        assert "limit" in hint and "50" in hint, hint
+        assert "limit" in hint, hint
+        assert "50" in hint, hint
 
     def test_untrimmed_page_is_done(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

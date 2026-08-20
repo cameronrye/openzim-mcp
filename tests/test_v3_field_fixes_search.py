@@ -180,7 +180,8 @@ def test_d26_title_index_verification_requires_a_whole_word(
 
     assert ops._verify_variant_via_title_index(archive, "Diabete") is None
     hit = ops._verify_variant_via_title_index(archive, "Diabetes")
-    assert hit is not None and hit.path == _DIABETES_PATH
+    assert hit is not None
+    assert hit.path == _DIABETES_PATH
 
 
 def test_d26_five_char_typo_generates_deletion_variant() -> None:
@@ -498,7 +499,8 @@ def test_d30_operator_words_do_not_anchor_or_highlight_snippets(tmp_path) -> Non
         )
     snippet = payload["results"][0]["snippet"]
     assert snippet.startswith("**Insulin** is a hormone"), snippet
-    assert "**and**" not in snippet and "**AND**" not in snippet
+    assert "**and**" not in snippet
+    assert "**AND**" not in snippet
 
 
 # ---------------------------------------------------------------------------
@@ -570,7 +572,9 @@ def test_d32_snippet_drops_empty_image_links_and_renders_mathjax() -> None:
     assert kant.startswith("[Immanuel Kant](../kantview/) (1724-1804)"), kant
 
     math = cp.create_snippet(_IEP_MARKDOWN, query="cardinal", max_paragraphs=1)
-    assert "\\\\(" not in math and "\\phi" not in math and "\\vDash" not in math
+    assert "\\\\(" not in math
+    assert "\\phi" not in math
+    assert "\\vDash" not in math
     assert "φ(κ)" in math, math
     assert "Γ^fin ⊨ δ" in math, math
     assert "Γ ∪ {¬ δ}" in math, math
