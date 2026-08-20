@@ -9,9 +9,13 @@ stubbed app would prove nothing.
 D62: a sessionless request on the handshake-era path made the SDK mint,
 register and task-start a session before rejecting the request with
 ``400 Missing session ID``; nothing ever reaped it.
+
+D63: the deployment page claimed every ``OPTIONS /mcp`` needs a Bearer
+token; with CORS origins configured a preflight is answered without one.
 """
 
 import json
+from pathlib import Path
 from typing import Any, Dict, Iterator, Optional, Tuple
 
 import pytest
@@ -255,3 +259,69 @@ def test_d62_health_endpoints_are_not_gated(
     client, _server = http_client
     assert client.get("/healthz").status_code == 200
     assert client.get("/readyz").status_code == 200
+
+
+# --------------------------------------------------------------------------
+# D63 — CORS preflight is answered without a token, and the doc must say so
+# --------------------------------------------------------------------------
+
+DEPLOYMENT_DOC = (
+    Path(__file__).resolve().parents[1]
+    / "website/src/content/docs/http-and-docker-deployment.mdx"
+)
+
+
+def test_d63_tokenless_preflight_is_answered_by_outer_cors_but_bare_options_is_not(
+    tmp_path: Any,
+) -> None:
+    """Pin the behavior the deployment page describes.
+
+    With a token AND CORS origins configured (the documented browser
+    deployment), a preflight — ``OPTIONS`` carrying ``Origin`` and
+    ``Access-Control-Request-Method`` — is answered 200 by the outermost CORS
+    layer before auth ever runs; browsers never attach ``Authorization`` to a
+    preflight, so this is by design. A bare ``OPTIONS`` with no preflight
+    headers still gets the 401, so non-browser callers cannot probe the
+    endpoint tokenlessly. Neither path mints a session.
+    """
+    client, server = _build_client(
+        tmp_path,
+        auth_token="sekret123",
+        cors_origins=["http://localhost:5173"],
+    )
+    with client:
+        preflight = client.options(
+            "/mcp",
+            headers={
+                "Origin": "http://localhost:5173",
+                "Access-Control-Request-Method": "POST",
+            },
+        )
+        assert preflight.status_code == 200, preflight.text
+        assert (
+            preflight.headers.get("access-control-allow-origin")
+            == "http://localhost:5173"
+        )
+        assert "POST" in preflight.headers.get("access-control-allow-methods", "")
+
+        bare = client.options("/mcp")
+        assert bare.status_code == 401
+        assert bare.headers.get("www-authenticate", "").startswith("Bearer")
+
+        assert _sessions(server) == {}
+
+
+def test_d63_deployment_doc_scopes_the_options_auth_claim_to_non_preflight() -> None:
+    """The page must not promise a guarantee the CORS deployment breaks.
+
+    The old sentence said OPTIONS requests "must also carry a valid
+    Authorization: Bearer" with no qualification; a tokenless preflight is
+    served 200 whenever ``OPENZIM_MCP_CORS_ORIGINS`` is set.
+    """
+    text = DEPLOYMENT_DOC.read_text(encoding="utf-8")
+    auth_section = text.split("## Authentication", 1)[1].split("\n## ", 1)[0]
+    assert "OPTIONS requests must also carry" not in auth_section
+    assert "preflight" in auth_section
+    # The scoped claim: preflight is the carve-out, by design, via outer CORS.
+    assert "OPENZIM_MCP_CORS_ORIGINS" in auth_section
+    assert "without" in auth_section and "token" in auth_section
