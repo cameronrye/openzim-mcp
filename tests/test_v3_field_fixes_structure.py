@@ -196,3 +196,65 @@ class TestD20CompactLinkParity:
                 zim_path, "Test", section_id="what-is-diabetes", compact=False
             )
         assert "](bloodglucose.html)" in section["content_markdown"]
+
+
+# ---------------------------------------------------------------------------
+# D21 — the advertised include_subsections knob must exist and be forwarded
+# ---------------------------------------------------------------------------
+
+
+def _tool_server() -> MagicMock:
+    """Stand-in server whose ``mcp.tool`` decorator records the function."""
+    srv = MagicMock()
+    store: dict = {}
+
+    def _tool(*, description: str = ""):
+        def decorate(fn):
+            store[fn.__name__] = (fn, description)
+            return fn
+
+        return decorate
+
+    srv.mcp.tool = _tool
+    srv._tools_store = store
+    return srv
+
+
+class TestD21IncludeSubsections:
+    """D21: the description's first sentence promised 'optional subsection
+    inclusion' while the tool had no such parameter and silently dropped
+    it. The data layer already implements the flag; forward it."""
+
+    @pytest.mark.asyncio
+    async def test_include_subsections_false_is_forwarded(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from unittest.mock import AsyncMock
+
+        from openzim_mcp.tools.zim_get_section import register
+
+        mock_ops = MagicMock()
+        mock_ops.get_section_data = AsyncMock(return_value={"ok": True})
+        monkeypatch.setattr(
+            "openzim_mcp.async_operations.AsyncZimOperations",
+            lambda _ops: mock_ops,
+        )
+        server = _tool_server()
+        register(server)
+        fn, description = server._tools_store["zim_get_section"]
+
+        await fn(
+            zim_file_path="/x.zim",
+            entry_path="A/Cat",
+            section_id="History",
+            include_subsections=False,
+        )
+        mock_ops.get_section_data.assert_awaited_once_with(
+            "/x.zim",
+            "A/Cat",
+            "History",
+            max_chars=None,
+            include_subsections=False,
+            compact=True,
+        )
+        assert "include_subsections" in description

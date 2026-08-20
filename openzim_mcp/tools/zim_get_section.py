@@ -44,6 +44,7 @@ def register(server: "OpenZimMcpServer") -> None:
         entry_path: str,
         section_id: str,
         max_chars: Optional[int] = None,
+        include_subsections: bool = True,
         compact: bool = True,
         compact_budget: Optional[Union[str, int]] = None,
     ) -> Any:
@@ -61,12 +62,16 @@ def register(server: "OpenZimMcpServer") -> None:
             # `[Table N: ...]` placeholders, link markup stripped), matching
             # get_zim_entry; False returns the unrendered section body with
             # full tables and links (v2.5 #18). `compact_budget` is still a
-            # surface-only no-op.
+            # surface-only no-op. `include_subsections` is the data layer's
+            # Op3 flag: the description advertised it from day one, but the
+            # wrapper never exposed it, so a caller passing it was silently
+            # served the full sub-tree while believing it had been excluded.
             return await ops.get_section_data(
                 zim_file_path,
                 entry_path,
                 section_id,
                 max_chars=max_chars,
+                include_subsections=include_subsections,
                 compact=compact,
             )
         except Exception as e:  # noqa: BLE001 — broad catch matches b13 envelope
