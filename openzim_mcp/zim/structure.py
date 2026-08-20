@@ -785,14 +785,26 @@ class _StructureMixin:
             # Op5: surface the lexically-closest match so a fat-fingered
             # ID hint ("Goegraphy" → "Geography") gives the model a
             # direct retry path instead of forcing it to scan the IDs.
+            # Compare case-folded: difflib is case-sensitive, and a pure case
+            # variant of a short anchor id (``sh2d`` vs ``SH2d``) scores 0.5
+            # — under the cutoff — so the easiest typo to repair got no
+            # suggestion at all. Fold both sides, then map back to the real
+            # id (first occurrence wins if two ids fold together).
             closest: Optional[str] = None
             try:
                 import difflib as _difflib
 
-                candidates = _difflib.get_close_matches(
-                    section_id, all_ids, n=1, cutoff=0.6
-                )
-                closest = candidates[0] if candidates else None
+                folded: Dict[str, str] = {}
+                for sid in all_ids:
+                    folded.setdefault(sid.casefold(), sid)
+                wanted = section_id.casefold()
+                if wanted in folded:
+                    closest = folded[wanted]
+                else:
+                    candidates = _difflib.get_close_matches(
+                        wanted, list(folded), n=1, cutoff=0.6
+                    )
+                    closest = folded[candidates[0]] if candidates else None
             except Exception:
                 closest = None
             extras: Dict[str, Any] = {

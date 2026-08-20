@@ -328,3 +328,44 @@ class TestD23SectionFreeEntries:
         assert "no headings" in result["message"].lower()
         assert "zim_get" in result["message"]
         assert "view='toc'" not in result["message"]
+
+
+# ---------------------------------------------------------------------------
+# D24 — a pure case mismatch on a short anchor id gets a closest_match
+# ---------------------------------------------------------------------------
+
+ANCHOR_ID_HTML = """\
+<html><body>
+<h1 id="H1">Plato</h1>
+<p>Lead.</p>
+<h2 id="SH2d">d. The Republic</h2>
+<p>On justice.</p>
+<h2 id="SH2e">e. Later Dialogues</h2>
+<p>On being.</p>
+</body></html>
+"""
+
+
+class TestD24CaseInsensitiveClosestMatch:
+    """D24: 'sh2d' vs 'SH2d' scores 0.5 under difflib's 0.6 cutoff, so the
+    easiest typo to repair got no Did-you-mean. Compare case-folded."""
+
+    def test_case_variant_gets_closest_match(
+        self, ops: ZimOperations, zim_path: str
+    ) -> None:
+        with patch(ARCHIVE_CTX) as ctx:
+            ctx.return_value.__enter__.return_value = _html_archive(ANCHOR_ID_HTML)
+            result = ops.get_section_data(zim_path, "Test", section_id="sh2d")
+
+        assert result["operation"] == "section_not_found"
+        assert result["closest_match"] == "SH2d"
+        assert "Did you mean 'SH2d'?" in result["message"]
+
+    def test_fuzzy_match_still_works_across_case(
+        self, ops: ZimOperations, zim_path: str
+    ) -> None:
+        with patch(ARCHIVE_CTX) as ctx:
+            ctx.return_value.__enter__.return_value = _html_archive(ANCHOR_ID_HTML)
+            result = ops.get_section_data(zim_path, "Test", section_id="Sh2E")
+
+        assert result["closest_match"] == "SH2e"
