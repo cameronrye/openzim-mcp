@@ -740,3 +740,97 @@ def test_leading_slash_and_percent_encoding_combine(
     with patch.object(ops, "_find_entry_by_search", MagicMock(return_value=None)):
         result = ops.get_zim_entry_data(str(zim_file), "/" + _IEP_ENCODED)
     assert result["path"] == _IEP_RAW
+
+
+# ---------------------------------------------------------------------------
+# D43 — tell_me_about on a MedlinePlus topic page must surface the Summary
+# prose, not stop at a prose-free lead
+# ---------------------------------------------------------------------------
+
+# The legacy text shape ``get_zim_entry`` hands ``_lead_with_toc`` for the
+# measles page once the in-page nav (D14) and noscript (D15) strips apply:
+# the pre-H2 lead is the H1 plus an "Also called:" label — no sentence at
+# all — and the real content starts under ``## Summary``.
+_MEASLES_ARTICLE_TEXT = (
+    "# Measles | Rubeola | MedlinePlus\n\n"
+    "Path: medlineplus.gov/measles.html\nType: text/html\n## Content\n\n"
+    "#  Measles \n\nAlso called: Rubeola\n\n"
+    "## Summary\n\n"
+    "Measles is an infectious disease caused by a virus. It spreads easily "
+    "from person to person. It causes a blotchy red rash.\n\n"
+    "## Start Here\n\n"
+    "  * [About Measles](../www.cdc.gov/measles/about/index.html) (CDC)\n\n"
+    "## Symptoms\n\n"
+    "  * [Signs and Symptoms](../www.cdc.gov/measles/signs-symptoms/) (CDC)\n"
+)
+
+_MEASLES_HEADINGS = {
+    "headings": [
+        {"level": 1, "text": "Measles"},
+        {"level": 2, "text": "Summary"},
+        {"level": 2, "text": "Start Here"},
+        {"level": 2, "text": "Symptoms"},
+    ]
+}
+
+
+def _simple_handler(article_text: str):
+    from unittest.mock import Mock
+
+    from openzim_mcp.simple_tools import SimpleToolsHandler
+
+    zim_ops = Mock()
+    zim_ops.get_zim_entry.return_value = article_text
+    zim_ops.get_article_structure_data.return_value = _MEASLES_HEADINGS
+    zim_ops.list_zim_files.return_value = (
+        '[{"path": "/zim/medlineplus.zim", "name": "medlineplus.zim"}]'
+    )
+    # The pipe-suffixed title is not a bare topic, so tell_me_about resolves
+    # it through search before fetching; give it a matching top hit.
+    zim_ops.search_zim_file_data.return_value = {
+        "results": [
+            {
+                "path": "medlineplus.gov/measles.html",
+                "title": "Measles | Rubeola | MedlinePlus",
+                "snippet": "Measles is an infectious disease caused by a virus.",
+            }
+        ]
+    }
+    return SimpleToolsHandler(zim_ops)
+
+
+def test_lead_with_toc_advances_past_prose_free_lead() -> None:
+    """D43: 'Also called: Rubeola' is a label, not a lead; the cut must reach
+    the first real section so the caller gets the Summary prose."""
+    handler = _simple_handler(_MEASLES_ARTICLE_TEXT)
+    out = handler._lead_with_toc(
+        "/zim/medlineplus.zim", "medlineplus.gov/measles.html", _MEASLES_ARTICLE_TEXT
+    )
+    assert "Measles is an infectious disease" in out, out
+    assert "Also called: Rubeola" in out  # the label is kept, just not alone
+    assert "About Measles" not in out  # still cut before the second section
+    assert "Sections in this article" in out
+
+
+def test_tell_me_about_topic_page_surfaces_summary_prose() -> None:
+    handler = _simple_handler(_MEASLES_ARTICLE_TEXT)
+    result = handler.handle_zim_query(
+        "tell me about Measles | Rubeola | MedlinePlus",
+        zim_file_path="/zim/medlineplus.zim",
+        options={"compact": True, "max_content_length": 8000},
+    )
+    assert "Measles is an infectious disease" in result, result
+
+
+def test_one_sentence_lead_is_still_a_lead() -> None:
+    """A short real lead must keep the standard lead-section cut."""
+    text = (
+        "# Tiger\n\nPath: Tiger\nType: text/html\n## Content\n\n"
+        "# Tiger\n\nThe tiger is the largest living cat species.\n\n"
+        "## Taxonomy\n\nTaxonomy body.\n\n## Range\n\nRange body."
+    )
+    handler = _simple_handler(text)
+    out = handler._lead_with_toc("/zim/wiki.zim", "Tiger", text)
+    assert "largest living cat species" in out
+    assert "Taxonomy body" not in out
+    assert "Lead was empty" not in out
