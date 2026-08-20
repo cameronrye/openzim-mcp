@@ -169,6 +169,11 @@ class OpenZimMcpCache:
         # entries. Updated incrementally on every set/eviction so the
         # byte-bound eviction check is O(1).
         self._total_bytes: int = 0
+        # Keys of *ancillary* entries — per-item fragments (one search can
+        # insert hundreds of per-result snippet renders) that are exempt
+        # from the ``max_size`` count cap and bounded by ``max_bytes``
+        # instead. See :meth:`set`.
+        self._ancillary_keys: set = set()
         # Monotonic counter for LRU access ordering. A counter is used in
         # preference to a wall-clock or monotonic timestamp because clock
         # resolution varies by platform (Windows ticks at ~15.6ms by default),
@@ -354,13 +359,33 @@ class OpenZimMcpCache:
             logger.debug(f"Cache hit: {key}")
             return entry.value
 
-    def set(self, key: str, value: Any) -> None:
+    def _counts_toward_cap(self, ancillary: bool) -> bool:
+        """Whether an entry flagged ``ancillary`` is charged to ``max_size``.
+
+        Fragments are exempt only while a byte budget exists to bound them;
+        with ``max_bytes=0`` the count cap is the sole limit and must apply
+        to everything.
+        """
+        return not ancillary or getattr(self.config, "max_bytes", 0) <= 0
+
+    def _primary_count(self) -> int:
+        """Entries charged to ``max_size`` (must be called with lock held)."""
+        return len(self._cache) - len(self._ancillary_keys)
+
+    def set(self, key: str, value: Any, *, ancillary: bool = False) -> None:
         """
         Set value in cache (thread-safe).
 
         Args:
             key: Cache key
             value: Value to cache
+            ancillary: Mark the entry as a per-item fragment (e.g. one
+                rendered snippet per search result) rather than a whole
+                response. ``max_size`` counts responses; fragments are
+                exempt from it and bounded by ``max_bytes`` alone, so a
+                single wide search cannot flush every other client's warm
+                responses while memory sits far below the byte budget.
+                They still participate in LRU eviction under byte pressure.
 
         Raises:
             OpenZimMcpValidationError: When persistence is enabled and the
@@ -387,9 +412,14 @@ class OpenZimMcpCache:
                 ) from exc
 
         with self._lock:
-            # Check if we need to evict by entry count
-            if len(self._cache) >= self.config.max_size and key not in self._cache:
-                self._evict_lru()
+            charged = self._counts_toward_cap(ancillary)
+            # Count-cap eviction applies when this set adds a charged entry
+            # (new key, or an existing fragment being promoted). Evict LRU —
+            # fragments included, they're simply the least recently used —
+            # until a charged slot frees up.
+            if charged and (key not in self._cache or key in self._ancillary_keys):
+                while self._cache and self._primary_count() >= self.config.max_size:
+                    self._evict_lru()
 
             # Replace path: drop the old entry's byte count first so
             # ``_total_bytes`` stays accurate when the same key is reset
@@ -403,6 +433,10 @@ class OpenZimMcpCache:
             # Add/update entry
             entry = CacheEntry(value, self.config.ttl_seconds)
             self._cache[key] = entry
+            if charged:
+                self._ancillary_keys.discard(key)
+            else:
+                self._ancillary_keys.add(key)
             self._total_bytes += entry.size_bytes
             self._access_counter += 1
             access_counter = self._access_counter
@@ -447,6 +481,7 @@ class OpenZimMcpCache:
             if self._total_bytes < 0:
                 self._total_bytes = 0
         self._access_order.pop(key, None)
+        self._ancillary_keys.discard(key)
 
     def _cleanup_expired(self) -> None:
         """Remove all expired entries (thread-safe).
@@ -511,6 +546,7 @@ class OpenZimMcpCache:
             self._cache.clear()
             self._access_order.clear()
             self._lru_heap.clear()
+            self._ancillary_keys.clear()
             self._total_bytes = 0
             self._hits = 0
             self._misses = 0
@@ -526,6 +562,10 @@ class OpenZimMcpCache:
                 "enabled": self.config.enabled,
                 "size": len(self._cache),
                 "max_size": self.config.max_size,
+                # Per-item fragments exempt from ``max_size`` (bounded by
+                # ``max_bytes``); ``size - ancillary_entries`` is what the
+                # count cap governs, so ``size`` may legitimately exceed it.
+                "ancillary_entries": len(self._ancillary_keys),
                 "size_bytes": self._total_bytes,
                 "max_bytes": getattr(self.config, "max_bytes", 0),
                 "ttl_seconds": self.config.ttl_seconds,
@@ -604,11 +644,16 @@ class OpenZimMcpCache:
                     # re-poison itself on every restart.
                     age = max(0.0, now_monotonic - entry.created_at)
                     if age <= entry.ttl_seconds:
-                        entries_to_save[key] = {
+                        saved: Dict[str, Any] = {
                             "value": entry.value,
                             "created_at": now_wall - age,
                             "ttl_seconds": entry.ttl_seconds,
                         }
+                        # Only written when set, so snapshots without
+                        # fragments keep the pre-existing v1 layout.
+                        if key in self._ancillary_keys:
+                            saved["ancillary"] = True
+                        entries_to_save[key] = saved
 
                 persistence_file = self._get_persistence_file()
 
@@ -714,6 +759,11 @@ class OpenZimMcpCache:
         entry = CacheEntry(entry_data["value"], ttl_seconds)
         entry.created_at = now_monotonic - age
         self._cache[key] = entry
+        # Re-apply the fragment marker under the *current* config: a
+        # snapshot written with a byte budget may be loaded without one, in
+        # which case fragments must be charged to the count cap again.
+        if not self._counts_toward_cap(bool(entry_data.get("ancillary", False))):
+            self._ancillary_keys.add(key)
         # ``_total_bytes`` must reflect every cached entry's size — without
         # this, ``max_bytes`` enforcement in ``set()`` reads zero across a
         # warm-start (the eviction loop's ``while self._total_bytes > max_bytes``
@@ -793,7 +843,7 @@ class OpenZimMcpCache:
                 # the loaded cache violates the configured cap until enough
                 # new sets force eviction. Eviction here uses the same LRU
                 # heap that ``set()`` maintains.
-                while len(self._cache) > self.config.max_size:
+                while self._cache and self._primary_count() > self.config.max_size:
                     self._evict_lru()
                 max_bytes = getattr(self.config, "max_bytes", 0)
                 if max_bytes > 0:

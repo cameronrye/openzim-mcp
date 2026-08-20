@@ -143,6 +143,12 @@ class FileSummary(TypedDict):
     size: str
     size_bytes: int
     modified: str
+    # Whether the file carries the ZIM signature (cheap probe, not a full
+    # integrity check). ``warning`` accompanies ``readable: False`` so a
+    # garbage file named ``.zim`` is visibly flagged rather than presented
+    # as a loaded archive.
+    readable: NotRequired[bool]
+    warning: NotRequired[str]
 
 
 class RelatedArticle(TypedDict):

@@ -2,7 +2,8 @@ Inspect the openzim-mcp server's state — or validate one archive — in one ca
 
 With NO argument: returns health checks (cache stats, directory probes,
 recommendations), configuration (allowed directories, cache config,
-server PID), and loaded_archives (the ZIM files the server can read).
+server PID), and loaded_archives (every *.zim found; `readable: false`
+marks files that fail the ZIM signature check).
 Collapses the legacy `get_server_health` + `get_server_configuration` +
 `list_zim_files` triple into one answer to "what is this server, what
 does it have, and is it OK".

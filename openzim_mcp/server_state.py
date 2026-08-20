@@ -27,6 +27,7 @@ from .constants import CACHE_HIGH_HIT_RATE_THRESHOLD, CACHE_LOW_HIT_RATE_THRESHO
 from .responses import ToolErrorPayload, tool_error
 from .security import redact_paths_in_message, sanitize_path_for_error
 from .tool_schemas import HealthStatus, ServerConfigurationResponse
+from .zim.archive import has_zim_signature
 
 if TYPE_CHECKING:
     from .server import OpenZimMcpServer
@@ -52,6 +53,11 @@ def _check_directory_health(
 ) -> Tuple[int, int]:
     """Probe one allowed directory and return (accessible, zim_count).
 
+    ``zim_count`` counts only files that carry the ZIM signature. A file
+    merely *named* ``.zim`` that libzim could never open is reported as a
+    warning (and downgrades the status) instead of being counted as a
+    loaded archive — otherwise a directory of garbage reads as "healthy".
+
     Mutates ``health_info``/``health_checks``/``warnings``/``recommendations``
     in place so the caller can accumulate aggregate state across directories.
     """
@@ -63,8 +69,21 @@ def _check_directory_health(
         dir_path = Path(directory)
         if dir_path.exists() and dir_path.is_dir():
             list(dir_path.iterdir())
-            zim_files = list(dir_path.glob("**/*.zim"))
-            return 1, len(zim_files)
+            zim_files = [p for p in dir_path.glob("**/*.zim") if p.is_file()]
+            unreadable = [p for p in zim_files if not has_zim_signature(p)]
+            for bad in unreadable:
+                warnings.append(
+                    "Unreadable .zim file (missing ZIM signature): "
+                    f"{sanitize_path_for_error(str(bad))}"
+                )
+            if unreadable:
+                recommendations.append(
+                    "Remove or replace the unreadable .zim file(s); "
+                    "they cannot be opened as archives"
+                )
+                if health_info["status"] == "healthy":
+                    health_info["status"] = "warning"
+            return 1, len(zim_files) - len(unreadable)
         warnings.append(f"Directory not accessible: {redacted}")
         recommendations.append(f"Check directory path and permissions: {redacted}")
         if health_info["status"] == "healthy":
