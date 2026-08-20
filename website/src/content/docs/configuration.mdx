@@ -221,6 +221,9 @@ Sorted alphabetically by field name within each grouping.
 | `content.default_search_limit` | `OPENZIM_MCP_CONTENT__DEFAULT_SEARCH_LIMIT` | `10` | 1-100 |
 | `content.max_content_length` | `OPENZIM_MCP_CONTENT__MAX_CONTENT_LENGTH` | `100000` | min 100 |
 | `content.snippet_length` | `OPENZIM_MCP_CONTENT__SNIPPET_LENGTH` | `3000` | min 100 |
+| `content.table_row_threshold` | `OPENZIM_MCP_CONTENT__TABLE_ROW_THRESHOLD` | `8` | min 1; tables with more rows collapse in compact mode |
+| `content.table_char_threshold` | `OPENZIM_MCP_CONTENT__TABLE_CHAR_THRESHOLD` | `600` | min 50; char size past which a table collapses |
+| `content.infobox_kv_limit` | `OPENZIM_MCP_CONTENT__INFOBOX_KV_LIMIT` | `30` | 1-200; key/value pairs kept from an infobox |
 | `cors_origins` | `OPENZIM_MCP_CORS_ORIGINS` | `[]` | JSON list; `*` rejected |
 | `host` | `OPENZIM_MCP_HOST` | `127.0.0.1` | non-loopback requires auth (http) or refuses (sse) |
 | `insecure_disable_auth` | `OPENZIM_MCP_INSECURE_DISABLE_AUTH` | `false` | escape hatch: allows token-less non-loopback HTTP with a WARNING (closed networks only) |
@@ -353,4 +356,4 @@ The following env-var namespaces appeared in pre-1.0 / early-v2 documentation an
 
 **Tuning?** See [Performance Optimization](/openzim-mcp/docs/performance-optimization/). **Deploying over HTTP?** See [HTTP and Docker Deployment](/openzim-mcp/docs/http-and-docker-deployment/).
 
-*The v1.x maintenance window closed when v2.5.0 shipped (2026-06-18); the 2.x line is the only supported series. See [CHANGELOG](https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md) for the v1 → v2 migration table.*
+*The v1.x maintenance window closed when v2.5.0 shipped (2026-06-18); only the current major line is supported — see [SECURITY.md](https://github.com/cameronrye/openzim-mcp/blob/main/SECURITY.md) for the policy. The [CHANGELOG](https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md) carries the v1 → v2 migration table and the v3.0.0 breaking-changes entry.*

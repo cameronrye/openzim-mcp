@@ -52,3 +52,60 @@ def test_zim_links_description_names_real_response_type() -> None:
     assert hasattr(schemas, "LinksResponse")
     assert not hasattr(schemas, "ArticleLinksResponse")
     assert "ArticleLinksResponse" not in desc
+
+
+_DOCS_ROOT = pathlib.Path(__file__).parent.parent
+
+
+def _support_policy_surfaces() -> list[pathlib.Path]:
+    """Every prose file that has carried a support-series claim."""
+    site = _DOCS_ROOT / "website" / "src"
+    return [
+        _DOCS_ROOT / "README.md",
+        _DOCS_ROOT / "SECURITY.md",
+        *(_DOCS_ROOT / "docs").glob("*.md"),
+        *(site / "content" / "docs").glob("*.mdx"),
+        site / "pages" / "index.astro",
+        _DOCS_ROOT / "website" / "public" / "llms.txt",
+    ]
+
+
+def test_no_doc_pins_the_support_policy_to_a_hardcoded_series() -> None:
+    """Support-policy prose must be version-agnostic, not name a major line.
+
+    "the 2.x line is the only supported series" shipped on fifteen pages of
+    the 3.0.0 release, every one contradicting the auto-bumped version string
+    beside it — because prose carries no x-release-please marker, hand-written
+    series claims go stale on every major. The policy statement therefore may
+    not embed a series number at all; SECURITY.md's table row is the one
+    allowed place, and it is pinned to the package major below.
+    """
+    drift = re.compile(
+        r"\d+\.x line is (?:now )?the only supported series"
+        r"|supported path is v\d"
+        r"|active development is (?:now )?on the \d+\.x line"
+    )
+    offenders = [
+        f"{path.name}: {match.group(0)!r}"
+        for path in _support_policy_surfaces()
+        for match in [drift.search(path.read_text(encoding="utf-8"))]
+        if match
+    ]
+    assert not offenders, offenders
+
+
+def test_security_policy_supports_the_current_major() -> None:
+    """SECURITY.md's supported row names the major the package actually is.
+
+    The table said 2.6.x while 3.0.0 was the shipped release; it drifts
+    because SECURITY.md is hand-maintained. The row now carries an
+    x-release-please-major marker so release-please bumps it, and this test
+    fails if either the marker or the sync is ever lost.
+    """
+    import openzim_mcp
+
+    major = openzim_mcp.__version__.split(".")[0]
+    security = (_DOCS_ROOT / "SECURITY.md").read_text(encoding="utf-8")
+    assert re.search(
+        rf"\|\s*{major}\.x[^|]*\|\s*Yes", security
+    ), f"SECURITY.md must list {major}.x as supported"

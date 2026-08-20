@@ -414,12 +414,18 @@ curl -sf http://127.0.0.1:8000/healthz && echo " healthz ok"
 # Readiness (will fail if /srv/zim is empty or unreadable)
 curl -sf http://127.0.0.1:8000/readyz && echo " readyz ok"
 
-# Authed RPC call: list available tools
+# Authed RPC call: list available tools (stateless 2026-07-28 framing —
+# a bare POST with no MCP-Protocol-Version header is routed down the
+# legacy handshake path and rejected with "Missing session ID", which
+# `curl -sf` swallows silently)
 TOKEN=$(grep OPENZIM_MCP_AUTH_TOKEN .env | cut -d= -f2)
 curl -sf -X POST http://127.0.0.1:8000/mcp \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' \
+  -H "Accept: application/json, text/event-stream" \
+  -H "MCP-Protocol-Version: 2026-07-28" \
+  -H "Mcp-Method: tools/list" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}' \
   | head -c 500
 ```
 
@@ -560,12 +566,15 @@ The first request triggers ACME issuance; subsequent restarts reuse the cached c
 # TLS chain
 curl -vsf https://zim.example.com/healthz 2>&1 | grep -E "subject|issuer|HTTP/"
 
-# Authed RPC call
+# Authed RPC call (stateless 2026-07-28 framing; see Recipe 1's Verify note)
 TOKEN=$(grep OPENZIM_MCP_AUTH_TOKEN .env | cut -d= -f2)
 curl -sf -X POST https://zim.example.com/mcp \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' \
+  -H "Accept: application/json, text/event-stream" \
+  -H "MCP-Protocol-Version: 2026-07-28" \
+  -H "Mcp-Method: tools/list" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}' \
   | head -c 500
 ```
 
@@ -588,7 +597,7 @@ docker compose up -d
 ```
 
 The image tag in `docker-compose.yml` is pinned (`:3.0.0`) — change it to the new version before pulling. {/* x-release-please-version */}
-Pinning is deliberate: `:latest` makes upgrades a surprise, and the release notes for each tag tell you when an upgrade involves a breaking change. The v1.x → v2.0.0 jump is a breaking rename of the advanced-mode tool surface (22 tools → 8); see the [CHANGELOG](https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md) before bumping.
+Pinning is deliberate: `:latest` makes upgrades a surprise, and the release notes for each tag tell you when an upgrade involves a breaking change. The v1.x → v2.0.0 jump is a breaking rename of the advanced-mode tool surface (22 tools → 8). The v2.x → 3.0.0 jump breaks exactly the population this page serves: `resources/subscribe`/`unsubscribe` are no longer served (a legacy client gets `-32601` and loses change notifications — live updates now mean negotiating 2026-07-28 and calling `subscriptions/listen`; see [Resources, prompts & subscriptions](/openzim-mcp/docs/resources-prompts-subscriptions/)), and link-graph sidecars built by 2.x are rejected on load — rebuild each with `openzim-mcp build link-graph --force <archive>.zim`, or `zim_links(direction="inbound")` degrades to `inbound_sidecar_unavailable`. See the [CHANGELOG](https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md) before bumping.
 
 #### Watching logs
 
@@ -608,4 +617,4 @@ Handshake-era clients still need session-stickiness: their session state lives i
 
 **Configuration reference:** [Configuration](/openzim-mcp/docs/configuration/). **Security model:** [Security best practices](/openzim-mcp/docs/security-best-practices/). **Performance tuning:** [Performance optimization](/openzim-mcp/docs/performance-optimization/).
 
-*The v1.x maintenance window closed when v2.5.0 shipped (2026-06-18); the 2.x line is the only supported series. See [CHANGELOG](https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md) for the v1 → v2 migration table.*
+*The v1.x maintenance window closed when v2.5.0 shipped (2026-06-18); only the current major line is supported — see [SECURITY.md](https://github.com/cameronrye/openzim-mcp/blob/main/SECURITY.md) for the policy. The [CHANGELOG](https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md) carries the v1 → v2 migration table and the v3.0.0 breaking-changes entry.*
