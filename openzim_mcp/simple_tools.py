@@ -866,6 +866,13 @@ class SimpleToolsHandler(
                 intent, SimpleToolsHandler._handle_search
             )
             raw = handler(self, query, zim_file_path, params, options)
+            # D51: a handler-edge rejection (cursor mismatch) is a
+            # ToolErrorPayload. Hand it back as-is: the envelope's
+            # ``operation`` is its telemetry class, so it must not pick
+            # up the parsed-intent marker the finalize step appends —
+            # that produced two contradictory markers on one response.
+            if isinstance(raw, dict):
+                return raw
             # Unpack structured handler results; plain string handlers are
             # unaffected — they return a ``str`` as before.
             if isinstance(raw, _HandlerResult):
@@ -1411,10 +1418,24 @@ class SimpleToolsHandler(
         {"browse", "walk_namespace", "links", "search", "filtered_search"}
     )
 
+    # D51: every handler-edge cursor rejection below travels as the same
+    # ``cursor_decode`` ToolErrorPayload the dispatcher already emits for
+    # an undecodable cursor. Pre-fix these were markdown strings carrying
+    # their own ``<!-- intent=cursor_decode -->`` marker, which then flowed
+    # through ``_finalize_compact_response`` and picked up a SECOND,
+    # contradictory ``<!-- intent=<parsed intent> -->`` marker — and were
+    # delivered ``isError=false`` although the server instructions promise
+    # a rejected argument is flagged. The envelope's ``operation`` field is
+    # the branch key now; the markdown body is unchanged apart from the
+    # dropped marker.
     @staticmethod
+    def _cursor_mismatch_error(message: str) -> ToolErrorPayload:
+        return tool_error(operation="cursor_decode", message=message)
+
+    @classmethod
     def _cursor_tool_mismatch(
-        options: Dict[str, Any], request_tool: str
-    ) -> Optional[str]:
+        cls, options: Dict[str, Any], request_tool: str
+    ) -> Optional[ToolErrorPayload]:
         """Post-a18 P1-D4: return a structured error when the decoded
         cursor's ``s.t`` (issuing tool) differs from the handler's
         own tool name. The simple-tools dispatcher decodes cursors
@@ -1433,22 +1454,21 @@ class SimpleToolsHandler(
             return None
         if cursor_t == request_tool:
             return None
-        return (
+        return cls._cursor_mismatch_error(
             "**Cursor / Tool Mismatch**\n\n"
             "**Issue**: the cursor was issued by "
             f"`{cursor_t}` but this call routes to "
             f"`{request_tool}`. Drop the cursor and call again "
             "without it (or restart the paginated call with the "
-            "tool that issued the cursor).\n\n"
-            "<!-- intent=cursor_decode cert=1.00 -->"
+            "tool that issued the cursor)."
         )
 
-    @staticmethod
+    @classmethod
     def _cursor_ns_mismatch(
-        options: Dict[str, Any], request_namespace: str
-    ) -> Optional[str]:
-        """P3-D7 helper: return a structured error string when the
-        decoded cursor's ``s.ns`` differs from the request's namespace.
+        cls, options: Dict[str, Any], request_namespace: str
+    ) -> Optional[ToolErrorPayload]:
+        """P3-D7 helper: return a structured error when the decoded
+        cursor's ``s.ns`` differs from the request's namespace.
 
         Returns ``None`` when no cursor was passed, when the cursor had
         no ``ns`` field, or when both match (case-insensitive). The
@@ -1463,19 +1483,18 @@ class SimpleToolsHandler(
         # case-insensitive across the dispatcher surface.
         if cursor_ns.strip().upper() == request_namespace.strip().upper():
             return None
-        return (
+        return cls._cursor_mismatch_error(
             "**Cursor / Namespace Mismatch**\n\n"
             "**Issue**: the cursor was issued for namespace "
             f"`{cursor_ns}` but this call asked for namespace "
             f"`{request_namespace}`. Drop the cursor and call again "
             "without it (or start a fresh page-1 request for the new "
-            "namespace).\n\n"
-            "<!-- intent=cursor_decode cert=1.00 -->"
+            "namespace)."
         )
 
     def _cursor_archive_mismatch(
         self, options: Dict[str, Any], zim_file_path: str
-    ) -> Optional[str]:
+    ) -> Optional[ToolErrorPayload]:
         """Return a structured error when the decoded cursor's ``s.ai``
         was minted against a different archive than this call's.
 
@@ -1502,13 +1521,12 @@ class SimpleToolsHandler(
             return None
         if cursor_ai == expected:
             return None
-        return (
+        return self._cursor_mismatch_error(
             "**Cursor / Archive Mismatch**\n\n"
             "**Issue**: the cursor was issued against a different "
             f"archive than `{Path(zim_file_path).name}`. Drop the cursor "
             "and call again without it (or resume the paginated call "
-            "against the archive that issued it).\n\n"
-            "<!-- intent=cursor_decode cert=1.00 -->"
+            "against the archive that issued it)."
         )
 
     @staticmethod
@@ -1527,7 +1545,7 @@ class SimpleToolsHandler(
     @classmethod
     def _cursor_entry_mismatch(
         cls, options: Dict[str, Any], request_entry_path: str
-    ) -> Optional[str]:
+    ) -> Optional[ToolErrorPayload]:
         """P26: return a structured error when the decoded cursor's ``s.ep``
         names a different article than this call's.
 
@@ -1547,14 +1565,13 @@ class SimpleToolsHandler(
             request_entry_path or ""
         ):
             return None
-        return (
+        return cls._cursor_mismatch_error(
             "**Cursor / Article Mismatch**\n\n"
             "**Issue**: the cursor was issued for article "
             f"`{cursor_ep}` but this call asked for "
             f"`{request_entry_path}`. Drop the cursor and call again "
             "without it (or resume the paginated call against the article "
-            "that issued it).\n\n"
-            "<!-- intent=cursor_decode cert=1.00 -->"
+            "that issued it)."
         )
 
     # ---------------------------------------------------------------- handlers
@@ -1597,7 +1614,7 @@ class SimpleToolsHandler(
         zim_file_path: str,
         params: Dict[str, Any],
         options: Dict[str, Any],
-    ) -> str:
+    ) -> Union[str, ToolErrorPayload]:
         # A15 post-a15 P6-D1: missing / malformed namespace argument
         # used to fall through to ``params.get("namespace", "C")`` and
         # silently browse C — exact analogue of the walk_namespace
@@ -2171,7 +2188,7 @@ class SimpleToolsHandler(
         zim_file_path: str,
         params: Dict[str, Any],
         options: Dict[str, Any],
-    ) -> str:
+    ) -> Union[str, ToolErrorPayload]:
         entry_path = params.get("entry_path")
         if not entry_path:
             return (
@@ -2342,7 +2359,7 @@ class SimpleToolsHandler(
         zim_file_path: str,
         params: Dict[str, Any],
         options: Dict[str, Any],
-    ) -> str:
+    ) -> Union[str, ToolErrorPayload]:
         # A16 post-a16 D6: if the user wrote ``in namespace X`` but the
         # extractor (now strict) couldn't parse a valid single-letter
         # namespace, surface the same "Missing or Invalid Namespace"
@@ -2567,7 +2584,7 @@ class SimpleToolsHandler(
         zim_file_path: str,
         params: Dict[str, Any],
         options: Dict[str, Any],
-    ) -> Union[str, "_HandlerResult"]:
+    ) -> Union[str, "_HandlerResult", ToolErrorPayload]:
         """Route a search-intent query to the appropriate backend call.
 
         In ``compact=True`` mode, uses the structured ``search_zim_file_data``
@@ -3740,7 +3757,7 @@ class SimpleToolsHandler(
         zim_file_path: str,
         params: Dict[str, Any],
         options: Dict[str, Any],
-    ) -> str:
+    ) -> Union[str, ToolErrorPayload]:
         # A15 post-a15 P4-D3: ``walk namespace`` with a malformed
         # argument (multi-char ``AB``, digit ``1``, special ``_``, or
         # missing entirely) previously fell through to

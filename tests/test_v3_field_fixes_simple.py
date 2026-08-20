@@ -9,12 +9,14 @@ regression is recognisable without the report.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, Dict, List
 from unittest.mock import MagicMock, Mock
 
 import pytest
 
-from openzim_mcp.pagination import Cursor
+from openzim_mcp.mcp_envelope import is_tool_error_envelope
+from openzim_mcp.pagination import Cursor, archive_identity
 from openzim_mcp.simple_tools import IntentParser, SimpleToolsHandler
 from openzim_mcp.title_promotion import is_strong_title_match
 
@@ -550,3 +552,117 @@ class TestD50GetEntriesAcceptsDomainPaths:
         assert "C/Photosynthesis" in out
         assert "medlineplus.gov/measles.html" in out
         assert "Path:" in out, "should point at the Path: lines other responses print"
+
+
+# ---------------------------------------------------------------------------
+# D51: cursor mismatches were non-error markdown with two intent markers
+# ---------------------------------------------------------------------------
+
+
+def _archive_bound_handler() -> tuple[SimpleToolsHandler, MagicMock]:
+    handler, mock = _handler_with()
+    mock.path_validator.validate_path.return_value = Path("/zims/test.zim")
+    mock.path_validator.validate_zim_file.return_value = Path("/zims/test.zim")
+    return handler, mock
+
+
+class TestD51CursorMismatchEnvelope:
+    """A browse cursor handed to ``walk namespace C`` came back as
+    ``isError:false`` markdown ending with BOTH ``intent=cursor_decode``
+    and ``intent=walk_namespace`` markers, while an undecodable cursor
+    came back as the structured ``cursor_decode`` envelope. Both are
+    rejections of the same argument and must share one envelope.
+    """
+
+    @staticmethod
+    def _assert_cursor_envelope(out: Any, title: str) -> None:
+        assert is_tool_error_envelope(out), out
+        assert out["operation"] == "cursor_decode"
+        assert title in out["message"]
+        assert "<!-- intent=" not in out["message"], "marker belongs to the envelope"
+
+    def test_handler_tool_mismatch_is_the_cursor_decode_envelope(self) -> None:
+        handler, mock = _handler_with()
+        out = handler.handle_zim_query(
+            "walk namespace C",
+            zim_file_path="/zims/test.zim",
+            options={"compact": True, "cursor": _browse_cursor()},
+        )
+        self._assert_cursor_envelope(out, "Cursor / Tool Mismatch")
+        assert "browse_namespace" in out["message"]
+        assert "walk_namespace" in out["message"]
+        assert not mock.walk_namespace_data.called
+
+    def test_dispatcher_foreign_cursor_guard_uses_the_same_envelope(self) -> None:
+        handler, _ = _handler_with()
+        out = handler.handle_zim_query(
+            "find article titled Measles",
+            zim_file_path="/zims/test.zim",
+            options={"compact": True, "cursor": _browse_cursor()},
+        )
+        self._assert_cursor_envelope(out, "Cursor / Tool Mismatch")
+
+    def test_namespace_mismatch_uses_the_same_envelope(self) -> None:
+        handler, _ = _archive_bound_handler()
+        cursor = Cursor.encode(
+            tool="browse_namespace",
+            state={  # type: ignore[typeddict-item]
+                "o": 5,
+                "l": 5,
+                "ns": "M",
+                "ai": archive_identity(Path("/zims/test.zim")),
+            },
+        )
+        out = handler.handle_zim_query(
+            "browse namespace C",
+            zim_file_path="/zims/test.zim",
+            options={"compact": True, "cursor": cursor},
+        )
+        self._assert_cursor_envelope(out, "Cursor / Namespace Mismatch")
+
+    def test_archive_mismatch_uses_the_same_envelope(self) -> None:
+        handler, _ = _archive_bound_handler()
+        cursor = Cursor.encode(
+            tool="browse_namespace",
+            state={  # type: ignore[typeddict-item]
+                "o": 5,
+                "l": 5,
+                "ns": "C",
+                "ai": archive_identity(Path("/zims/other.zim")),
+            },
+        )
+        out = handler.handle_zim_query(
+            "browse namespace C",
+            zim_file_path="/zims/test.zim",
+            options={"compact": True, "cursor": cursor},
+        )
+        self._assert_cursor_envelope(out, "Cursor / Archive Mismatch")
+
+    def test_article_mismatch_uses_the_same_envelope(self) -> None:
+        handler, _ = _archive_bound_handler()
+        cursor = Cursor.encode(
+            tool="extract_article_links",
+            state={  # type: ignore[typeddict-item]
+                "o": 25,
+                "l": 25,
+                "ep": "A/Photosynthesis",
+                "k": "internal",
+                "ai": archive_identity(Path("/zims/test.zim")),
+            },
+        )
+        out = handler.handle_zim_query(
+            "links in Berlin",
+            zim_file_path="/zims/test.zim",
+            options={"compact": True, "cursor": cursor},
+        )
+        self._assert_cursor_envelope(out, "Cursor / Article Mismatch")
+
+    def test_undecodable_cursor_keeps_its_envelope(self) -> None:
+        handler, _ = _handler_with()
+        out = handler.handle_zim_query(
+            "walk namespace C",
+            zim_file_path="/zims/test.zim",
+            options={"compact": True, "cursor": "garbage!!"},
+        )
+        assert is_tool_error_envelope(out)
+        assert out["operation"] == "cursor_decode"
