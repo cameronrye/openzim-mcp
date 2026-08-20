@@ -349,12 +349,7 @@ class OpenZimMcpCache:
                 logger.debug(f"Cache entry expired: {key}")
                 return None
 
-            # Update access counter for LRU
-            self._access_counter += 1
-            access_counter = self._access_counter
-            self._access_order[key] = access_counter
-            # Push to heap - old entries skipped during eviction (lazy cleanup)
-            heapq.heappush(self._lru_heap, (access_counter, key))
+            self._touch(key)
             self._hits += 1
             logger.debug(f"Cache hit: {key}")
             return entry.value
@@ -371,6 +366,67 @@ class OpenZimMcpCache:
     def _primary_count(self) -> int:
         """Entries charged to ``max_size`` (must be called with lock held)."""
         return len(self._cache) - len(self._ancillary_keys)
+
+    def _validate_persistable(self, key: str, value: Any) -> None:
+        """Reject a value the persisted cache could not round-trip.
+
+        Only the persisted path needs JSON guarantees; pure in-memory caches
+        still accept arbitrary Python objects.
+        """
+        if not self._persistence_enabled:
+            return
+        try:
+            json.dumps(value)
+        except (TypeError, ValueError) as exc:
+            raise OpenZimMcpValidationError(
+                f"Cache value for key {key!r} is not JSON-serializable; "
+                f"persistence is enabled so the value must be JSON-safe.",
+                details=str(exc),
+            ) from exc
+
+    def _release_bytes(self, size_bytes: int) -> None:
+        """Uncharge a departing entry's bytes, clamped at zero (lock held)."""
+        self._total_bytes -= size_bytes
+        if self._total_bytes < 0:
+            self._total_bytes = 0
+
+    def _touch(self, key: str) -> None:
+        """Stamp ``key`` as most recently used (must be called with lock held).
+
+        Pushes a fresh ``(counter, key)`` pair onto the heap; any older pair
+        for the same key is now stale and gets skipped lazily by
+        ``_evict_lru``.
+        """
+        self._access_counter += 1
+        access_counter = self._access_counter
+        self._access_order[key] = access_counter
+        heapq.heappush(self._lru_heap, (access_counter, key))
+
+    def _make_room_for_charged(self, key: str) -> None:
+        """Free a ``max_size`` slot before a charged entry lands (lock held).
+
+        Only a set that *adds* a charged entry needs a slot: a new key, or an
+        existing fragment being promoted. Overwriting a charged key in place
+        does not. Eviction takes the least recently used entry regardless of
+        kind — a fragment goes too when it is the oldest.
+        """
+        if key in self._cache and key not in self._ancillary_keys:
+            return
+        while self._cache and self._primary_count() >= self.config.max_size:
+            self._evict_lru()
+
+    def _enforce_byte_budget(self) -> None:
+        """Evict LRU entries until ``_total_bytes`` fits ``max_bytes`` (lock held).
+
+        Skipped when the cap is 0 (disabled) or when the cache only holds a
+        single entry: one oversized value can legitimately exceed the cap,
+        and the count cap still bounds entry count.
+        """
+        max_bytes = getattr(self.config, "max_bytes", 0)
+        if max_bytes <= 0:
+            return
+        while self._total_bytes > max_bytes and len(self._cache) > 1:
+            self._evict_lru()
 
     def set(self, key: str, value: Any, *, ancillary: bool = False) -> None:
         """
@@ -398,37 +454,19 @@ class OpenZimMcpCache:
         if not self.config.enabled:
             return
 
-        # Validate JSON-serializability at write time when persistence is
-        # enabled. Pure in-memory caches still accept arbitrary Python
-        # objects — only the persisted path needs JSON guarantees.
-        if self._persistence_enabled:
-            try:
-                json.dumps(value)
-            except (TypeError, ValueError) as exc:
-                raise OpenZimMcpValidationError(
-                    f"Cache value for key {key!r} is not JSON-serializable; "
-                    f"persistence is enabled so the value must be JSON-safe.",
-                    details=str(exc),
-                ) from exc
+        self._validate_persistable(key, value)
 
         with self._lock:
             charged = self._counts_toward_cap(ancillary)
-            # Count-cap eviction applies when this set adds a charged entry
-            # (new key, or an existing fragment being promoted). Evict LRU —
-            # fragments included, they're simply the least recently used —
-            # until a charged slot frees up.
-            if charged and (key not in self._cache or key in self._ancillary_keys):
-                while self._cache and self._primary_count() >= self.config.max_size:
-                    self._evict_lru()
+            if charged:
+                self._make_room_for_charged(key)
 
             # Replace path: drop the old entry's byte count first so
             # ``_total_bytes`` stays accurate when the same key is reset
             # with a value of different size.
             prior = self._cache.get(key)
             if prior is not None:
-                self._total_bytes -= prior.size_bytes
-                if self._total_bytes < 0:
-                    self._total_bytes = 0
+                self._release_bytes(prior.size_bytes)
 
             # Add/update entry
             entry = CacheEntry(value, self.config.ttl_seconds)
@@ -438,25 +476,13 @@ class OpenZimMcpCache:
             else:
                 self._ancillary_keys.add(key)
             self._total_bytes += entry.size_bytes
-            self._access_counter += 1
-            access_counter = self._access_counter
-            self._access_order[key] = access_counter
-            # Push to heap for O(log n) LRU eviction
-            heapq.heappush(self._lru_heap, (access_counter, key))
+            self._touch(key)
             logger.debug(
                 f"Cache set: {key} ({entry.size_bytes} bytes, total "
                 f"{self._total_bytes} bytes)"
             )
 
-            # Byte-budget eviction: if the cache exceeds ``max_bytes``,
-            # evict LRU entries until we're back under. Skip when the
-            # cap is 0 (disabled) or when the cache only holds this one
-            # entry (a single oversized value can legitimately exceed
-            # the cap; the count cap still bounds entry count).
-            max_bytes = getattr(self.config, "max_bytes", 0)
-            if max_bytes > 0:
-                while self._total_bytes > max_bytes and len(self._cache) > 1:
-                    self._evict_lru()
+            self._enforce_byte_budget()
 
     def delete(self, key: str) -> None:
         """
@@ -477,9 +503,7 @@ class OpenZimMcpCache:
         """Remove entry from cache (must be called with lock held)."""
         entry = self._cache.pop(key, None)
         if entry is not None:
-            self._total_bytes -= entry.size_bytes
-            if self._total_bytes < 0:
-                self._total_bytes = 0
+            self._release_bytes(entry.size_bytes)
         self._access_order.pop(key, None)
         self._ancillary_keys.discard(key)
 
@@ -779,9 +803,7 @@ class OpenZimMcpCache:
         # restart. Loaded entries get successively higher counters in
         # iteration order; live operations after restart continue from a
         # higher counter.
-        self._access_counter += 1
-        self._access_order[key] = self._access_counter
-        heapq.heappush(self._lru_heap, (self._access_counter, key))
+        self._touch(key)
         return True
 
     def _load_from_disk(self) -> None:
@@ -847,10 +869,7 @@ class OpenZimMcpCache:
                 # heap that ``set()`` maintains.
                 while self._cache and self._primary_count() > self.config.max_size:
                     self._evict_lru()
-                max_bytes = getattr(self.config, "max_bytes", 0)
-                if max_bytes > 0:
-                    while self._total_bytes > max_bytes and len(self._cache) > 1:
-                        self._evict_lru()
+                self._enforce_byte_budget()
 
             if skipped_count:
                 logger.warning(

@@ -79,7 +79,8 @@ class TestD01UnreadableZimFilesAreFlagged:
 
         fake = by_name["fake.zim"]
         assert fake["readable"] is False
-        assert "warning" in fake and "ZIM" in fake["warning"]
+        assert "warning" in fake
+        assert "ZIM" in fake["warning"]
 
     def test_listing_marks_truncated_header_unreadable(self, tmp_path: Path) -> None:
         # Shorter than the 4-byte signature: must be flagged, not crash the scan.
@@ -138,7 +139,8 @@ class TestD64IntegrityCheckRunsOutOfProcess:
         good = ops.get_archive_validation_data(str(withns / "small.zim"))
         assert good["is_valid"] is True
         assert good["has_checksum"] is True
-        assert isinstance(good["checksum"], str) and good["checksum"]
+        assert isinstance(good["checksum"], str)
+        assert good["checksum"]
 
         # Opens fine but fails its internal checksum: the verdict must come
         # back False, not be lost in the process hop.
@@ -172,8 +174,9 @@ class TestD64IntegrityCheckRunsOutOfProcess:
         self, v2_phase_a_zim: Path
     ) -> None:
         pool = archive_mod._validation_pool()
+        crash = pool.submit(os._exit, 1)
         with pytest.raises(BrokenProcessPool):
-            pool.submit(os._exit, 1).result()
+            crash.result()
 
         ops = make_zim_ops(str(v2_phase_a_zim.parent))
         with pytest.raises(OpenZimMcpArchiveError, match="worker"):
