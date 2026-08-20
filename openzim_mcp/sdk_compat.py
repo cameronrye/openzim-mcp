@@ -27,28 +27,45 @@ locked SDK ships the rows itself. Delete the shim, its install call in
 ``server.py``, and the canary file; the wire tests in ``test_mcp_session.py``
 stay.
 
-The second is :func:`stdio_server_answering_malformed_frames`. The SDK's stdio
-reader forwards any line ``jsonrpc_message_adapter`` rejects — undecodable
-JSON, a JSON-RPC batch array, a bare string, an object missing ``jsonrpc`` —
-as a bare ``Exception`` item on the read stream, and the server-side
-dispatcher, which installs no ``on_stream_exception`` observer, drops those
-items at debug level. JSON-RPC 2.0 requires a ``-32700`` (id null) for a
-parse failure and a ``-32600`` for an invalid Request object, and the SDK's
-own HTTP transports do answer them; only the stdio path is silent, so a
-hand-rolled client waiting on such an id hangs with no diagnostic anywhere.
-The wrapper relays the read stream and answers the ``Exception`` items on
-the write stream itself, so the serving loop never sees them. It is wiring
-around the transport rather than surgery inside it, which is why it needs
-no private-dict access.
+The second is :func:`stdio_server_answering_malformed_frames`, which wires
+around the SDK's stdio transport to fix three things its stdio path gets
+wrong. It is wiring rather than surgery, which is why it needs no
+private-dict access.
+
+- Malformed frames. The SDK's stdio reader forwards any line
+  ``jsonrpc_message_adapter`` rejects — undecodable JSON, a JSON-RPC batch
+  array, a bare string, an object missing ``jsonrpc`` — as a bare
+  ``Exception`` item on the read stream, and the server-side dispatcher,
+  which installs no ``on_stream_exception`` observer, drops those items at
+  debug level. JSON-RPC 2.0 requires a ``-32700`` (id null) for a parse
+  failure and a ``-32600`` for an invalid Request object, and the SDK's own
+  HTTP transports do answer them; only the stdio path is silent, so a
+  hand-rolled client waiting on such an id hangs with no diagnostic
+  anywhere. The wrapper relays the read stream and answers the
+  ``Exception`` items on the write stream itself, so the serving loop never
+  sees them.
+- Null-id requests. The adapter ignores unknown members, so a request
+  carrying ``"id": null`` validates as a *notification* and vanishes. The
+  wrapper feeds the SDK its stdin lines itself and answers that one shape
+  with ``-32600`` before the adapter can misread it.
+- EOF. The dispatcher cancels every in-flight handler the instant its read
+  stream ends, so a client that closes stdin right after its request —
+  ``printf '<request>' | server`` — never gets the answer. The wrapper holds
+  the serving loop's EOF until the requests it forwarded have been answered
+  (bounded by ``STDIN_EOF_DRAIN_TIMEOUT_S``).
 
 Retirement: the canary in ``tests/test_v3_field_fixes_protocol.py`` runs the
-SDK's stdio server bare and fails when it starts answering these frames.
-Delete the wrapper and the ``run_stdio_async`` override in
-``mcp_envelope.py``; the wire tests beside the canary stay.
+SDK's stdio server bare and fails when it starts answering malformed
+frames; check the null-id and one-shot wire tests beside it against the
+bare SDK at the same time. When all three hold upstream, delete the wrapper
+and the ``run_stdio_async`` override in ``mcp_envelope.py``; the wire tests
+stay.
 """
 
 import gc
+import json
 import logging
+import sys
 from collections import Counter
 from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
@@ -200,13 +217,40 @@ def rejection_for_frame(exc: Exception) -> JSONRPCError | None:
     )
 
 
-async def _answer_rejected_frame(
-    exc: Exception, write_stream: WriteStream[SessionMessage]
+def null_id_rejection(line: str) -> JSONRPCError | None:
+    """The -32600 a request carrying ``"id": null`` deserves, else None.
+
+    The SDK's message adapter ignores members it does not know, so such a
+    frame validates as a *notification* of the same method and is dropped
+    without a trace. JSON-RPC 2.0 and the MCP schema both define a request
+    id as a string or a number; null is reserved for error responses to
+    undecodable requests, so a frame with a ``method`` and a null id is an
+    invalid Request, answered with id null like the other -32600s here. A
+    response (``result`` or ``error``, no ``method``) with a null id is legal
+    and passes through untouched.
+    """
+    if '"id"' not in line or "null" not in line:
+        return None
+    try:
+        frame = json.loads(line)
+    except ValueError:
+        # The transport's own parse failure path answers these with -32700.
+        return None
+    if not (isinstance(frame, dict) and "method" in frame and "id" in frame):
+        return None
+    if frame["id"] is not None:
+        return None
+    return _rejection(
+        INVALID_REQUEST,
+        "Invalid Request: a request id must be a string or an integer, not "
+        "null; omit the id to send a notification",
+        None,
+    )
+
+
+async def _send_rejection(
+    rejection: JSONRPCError, write_stream: WriteStream[SessionMessage]
 ) -> None:
-    rejection = rejection_for_frame(exc)
-    if rejection is None:
-        logger.debug("ignoring blank stdio line")
-        return
     logger.warning(
         "rejected a malformed stdio frame with %d: %s",
         rejection.error.code,
@@ -216,6 +260,48 @@ async def _answer_rejected_frame(
         await write_stream.send(SessionMessage(rejection))
     except (anyio.ClosedResourceError, anyio.BrokenResourceError):
         logger.debug("dropped rejection for a malformed frame: write stream closed")
+
+
+async def _answer_rejected_frame(
+    exc: Exception, write_stream: WriteStream[SessionMessage]
+) -> None:
+    rejection = rejection_for_frame(exc)
+    if rejection is None:
+        logger.debug("ignoring blank stdio line")
+        return
+    await _send_rejection(rejection, write_stream)
+
+
+class _StdinFrames:
+    """Lines of ``sys.stdin`` for the SDK's reader, minus null-id requests.
+
+    Passed to ``stdio_server(stdin=...)`` so the one shape the SDK's adapter
+    misreads is answered before it can be parsed; every other line reaches
+    the adapter verbatim. Decoding mirrors the SDK's own stdin wrapper
+    (UTF-8, undecodable bytes replaced, so a bad byte is a -32700 rather
+    than a dead reader). The rejection is written from the reader itself, in
+    line order, on the write stream ``answer_on`` binds once the transport
+    exists; reading waits for that binding rather than for a scheduling
+    accident.
+    """
+
+    def __init__(self) -> None:
+        self._write_stream: WriteStream[SessionMessage] | None = None
+        self._bound = anyio.Event()
+
+    def answer_on(self, write_stream: WriteStream[SessionMessage]) -> None:
+        self._write_stream = write_stream
+        self._bound.set()
+
+    async def __aiter__(self) -> AsyncIterator[str]:
+        await self._bound.wait()
+        async for raw in anyio.wrap_file(sys.stdin.buffer):
+            line = raw.decode("utf-8", errors="replace")
+            rejection = null_id_rejection(line)
+            if rejection is None:
+                yield line
+            elif self._write_stream is not None:
+                await _send_rejection(rejection, self._write_stream)
 
 
 class _InFlightRequests:
@@ -358,10 +444,22 @@ async def stdio_server_answering_malformed_frames() -> AsyncIterator[
     later frame is forwarded, and the error goes out on the transport's own
     write stream — the stdio server diverts fd 1 while serving, so nothing
     else can reach the wire.
+
+    stdin is handed to the SDK as lines (``_StdinFrames``) rather than
+    claimed by it, which is the public seam for intercepting a frame before
+    the adapter sees it. The SDK therefore does not divert fd 0 to the null
+    device while serving; that diversion shields handlers and child
+    processes that read stdin, and this server has neither. fd 1, the one
+    that shields the wire, is still claimed by the SDK.
     """
-    async with stdio_server() as (transport_read, transport_write):
+    frames = _StdinFrames()
+    async with stdio_server(stdin=cast(anyio.AsyncFile[str], frames)) as (
+        transport_read,
+        transport_write,
+    ):
         in_flight = _InFlightRequests()
         write_stream = _AnsweringWriteStream(transport_write, in_flight)
+        frames.answer_on(write_stream)
         relay_send, relay_receive = anyio.create_memory_object_stream[
             SessionMessage | Exception
         ](0)

@@ -240,9 +240,11 @@ class EnvelopeAwareMCPServer(MCPServer):
 
         Body-identical to the SDK's ``run_stdio_async`` except for the
         transport context manager: the SDK's stdio server hands undecodable
-        lines to a dispatcher that drops them silently, and the wrapper
-        answers them with the JSON-RPC error the spec requires. Retire with
-        the wrapper (see ``sdk_compat`` for the canary).
+        and null-id lines to a dispatcher that drops them silently, and
+        cancels requests already read the moment stdin closes; the wrapper
+        answers the former with the JSON-RPC error the spec requires and
+        holds EOF until the latter are answered. Retire with the wrapper
+        (see ``sdk_compat`` for the canary).
         """
         from .sdk_compat import stdio_server_answering_malformed_frames
 
