@@ -417,3 +417,111 @@ class TestD25RateLimitWaitFloor:
 
         with pytest.raises(OpenZimMcpRateLimitError, match=r"1\.50 seconds"):
             limiter.check_rate_limit("op", cost=1, client_id="c")
+
+
+# ---------------------------------------------------------------------------
+# D33 — related rows must follow redirects: real title, canonical path
+# ---------------------------------------------------------------------------
+
+CLIMATE_ZIM = Path(
+    "test_data/zim-testing-suite/withns/wikipedia_en_climate_change_mini_2024-06.zim"
+)
+
+
+def _redirect_archive() -> MagicMock:
+    """Archive where ``C/aristotl`` is a zimit-style redirect whose own title
+    is the path string, pointing at ``C/aristotle/`` with the real title."""
+    target = MagicMock()
+    target.is_redirect = False
+    target.path = "C/aristotle/"
+    target.title = "Aristotle | Internet Encyclopedia of Philosophy"
+    stub = MagicMock()
+    stub.is_redirect = True
+    stub.path = "C/aristotl"
+    stub.title = "C/aristotl"
+    stub.get_redirect_entry.return_value = target
+
+    def lookup(path: str) -> MagicMock:
+        if path == "C/aristotl":
+            return stub
+        if path == "C/aristotle/":
+            return target
+        raise KeyError("Cannot find entry")
+
+    archive = MagicMock()
+    archive.get_entry_by_path.side_effect = lookup
+    return archive
+
+
+class TestD33RelatedFollowsRedirects:
+    """D33: ``_resolve_outbound_titles`` took the redirect stub's own title
+    (the path string, on zimit archives) and left the pre-redirect path,
+    so every related row read ``title == path`` and fed back zero inbound
+    rows. Follow the chain like the sidecar builder does."""
+
+    def test_redirect_stub_resolves_to_target_title_and_path(self) -> None:
+        from openzim_mcp.zim.structure import _StructureMixin
+
+        rows = [{"path": "C/aristotl", "title": "C/aristotl"}]
+        with patch(ARCHIVE_CTX) as ctx:
+            ctx.return_value.__enter__.return_value = _redirect_archive()
+            _StructureMixin._resolve_outbound_titles("/x.zim", rows)
+
+        assert rows[0]["path"] == "C/aristotle/"
+        assert rows[0]["title"] == "Aristotle | Internet Encyclopedia of Philosophy"
+
+    def test_non_redirect_entry_is_unchanged(self) -> None:
+        from openzim_mcp.zim.structure import _StructureMixin
+
+        rows = [{"path": "C/aristotle/", "title": "C/aristotle/"}]
+        with patch(ARCHIVE_CTX) as ctx:
+            ctx.return_value.__enter__.return_value = _redirect_archive()
+            _StructureMixin._resolve_outbound_titles("/x.zim", rows)
+
+        assert rows[0]["path"] == "C/aristotle/"
+        assert rows[0]["title"].startswith("Aristotle")
+
+    @pytest.mark.skipif(not CLIMATE_ZIM.exists(), reason="test ZIM corpus absent")
+    def test_real_archive_redirect_is_followed(self) -> None:
+        from openzim_mcp.zim.structure import _StructureMixin
+
+        rows = [{"path": 'A/"dry_spell"', "title": 'A/"dry_spell"'}]
+        _StructureMixin._resolve_outbound_titles(str(CLIMATE_ZIM), rows)
+
+        assert rows[0]["path"] == "A/Drought"
+        assert rows[0]["title"] != rows[0]["path"]
+        assert "Drought" in rows[0]["title"]
+
+    def test_related_merges_spellings_of_one_target(
+        self, test_config: OpenZimMcpConfig
+    ) -> None:
+        """Two hrefs that redirect to the same canonical entry are one
+        related row with the summed mention_count, not two rows whose
+        paths disagree with what inbound returns."""
+        from openzim_mcp.server import OpenZimMcpServer
+
+        srv = OpenZimMcpServer(test_config)
+        srv.zim_operations.path_validator = MagicMock()
+        srv.zim_operations.path_validator.validate_path.side_effect = lambda p: p
+        srv.zim_operations.path_validator.validate_zim_file.side_effect = lambda p: p
+        srv.zim_operations.extract_article_links_data = MagicMock(
+            return_value={
+                "kind": "internal",
+                "path": "C/plato/",
+                "results": [
+                    {"url": "../aristotl", "text": "Aristotle (stub)"},
+                    {"url": "../aristotle/", "text": "Aristotle"},
+                    {"url": "../aristotl", "text": "Aristotle (stub)"},
+                ],
+            }
+        )
+        with patch(ARCHIVE_CTX) as ctx:
+            ctx.return_value.__enter__.return_value = _redirect_archive()
+            result = srv.zim_operations.get_related_articles_data(
+                "/zim/test.zim", "C/plato/", limit=10
+            )
+
+        assert [r["path"] for r in result["results"]] == ["C/aristotle/"]
+        assert result["results"][0]["mention_count"] == 3
+        assert result["results"][0]["title"].startswith("Aristotle")
+        assert result["total"] == 1

@@ -1122,19 +1122,40 @@ class _StructureMixin:
             # Rank: frequency descending, ties broken by first-appearance
             # order (Counter.most_common preserves insertion order for
             # equal counts).
-            for target, count in target_counts.most_common(limit):
-                outbound.append(
-                    {
-                        "path": target,
-                        # Placeholder; resolved via archive lookup below
-                        # under a single archive open so we don't pay one
-                        # open per result.
-                        "title": target,
-                        "link_text": first_text.get(target, ""),
-                        "mention_count": count,
-                    }
-                )
-            self._resolve_outbound_titles(validated_str, outbound)
+            ranked: List[Dict[str, Any]] = [
+                {
+                    "path": target,
+                    # Placeholder; resolved via archive lookup below
+                    # under a single archive open so we don't pay one
+                    # open per result.
+                    "title": target,
+                    "link_text": first_text.get(target, ""),
+                    "mention_count": count,
+                }
+                for target, count in target_counts.most_common()
+            ]
+            # Resolve BEFORE slicing to ``limit``: title resolution also
+            # canonicalizes redirect spellings, so two hrefs that redirect
+            # to one entry must merge into one row (summed mention_count)
+            # rather than ship as two rows whose paths disagree with what
+            # ``direction="inbound"`` indexes. Slicing first would also
+            # leave the page short whenever a merge happened inside it.
+            self._resolve_outbound_titles(validated_str, ranked)
+            merged: Dict[str, Dict[str, Any]] = {}
+            for row in ranked:
+                canonical = row["path"]
+                if canonical in (entry_path, resolved_source):
+                    # A redirect spelling of the source article itself.
+                    continue
+                if canonical in merged:
+                    merged[canonical]["mention_count"] += row["mention_count"]
+                else:
+                    merged[canonical] = row
+            # ``sorted`` is stable, so equal counts keep their first-
+            # appearance order from ``most_common``.
+            outbound = sorted(merged.values(), key=lambda r: -r["mention_count"])[
+                :limit
+            ]
         except OpenZimMcpArchiveError as e:
             # Partial-success contract: an archive- or extraction-level
             # failure surfaces as an empty result with an error string,
@@ -1288,11 +1309,22 @@ class _StructureMixin:
     ) -> None:
         """Fill in each outbound entry's ``title`` from its archive title.
 
-        Single archive open shared across all entries (limit ≤ 100). On any
-        per-entry lookup failure the title stays at its placeholder (path)
-        so callers always see a non-empty string. A failure to open the
-        archive at all is also non-fatal — leave placeholders in place.
+        Single archive open shared across all entries. On any per-entry
+        lookup failure the title stays at its placeholder (path) so callers
+        always see a non-empty string. A failure to open the archive at all
+        is also non-fatal — leave placeholders in place.
+
+        Redirect entries are followed to their canonical target (the same
+        best-effort walk the sidecar builder uses), and ``item["path"]`` is
+        rewritten to the canonical path. zimit archives give a redirect
+        stub its own path string as its title, so reading the stub's title
+        "succeeded" with junk — every related row on the IEP read
+        ``title == path`` — and the pre-redirect path it shipped yielded
+        zero rows when fed back to ``direction="inbound"``, which indexes
+        canonical paths.
         """
+        from openzim_mcp.zim.redirects import best_effort_redirect_chain
+
         if not outbound:
             return
         try:
@@ -1307,6 +1339,17 @@ class _StructureMixin:
                         # the "title" placeholder) and, worse, went out on the
                         # wire as a ``path`` the caller could not fetch.
                         entry, spelling = _resolve_entry_spelling(archive, item["path"])
+                        # ``is True``: the mock archives used across the test
+                        # suite hand back MagicMock entries whose
+                        # ``is_redirect`` is itself a truthy MagicMock.
+                        if (
+                            entry is not None
+                            and getattr(entry, "is_redirect", False) is True
+                        ):
+                            resolved = best_effort_redirect_chain(entry)
+                            resolved_path = getattr(resolved, "path", None)
+                            if isinstance(resolved_path, str) and resolved_path:
+                                entry, spelling = resolved, resolved_path
                         item["path"] = spelling
                         title = getattr(entry, "title", None) if entry else None
                         if title:
