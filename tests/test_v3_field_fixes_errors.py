@@ -330,3 +330,55 @@ def test_d06_page_and_walk_limit_rejections_share_one_style(temp_dir: Path) -> N
         match=r"limit must be between 1 and 500 \(provided: 600\)",
     ):
         ops.walk_namespace_data("any.zim", "C", limit=600)
+
+
+# ---------------------------------------------------------------------------
+# D59 — zim_search shares zim_query's front-door query length cap
+# ---------------------------------------------------------------------------
+
+
+def _register_with_fake_mcp(register, server):
+    captured = {}
+
+    class _FakeMcp:
+        def tool(self, description=None):
+            def deco(fn):
+                captured["fn"] = fn
+                return fn
+
+            return deco
+
+    server.mcp = _FakeMcp()
+    register(server)
+    return captured["fn"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["fulltext", "title", "suggest"])
+async def test_d59_zim_search_rejects_an_oversized_query(mode: str) -> None:
+    """A 1 MB query was accepted in every mode and echoed back 1:1 in the
+    response's ``query`` field. zim_query caps the same argument at
+    ``MAX_QUERY_LENGTH``; the sibling tool must share the bound."""
+    from unittest.mock import MagicMock
+
+    from openzim_mcp.constants import MAX_QUERY_LENGTH
+    from openzim_mcp.tools import zim_search as zim_search_tool
+
+    server = MagicMock()
+    server.rate_limiter.check_rate_limit.return_value = None
+    fn = _register_with_fake_mcp(zim_search_tool.register, server)
+
+    result = await fn("x" * (MAX_QUERY_LENGTH + 1), mode=mode, zim_file_path="/a.zim")
+
+    assert result["error"] is True
+    assert result["operation"] == "invalid_query"
+    assert str(MAX_QUERY_LENGTH) in result["message"]
+    # The oversized input must not be echoed back.
+    assert len(result["message"]) < 512, len(result["message"])
+
+
+def test_d59_query_cap_is_one_constant_for_both_tools() -> None:
+    from openzim_mcp.constants import MAX_QUERY_LENGTH
+    from openzim_mcp.tools.zim_query import MAX_QUERY_LENGTH as query_cap
+
+    assert query_cap == MAX_QUERY_LENGTH == 4096
