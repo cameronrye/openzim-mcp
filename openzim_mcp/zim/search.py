@@ -237,6 +237,31 @@ def _query_title_already_on_page(results: List[Dict[str, Any]], query: str) -> b
     return False
 
 
+# Xapian query-syntax operator words. The query itself is handed to libzim
+# verbatim (operators are not parsed, and the tool description says so);
+# these only have to stay out of the *snippet* terms, where ``and``/``not``
+# otherwise anchored the extract on nav junk (``* Diagnosis **and** Tests``)
+# and got bolded as if they were content.
+_QUERY_OPERATOR_WORDS = frozenset({"and", "or", "not", "xor", "near", "adj"})
+
+
+def _snippet_query(query: str) -> Optional[str]:
+    """``query`` without Boolean-operator words, for snippet selection.
+
+    ``(insulin) AND (NOT glucose)`` -> ``insulin glucose``: operator words
+    go, and grouping/quoting/wildcard punctuation is peeled off the words
+    that stay (inner hyphens as in ``insulin-like`` survive). Returns
+    ``None`` when nothing remains, so the caller falls back to the lead
+    paragraph.
+    """
+    kept = []
+    for word in query.split():
+        bare = word.strip("()\"'+-*")
+        if bare and bare.lower() not in _QUERY_OPERATOR_WORDS:
+            kept.append(bare)
+    return " ".join(kept) or None
+
+
 # Shortest shared prefix that counts as a common stem in the relevance
 # proxy: ``diabet``/``diabetes`` and ``symptom``/``symptoms`` share one,
 # ``cat``/``catalogue`` do not.
@@ -940,7 +965,7 @@ class _SearchMixin:
             title = entry.title or "Untitled"
             snippet = self._get_entry_snippet(
                 entry,
-                query=query,
+                query=_snippet_query(query),
                 snippet_length=snippet_length,
                 max_paragraphs=max_paragraphs,
                 validated_path=str(validated_path) if validated_path else None,
@@ -2140,10 +2165,11 @@ class _SearchMixin:
         when the scan produced an empty value.
         """
         results: List[Dict[str, Any]] = []
+        snippet_query = _snippet_query(query) if query else None
         for i, (entry_id, entry, entry_namespace, content_mime) in enumerate(page):
             try:
                 title = entry.title or "Untitled"
-                snippet = self._get_entry_snippet(entry, query=query)
+                snippet = self._get_entry_snippet(entry, query=snippet_query)
                 if not content_type:
                     # No content_type filter means the scan never fetched
                     # the mimetype (tuple carries ""), so backfill it here.

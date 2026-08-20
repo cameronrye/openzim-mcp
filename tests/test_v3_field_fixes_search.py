@@ -446,3 +446,66 @@ def test_d29_snippet_skips_on_this_page_navigation_lists() -> None:
     # anchors a snippet for a term inside it.
     symptoms = cp.create_snippet(_ENCY_MARKDOWN, query="thirsty", max_paragraphs=1)
     assert "Being very **thirsty**" in symptoms
+
+
+# ---------------------------------------------------------------------------
+# D30 — Boolean operator syntax: documented as literal, kept out of snippets
+# ---------------------------------------------------------------------------
+
+
+def test_d30_operator_words_do_not_anchor_or_highlight_snippets(tmp_path) -> None:
+    """``(insulin) AND (NOT glucose)`` must snippet on *insulin*, not *and*.
+
+    The query goes to Xapian verbatim (operators are not parsed), but the
+    snippet builder also treated ``and``/``not`` as match terms, anchoring
+    on nav junk like ``* Diagnosis **and** Tests`` and bolding the
+    operator word. Operator words are stripped from the snippet query.
+    """
+    from unittest.mock import patch
+
+    from openzim_mcp.zim.search import _snippet_query
+    from tests.zim_stubs import make_archive_stub, make_ops, make_search_stub
+
+    assert _snippet_query("(insulin) AND (NOT glucose)") == "insulin glucose"
+    assert _snippet_query("salt and pepper") == "salt pepper"
+    assert _snippet_query("AND OR NOT") is None
+
+    ops = make_ops(tmp_path)
+    zim_file = tmp_path / "test.zim"
+    zim_file.write_bytes(b"zim")
+
+    def _entry(eid: str) -> MagicMock:
+        e = MagicMock()
+        e.path = eid
+        e.title = "Hypoglycemia"
+        item = MagicMock()
+        item.mimetype = "text/html"
+        item.content = (
+            b"<p>Diagnosis and Tests</p>"
+            b"<p>Insulin is a hormone that lowers blood glucose.</p>"
+        )
+        e.get_item.return_value = item
+        return e
+
+    with patch("openzim_mcp.zim_operations.Searcher") as searcher:
+        searcher.return_value.search.return_value = make_search_stub(["C/Hypo"])
+        payload, _ = ops._perform_search(
+            make_archive_stub(_entry),
+            "(insulin) AND (NOT glucose)",
+            5,
+            0,
+            validated_path=zim_file,
+        )
+    snippet = payload["results"][0]["snippet"]
+    assert snippet.startswith("**Insulin** is a hormone"), snippet
+    assert "**and**" not in snippet and "**AND**" not in snippet
+
+
+def test_d30_description_says_operators_are_literal_terms() -> None:
+    """The description advertises Xapian BM25; it must also say that
+    Boolean operators, quotes and wildcards are passed through unparsed."""
+    from openzim_mcp.tools._common import load_description
+
+    text = load_description("zim_search")
+    assert "AND/OR/NOT" in text
+    assert "literal" in text
