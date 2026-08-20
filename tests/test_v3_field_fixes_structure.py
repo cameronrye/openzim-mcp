@@ -851,6 +851,71 @@ class TestD38AnchorWrappedAssets:
 
 
 # ---------------------------------------------------------------------------
+# R2-6 — an <a> wrapping its own <img> is one asset, not two media rows
+# ---------------------------------------------------------------------------
+
+WRAPPED_IMAGE_HTML = """\
+<html><body>
+<h1>Aristotle</h1>
+<p><a href="../wp-content/media/aristotle1.jpg"><img src="../wp-content/media/aristotle1.jpg" alt=""></a>
+<a href="../plato/">Plato</a>
+<a href="../../www.iep.utm.edu/wp-content/media/Aristotle_fig_1.gif"><img
+   src="../../www.iep.utm.edu/wp-content/media/Aristotle_fig_1.gif" alt="figure 1"></a>
+<a href="../wp-content/media/full.png"><img src="../wp-content/media/thumb.png" alt="thumb"></a></p>
+</body></html>
+"""
+
+
+class TestR26WrappedImageSingleRow:
+    """R2-6 (D38 side-effect): zimit's ``<a href="x.jpg"><img src="x.jpg">``
+    produced an ``image`` row AND an ``asset`` row for the same entry, so
+    ``category_totals.media`` doubled. One DOM construct is one asset: an
+    anchor whose href resolves to the same entry path as a media row is
+    folded into that row (which inherits the anchor's fetchable ``path``);
+    anchors to a genuinely different entry (full-size vs thumbnail) keep
+    their own ``asset`` row."""
+
+    def _data(self, ops: ZimOperations, zim_path: str, kind: str) -> dict:
+        archive = _links_archive(
+            WRAPPED_IMAGE_HTML, source="iep.utm.edu/aristotle/", targets={}
+        )
+        with patch(ARCHIVE_CTX) as ctx:
+            ctx.return_value.__enter__.return_value = archive
+            return ops.extract_article_links_data(
+                zim_path, "iep.utm.edu/aristotle/", kind=kind
+            )
+
+    def test_same_target_anchor_folds_into_image_row(
+        self, ops: ZimOperations, zim_path: str
+    ) -> None:
+        data = self._data(ops, zim_path, "media")
+        rows = [(r["url"], r["type"]) for r in data["results"]]
+        assert rows == [
+            ("../wp-content/media/aristotle1.jpg", "image"),
+            ("../../www.iep.utm.edu/wp-content/media/Aristotle_fig_1.gif", "image"),
+            ("../wp-content/media/thumb.png", "image"),
+            ("../wp-content/media/full.png", "asset"),
+        ]
+        # Totals follow the rows, not the raw pre-merge lists.
+        assert data["total"] == 4
+        assert data["category_totals"]["media"] == 4
+        assert data["category_totals"]["internal"] == 1
+
+    def test_folded_image_row_inherits_anchor_path(
+        self, ops: ZimOperations, zim_path: str
+    ) -> None:
+        data = self._data(ops, zim_path, "media")
+        by_url = {r["url"]: r for r in data["results"]}
+        lead = by_url["../wp-content/media/aristotle1.jpg"]
+        assert lead["alt"] == ""  # the richer <img> row survives
+        assert lead["path"] == "iep.utm.edu/wp-content/media/aristotle1.jpg"
+        # Distinct targets: the anchor keeps its own resolved path.
+        assert by_url["../wp-content/media/full.png"]["path"] == (
+            "iep.utm.edu/wp-content/media/full.png"
+        )
+
+
+# ---------------------------------------------------------------------------
 # D39 — outbound is occurrence-level; the description must say so
 # ---------------------------------------------------------------------------
 

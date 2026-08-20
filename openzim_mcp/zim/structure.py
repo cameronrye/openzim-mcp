@@ -447,6 +447,7 @@ class _StructureMixin:
                     if not (isinstance(lk, dict) and lk.get("type") == "anchor")
                 ]
                 anchor_count = len(internal_bucket) - len(non_anchor_internal)
+
                 # zimit/warc2zim wraps an article's lead image (and figure
                 # links) in ``<a href="…/plato.jpg">``, so the anchor
                 # classifier typed image/font/script assets 'internal' and
@@ -456,18 +457,44 @@ class _StructureMixin:
                 # assets move to the media bucket (``type="asset"``, after
                 # the page's own ``<img>``-style rows) so 'internal' counts
                 # navigable articles consistently across directions.
+                #
+                # R2-6: zimit's ``<a href="x.jpg"><img src="x.jpg">`` is ONE
+                # asset, but the ``<img>`` already sits in the media bucket,
+                # so the reclassified anchor doubled it (and the media
+                # total). Rule: an anchor whose href resolves to the same
+                # entry path as an existing media row is folded into that
+                # row — the richer ``image`` row survives and inherits the
+                # anchor's fetchable ``path``. Anchors to a genuinely
+                # different entry (full-size file vs thumbnail) keep their
+                # own ``asset`` row.
+                def media_target(lk: Any) -> Optional[str]:
+                    return self._resolve_link_to_entry_path(
+                        str(lk.get("url", "")), bundle["entry_path"]
+                    )
+
+                media_rows: List[Any] = list(bundle["links"]["media"])
+                media_targets = {
+                    t
+                    for t in (
+                        media_target(lk) for lk in media_rows if isinstance(lk, dict)
+                    )
+                    if t
+                }
                 cross_article_internal: List[Any] = []
                 anchor_wrapped_assets: List[Any] = []
+                folded_targets: set[str] = set()
                 for lk in non_anchor_internal:
                     if isinstance(lk, dict) and self._is_non_article_target(
                         str(lk.get("url", ""))
                     ):
+                        target = media_target(lk)
+                        if target and target in media_targets:
+                            folded_targets.add(target)
+                            continue
                         anchor_wrapped_assets.append({**lk, "type": "asset"})
                     else:
                         cross_article_internal.append(lk)
-                media_links: List[Any] = (
-                    list(bundle["links"]["media"]) + anchor_wrapped_assets
-                )
+                media_links: List[Any] = media_rows + anchor_wrapped_assets
 
                 if kind == "internal":
                     all_links_for_kind: List[Any] = cross_article_internal
@@ -480,11 +507,16 @@ class _StructureMixin:
                 if kind == "media":
                     # Anchor-wrapped assets were ``<a href>``s, so they get
                     # the same resolved ``path`` internal rows do — usable
-                    # with ``zim_get(binary=True)``.
+                    # with ``zim_get(binary=True)``. Media rows that absorbed
+                    # such an anchor get it too, so folding loses nothing.
                     page = [
                         (
                             self._with_resolved_path(archive, lk, bundle["entry_path"])
-                            if isinstance(lk, dict) and lk.get("type") == "asset"
+                            if isinstance(lk, dict)
+                            and (
+                                lk.get("type") == "asset"
+                                or media_target(lk) in folded_targets
+                            )
                             else lk
                         )
                         for lk in page
