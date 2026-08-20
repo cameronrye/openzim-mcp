@@ -795,40 +795,59 @@ class _SearchMixin:
                 total_results,
             )
 
-        result_count = min(limit, total_results - offset)
-        result_entries = list(search.getResults(offset, result_count))
-
         results: List[Dict[str, Any]] = []
-        for i, entry_id in enumerate(result_entries):
-            try:
-                entry = archive.get_entry_by_path(entry_id)
-                title = entry.title or "Untitled"
-                snippet = self._get_entry_snippet(
-                    entry,
-                    query=query,
-                    snippet_length=snippet_length,
-                    max_paragraphs=max_paragraphs,
-                    validated_path=str(validated_path) if validated_path else None,
-                )
-                results.append({"path": entry_id, "title": title, "snippet": snippet})
-            except Exception as e:
-                logger.warning(f"Error processing search result {entry_id}: {e}")
-                results.append(
-                    {
-                        "path": entry_id,
-                        "title": f"Entry {offset + i + 1}",
-                        "snippet": f"(Error getting entry details: {e})",
-                    }
-                )
-
-        returned_count = len(results)
-        last_index = offset + returned_count
+        # warc2zim stores query-string variants of a page as separate entries
+        # (``quiz.htm`` and ``quiz.htm?quiz=1``), and Xapian ranks them side
+        # by side — a MedlinePlus page of 40 carried 19 duplicates. Collapse
+        # on the canonical path, as the filtered scanner does, and keep
+        # pulling ranked rows until the page holds ``limit`` distinct pages.
+        # Page-scoped (not scan-scoped) so ``offset`` stays a plain ranked-row
+        # offset and a high offset never triggers a scan from zero; the rows
+        # actually consumed are reported in ``page_info.source_consumed`` so
+        # a client resumes at ``offset + source_consumed``.
+        seen_canonical: set[str] = set()
+        consumed = 0
         # ``total_results`` is Xapian's ESTIMATE and can exceed the real hit
         # count. When ``getResults`` hands back fewer entries than requested,
         # the real stream is exhausted — treating the estimate as authoritative
         # here re-minted the same cursor forever (empty page, done=False,
         # offset unchanged: a livelock for contract-following clients).
-        done = last_index >= total_results or returned_count < result_count
+        exhausted = False
+        while len(results) < limit and not exhausted:
+            want = min(limit - len(results), total_results - offset - consumed)
+            if want <= 0:
+                break
+            batch = list(search.getResults(offset + consumed, want))
+            if len(batch) < want:
+                exhausted = True
+            for entry_id in batch:
+                consumed += 1
+                canonical = canonical_result_path(entry_id)
+                if canonical in seen_canonical:
+                    continue
+                seen_canonical.add(canonical)
+                results.append(
+                    self._search_result_row(
+                        archive,
+                        entry_id,
+                        rank=offset + consumed,
+                        query=query,
+                        snippet_length=snippet_length,
+                        max_paragraphs=max_paragraphs,
+                        validated_path=validated_path,
+                    )
+                )
+
+        returned_count = len(results)
+        last_index = offset + consumed
+        done = last_index >= total_results or exhausted
+        page_info: Dict[str, Any] = {
+            "offset": offset,
+            "limit": limit,
+            "returned_count": returned_count,
+        }
+        if consumed != returned_count:
+            page_info["source_consumed"] = consumed
         next_cursor: Optional[str] = None
         if not done:
             # Post-a20 P1-D1 / post-a21 P1-D5 contract: any tool whose
@@ -859,14 +878,45 @@ class _SearchMixin:
                 "next_cursor": next_cursor,
                 "total": total_results,
                 "done": done,
-                "page_info": {
-                    "offset": offset,
-                    "limit": limit,
-                    "returned_count": returned_count,
-                },
+                "page_info": page_info,
             },
             total_results,
         )
+
+    def _search_result_row(
+        self,
+        archive: Archive,
+        entry_id: str,
+        *,
+        rank: int,
+        query: str,
+        snippet_length: Optional[int],
+        max_paragraphs: Optional[int],
+        validated_path: Optional[Path],
+    ) -> Dict[str, Any]:
+        """Project one ranked hit onto a SearchHit row; never raises.
+
+        ``rank`` is the 1-based position in the ranked stream, used only to
+        label a row whose entry could not be read.
+        """
+        try:
+            entry = archive.get_entry_by_path(entry_id)
+            title = entry.title or "Untitled"
+            snippet = self._get_entry_snippet(
+                entry,
+                query=query,
+                snippet_length=snippet_length,
+                max_paragraphs=max_paragraphs,
+                validated_path=str(validated_path) if validated_path else None,
+            )
+            return {"path": entry_id, "title": title, "snippet": snippet}
+        except Exception as e:
+            logger.warning(f"Error processing search result {entry_id}: {e}")
+            return {
+                "path": entry_id,
+                "title": f"Entry {rank}",
+                "snippet": f"(Error getting entry details: {e})",
+            }
 
     def _format_search_text(
         self,

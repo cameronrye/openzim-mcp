@@ -42,7 +42,9 @@ PARAMETERS:
                one MIME bucket (e.g. "text/html").
   limit        Max results; cap 50 title/suggest/cross_file, 100 filtered, else 1000.
   offset       Pagination offset (default 0); single-archive
-               fulltext only.
+               fulltext only. Resume at offset +
+               page_info.source_consumed when present (duplicate
+               URL variants were skipped), else + returned_count.
   cursor       Unsupported; page fulltext via `offset`.
 
 RESPONSE:

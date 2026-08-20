@@ -253,3 +253,70 @@ def test_d26_z4_reads_the_candidate_name_from_the_title_on_url_paths() -> None:
     # The b11 motivating rejection is untouched on a Wikipedia-style path.
     wikipedia = {"path": "A/Mozarthaus_Vienna", "title": "Mozarthaus Vienna"}
     assert is_tangential_multi_token_shape(wikipedia, "Mozart Vienna") is True
+
+
+# ---------------------------------------------------------------------------
+# D27 — plain fulltext dedupes query-string variants of the same page
+# ---------------------------------------------------------------------------
+
+
+def test_d27_plain_fulltext_page_emits_each_page_once(tmp_path) -> None:
+    """``foo.htm`` and ``foo.htm?quiz=1`` are one page, emitted once.
+
+    The filtered scanner already collapses warc2zim query-string variants
+    on ``canonical_result_path``; the plain path appended raw hits, so a
+    MedlinePlus page of 40 carried 19 duplicates. The page must fill to
+    ``limit`` with distinct pages and report how many ranked rows it
+    consumed so a client can resume cleanly.
+    """
+    from unittest.mock import patch
+
+    from openzim_mcp.pagination import Cursor
+    from tests.zim_stubs import make_archive_stub, make_ops, make_search_stub
+
+    ops = make_ops(tmp_path)
+    zim_file = tmp_path / "test.zim"
+    zim_file.write_bytes(b"zim")
+    entry_ids = [
+        "C/quiz/001214_3.htm",
+        "C/quiz/001214_3.htm?quiz=1",
+        "C/quiz/000249_49.htm",
+        "C/quiz/007617_46.htm",
+        "C/quiz/007617_46.htm?quiz=1",
+        "C/quiz/000123_9.htm",
+    ]
+
+    def _perform(ids, limit, offset):
+        with patch("openzim_mcp.zim_operations.Searcher") as searcher:
+            searcher.return_value.search.return_value = make_search_stub(ids)
+            return ops._perform_search(
+                make_archive_stub(), "quiz", limit, offset, validated_path=zim_file
+            )
+
+    page1, total = _perform(entry_ids, 2, 0)
+    assert total == len(entry_ids)
+    assert [r["path"] for r in page1["results"]] == [
+        "C/quiz/001214_3.htm",
+        "C/quiz/000249_49.htm",
+    ]
+    assert page1["page_info"]["returned_count"] == 2
+    # Three ranked rows were examined to fill two slots.
+    assert page1["page_info"]["source_consumed"] == 3
+    assert page1["done"] is False
+    cursor = Cursor.decode(page1["next_cursor"], expected_tool="search_zim_file")
+    assert cursor["s"]["o"] == 3
+
+    # Resuming where the first page stopped yields the remaining pages,
+    # deduped again, and exhausts the stream.
+    page2, _ = _perform(entry_ids, 2, 3)
+    assert [r["path"] for r in page2["results"]] == [
+        "C/quiz/007617_46.htm",
+        "C/quiz/000123_9.htm",
+    ]
+    assert page2["done"] is True
+    assert page2["next_cursor"] is None
+
+    # A page without variants is byte-identical to before: no extra key.
+    clean, _ = _perform(["C/a.htm", "C/b.htm", "C/c.htm"], 2, 0)
+    assert [r["path"] for r in clean["results"]] == ["C/a.htm", "C/b.htm"]
+    assert "source_consumed" not in clean["page_info"]
