@@ -816,8 +816,11 @@ class AsyncZimOperations:
     ) -> "ArchiveValidationResponse":
         """Per-archive validation (``zim_health(zim_file_path=...)``).
 
-        Runs ``Archive.check()`` plus checksum / index / identity reads in a
-        worker thread so the event loop isn't blocked by the integrity scan.
+        The checksum / index / identity reads run in a worker thread; the
+        ``Archive.check()`` integrity scan itself is delegated to a separate
+        process (``zim.archive.check_archive_integrity``) because the libzim
+        binding holds the GIL for the whole pass, so a thread alone could not
+        keep the event loop responsive.
         """
         return await asyncio.to_thread(
             self._ops.get_archive_validation_data, zim_file_path

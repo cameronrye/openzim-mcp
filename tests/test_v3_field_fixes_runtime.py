@@ -16,12 +16,18 @@ Covers the three runtime defects from the 2026-08-19 real-world sweep:
 
 from __future__ import annotations
 
+import os
 import shutil
+from concurrent.futures.process import BrokenProcessPool
 from pathlib import Path
 
+import pytest
+
 from openzim_mcp.config import CacheConfig, LoggingConfig, OpenZimMcpConfig
+from openzim_mcp.exceptions import OpenZimMcpArchiveError
 from openzim_mcp.server import OpenZimMcpServer
 from openzim_mcp.server_state import _build_health_report
+from openzim_mcp.zim import archive as archive_mod
 from tests.conftest_v2_fixtures import make_zim_ops
 
 GARBAGE = b"not a zim"
@@ -109,3 +115,66 @@ class TestD01UnreadableZimFilesAreFlagged:
         assert health["health_checks"]["zim_files_found"] == 1
         assert health["status"] == "healthy"
         assert health["warnings"] == []
+
+
+# ---------------------------------------------------------------------------
+# D64 — Archive.check() must not freeze the event loop (runs out of process)
+# ---------------------------------------------------------------------------
+
+
+class TestD64IntegrityCheckRunsOutOfProcess:
+    def test_validation_verdicts_still_correct_on_suite_zims(
+        self, zim_test_data_dir: Path | None
+    ) -> None:
+        if zim_test_data_dir is None:
+            pytest.skip("ZIM test suite not available")
+        withns = zim_test_data_dir / "withns"
+        ops = make_zim_ops(str(withns))
+
+        good = ops.get_archive_validation_data(str(withns / "small.zim"))
+        assert good["is_valid"] is True
+        assert good["has_checksum"] is True
+        assert isinstance(good["checksum"], str) and good["checksum"]
+
+        # Opens fine but fails its internal checksum: the verdict must come
+        # back False, not be lost in the process hop.
+        bad = ops.get_archive_validation_data(
+            str(withns / "invalid.bad_mimetype_in_dirent.zim")
+        )
+        assert bad["is_valid"] is False
+
+    def test_integrity_check_leaves_this_interpreter(
+        self, v2_phase_a_zim: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The pool is the mechanism: its worker must be another process.
+        pool = archive_mod._validation_pool()
+        assert pool.submit(os.getpid).result() != os.getpid()
+
+        # ...and get_archive_validation_data must route check() through it.
+        routed: list[Path] = []
+        real = archive_mod.check_archive_integrity
+
+        def spy(path: Path) -> bool:
+            routed.append(path)
+            return real(path)
+
+        monkeypatch.setattr(archive_mod, "check_archive_integrity", spy)
+        ops = make_zim_ops(str(v2_phase_a_zim.parent))
+        data = ops.get_archive_validation_data(str(v2_phase_a_zim))
+        assert data["is_valid"] is True
+        assert routed == [v2_phase_a_zim.resolve()]
+
+    def test_worker_crash_is_a_validation_error_and_the_pool_recovers(
+        self, v2_phase_a_zim: Path
+    ) -> None:
+        pool = archive_mod._validation_pool()
+        with pytest.raises(BrokenProcessPool):
+            pool.submit(os._exit, 1).result()
+
+        ops = make_zim_ops(str(v2_phase_a_zim.parent))
+        with pytest.raises(OpenZimMcpArchiveError, match="worker"):
+            ops.get_archive_validation_data(str(v2_phase_a_zim))
+
+        # The broken pool was discarded; the next call gets a fresh worker.
+        assert archive_mod._validation_pool() is not pool
+        assert ops.get_archive_validation_data(str(v2_phase_a_zim))["is_valid"] is True
