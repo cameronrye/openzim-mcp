@@ -726,3 +726,29 @@ class TestD35InboundCanonicalization:
 
         assert "iep.utm.edu/does-not-exist/" in str(excinfo.value)
         assert get_error_config(excinfo.value) is NOT_FOUND_ERROR_CONFIG
+
+
+# ---------------------------------------------------------------------------
+# D36 — outbound on a missing entry renders not-found, not corruption advice
+# ---------------------------------------------------------------------------
+
+
+class TestD36OutboundMissingEntry:
+    """D36: the broad except wrapped libzim's miss as 'Link extraction
+    failed', which the renderer classified as an archive fault ('verify the
+    ZIM file is not corrupted'). The same miss must render not-found."""
+
+    def test_missing_entry_renders_not_found_template(
+        self, ops: ZimOperations, zim_path: str
+    ) -> None:
+        from openzim_mcp.error_messages import NOT_FOUND_ERROR_CONFIG, get_error_config
+
+        with patch(ARCHIVE_CTX) as ctx:
+            ctx.return_value.__enter__.return_value = _missing_entry_archive()
+            with pytest.raises(Exception) as excinfo:
+                ops.extract_article_links_data(zim_path, "A/does-not-exist.html")
+
+        err = excinfo.value
+        assert "A/does-not-exist.html" in str(err)
+        assert "Link extraction failed" not in str(err)
+        assert get_error_config(err) is NOT_FOUND_ERROR_CONFIG, str(err)

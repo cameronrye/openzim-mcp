@@ -424,15 +424,9 @@ class _StructureMixin:
                 raise OpenZimMcpValidationError(str(e)) from e
 
         try:
-            from openzim_mcp.bundle import get_or_build_bundle
-
             with _zim_ops_mod.zim_archive(validated_path) as archive:
-                bundle = get_or_build_bundle(
-                    archive,
-                    entry_path,
-                    cache=self.cache,
-                    validated_path=validated_path,
-                    content_processor=self.content_processor,
+                bundle = self._build_bundle(
+                    archive, entry_path, validated_path=validated_path
                 )
 
                 # BUG #6: the bundle 'internal' bucket carries BOTH real
