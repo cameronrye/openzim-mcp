@@ -782,6 +782,15 @@ class SimpleToolsHandler(
             # path through unchanged (the handler ignores it but
             # downstream low-confidence rendering / telemetry expect a
             # non-empty string).
+            # D45: ``search <archive> for <terms>`` names its target in
+            # plain text. Resolve the name against the loaded archives
+            # BEFORE the gate (same precedent as the metadata hint
+            # below) and strip it from the terms either way — an
+            # explicit ``zim_file_path`` still wins for routing.
+            if intent == "search" and isinstance(params, dict):
+                hinted_archive = self._apply_search_archive_hint(params)
+                if hinted_archive and not zim_file_path:
+                    zim_file_path = hinted_archive
             if intent == "search_all":
                 zim_file_path = zim_file_path or ""
             elif not zim_file_path:
@@ -4510,6 +4519,73 @@ class SimpleToolsHandler(
             return basename_match or ci_basename_match
         except Exception:
             return None
+
+    # D45: ``search <archive> for <terms>``. ``_extract_search`` strips an
+    # optional ``for`` only when it sits right after the verb, so the
+    # archive name rode into the search terms (``Found ~2239 matches for
+    # "medlineplus for diabetes"``) and, with 2+ archives loaded and no
+    # path, the no-zim-file gate fired although the query named its
+    # target. The leading token must be at least three characters so a
+    # stray short word cannot prefix-match an archive; an optional
+    # ``archive`` / ``file`` / ``zim`` noun and a ``.zim`` suffix are
+    # tolerated because that is how people write archive names.
+    _SEARCH_ARCHIVE_HINT_RE = re.compile(
+        r"^(?:the\s+)?(?P<hint>[A-Za-z0-9][A-Za-z0-9_.\-]{2,})"
+        r"(?:\s+(?:archive|file|zim))?\s+for\s+(?P<terms>\S.*)$",
+        re.IGNORECASE | re.DOTALL,
+    )
+
+    def _apply_search_archive_hint(self, params: Dict[str, Any]) -> Optional[str]:
+        """Resolve a leading ``<archive> for`` in the extracted search terms.
+
+        When the leading token names exactly one loaded archive (exact
+        basename, or an unambiguous case-insensitive basename prefix),
+        strip it from ``params["query"]`` and return the archive's real
+        path. Returns ``None`` — and leaves the terms untouched — when
+        the token matches no archive (it is a search term) or more than
+        one (the caller must disambiguate, so the gate still fires).
+        """
+        terms = params.get("query")
+        if not isinstance(terms, str):
+            return None
+        match = self._SEARCH_ARCHIVE_HINT_RE.match(terms.strip())
+        if not match:
+            return None
+        resolved = self._match_archive_by_name(match.group("hint"))
+        if resolved is None:
+            return None
+        params["query"] = match.group("terms").strip()
+        self._track("search_archive_hint_resolved")
+        return resolved
+
+    def _match_archive_by_name(self, hint: str) -> Optional[str]:
+        """Map a bare archive name to exactly one loaded archive path.
+
+        Tries the exact / case-insensitive basename resolver first (so a
+        full ``medlineplus.gov_en_all_2025-01.zim`` works), then a
+        case-insensitive basename-prefix match on the name without its
+        ``.zim`` suffix (``medlineplus`` → ``medlineplus.gov_en_all_…``).
+        Two or more prefix hits mean the name is ambiguous: return
+        ``None`` rather than guess.
+        """
+        exact = self._resolve_zim_path(hint)
+        if exact is not None:
+            return exact
+        stem = re.sub(r"\.zim$", "", hint.strip(), flags=re.IGNORECASE).lower()
+        if len(stem) < 3:
+            return None
+        try:
+            files = self.zim_operations.list_zim_files_data()
+        except Exception:
+            return None
+        hits: List[str] = []
+        for entry in files:
+            if not isinstance(entry, dict):
+                continue
+            real_path = str(entry.get("path", ""))
+            if real_path and Path(real_path).name.lower().startswith(stem):
+                hits.append(real_path)
+        return hits[0] if len(hits) == 1 else None
 
     def _auto_select_zim_file(self) -> Optional[str]:
         """Phase F: thin wrapper delegating to ``topic_preprocessing``.

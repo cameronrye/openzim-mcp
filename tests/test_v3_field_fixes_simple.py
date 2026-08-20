@@ -211,3 +211,71 @@ class TestD44ForeignCursorRejectedUniformly:
         assert "Cursor / Tool Mismatch" in body
         assert "walk_namespace" in body
         assert not mock.walk_namespace_data.called
+
+
+# ---------------------------------------------------------------------------
+# D45: ``search <archive> for <terms>`` neither selects nor strips the archive
+# ---------------------------------------------------------------------------
+
+MEDLINE = "/zims/medlineplus.gov_en_all_2025-01.zim"
+IEP = "/zims/internet-encyclopedia-philosophy_en_all_2025-06.zim"
+
+
+class TestD45ArchiveNameInSearchQuery:
+    """With two archives loaded and no path, ``search medlineplus for
+    diabetes`` tripped the "No ZIM File Specified" gate although the
+    query named the target; with an explicit path the archive name
+    leaked into the terms (``Found ~2239 matches for "medlineplus for
+    diabetes"``).
+    """
+
+    def _handler(self) -> tuple[SimpleToolsHandler, MagicMock]:
+        handler, mock = _handler_with()
+        mock.list_zim_files_data.return_value = [{"path": MEDLINE}, {"path": IEP}]
+        mock.search_zim_file.return_value = "rendered"
+        return handler, mock
+
+    def test_named_archive_selected_before_the_no_zim_file_gate(self) -> None:
+        handler, mock = self._handler()
+        out = handler.handle_zim_query("search medlineplus for diabetes")
+        assert "No ZIM File Specified" not in _text(out)
+        call = mock.search_zim_file.call_args
+        assert call is not None
+        assert call.args[0] == MEDLINE
+        assert call.args[1] == "diabetes"
+
+    def test_full_basename_with_zim_suffix_selects_too(self) -> None:
+        handler, mock = self._handler()
+        handler.handle_zim_query(
+            "search medlineplus.gov_en_all_2025-01.zim for diabetes"
+        )
+        call = mock.search_zim_file.call_args
+        assert call.args[0] == MEDLINE
+        assert call.args[1] == "diabetes"
+
+    def test_explicit_path_wins_but_archive_name_is_stripped(self) -> None:
+        handler, mock = self._handler()
+        handler.handle_zim_query(
+            "search medlineplus for diabetes", zim_file_path=MEDLINE
+        )
+        call = mock.search_zim_file.call_args
+        assert call.args[0] == MEDLINE
+        assert call.args[1] == "diabetes"
+
+    def test_unknown_leading_word_is_left_in_the_terms(self) -> None:
+        """``treatments`` names no loaded archive, so it is a search term."""
+        handler, mock = self._handler()
+        handler.handle_zim_query(
+            "search treatments for diabetes", zim_file_path=MEDLINE
+        )
+        assert mock.search_zim_file.call_args.args[1] == "treatments for diabetes"
+
+    def test_ambiguous_prefix_does_not_guess(self) -> None:
+        handler, mock = self._handler()
+        mock.list_zim_files_data.return_value = [
+            {"path": "/zims/wikipedia_en_all_2026-02.zim"},
+            {"path": "/zims/wikipedia_de_all_2026-02.zim"},
+        ]
+        out = handler.handle_zim_query("search wikipedia for cats")
+        assert "No ZIM File Specified" in _text(out)
+        assert not mock.search_zim_file.called
