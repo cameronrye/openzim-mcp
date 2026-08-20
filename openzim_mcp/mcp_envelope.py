@@ -39,7 +39,6 @@ arguments, and a fault inside a prompt body ``-32603`` naming only the prompt.
 from __future__ import annotations
 
 import json
-import logging
 from typing import Any
 
 import pydantic_core
@@ -58,8 +57,6 @@ from mcp_types import (
 from pydantic import ValidationError
 
 __all__ = ["EnvelopeAwareMCPServer", "is_tool_error_envelope"]
-
-logger = logging.getLogger(__name__)
 
 # The one ``zim://`` URI whose content is not fixed by a sealed archive file:
 # it is a live scan of the allowed directories, so it must keep the

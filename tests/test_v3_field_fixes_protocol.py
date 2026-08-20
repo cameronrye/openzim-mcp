@@ -31,7 +31,7 @@ import queue
 import subprocess
 import sys
 import threading
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from typing import Any, AsyncIterator, Iterator
 
@@ -243,7 +243,8 @@ async def test_missing_arguments_are_listed_in_stable_order(tmp_path: Path) -> N
     """D57: no ``set`` repr — the list is sorted so the text is deterministic."""
     error = await _prompt_error(tmp_path, modern=False, name="summarize", arguments={})
 
-    assert "{'" not in error.message and "'}" not in error.message
+    assert "{'" not in error.message
+    assert "'}" not in error.message
     assert error.message.index("entry_path") < error.message.index("zim_file_path")
 
 
@@ -484,7 +485,8 @@ def _one_shot_stdio(
             stderr=stderr,
             env=os.environ.copy(),
         )
-    assert proc.stdin is not None and proc.stdout is not None
+    assert proc.stdin is not None
+    assert proc.stdout is not None
     lines: queue.Queue[bytes] = queue.Queue()
     stdout = proc.stdout
 
@@ -494,16 +496,18 @@ def _one_shot_stdio(
         lines.put(b"")
 
     threading.Thread(target=pump, daemon=True).start()
+    # ``None`` means the deadline passed with nothing on stdout; ``b""`` is the
+    # pump's EOF sentinel, i.e. the server exited without answering.
+    first: bytes | None = None
     try:
         proc.stdin.write("".join(f + "\n" for f in frames).encode())
         proc.stdin.close()
-        try:
+        with suppress(queue.Empty):
             first = lines.get(timeout=answer_timeout)
-        except queue.Empty:
-            pytest.fail(
-                f"no response within {answer_timeout}s of EOF; stderr:\n"
-                + stderr_path.read_text()
-            )
+        assert first is not None, (
+            f"no response within {answer_timeout}s of EOF; stderr:\n"
+            + stderr_path.read_text()
+        )
         assert first != b"", "server exited without answering; stderr:\n" + (
             stderr_path.read_text()
         )

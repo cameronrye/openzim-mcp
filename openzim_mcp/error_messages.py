@@ -6,7 +6,7 @@ maintain consistent error messages and potentially support localization.
 """
 
 import logging
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from typing import Callable, Dict, List, Optional, Type
 
 from .exceptions import (
@@ -92,10 +92,14 @@ ERROR_CONFIGS: Dict[Type[OpenZimMcpError], ErrorConfig] = {
         title="Archive Not Found",
         issue="`zim_file_path` did not match any loaded archive.",
         steps=[
-            "Use `zim_health()` and pass a `loaded_archives[].path` value "
-            "verbatim as `zim_file_path`",
-            "Relative names resolve only against the server's archive "
-            "directories — check the spelling and the `.zim` extension",
+            (
+                "Use `zim_health()` and pass a `loaded_archives[].path` value "
+                "verbatim as `zim_file_path`"
+            ),
+            (
+                "Relative names resolve only against the server's archive "
+                "directories — check the spelling and the `.zim` extension"
+            ),
         ],
     ),
     OpenZimMcpValidationError: ErrorConfig(
@@ -171,7 +175,7 @@ def _archive_path_config(
     # list → pick → (omit) → confirm.
     steps = list(base.steps)
     steps.insert(2, extra)
-    return replace(base, steps=steps)
+    return ErrorConfig(title=base.title, issue=base.issue, steps=steps)
 
 
 # Permission-related error configuration
