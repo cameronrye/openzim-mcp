@@ -689,8 +689,12 @@ class _NamespaceMixin:
         # archive-access failures, so they surface as
         # OpenZimMcpValidationError to let the tool layer render a targeted
         # validation message.
+        # Same shape as the walk validator's message so the two modes of
+        # zim_browse reject an out-of-range limit in one style (D06).
         if limit < 1 or limit > 200:
-            raise OpenZimMcpValidationError("Limit must be between 1 and 200")
+            raise OpenZimMcpValidationError(
+                f"limit must be between 1 and 200 (provided: {limit})"
+            )
         if offset < 0:
             raise OpenZimMcpValidationError("Offset must be non-negative")
         if not namespace or len(namespace.strip()) == 0:

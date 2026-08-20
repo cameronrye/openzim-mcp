@@ -288,3 +288,45 @@ def test_d05_description_documents_the_soft_reject_shape() -> None:
     assert "bad_namespace" in errors, errors
     assert "isError=false" in errors, errors
     assert "unknown\n  namespace returns the underlying data-layer error" not in errors
+
+
+# ---------------------------------------------------------------------------
+# D06 — per-mode `limit` bounds are documented and rejected in one style
+# ---------------------------------------------------------------------------
+
+
+def test_d06_description_states_the_per_mode_limit_bounds() -> None:
+    from openzim_mcp.tools._common import load_description
+
+    text = load_description("zim_browse")
+    params = text[text.index("PARAMETERS:") : text.index("RESPONSE:")]
+    limit_line = next(
+        ln for ln in params.splitlines() if ln.strip().startswith("limit")
+    )
+    # Bounds may wrap onto a continuation line; take the line plus the next.
+    idx = params.splitlines().index(limit_line)
+    limit_text = " ".join(params.splitlines()[idx : idx + 2])
+
+    assert "1-200" in limit_text and "1-500" in limit_text, limit_text
+    assert "page" in limit_text and "walk" in limit_text, limit_text
+
+
+def test_d06_page_and_walk_limit_rejections_share_one_style(temp_dir: Path) -> None:
+    """Page mode said "Limit must be between 1 and 200"; walk said "limit
+    must be between 1 and 500 (provided: N)". One data-layer style, with
+    the offending value echoed, for both."""
+    from openzim_mcp.exceptions import OpenZimMcpValidationError
+
+    config = OpenZimMcpConfig(allowed_directories=[str(temp_dir)], tool_mode="advanced")
+    ops = OpenZimMcpServer(config).zim_operations
+
+    with pytest.raises(
+        OpenZimMcpValidationError,
+        match=r"limit must be between 1 and 200 \(provided: 300\)",
+    ):
+        ops.browse_namespace_data("any.zim", "C", limit=300)
+    with pytest.raises(
+        OpenZimMcpValidationError,
+        match=r"limit must be between 1 and 500 \(provided: 600\)",
+    ):
+        ops.walk_namespace_data("any.zim", "C", limit=600)

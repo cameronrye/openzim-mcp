@@ -16,17 +16,17 @@ PARAMETERS:
                     "I" for images).
   mode              "page" (default) — paginated browse.
                     "walk" — full namespace enumeration.
-  cursor            Phase B cursor pagination handle.
-  limit             Page size (default depends on mode).
+  cursor            Opaque pagination handle from `next_cursor`.
+  limit             Page size: page 1-200 (default 50), walk 1-500
+                    (default 200).
   offset            Page-mode pagination offset (ignored in walk).
-  include_assets    Default False; C-browse hides assets (css/js/fonts/
-                    images/media). True surfaces them — for discovering
-                    media paths to fetch via `zim_get(binary=True)`.
+  include_assets    Default False hides assets (css/js/fonts/images/
+                    media) in C-browse; True surfaces them, e.g. media
+                    paths for `zim_get(binary=True)`.
 
 RESPONSE:
   BrowseNamespaceResponse (mode="page") or WalkNamespaceResponse
-  (mode="walk"). Both carry `results`, `next_cursor`, and pagination
-  metadata in `page_info`.
+  (mode="walk"). Both carry `results`, `next_cursor`, and `page_info`.
 
 ERRORS:
   Invalid `mode` returns `invalid_mode`; an empty `namespace` returns

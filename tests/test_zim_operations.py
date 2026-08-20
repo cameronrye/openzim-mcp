@@ -820,7 +820,7 @@ class TestZimOperations:
         targeted error message to callers.
         """
         with pytest.raises(
-            OpenZimMcpValidationError, match="Limit must be between 1 and 200"
+            OpenZimMcpValidationError, match="limit must be between 1 and 200"
         ):
             zim_operations.browse_namespace("test.zim", "C", limit=0)
 
@@ -2529,12 +2529,12 @@ class TestZimOperations:
         # failures raise OpenZimMcpValidationError, which is distinct from
         # OpenZimMcpArchiveError raised by archive-access failures.
         with pytest.raises(
-            OpenZimMcpValidationError, match="Limit must be between 1 and 200"
+            OpenZimMcpValidationError, match="limit must be between 1 and 200"
         ):
             zim_operations.browse_namespace(str(zim_file), "A", limit=0)
 
         with pytest.raises(
-            OpenZimMcpValidationError, match="Limit must be between 1 and 200"
+            OpenZimMcpValidationError, match="limit must be between 1 and 200"
         ):
             zim_operations.browse_namespace(str(zim_file), "A", limit=201)
 
