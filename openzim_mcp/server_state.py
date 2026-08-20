@@ -44,6 +44,41 @@ def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _downgrade_to_warning(health_info: Dict[str, Any]) -> None:
+    """Move ``status`` from ``healthy`` to ``warning``; never overrides ``error``."""
+    if health_info["status"] == "healthy":
+        health_info["status"] = "warning"
+
+
+def _count_readable_zim_files(
+    dir_path: Path,
+    health_info: Dict[str, Any],
+    warnings: List[str],
+    recommendations: List[str],
+) -> int:
+    """Count the ``.zim`` files under an accessible directory that carry the
+    ZIM signature, reporting the ones that do not.
+
+    Probes the directory with ``iterdir`` first so a permission problem
+    surfaces as the exception the caller classifies, not as a silent zero.
+    """
+    list(dir_path.iterdir())
+    zim_files = [p for p in dir_path.glob("**/*.zim") if p.is_file()]
+    unreadable = [p for p in zim_files if not has_zim_signature(p)]
+    for bad in unreadable:
+        warnings.append(
+            "Unreadable .zim file (missing ZIM signature): "
+            f"{sanitize_path_for_error(str(bad))}"
+        )
+    if unreadable:
+        recommendations.append(
+            "Remove or replace the unreadable .zim file(s); "
+            "they cannot be opened as archives"
+        )
+        _downgrade_to_warning(health_info)
+    return len(zim_files) - len(unreadable)
+
+
 def _check_directory_health(
     directory: str,
     health_info: Dict[str, Any],
@@ -68,38 +103,23 @@ def _check_directory_health(
     try:
         dir_path = Path(directory)
         if dir_path.exists() and dir_path.is_dir():
-            list(dir_path.iterdir())
-            zim_files = [p for p in dir_path.glob("**/*.zim") if p.is_file()]
-            unreadable = [p for p in zim_files if not has_zim_signature(p)]
-            for bad in unreadable:
-                warnings.append(
-                    "Unreadable .zim file (missing ZIM signature): "
-                    f"{sanitize_path_for_error(str(bad))}"
-                )
-            if unreadable:
-                recommendations.append(
-                    "Remove or replace the unreadable .zim file(s); "
-                    "they cannot be opened as archives"
-                )
-                if health_info["status"] == "healthy":
-                    health_info["status"] = "warning"
-            return 1, len(zim_files) - len(unreadable)
+            readable = _count_readable_zim_files(
+                dir_path, health_info, warnings, recommendations
+            )
+            return 1, readable
         warnings.append(f"Directory not accessible: {redacted}")
         recommendations.append(f"Check directory path and permissions: {redacted}")
-        if health_info["status"] == "healthy":
-            health_info["status"] = "warning"
+        _downgrade_to_warning(health_info)
     except PermissionError:
         warnings.append(f"Permission denied: {redacted}")
         recommendations.append(f"Check file permissions for: {redacted}")
         health_checks["permissions_ok"] = False
-        if health_info["status"] == "healthy":
-            health_info["status"] = "warning"
+        _downgrade_to_warning(health_info)
     except Exception as e:
         warnings.append(
             f"Error accessing {redacted}: {redact_paths_in_message(str(e))}"
         )
-        if health_info["status"] == "healthy":
-            health_info["status"] = "warning"
+        _downgrade_to_warning(health_info)
     return 0, 0
 
 
@@ -146,8 +166,7 @@ def _finalize_health_status(
     if total_zim_files == 0:
         warnings.append("No ZIM files found in any directory")
         recommendations.append("Add ZIM files to configured directories")
-        if health_info["status"] == "healthy":
-            health_info["status"] = "warning"
+        _downgrade_to_warning(health_info)
 
     if accessible_dirs == 0:
         health_info["status"] = "error"
