@@ -20,7 +20,7 @@ import pydantic_core
 import pytest
 from mcp import ClientSession
 from mcp.shared.memory import create_client_server_memory_streams
-from mcp_types import TextContent
+from mcp_types import EmptyResult, TextContent
 
 from openzim_mcp.config import OpenZimMcpConfig
 from openzim_mcp.server import OpenZimMcpServer
@@ -552,3 +552,30 @@ async def test_legacy_clients_are_not_served_the_per_uri_ttl(tmp_path: Path) -> 
         read = await session.read_resource("zim://wiki")
 
     assert read.ttl_ms == 0
+
+
+@pytest.mark.asyncio
+async def test_modern_clients_can_ping(tmp_path: Path) -> None:
+    """A keepalive ping on a 2026-07-28 connection is answered, not -32601.
+
+    SDK 2.0.0 ships its modern method tables without a ping row
+    (python-sdk#3273), so a keepalive-pinging modern client — the kind this
+    port exists to serve — sees METHOD_NOT_FOUND on every ping and flaps its
+    connection. ``install_ping_keepalive_shim`` closes the gap at server
+    construction until an SDK release does; the canary in
+    ``test_sdk_ping_shim.py`` retires the shim when that happens, but this
+    test stays — it asserts the behavior, not the mechanism.
+    """
+    async with _modern_client(tmp_path) as session:
+        result = await session.send_ping()
+
+    assert isinstance(result, EmptyResult)
+
+
+@pytest.mark.asyncio
+async def test_legacy_clients_can_still_ping(tmp_path: Path) -> None:
+    """The shim's table rows are modern-only; the legacy ping path must not move."""
+    async with session_for(tmp_path, "advanced") as session:
+        result = await session.send_ping()
+
+    assert isinstance(result, EmptyResult)

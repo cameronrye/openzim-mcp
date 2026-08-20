@@ -21,6 +21,7 @@ from .exceptions import OpenZimMcpConfigurationError
 from .instructions import instructions_for
 from .mcp_envelope import EnvelopeAwareMCPServer
 from .rate_limiter import RateLimiter
+from .sdk_compat import install_ping_keepalive_shim
 from .security import (
     PathValidator,
     redact_paths_in_message,
@@ -239,6 +240,9 @@ class OpenZimMcpServer:
         Args:
             config: Server configuration
         """
+        # SDK 2.0.0 rejects keepalive pings on 2026-07-28 connections
+        # (python-sdk#3273); patch its method tables before serving anything.
+        install_ping_keepalive_shim()
         self.config = config
 
         # Track server start so health reports can show real uptime instead
