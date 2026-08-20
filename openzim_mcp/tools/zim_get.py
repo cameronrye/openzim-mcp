@@ -181,7 +181,14 @@ def register(server: "OpenZimMcpServer") -> None:
                         return rl
 
             if main_page:
-                return await ops.get_main_page_data(zim_file_path, compact=compact)
+                # ``max_content_length`` is documented as the body cap and is
+                # not on this branch's forbidden list, so it must apply here
+                # too rather than being dropped on the floor.
+                return await ops.get_main_page_data(
+                    zim_file_path,
+                    compact=compact,
+                    max_content_length=max_content_length,
+                )
             if binary:
                 assert entry_path is not None  # validator guarantees this
                 # ``max_content_length`` caps the fetched BYTES here — it maps

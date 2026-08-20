@@ -245,3 +245,118 @@ def test_binary_oversize_message_names_max_content_length(
     assert "max_size_bytes" not in message, message
     # The cap the caller hit is still reported so they can size the retry.
     assert "100 B" in message
+
+
+# ---------------------------------------------------------------------------
+# D10 / D11 — main_page must be scoped and capped like a path fetch
+# ---------------------------------------------------------------------------
+
+# Trimmed from medlineplus.gov/ (warc2zim): federal banner + skip-nav +
+# header menus OUTSIDE <article>, the welcome prose INSIDE it.
+_MEDLINEPLUS_HOME_HTML = """\
+<html><body>
+<a class="usa-skipnav" href="#main">Skip navigation</a>
+<section class="usa-banner"><p>An official website of the United States government</p>
+<p>Here's how you know</p><p><strong>Official websites use .gov</strong></p></section>
+<header><nav><ul><li><a href="healthtopics.html">Health Topics</a></li>
+<li><a href="druginfo/">Drugs &amp; Supplements</a></li></ul></nav></header>
+<article>
+<h1>Welcome to MedlinePlus</h1>
+<p>MedlinePlus is an online health information resource for patients and
+their families and friends.</p>
+<h2>Health Topics</h2>
+<p>Find information on health, wellness, disorders and conditions.</p>
+</article>
+<footer><p>Stay Connected</p></footer>
+</body></html>
+"""
+
+
+def _archive_with_main_page(html: str, path: str = "medlineplus.gov/") -> MagicMock:
+    entry = _html_entry(path, "MedlinePlus", html)
+    inst = _archive_with({path: entry})
+    inst.main_entry = entry
+    return inst
+
+
+@patch("openzim_mcp.zim_operations.Archive")
+def test_main_page_scopes_site_chrome_like_a_path_fetch(
+    mock_archive: MagicMock, ops: ZimOperations, zim_file: Path
+) -> None:
+    """D10: main_page=True served the banner/skip-nav/menus that fetching the
+    identical entry by path already strips; both branches must agree."""
+    mock_archive.return_value = _archive_with_main_page(_MEDLINEPLUS_HOME_HTML)
+
+    main = ops.get_main_page_data(str(zim_file))
+    by_path = ops.get_zim_entry_data(str(zim_file), "medlineplus.gov/")
+
+    assert "Skip navigation" not in main["content"], main["content"]
+    assert "official website" not in main["content"], main["content"]
+    assert main["content"].lstrip().startswith("# Welcome to MedlinePlus")
+    assert main["content"] == by_path["content"]
+
+
+@patch("openzim_mcp.zim_operations.Archive")
+def test_main_page_honors_max_content_length(
+    mock_archive: MagicMock, ops: ZimOperations, zim_file: Path
+) -> None:
+    """D11: max_content_length was silently ignored on the main_page branch;
+    every other unsupported combination on this tool errors loudly."""
+    long_html = _MEDLINEPLUS_HOME_HTML.replace(
+        "<h2>Health Topics</h2>",
+        # ~1.2K chars: above the 200 cap under test, below the branch's
+        # 5000-char default so the uncapped control read is NOT truncated.
+        "<h2>Health Topics</h2>" + "<p>" + ("lorem ipsum " * 100) + "</p>",
+    )
+    mock_archive.return_value = _archive_with_main_page(long_html)
+
+    capped = ops.get_main_page_data(str(zim_file), max_content_length=200)
+    body, sep, footer = capped["content"].partition("\n\n... [Content truncated")
+    assert sep, capped["content"]
+    assert len(body) <= 200
+    assert capped["_meta"]["truncated"] is True
+    assert capped["_meta"]["total_chars"] > 200
+    # The footer must not advertise content_offset: the branch never reads it.
+    assert "content_offset=" not in footer
+
+    # The cap is part of the response identity — an uncapped call right after
+    # must not be served the capped rendering from cache.
+    uncapped = ops.get_main_page_data(str(zim_file))
+    assert len(uncapped["content"]) > len(capped["content"])
+    assert uncapped["_meta"]["truncated"] is False
+
+
+@pytest.mark.asyncio
+async def test_zim_get_forwards_max_content_length_to_main_page(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The tool layer dropped max_content_length on the main_page branch."""
+    from unittest.mock import AsyncMock
+
+    from openzim_mcp.tools.zim_get import register as register_zim_get
+
+    srv = MagicMock()
+    store: dict = {}
+
+    def _tool(*, description: str = ""):
+        def decorate(fn):
+            store[fn.__name__] = fn
+            return fn
+
+        return decorate
+
+    srv.mcp.tool = _tool
+    mock_ops = MagicMock()
+    mock_ops.get_main_page_data = AsyncMock(return_value={"content": "Welcome"})
+    monkeypatch.setattr(
+        "openzim_mcp.async_operations.AsyncZimOperations", lambda _ops: mock_ops
+    )
+    register_zim_get(srv)
+
+    await store["zim_get"](
+        zim_file_path="/x.zim", main_page=True, max_content_length=200
+    )
+
+    mock_ops.get_main_page_data.assert_awaited_once_with(
+        "/x.zim", compact=False, max_content_length=200
+    )
