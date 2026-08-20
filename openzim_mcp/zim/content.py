@@ -168,11 +168,20 @@ def _alternate_entry_spellings(entry_path: str) -> List[str]:
     offered only when it differs from the input, so paths with a literal
     ``%`` (warc2zim asset names) are never decoded away from a working
     spelling.
+
+    A leading ``/`` is the other common client slip: ZIM paths are never
+    rooted, so ``/medlineplus.gov/diabetes.html`` can only mean the
+    un-slashed entry. The search fallback cannot recover it — its matcher
+    splits the first segment off both sides asymmetrically — and the
+    not-found error then ran the path through the filesystem redactor,
+    echoing ``...diabetes.html`` back at the caller.
     """
+    candidates = [unquote(entry_path)]
+    candidates.extend(c.lstrip("/") for c in (entry_path, *candidates))
     spellings: List[str] = []
-    decoded = unquote(entry_path)
-    if decoded and decoded != entry_path:
-        spellings.append(decoded)
+    for candidate in candidates:
+        if candidate and candidate != entry_path and candidate not in spellings:
+            spellings.append(candidate)
     return spellings
 
 

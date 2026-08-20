@@ -701,3 +701,42 @@ def test_entry_footer_count_agrees_with_more_at_offset(
     assert shown is not None, result["content"]
     assert result["_meta"]["more_at_offset"] == cap - 1
     assert int(shown.group(1).replace(",", "")) == cap - 1
+
+
+# ---------------------------------------------------------------------------
+# D17 — a leading slash is a plausible client slip; the ladder should try the
+# un-slashed spelling before giving up
+# ---------------------------------------------------------------------------
+
+
+@patch("openzim_mcp.zim_operations.Archive")
+def test_leading_slash_path_resolves_via_alternate_spelling(
+    mock_archive: MagicMock, ops: ZimOperations, zim_file: Path
+) -> None:
+    """D17: ``/medlineplus.gov/diabetes.html`` failed not-found (and the
+    redactor then mangled the echoed path) although the un-slashed spelling
+    resolves. The search fallback cannot rescue it either — its matcher splits
+    the first segment off both sides asymmetrically."""
+    path = "medlineplus.gov/diabetes.html"
+    mock_archive.return_value = _archive_with(
+        {path: _html_entry(path, "Diabetes", "<h1>Diabetes</h1><p>x</p>")}
+    )
+    search = MagicMock(return_value=None)
+    with patch.object(ops, "_find_entry_by_search", search):
+        result = ops.get_zim_entry_data(str(zim_file), "/" + path)
+
+    assert result["path"] == path
+    assert result["requested_path"] == "/" + path
+    search.assert_not_called()
+
+
+@patch("openzim_mcp.zim_operations.Archive")
+def test_leading_slash_and_percent_encoding_combine(
+    mock_archive: MagicMock, ops: ZimOperations, zim_file: Path
+) -> None:
+    mock_archive.return_value = _archive_with(
+        {_IEP_RAW: _html_entry(_IEP_RAW, "Gaudapada", "<h1>G</h1><p>x</p>")}
+    )
+    with patch.object(ops, "_find_entry_by_search", MagicMock(return_value=None)):
+        result = ops.get_zim_entry_data(str(zim_file), "/" + _IEP_ENCODED)
+    assert result["path"] == _IEP_RAW
