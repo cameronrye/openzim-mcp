@@ -791,3 +791,60 @@ class TestD37NonHtmlLinksMessage:
 
         assert data["results"] == []
         assert "message" not in data
+
+
+# ---------------------------------------------------------------------------
+# D38 — anchor-wrapped assets belong in the media bucket, not internal
+# ---------------------------------------------------------------------------
+
+ARISTOTLE_HTML = """\
+<html><body>
+<h1>Aristotle</h1>
+<p><a href="../wp-content/media/aristotle1.jpg"><img src="thumb.gif" alt="A"></a>
+<a href="../plato/">Plato</a>
+<a href="../../www.iep.utm.edu/wp-content/media/Aristotle_fig_1.gif">figure</a>
+<a href="../socrates/">Socrates</a></p>
+</body></html>
+"""
+
+
+class TestD38AnchorWrappedAssets:
+    """D38: zimit wraps lead images in ``<a href>``, so image assets were
+    typed 'internal' and inflated ``category_totals.internal`` — while the
+    related direction and the sidecar builder both drop them. Reclassify
+    them into the media bucket as ``type="asset"``."""
+
+    def _data(self, ops: ZimOperations, zim_path: str, kind: str) -> dict:
+        archive = _links_archive(
+            ARISTOTLE_HTML, source="iep.utm.edu/aristotle/", targets={}
+        )
+        with patch(ARCHIVE_CTX) as ctx:
+            ctx.return_value.__enter__.return_value = archive
+            return ops.extract_article_links_data(
+                zim_path, "iep.utm.edu/aristotle/", kind=kind
+            )
+
+    def test_internal_bucket_counts_only_navigable_articles(
+        self, ops: ZimOperations, zim_path: str
+    ) -> None:
+        data = self._data(ops, zim_path, "internal")
+        assert [r["url"] for r in data["results"]] == ["../plato/", "../socrates/"]
+        assert data["total"] == 2
+        assert data["category_totals"]["internal"] == 2
+        assert data["category_totals"]["media"] == 3
+
+    def test_assets_surface_under_media_with_asset_type(
+        self, ops: ZimOperations, zim_path: str
+    ) -> None:
+        data = self._data(ops, zim_path, "media")
+        by_url = {r["url"]: r for r in data["results"]}
+        assert set(by_url) == {
+            "thumb.gif",
+            "../wp-content/media/aristotle1.jpg",
+            "../../www.iep.utm.edu/wp-content/media/Aristotle_fig_1.gif",
+        }
+        assert by_url["thumb.gif"]["type"] == "image"
+        asset = by_url["../wp-content/media/aristotle1.jpg"]
+        assert asset["type"] == "asset"
+        assert asset["path"] == "iep.utm.edu/wp-content/media/aristotle1.jpg"
+        assert data["total"] == 3

@@ -440,22 +440,54 @@ class _StructureMixin:
                 internal_bucket: List[Any] = cast(
                     "List[Any]", bundle["links"]["internal"]
                 )
-                cross_article_internal = [
+                non_anchor_internal = [
                     lk
                     for lk in internal_bucket
                     if not (isinstance(lk, dict) and lk.get("type") == "anchor")
                 ]
-                anchor_count = len(internal_bucket) - len(cross_article_internal)
+                anchor_count = len(internal_bucket) - len(non_anchor_internal)
+                # zimit/warc2zim wraps an article's lead image (and figure
+                # links) in ``<a href="…/plato.jpg">``, so the anchor
+                # classifier typed image/font/script assets 'internal' and
+                # they inflated ``category_totals.internal`` — while the
+                # related direction and the sidecar builder both drop them
+                # via ``_is_non_article_target``. Apply the same test here:
+                # assets move to the media bucket (``type="asset"``, after
+                # the page's own ``<img>``-style rows) so 'internal' counts
+                # navigable articles consistently across directions.
+                cross_article_internal: List[Any] = []
+                anchor_wrapped_assets: List[Any] = []
+                for lk in non_anchor_internal:
+                    if isinstance(lk, dict) and self._is_non_article_target(
+                        str(lk.get("url", ""))
+                    ):
+                        anchor_wrapped_assets.append({**lk, "type": "asset"})
+                    else:
+                        cross_article_internal.append(lk)
+                media_links: List[Any] = (
+                    list(bundle["links"]["media"]) + anchor_wrapped_assets
+                )
 
                 if kind == "internal":
                     all_links_for_kind: List[Any] = cross_article_internal
+                elif kind == "media":
+                    all_links_for_kind = media_links
                 else:
-                    all_links_for_kind = cast(
-                        "List[Any]",
-                        bundle["links"][kind],  # type: ignore[literal-required]
-                    )
+                    all_links_for_kind = cast("List[Any]", bundle["links"]["external"])
                 total_for_kind = len(all_links_for_kind)
                 page = all_links_for_kind[offset : offset + limit]
+                if kind == "media":
+                    # Anchor-wrapped assets were ``<a href>``s, so they get
+                    # the same resolved ``path`` internal rows do — usable
+                    # with ``zim_get(binary=True)``.
+                    page = [
+                        (
+                            self._with_resolved_path(archive, lk, bundle["entry_path"])
+                            if isinstance(lk, dict) and lk.get("type") == "asset"
+                            else lk
+                        )
+                        for lk in page
+                    ]
                 if kind == "internal":
                     # ``url`` is the raw document-relative href (``../aristotl``)
                     # and does not round-trip into ``zim_get`` or the other
@@ -503,7 +535,7 @@ class _StructureMixin:
                 "category_totals": {
                     "internal": len(cross_article_internal),
                     "external": len(bundle["links"]["external"]),
-                    "media": len(bundle["links"]["media"]),
+                    "media": len(media_links),
                     "anchor": anchor_count,
                 },
             }
