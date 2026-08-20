@@ -12,6 +12,7 @@ uncapped ``Technical Details`` echo (D60), and tab/newline surviving
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -205,3 +206,60 @@ def test_d03_ops_layer_prologue_accepts_a_bare_name(temp_dir: Path) -> None:
     resolved = server.zim_operations._validate_zim_path("only.zim")
 
     assert resolved == (temp_dir / "only.zim").resolve()
+
+
+# ---------------------------------------------------------------------------
+# D04 — invalid `mode` reaches the handler's invalid_mode envelope over the wire
+# ---------------------------------------------------------------------------
+
+
+def _text(result) -> str:
+    from mcp_types import TextContent
+
+    return "".join(b.text for b in result.content if isinstance(b, TextContent))
+
+
+@pytest.mark.asyncio
+async def test_d04_invalid_mode_is_a_structured_envelope_over_the_wire(
+    tmp_path: Path,
+) -> None:
+    """The description promises "Invalid `mode` returns `invalid_mode`". A
+    ``Literal`` annotation let pydantic reject the call first, leaking
+    ``zim_browseArguments ... errors.pydantic.dev`` text instead."""
+    from tests.test_mcp_session import advanced_session
+
+    (tmp_path / "a.zim").write_bytes(b"ZIM\x04")
+    async with advanced_session(tmp_path) as session:
+        result = await session.call_tool(
+            "zim_browse",
+            {
+                "zim_file_path": str(tmp_path / "a.zim"),
+                "namespace": "M",
+                "mode": "bogus",
+            },
+        )
+
+    assert result.is_error is True
+    text = _text(result)
+    assert "pydantic" not in text, text
+    payload = json.loads(text)
+    assert payload["error"] is True
+    assert payload["operation"] == "invalid_mode"
+    assert "'bogus'" in payload["message"]
+
+
+def test_d04_browse_mode_schema_still_advertises_the_enum(tmp_path: Path) -> None:
+    """Dropping ``Literal`` must not drop the wire enum: the prototype-parity
+    snapshot (and dispatch quality) depend on clients seeing the two values."""
+    config = OpenZimMcpConfig(allowed_directories=[str(tmp_path)], tool_mode="advanced")
+    server = OpenZimMcpServer(config)
+    mode_schema = server.mcp._tool_manager._tools["zim_browse"].parameters[
+        "properties"
+    ]["mode"]
+
+    assert mode_schema == {
+        "default": "page",
+        "enum": ["page", "walk"],
+        "title": "Mode",
+        "type": "string",
+    }
