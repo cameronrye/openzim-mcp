@@ -148,6 +148,32 @@ _PSEUDO_NAMESPACE_TITLE_PREFIXES_EXTENDED = (
 )
 
 
+# ``suggest`` / ``find_entry_by_title`` take no offset or cursor; ``limit``
+# is their only knob, and both validators cap it at 50.
+_UNPAGED_LIMIT_CAP = 50
+
+
+def _unpaged_overflow_hint(*, subject: str, limit: int, narrow: str) -> str:
+    """The continuation for an unpaged lookup whose pool exceeded ``limit``.
+
+    R2-4: ``done=False`` with ``next_cursor=None`` used to be the whole
+    signal, which reads as "page with offset" — the one thing these
+    lookups do not honour. Spell out the only step that works instead:
+    a larger ``limit``, or a narrower query once the cap is reached.
+    """
+    if limit < _UNPAGED_LIMIT_CAP:
+        return (
+            f"More {subject} exist than limit={limit} returned. This lookup "
+            "cannot be paged (offset and cursor are not honoured); re-run "
+            f"with a larger limit (max {_UNPAGED_LIMIT_CAP})."
+        )
+    return (
+        f"More {subject} exist than the limit={_UNPAGED_LIMIT_CAP} cap can "
+        "return. This lookup cannot be paged (offset and cursor are not "
+        f"honoured); {narrow} to narrow the set."
+    )
+
+
 def _is_pseudo_namespace_entry(
     path: str, title: str, *, extended: bool = False
 ) -> bool:
@@ -2213,8 +2239,12 @@ class _SearchMixin:
 
         ``get_search_suggestions`` is non-paginated (no cursor input,
         no offset), but the v2 Phase B contract still applies for
-        uniformity: ``next_cursor=None``, ``done=True``,
-        ``total=len(results)``, ``page_info.offset=0``.
+        uniformity: ``next_cursor=None``, ``total=len(results)``,
+        ``page_info.offset=0``. ``done`` is False only when the backend
+        saw a match beyond the page; that payload also carries
+        ``page_info.total_is_lower_bound`` and a ``_meta.hint`` naming
+        the continuation (a larger ``limit``), since ``offset`` is not
+        honoured here.
 
         Raises:
             OpenZimMcpFileNotFoundError: If ZIM file not found
@@ -2244,13 +2274,16 @@ class _SearchMixin:
         validated_path = self._validate_zim_path(zim_file_path)
 
         # Cache key bumped to v2b (Phase B) so v1.x cached responses (old
-        # shape: suggestions/count keys) don't leak through after the upgrade.
-        # The stat token (mtime_ns:size) invalidates suggestions when the
-        # archive is replaced in place (archive_stat_token contract).
+        # shape: suggestions/count keys) don't leak through after the upgrade;
+        # v2d when a full page stopped implying ``done=False`` (R2-4) — a
+        # persisted v2c payload would keep re-serving the bare continuation
+        # signal for its TTL. The stat token (mtime_ns:size) invalidates
+        # suggestions when the archive is replaced in place
+        # (archive_stat_token contract).
         from openzim_mcp.bundle import archive_stat_token
 
         cache_key = (
-            f"suggestions_data:v2c:{validated_path}:"
+            f"suggestions_data:v2d:{validated_path}:"
             f"{archive_stat_token(validated_path)}:{partial_query}:{limit}"
         )
         cached_result = self.cache.get(cache_key)
@@ -2271,32 +2304,42 @@ class _SearchMixin:
             actual_count = len(suggestions)
 
             # The suggestion pool is capped at ``limit``; we don't enumerate
-            # the full match set. A full page therefore can't claim the set
-            # is exhausted — reporting ``done=True`` with ``returned==limit``
-            # falsely signals completeness for prefixes with many matches.
-            # ``done`` is only True when we returned fewer than we asked for
-            # (the candidate pool was genuinely exhausted). ``total`` is the
-            # number actually returned, which is exact when ``done`` and a
-            # lower bound otherwise (flagged in ``_meta`` via ``reason``).
-            done = actual_count < limit
+            # the full match set. The generator over-fetches by one, so
+            # ``has_more`` says whether a match exists beyond the page.
+            # ``done`` used to be ``actual_count < limit`` — a full page
+            # *assumed* more and signalled ``done=False`` with nothing to
+            # continue on (R2-4). ``total`` is the number actually
+            # returned: exact when ``done``, a lower bound otherwise
+            # (flagged in ``page_info`` and via ``reason``).
+            has_more = bool(raw.get("has_more", False))
+            done = not has_more
 
+            page_info: Dict[str, Any] = {
+                "offset": 0,
+                "limit": limit,
+                "returned_count": actual_count,
+            }
+            if has_more:
+                page_info["total_is_lower_bound"] = True
             payload: Dict[str, Any] = {
                 "partial_query": partial_query,
                 "results": suggestions,
                 "next_cursor": None,
                 "total": actual_count,
                 "done": done,
-                "page_info": {
-                    "offset": 0,
-                    "limit": limit,
-                    "returned_count": actual_count,
-                },
+                "page_info": page_info,
             }
 
             with_meta = attach_meta(
                 payload,
                 reason=None if done else "suggestion_total_is_lower_bound",
             )
+            if has_more:
+                # ``next_cursor`` is None and ``offset`` is not honoured,
+                # so the continuation has to be spelled out.
+                with_meta["_meta"]["hint"] = _unpaged_overflow_hint(
+                    subject="suggestions", limit=limit, narrow="extend the prefix"
+                )
             # Cache the post-attach payload (Phase B #12). A cold-cache
             # request that hits before the libzim title index has warmed
             # up can return zero suggestions for a query that will
@@ -2360,7 +2403,15 @@ class _SearchMixin:
 
         # Strategy 1: Use search functionality as fallback since direct entry
         # iteration may not work reliably with all ZIM file structures.
-        suggestions = self._get_suggestions_from_search(archive, partial_query, limit)
+        # R2-4: ask for one more than the page so a full page can tell
+        # "exactly ``limit`` exist" from "more lie beyond it". ``has_more``
+        # is the only honest basis for ``done=False`` — this lookup takes
+        # no offset, so a continuation signal must come with a hint.
+        suggestions = self._get_suggestions_from_search(
+            archive, partial_query, limit + 1
+        )
+        has_more = len(suggestions) > limit
+        suggestions = suggestions[:limit]
 
         # D6 (beta): the libzim suggest index / Xapian search both miss
         # the canonical bare-title article for common prefixes.
@@ -2390,7 +2441,9 @@ class _SearchMixin:
             if canonical is not None:
                 suggestions = [canonical] + suggestions
                 # Trim back to limit so the canonical doesn't push the
-                # original last suggestion off the cliff unaccounted.
+                # original last suggestion off the cliff unaccounted —
+                # an evicted row is a real suggestion beyond the page.
+                has_more = has_more or len(suggestions) > limit
                 suggestions = suggestions[:limit]
 
             logger.info(f"Found {len(suggestions)} suggestions using search fallback")
@@ -2398,6 +2451,7 @@ class _SearchMixin:
                 "partial_query": partial_query,
                 "suggestions": suggestions,
                 "count": len(suggestions),
+                "has_more": has_more,
             }
 
         # Strategy 2: Use the libzim title-index suggestion API. Replaces the
@@ -2492,7 +2546,9 @@ class _SearchMixin:
         # Sort by score and title length (prefer shorter, more relevant titles)
         title_matches.sort(key=lambda x: (-x["score"], len(x["suggestion"])))
 
-        # Take the best matches
+        # Take the best matches. The loop above collects up to ``2 * limit``
+        # candidates, so anything past ``limit`` is a match beyond the page.
+        has_more = len(title_matches) > limit
         for match in title_matches[:limit]:
             suggestions.append(
                 {
@@ -2520,12 +2576,14 @@ class _SearchMixin:
             )
             if canonical is not None:
                 suggestions = [canonical] + suggestions
+                has_more = has_more or len(suggestions) > limit
                 suggestions = suggestions[:limit]
 
         return {
             "partial_query": partial_query,
             "suggestions": suggestions[:limit],
             "count": len(suggestions[:limit]),
+            "has_more": has_more,
         }
 
     def _get_suggestions_from_search(  # NOSONAR(python:S3776)
@@ -3276,31 +3334,40 @@ class _SearchMixin:
         # Trim to limit and build the contract envelope. ``find_entry_by_title``
         # is non-paginated (no cursor input, no offset), but the v2 Phase B
         # contract still applies for uniformity: ``next_cursor=None``,
-        # ``done=True``, ``total=len(results)``, ``page_info.offset=0``.
+        # ``total=len(results)``, ``page_info.offset=0``. ``done`` was
+        # stamped True even when the trim dropped rows (R2-4); a trimmed
+        # page now says so, with the lower-bound flag and the ``limit``
+        # hint, because ``offset`` is not honoured here either.
         trimmed_results = aggregate_results[:limit]
+        has_more = len(aggregate_results) > limit
+        page_info: Dict[str, Any] = {
+            "offset": 0,
+            "limit": limit,
+            "returned_count": len(trimmed_results),
+        }
+        if has_more:
+            page_info["total_is_lower_bound"] = True
         payload: Dict[str, Any] = {
             "query": title,
             "results": trimmed_results,
             "next_cursor": None,
             "total": len(trimmed_results),
-            "done": True,
-            "page_info": {
-                "offset": 0,
-                "limit": limit,
-                "returned_count": len(trimmed_results),
-            },
+            "done": not has_more,
+            "page_info": page_info,
             "fast_path_hit": fast_path_hit,
             "fuzzy_path_hit": fuzzy_path_hit,
             "files_searched": len(files),
         }
-        return cast(
-            "FindEntryResponse",
-            attach_meta(
-                payload,
-                suggestions=suggestions if suggestions else None,
-                reason=reason,
-            ),
+        with_meta = attach_meta(
+            payload,
+            suggestions=suggestions if suggestions else None,
+            reason=reason,
         )
+        if has_more:
+            with_meta["_meta"]["hint"] = _unpaged_overflow_hint(
+                subject="title matches", limit=limit, narrow="lengthen the title"
+            )
+        return cast("FindEntryResponse", with_meta)
 
     def find_entry_by_title_data(
         self,
@@ -3411,7 +3478,13 @@ class _SearchMixin:
                         ).suggest(title)
                         total = suggestion_search.getEstimatedMatches()
                         if total > 0:
-                            paths = list(suggestion_search.getResults(0, limit))
+                            # R2-4: pull one row past the page so the
+                            # assembler's trim can tell "exactly ``limit``
+                            # matched" from "more exist" — pulling exactly
+                            # ``limit`` made every full page claim ``done``.
+                            # Rank scores decay against a fixed window, so
+                            # the extra row leaves the page's scores alone.
+                            paths = list(suggestion_search.getResults(0, limit + 1))
                             # Score by rank — first result is the best
                             # libzim suggestion match. Legacy behaviour was a
                             # hardcoded 0.8 for every hit, which made the

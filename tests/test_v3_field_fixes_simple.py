@@ -11,10 +11,13 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any, Dict, List
-from unittest.mock import MagicMock, Mock
+from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 
+from openzim_mcp.cache import OpenZimMcpCache
+from openzim_mcp.config import CacheConfig, ContentConfig, OpenZimMcpConfig
+from openzim_mcp.content_processor import ContentProcessor
 from openzim_mcp.exceptions import (
     OpenZimMcpArchivePathError,
     OpenZimMcpSecurityError,
@@ -22,8 +25,10 @@ from openzim_mcp.exceptions import (
 )
 from openzim_mcp.mcp_envelope import is_tool_error_envelope
 from openzim_mcp.pagination import Cursor, archive_identity
+from openzim_mcp.security import PathValidator
 from openzim_mcp.simple_tools import IntentParser, SimpleToolsHandler
 from openzim_mcp.title_promotion import is_strong_title_match
+from openzim_mcp.zim_operations import ZimOperations
 
 
 def _weak_results() -> List[Dict[str, Any]]:
@@ -834,3 +839,274 @@ class TestD58PathFailuresAreErrorEnvelopes:
         out = handler.handle_zim_query("show main page", zim_file_path="/zims/test.zim")
         assert isinstance(out, str)
         assert "body" in out
+
+
+# ---------------------------------------------------------------------------
+# R2-4 (D47 residual): suggestions signalled a continuation that did not exist
+# ---------------------------------------------------------------------------
+
+
+def _suggestion_ops(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> ZimOperations:
+    """A real ``ZimOperations`` with path validation and the archive stat
+    token stubbed out so the suggestion pipeline runs end to end against
+    a mocked archive."""
+    config = OpenZimMcpConfig(
+        allowed_directories=[str(tmp_path)],
+        cache=CacheConfig(enabled=False, max_size=10, ttl_seconds=60),
+        content=ContentConfig(max_content_length=1000, snippet_length=100),
+    )
+    ops = ZimOperations(
+        config,
+        PathValidator(config.allowed_directories),
+        OpenZimMcpCache(config.cache),
+        ContentProcessor(snippet_length=100),
+    )
+    monkeypatch.setattr(ops, "_validate_zim_path", lambda p: Path("/zim/test.zim"))
+    monkeypatch.setattr("openzim_mcp.bundle.archive_stat_token", lambda p: "tok")
+    return ops
+
+
+def _strategy1_pool(size: int) -> Any:
+    """A Strategy 1 stub that honours ``limit`` over a pool of ``size`` titles."""
+
+    def fake(archive: Any, partial_query: str, limit: int) -> List[Dict[str, str]]:
+        return [
+            {
+                "text": f"Diabetes {i}",
+                "path": f"C/Diabetes_{i}",
+                "type": "search_start_match",
+            }
+            for i in range(min(size, limit))
+        ]
+
+    return fake
+
+
+class TestR24SuggestionsContinuationIsReal:
+    """``suggestions for diab`` with ``limit=3`` returned ``done: false``,
+    ``next_cursor: null`` and ``_meta.reason =
+    suggestion_total_is_lower_bound`` — a continuation signal with no
+    continuation mechanism (the backend takes no offset or cursor, and
+    ``offset=3`` replayed page one). A full page was *assumed* to mean
+    more exist; the backend never looked. Now it over-fetches by one:
+    when nothing lies beyond the page the payload is ``done: true`` with
+    no lower-bound reason, and when more do exist ``done: false`` comes
+    with ``page_info.total_is_lower_bound`` and an explicit
+    ``_meta.hint`` naming the only continuation that works (raise
+    ``limit``; at the cap, narrow the prefix).
+    """
+
+    def _data(self, ops: ZimOperations, limit: int) -> Dict[str, Any]:
+        with patch("openzim_mcp.zim_operations.zim_archive") as zim_archive:
+            zim_archive.return_value.__enter__.return_value = MagicMock()
+            return dict(ops.get_search_suggestions_data("/zim/test.zim", "diab", limit))
+
+    def test_more_beyond_the_page_yields_an_actionable_continuation(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        ops = _suggestion_ops(tmp_path, monkeypatch)
+        monkeypatch.setattr(ops, "_get_suggestions_from_search", _strategy1_pool(10))
+        out = self._data(ops, limit=3)
+        assert out["page_info"]["returned_count"] == 3
+        assert out["page_info"]["limit"] == 3
+        assert out["done"] is False
+        assert out["page_info"]["total_is_lower_bound"] is True
+        assert out["_meta"]["reason"] == "suggestion_total_is_lower_bound"
+        hint = out["_meta"]["hint"]
+        assert "limit" in hint and "50" in hint, hint
+        assert "offset" in hint, "must say why offset is not the continuation"
+
+    def test_exactly_limit_matches_is_done(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        ops = _suggestion_ops(tmp_path, monkeypatch)
+        monkeypatch.setattr(ops, "_get_suggestions_from_search", _strategy1_pool(3))
+        out = self._data(ops, limit=3)
+        assert out["page_info"]["returned_count"] == 3
+        assert out["done"] is True
+        assert "reason" not in out["_meta"]
+        assert "hint" not in out["_meta"]
+        assert "total_is_lower_bound" not in out["page_info"]
+
+    def test_short_page_is_done(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        ops = _suggestion_ops(tmp_path, monkeypatch)
+        monkeypatch.setattr(ops, "_get_suggestions_from_search", _strategy1_pool(2))
+        out = self._data(ops, limit=3)
+        assert out["page_info"]["returned_count"] == 2
+        assert out["done"] is True
+        assert "reason" not in out["_meta"]
+        assert "hint" not in out["_meta"]
+
+    def test_at_the_cap_the_hint_narrows_instead_of_raising(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        ops = _suggestion_ops(tmp_path, monkeypatch)
+        monkeypatch.setattr(ops, "_get_suggestions_from_search", _strategy1_pool(60))
+        out = self._data(ops, limit=50)
+        assert out["page_info"]["returned_count"] == 50
+        assert out["done"] is False
+        hint = out["_meta"]["hint"]
+        assert "prefix" in hint, hint
+        assert "larger" not in hint, "limit is already at the cap"
+
+    def test_canonical_prepend_that_evicts_a_row_is_not_done(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The D6 canonical probe prepends a row and trims back to
+        ``limit``; the evicted row is a real suggestion beyond the page."""
+        ops = _suggestion_ops(tmp_path, monkeypatch)
+        monkeypatch.setattr(ops, "_get_suggestions_from_search", _strategy1_pool(3))
+        monkeypatch.setattr(
+            ops,
+            "_find_canonical_prefix_match",
+            lambda *a, **kw: {"text": "Diab", "path": "C/Diab", "type": "canonical"},
+        )
+        out = self._data(ops, limit=3)
+        assert [r["text"] for r in out["results"]] == [
+            "Diab",
+            "Diabetes 0",
+            "Diabetes 1",
+        ]
+        assert out["done"] is False
+        assert "hint" in out["_meta"]
+
+    def test_title_index_fallback_detects_overflow_too(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Strategy 2 (SuggestionSearcher) gets the same over-fetch."""
+        ops = _suggestion_ops(tmp_path, monkeypatch)
+        monkeypatch.setattr(ops, "_get_suggestions_from_search", lambda *a, **kw: [])
+        paths = [f"C/Diabetes_{i}" for i in range(8)]
+
+        def entry_for(path: str) -> MagicMock:
+            entry = MagicMock()
+            entry.path = path
+            entry.title = path[2:].replace("_", " ")
+            return entry
+
+        archive = MagicMock()
+        archive.get_entry_by_path.side_effect = entry_for
+        with (
+            patch("openzim_mcp.zim_operations.zim_archive") as zim_archive,
+            patch("openzim_mcp.zim_operations.SuggestionSearcher") as searcher_cls,
+        ):
+            zim_archive.return_value.__enter__.return_value = archive
+            suggest = MagicMock()
+            suggest.getEstimatedMatches.return_value = len(paths)
+            suggest.getResults.return_value = paths
+            searcher_cls.return_value.suggest.return_value = suggest
+            full = dict(ops.get_search_suggestions_data("/zim/test.zim", "diab", 3))
+            whole = dict(ops.get_search_suggestions_data("/zim/test.zim", "diab", 8))
+
+        assert full["page_info"]["returned_count"] == 3
+        assert full["done"] is False
+        assert "hint" in full["_meta"]
+        assert whole["page_info"]["returned_count"] == 8
+        assert whole["done"] is True
+        assert "hint" not in whole["_meta"]
+
+
+class TestR24FindByTitleDoesNotClaimCompleteness:
+    """Mirror image on ``find article titled``: the assembler trimmed the
+    aggregate to ``limit`` and stamped ``done: true`` regardless, so a
+    trimmed page claimed the set was exhausted. Trimming now yields
+    ``done: false`` with the same lower-bound flag and ``limit`` hint;
+    an untrimmed page keeps ``done: true``.
+    """
+
+    def _rows(self, n: int) -> List[Dict[str, Any]]:
+        return [
+            {
+                "path": f"C/Diabetes_{i}",
+                "title": f"Diabetes {i}",
+                "score": 1.0 - i / 100,
+                "zim_file": "/zim/test.zim",
+                "match_type": "fuzzy_suggest",
+            }
+            for i in range(n)
+        ]
+
+    def _assemble(
+        self, ops: ZimOperations, rows: List[Dict[str, Any]], limit: int
+    ) -> Dict[str, Any]:
+        return dict(
+            ops._assemble_find_response(
+                rows,
+                title="diabetes",
+                limit=limit,
+                files=["/zim/test.zim"],
+                fast_path_hit=False,
+                fuzzy_path_hit=True,
+                verified_variants=[],
+            )
+        )
+
+    def test_trimmed_page_is_not_done(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        ops = _suggestion_ops(tmp_path, monkeypatch)
+        out = self._assemble(ops, self._rows(5), limit=3)
+        assert out["page_info"]["returned_count"] == 3
+        assert out["total"] == 3
+        assert out["done"] is False
+        assert out["page_info"]["total_is_lower_bound"] is True
+        hint = out["_meta"]["hint"]
+        assert "limit" in hint and "50" in hint, hint
+
+    def test_untrimmed_page_is_done(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        ops = _suggestion_ops(tmp_path, monkeypatch)
+        for n in (2, 3):
+            out = self._assemble(ops, self._rows(n), limit=3)
+            assert out["page_info"]["returned_count"] == n
+            assert out["done"] is True
+            assert "hint" not in out["_meta"]
+            assert "total_is_lower_bound" not in out["page_info"]
+
+    def test_title_index_probe_looks_one_past_the_page(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The suggestion-index fallback pulled exactly ``limit`` rows, so
+        the assembler never saw a trim: ``limit=3`` claimed ``done`` while
+        ``limit=10`` returned ten. Pull one extra so a full page is only
+        ``done`` when the index really had nothing more."""
+        ops = _suggestion_ops(tmp_path, monkeypatch)
+        monkeypatch.setattr(ops, "_fast_path_row", lambda *a, **kw: None)
+        paths = [f"C/Diabetes_{i}" for i in range(10)]
+
+        def entry_for(path: str) -> MagicMock:
+            entry = MagicMock()
+            entry.path = path
+            entry.title = path[2:].replace("_", " ")
+            entry.is_redirect = False
+            return entry
+
+        archive = MagicMock()
+        archive.get_entry_by_path.side_effect = entry_for
+        suggest = MagicMock()
+        suggest.getEstimatedMatches.return_value = len(paths)
+        suggest.getResults.side_effect = lambda start, count: paths[
+            start : start + count
+        ]
+        with (
+            patch("openzim_mcp.zim_operations.zim_archive") as zim_archive,
+            patch("openzim_mcp.zim_operations.SuggestionSearcher") as searcher_cls,
+        ):
+            zim_archive.return_value.__enter__.return_value = archive
+            searcher_cls.return_value.suggest.return_value = suggest
+            page = dict(
+                ops.find_entry_by_title_data("/zim/test.zim", "diabetes", limit=3)
+            )
+            whole = dict(
+                ops.find_entry_by_title_data("/zim/test.zim", "diabetes", limit=10)
+            )
+
+        assert page["page_info"]["returned_count"] == 3
+        assert page["done"] is False
+        assert "hint" in page["_meta"]
+        assert whole["page_info"]["returned_count"] == 10
+        assert whole["done"] is True
+        assert "hint" not in whole["_meta"]
