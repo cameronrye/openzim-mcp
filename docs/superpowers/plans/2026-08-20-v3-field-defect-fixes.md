@@ -13,7 +13,7 @@
 ## Global Constraints
 
 - Branch from `fix/v3-field-defects` (HEAD of this plan's commit); name your branch exactly as your task states.
-- TDD per defect: failing test first, watch it fail, minimal fix, watch it pass, commit. One commit per defect or per tightly-coupled defect group; conventional messages (`fix: ...`, `docs: ...`) written as the developer, no AI attribution, no Co-Authored-By.
+- TDD per defect: failing test first, watch it fail, minimal fix, watch it pass, commit. One commit per defect or per tightly-coupled defect group; conventional messages (`fix: ...`, `docs: ...`) in the repo's existing `git log` style, subject plus a short why-focused body, no trailers.
 - New tests go in a NEW file `tests/test_v3_field_fixes_<cluster>.py`. Modify existing test files only when a pinned test contradicts a fix; say so in the commit body.
 - Pre-commit is stricter than CI (bundled flake8 plugins, full-severity bandit). Run `uv run pre-commit run --files <changed>` and read the REAL exit code — never pipe through `tail`/`echo $?` chains that mask it. Never `--no-verify`, never amend.
 - The full suite excludes `-m live` by default; run `uv run pytest -x -q` before your final commit and leave it green. 3 live tests fail on main already — do not chase them.
