@@ -323,8 +323,10 @@ def test_d06_description_states_the_per_mode_limit_bounds() -> None:
     idx = params.splitlines().index(limit_line)
     limit_text = " ".join(params.splitlines()[idx : idx + 2])
 
-    assert "1-200" in limit_text and "1-500" in limit_text, limit_text
-    assert "page" in limit_text and "walk" in limit_text, limit_text
+    assert "1-200" in limit_text, limit_text
+    assert "1-500" in limit_text, limit_text
+    assert "page" in limit_text, limit_text
+    assert "walk" in limit_text, limit_text
 
 
 def test_d06_page_and_walk_limit_rejections_share_one_style(temp_dir: Path) -> None:
@@ -474,8 +476,11 @@ def test_d61_context_sanitizer_strips_every_c0_control_character() -> None:
 
     out = sanitize_context_for_error("Path: foo\n\tbar\r.zim")
 
-    assert "\n" not in out and "\t" not in out and "\r" not in out, repr(out)
-    assert "foo" in out and "bar" in out, out
+    assert "\n" not in out, repr(out)
+    assert "\t" not in out, repr(out)
+    assert "\r" not in out, repr(out)
+    assert "foo" in out, out
+    assert "bar" in out, out
     # Every C0 control plus DEL, not just the three the field report named.
     for code in list(range(0x00, 0x20)) + [0x7F]:
         assert chr(code) not in sanitize_context_for_error(f"a{chr(code)}b"), hex(code)
@@ -492,7 +497,8 @@ def test_d61_envelope_context_and_message_are_single_line(temp_dir: Path) -> Non
         server, operation="zim_metadata", error=err, context="Path: foo\n\tbar.zim"
     )
 
-    assert "\n" not in payload["context"] and "\t" not in payload["context"]
+    assert "\n" not in payload["context"]
+    assert "\t" not in payload["context"]
     context_line = next(
         ln for ln in payload["message"].splitlines() if ln.startswith("**Context**")
     )
@@ -543,7 +549,8 @@ def test_r2_3_templated_details_line_is_single_line(temp_dir: Path) -> None:
     assert msg.count("\n") == clean.count("\n"), repr(msg)
     details = msg.splitlines()[-1]
     assert details.startswith("**Technical Details**:"), details
-    assert "foo" in details and "bar" in details, details
+    assert "foo" in details, details
+    assert "bar" in details, details
 
 
 def test_r2_3_generic_details_line_is_single_line(temp_dir: Path) -> None:
@@ -588,7 +595,8 @@ def test_r2_3_details_are_sanitized_before_the_length_cap() -> None:
     out = _bound_details("x" * 500 + "\n" + "y" * 600)
 
     assert "\n" not in out, repr(out[490:510])
-    assert out.endswith("...") and len(out) <= 1024 + len("...")
+    assert out.endswith("...")
+    assert len(out) <= 1024 + len("...")
 
 
 @contextlib.contextmanager
@@ -634,9 +642,9 @@ def test_r2_3_tool_error_log_record_is_a_single_line(
         )
 
     (logged,) = _messages(caplog, "openzim_mcp.tools.zim_metadata")
-    assert "\n" not in logged and "\t" not in logged and "\r" not in logged, repr(
-        logged
-    )
+    assert "\n" not in logged, repr(logged)
+    assert "\t" not in logged, repr(logged)
+    assert "\r" not in logged, repr(logged)
     assert logged.startswith("Error in zim_metadata: Path contains suspicious")
     # Operators still see the offending path, with its controls neutralised.
     assert "foo bar .zim" in logged, logged
@@ -666,13 +674,16 @@ def test_r2_3_zim_query_handler_log_record_is_a_single_line(
     with _captured(caplog, "openzim_mcp.simple_tools"):
         out = handler.handle_zim_query("summarize main page", _INJECTED_PATH)
 
-    assert isinstance(out, dict) and out["error"] is True, out
+    assert isinstance(out, dict), out
+    assert out["error"] is True, out
     logged = [
         m for m in _messages(caplog, "openzim_mcp.simple_tools") if "zim_query" in m
     ]
     assert logged, _messages(caplog, "openzim_mcp.simple_tools")
     for line in logged:
-        assert "\n" not in line and "\t" not in line and "\r" not in line, repr(line)
+        assert "\n" not in line, repr(line)
+        assert "\t" not in line, repr(line)
+        assert "\r" not in line, repr(line)
     assert any("foo bar .zim" in m for m in logged), logged
 
 
