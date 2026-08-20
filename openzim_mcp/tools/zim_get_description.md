@@ -11,8 +11,8 @@ mutually-exclusive branches:
     raw bytes (image, video, PDF, etc.). `view` is locked to "full"
     in this branch.
 - Batch: pass `entry_paths` (list of strings). Returns each entry's
-    clean body (first page only); non-full `view` and `content_offset`
-    return `invalid_path_combination` — page long entries singly.
+    clean body, first page only; non-full `view` / `content_offset`
+    return `invalid_path_combination`.
 - Main page: pass `main_page=True` (no entry_path). Returns the
     archive's main page. `view`, `entry_path`, `entry_paths`,
     `binary` are all forbidden in this branch.
