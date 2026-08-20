@@ -24,6 +24,7 @@ from typing import (
     TypeVar,
     cast,
 )
+from urllib.parse import unquote
 
 from libzim.reader import Archive  # type: ignore[import-untyped]
 
@@ -157,6 +158,22 @@ def _render_entry_payload_text(payload: Dict[str, Any]) -> str:
     result_text += f"Type: {payload.get('content_type') or 'Unknown'}\n"
     offset_line, body = _render_offset_and_body(payload)
     return f"{result_text}{offset_line}## Content\n\n{body}"
+
+
+def _alternate_entry_spellings(entry_path: str) -> List[str]:
+    """Other spellings of ``entry_path`` worth an exact probe, raw one excluded.
+
+    Mirrors ``zim.structure._resolve_entry_spelling``'s raw-first / decoded-
+    fallback order for the entry-fetch ladder: the percent-decoded form is
+    offered only when it differs from the input, so paths with a literal
+    ``%`` (warc2zim asset names) are never decoded away from a working
+    spelling.
+    """
+    spellings: List[str] = []
+    decoded = unquote(entry_path)
+    if decoded and decoded != entry_path:
+        spellings.append(decoded)
+    return spellings
 
 
 def _heading_matches(title: str, tokens: Tuple[str, ...]) -> bool:
@@ -766,6 +783,29 @@ class _ContentMixin:
             raise
         except Exception as direct_error:
             logger.debug(f"Direct entry access failed for {entry_path}: {direct_error}")
+
+            # Cheap exact probes on alternate spellings of the same path
+            # come BEFORE the search fallback: the archive's own links are
+            # percent-encoded per RFC 3986 while libzim stores raw UTF-8,
+            # so a client following a link zim_get itself served
+            # (``../gau%E1%B8%8Dapad/``) used to dead-end in not-found.
+            # The raw spelling was already tried above — some archives store
+            # a literal ``%`` in a path — so decoding is strictly a fallback.
+            for alternate in _alternate_entry_spellings(entry_path):
+                try:
+                    result, content_ok, resolved_path = build(alternate)
+                except OpenZimMcpArchiveError:
+                    raise
+                except Exception as alternate_error:
+                    logger.debug(
+                        f"Alternate spelling {alternate!r} failed: {alternate_error}"
+                    )
+                    continue
+                self.cache.set(cache_key, resolved_path)
+                logger.info(
+                    f"Resolved {entry_path!r} via alternate spelling {alternate!r}"
+                )
+                return result, content_ok
 
             # Fall back to search-based retrieval
             try:
