@@ -32,6 +32,54 @@ logger = logging.getLogger(__name__)
 # where those comparisons must be Unicode-correct.
 _UNICODE_TOKEN_RE = re.compile(r"[^\W_]+", re.UNICODE)
 
+# D49: zimit / warc2zim archives title every page ``<Page> | <Site>`` and
+# catalogue-style corpora (the IEP, biographical dictionaries) title people
+# ``Last, First``. Neither convention is how anyone asks — ``tell me about
+# Immanuel Kant`` — so the order-sensitive comparison below never
+# strong-matched on such a corpus and the auto-fetch / disambiguation path
+# was unreachable. The suffix is peeled off the end; the inversion swaps
+# the two halves around the FIRST comma and keeps whatever follows a
+# ``:`` / ``(`` (``Kant, Immanuel: Aesthetics`` → ``Immanuel Kant:
+# Aesthetics``) so the candidate-extends-topic rule still sees the name
+# as its prefix.
+_SITE_SUFFIX_RE = re.compile(r"\s*\|[^|]*$")
+_INVERTED_NAME_RE = re.compile(r"^\s*([^,:(|]+?)\s*,\s*([^,:(|]+?)\s*(?=$|[:(])")
+
+
+def _candidate_forms(candidate: str) -> Iterator[str]:
+    """Yield ``candidate`` plus its site-suffix-stripped and comma-inverted
+    spellings (deduplicated, original first)."""
+    seen = {candidate}
+    yield candidate
+    stripped = _SITE_SUFFIX_RE.sub("", candidate).strip()
+    if stripped and stripped not in seen:
+        seen.add(stripped)
+        yield stripped
+    m = _INVERTED_NAME_RE.match(stripped)
+    if m:
+        inverted = f"{m.group(2)} {m.group(1)}{stripped[m.end():]}"
+        if inverted not in seen:
+            yield inverted
+
+
+def _tokens_strong_match(topic_tokens: tuple, cand_tokens: tuple) -> bool:
+    """The ordered-token rules of :func:`is_strong_title_match` for one
+    candidate spelling."""
+    if topic_tokens == cand_tokens:
+        return True
+    if sum(len(t) for t in topic_tokens) < 3:
+        return False
+    if sum(len(t) for t in cand_tokens) < 3:
+        return False
+    # Candidate-extends-topic — unconditional (canonical promotion).
+    if cand_tokens[: len(topic_tokens)] == topic_tokens:
+        return True
+    # Topic-extends-candidate — bounded to a 1-token diff so
+    # ``Apollo 11 (mission)`` → ``Apollo_11`` works but
+    # ``Martin Luther King`` → ``Martin`` doesn't.
+    diff = len(topic_tokens) - len(cand_tokens)
+    return 0 < diff <= 1 and topic_tokens[: len(cand_tokens)] == cand_tokens
+
 
 def is_strong_title_match(topic: str, path: str, title: str) -> bool:
     """Return True iff ``path`` or ``title`` looks like the article for ``topic``.
@@ -53,6 +101,12 @@ def is_strong_title_match(topic: str, path: str, title: str) -> bool:
       are NOT accepted — a bare-first-name stub shouldn't outrank the
       canonical full-name article (H20 regression).
 
+    Each candidate is tried in three spellings (D49): as given, with a
+    trailing ``| Site`` suffix removed, and with a leading ``Last, First``
+    inverted to ``First Last`` — so ``Immanuel Kant`` strong-matches
+    ``Kant, Immanuel | Internet Encyclopedia of Philosophy``. The rules
+    themselves stay order-sensitive.
+
     The 3-char-minimum guard on each side prevents trivially-short
     tokens (``Pi``) from driving prefix matches.
     """
@@ -65,24 +119,10 @@ def is_strong_title_match(topic: str, path: str, title: str) -> bool:
     for candidate in (path, title):
         if not candidate:
             continue
-        cand_tokens = tuple(_UNICODE_TOKEN_RE.findall(candidate.lower()))
-        if not cand_tokens:
-            continue
-        if topic_tokens == cand_tokens:
-            return True
-        if sum(len(t) for t in topic_tokens) < 3:
-            continue
-        if sum(len(t) for t in cand_tokens) < 3:
-            continue
-        # Candidate-extends-topic — unconditional (canonical promotion).
-        if cand_tokens[: len(topic_tokens)] == topic_tokens:
-            return True
-        # Topic-extends-candidate — bounded to a 1-token diff so
-        # ``Apollo 11 (mission)`` → ``Apollo_11`` works but
-        # ``Martin Luther King`` → ``Martin`` doesn't.
-        diff = len(topic_tokens) - len(cand_tokens)
-        if 0 < diff <= 1 and topic_tokens[: len(cand_tokens)] == cand_tokens:
-            return True
+        for form in _candidate_forms(candidate):
+            cand_tokens = tuple(_UNICODE_TOKEN_RE.findall(form.lower()))
+            if cand_tokens and _tokens_strong_match(topic_tokens, cand_tokens):
+                return True
     return False
 
 

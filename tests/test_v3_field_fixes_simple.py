@@ -16,6 +16,7 @@ import pytest
 
 from openzim_mcp.pagination import Cursor
 from openzim_mcp.simple_tools import IntentParser, SimpleToolsHandler
+from openzim_mcp.title_promotion import is_strong_title_match
 
 
 def _weak_results() -> List[Dict[str, Any]]:
@@ -398,3 +399,78 @@ class TestD48GetArticleDeterminerAndAbout:
         assert not mock.search_zim_file.called
         assert not mock.search_zim_file_data.called
         assert "body" in out
+
+
+# ---------------------------------------------------------------------------
+# D49: natural-order names never strong-match "Last, First | Site" titles
+# ---------------------------------------------------------------------------
+
+IEP_SUFFIX = " | Internet Encyclopedia of Philosophy"
+
+
+class TestD49InvertedTitleStrongMatch:
+    """IEP titles all read ``Kant, Immanuel | Internet Encyclopedia of
+    Philosophy``; the order-sensitive token comparison never matched the
+    natural word order every real user types, so ``tell me about
+    Immanuel Kant`` rendered a plain 3-hit list while ``tell me about
+    Kant, Immanuel`` reached the strong-match disambiguation.
+    """
+
+    @pytest.mark.parametrize(
+        ("topic", "title"),
+        [
+            ("immanuel kant", "Kant, Immanuel" + IEP_SUFFIX),
+            ("immanuel kant", "Kant, Immanuel"),
+            ("Immanuel Kant", "Kant, Immanuel: Aesthetics" + IEP_SUFFIX),
+            ("kant, immanuel", "Kant, Immanuel" + IEP_SUFFIX),
+            # Site suffix alone must not dilute an otherwise exact title.
+            ("measles", "Measles" + " | MedlinePlus"),
+        ],
+    )
+    def test_inverted_and_suffixed_titles_match(self, topic: str, title: str) -> None:
+        assert is_strong_title_match(topic, "iep.utm.edu/x/", title)
+
+    @pytest.mark.parametrize(
+        ("topic", "title"),
+        [
+            ("immanuel kant", "Hegel, Georg Wilhelm Friedrich" + IEP_SUFFIX),
+            ("immanuel kant", "Kant: Aesthetics" + IEP_SUFFIX),
+            ("immanuel kant", "Immanuel, Hegel" + IEP_SUFFIX),
+            ("martin luther king", "Martin" + IEP_SUFFIX),
+            # Inversion must not rescue a multi-comma list.
+            ("john smith", "Smith, John, Jr., Sr."),
+        ],
+    )
+    def test_unrelated_or_overreaching_titles_still_miss(
+        self, topic: str, title: str
+    ) -> None:
+        assert not is_strong_title_match(topic, "iep.utm.edu/x/", title)
+
+    def test_natural_order_query_reaches_disambiguation(self) -> None:
+        handler, mock = _handler_with()
+        mock.search_zim_file_data.return_value = {
+            "results": [
+                {
+                    "path": "iep.utm.edu/kantaest/",
+                    "title": "Kant, Immanuel: Aesthetics" + IEP_SUFFIX,
+                    "snippet": "",
+                },
+                {
+                    "path": "iep.utm.edu/kantview/",
+                    "title": "Kant, Immanuel" + IEP_SUFFIX,
+                    "snippet": "",
+                },
+                {
+                    "path": "iep.utm.edu/kant-rel/",
+                    "title": "Kant, Immanuel: Philosophy of Religion" + IEP_SUFFIX,
+                    "snippet": "",
+                },
+            ]
+        }
+        mock.search_zim_file.return_value = "plain rendered list"
+        out = handler.handle_zim_query(
+            "tell me about Immanuel Kant", zim_file_path="/zims/test.zim"
+        )
+        assert "plain rendered list" not in out
+        assert "Multiple articles match" in out
+        assert "iep.utm.edu/kantview/" in out
