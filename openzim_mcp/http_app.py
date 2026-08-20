@@ -10,10 +10,12 @@ HTTP-specific behavior is grouped here.
 import asyncio
 import hashlib
 import hmac
+import json
 import logging
 import os
 import socket
 import warnings
+from collections import deque
 from concurrent.futures import Future
 from contextlib import asynccontextmanager
 from typing import (
@@ -27,12 +29,13 @@ from typing import (
 )
 
 from starlette.applications import Starlette
+from starlette.datastructures import Headers
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.cors import CORSMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
-from starlette.types import ASGIApp
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from .exceptions import OpenZimMcpConfigurationError, OpenZimMcpTimeoutError
 from .timeout_utils import _get_executor, run_with_timeout
@@ -525,6 +528,182 @@ class TransportSecurityGateMiddleware(BaseHTTPMiddleware):
         return await call_next(request)
 
 
+def _is_initialize_request(body: bytes) -> bool:
+    """True iff ``body`` is a JSON-RPC request the SDK would accept as ``initialize``.
+
+    Mirrors what ``JSONRPCRequest`` validation lets through — ``jsonrpc`` of
+    exactly ``"2.0"``, a string or (strict, so not bool) int ``id``, and
+    ``params`` absent or an object — so the gate never turns away a request
+    the SDK would have opened a session for, and never lets through one it
+    would have rejected *after* opening a session.
+    """
+    try:
+        message = json.loads(body)
+    except ValueError:
+        return False
+    if not isinstance(message, dict) or message.get("method") != "initialize":
+        return False
+    if message.get("jsonrpc") != "2.0":
+        return False
+    request_id = message.get("id")
+    if isinstance(request_id, bool) or not isinstance(request_id, (int, str)):
+        return False
+    return message.get("params", None) is None or isinstance(message["params"], dict)
+
+
+class SessionlessRequestGateMiddleware:
+    """Refuse handshake-era requests that have no session and are not ``initialize``.
+
+    The SDK's stateful request path mints a transport, registers it in the
+    session table and starts its serve loop for *any* request that lacks an
+    ``Mcp-Session-Id`` header — and only then looks at the request. Every
+    sessionless request except ``initialize`` is rejected at that point
+    (``400 Missing session ID``), but the session it minted outlives the 400:
+    the caller never learns it owns one, so no DELETE comes, and the idle-expiry
+    branch is dead because the app builder exposes no ``session_idle_timeout``.
+    A plain curl, a misbehaving client, or a page the user happens to visit can
+    grow the table and the task count without bound on the default deployment.
+
+    This gate answers those requests itself, with the SDK's own ``400`` body,
+    before the SDK can mint anything. Only two kinds of request legitimately
+    arrive without a session and must pass: an ``initialize`` POST (the session
+    does not exist yet) and anything on the 2026-07-28 stateless path, which is
+    routed by the ``MCP-Protocol-Version`` header and never has a session.
+    ``initialize`` is only recognisable from the body, so a sessionless POST is
+    buffered — under the SDK's request-size cap, which it mirrors — and replayed
+    to the app. A body the gate can neither parse nor recognise gets the same
+    ``Missing session ID`` answer: whatever else is wrong with it, the request
+    has no session and can never be served.
+
+    A pure ASGI middleware rather than ``BaseHTTPMiddleware`` so the body
+    replay is explicit and bounded. Health endpoints are exempt, as they are
+    from the other gates.
+    """
+
+    def __init__(self, app: ASGIApp, max_body_size: Optional[int] = None) -> None:
+        """Wrap ``app``; ``max_body_size`` defaults to the SDK's request cap."""
+        from mcp.server.streamable_http_manager import DEFAULT_MAX_REQUEST_BODY_SIZE
+
+        self.app = app
+        self._max_body_size = (
+            max_body_size
+            if max_body_size is not None
+            else DEFAULT_MAX_REQUEST_BODY_SIZE
+        )
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        """Pass through every request that cannot leak; answer the rest."""
+        from mcp.server.streamable_http import MCP_SESSION_ID_HEADER
+        from mcp.shared.inbound import MCP_PROTOCOL_VERSION_HEADER
+        from mcp_types.version import HANDSHAKE_PROTOCOL_VERSIONS
+
+        if scope["type"] != "http" or scope["path"] in AUTH_EXEMPT_PATHS:
+            await self.app(scope, receive, send)
+            return
+        headers = Headers(scope=scope)
+        if headers.get(MCP_SESSION_ID_HEADER) is not None:
+            # Existing-session and unknown-session paths never mint.
+            await self.app(scope, receive, send)
+            return
+        protocol_version = headers.get(MCP_PROTOCOL_VERSION_HEADER)
+        if (
+            protocol_version is not None
+            and protocol_version not in HANDSHAKE_PROTOCOL_VERSIONS
+        ):
+            # Era routing sends this to the stateless 2026-07-28 handler.
+            await self.app(scope, receive, send)
+            return
+
+        method = scope["method"]
+        if method in ("GET", "DELETE"):
+            await self._reject_missing_session(scope, receive, send)
+            return
+        if method != "POST":
+            # The SDK answers 405 for these too — after minting a session.
+            await self._send_jsonrpc_error(
+                scope,
+                receive,
+                send,
+                "Method Not Allowed",
+                405,
+                extra_headers={"Allow": "GET, POST, DELETE"},
+            )
+            return
+
+        declared = headers.get("content-length")
+        if declared is not None:
+            try:
+                if int(declared) > self._max_body_size:
+                    # The SDK's own body-limit middleware rejects this with
+                    # 413 before its session code runs; no need to read it.
+                    await self.app(scope, receive, send)
+                    return
+            except ValueError:
+                pass
+
+        cached: "deque[Message]" = deque()
+        body = bytearray()
+        while True:
+            message = await receive()
+            if message["type"] != "http.request":
+                # Disconnected mid-body: nothing to classify and nobody to
+                # answer, but the outer middleware needs *a* response.
+                await self._reject_missing_session(scope, receive, send)
+                return
+            chunk = message.get("body", b"")
+            if len(body) + len(chunk) > self._max_body_size:
+                response = Response("Request body too large", status_code=413)
+                await response(scope, receive, send)
+                return
+            body.extend(chunk)
+            cached.append(message)
+            if not message.get("more_body", False):
+                break
+
+        if not _is_initialize_request(bytes(body)):
+            await self._reject_missing_session(scope, receive, send)
+            return
+
+        async def replay() -> Message:
+            if cached:
+                return cached.popleft()
+            return await receive()
+
+        await self.app(scope, replay, send)
+
+    async def _reject_missing_session(
+        self, scope: Scope, receive: Receive, send: Send
+    ) -> None:
+        await self._send_jsonrpc_error(
+            scope, receive, send, "Bad Request: Missing session ID", 400
+        )
+
+    async def _send_jsonrpc_error(
+        self,
+        scope: Scope,
+        receive: Receive,
+        send: Send,
+        message: str,
+        status_code: int,
+        extra_headers: Optional[Mapping[str, str]] = None,
+    ) -> None:
+        """Answer exactly as the SDK transport would, minus the session header."""
+        from mcp_types import INVALID_REQUEST, ErrorData, JSONRPCError
+
+        error = JSONRPCError(
+            jsonrpc="2.0",
+            id=None,
+            error=ErrorData(code=INVALID_REQUEST, message=message),
+        )
+        response = Response(
+            error.model_dump_json(by_alias=True, exclude_unset=True),
+            status_code=status_code,
+            headers=dict(extra_headers or {}),
+            media_type="application/json",
+        )
+        await response(scope, receive, send)
+
+
 def serve_streamable_http(
     server: "OpenZimMcpServer",
     runner: Callable[[Starlette, str, int], None] = _default_uvicorn_runner,
@@ -570,10 +749,14 @@ def serve_streamable_http(
     # layer so 401 responses from the inner auth middleware still carry
     # Access-Control-Allow-Origin headers (otherwise browser JS clients
     # see an opaque CORS error instead of "401 unauthorized").
-    # Added FIRST, so it is the INNERMOST of the three: auth and CORS still
-    # get to answer first, but a request that clears them is Host/Origin
-    # checked here rather than after the SDK has already minted a session for
-    # it. See TransportSecurityGateMiddleware.
+    # Added FIRST, so it is the INNERMOST layer: everything else answers
+    # before it, and only a request that cleared auth and Host/Origin has its
+    # body read. It is the last line between a sessionless request and the
+    # SDK's session-minting code. See SessionlessRequestGateMiddleware.
+    app.add_middleware(SessionlessRequestGateMiddleware)
+    # Next-innermost: auth and CORS still get to answer first, but a request
+    # that clears them is Host/Origin checked here rather than after the SDK
+    # has already minted a session for it. See TransportSecurityGateMiddleware.
     if server._transport_security is not None:
         app.add_middleware(
             TransportSecurityGateMiddleware, security=server._transport_security
