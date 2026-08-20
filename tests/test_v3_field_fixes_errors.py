@@ -263,3 +263,28 @@ def test_d04_browse_mode_schema_still_advertises_the_enum(tmp_path: Path) -> Non
         "title": "Mode",
         "type": "string",
     }
+
+
+# ---------------------------------------------------------------------------
+# D05 — the browse description documents the unknown-namespace soft reject
+# ---------------------------------------------------------------------------
+
+
+def _browse_errors_section() -> str:
+    from openzim_mcp.tools._common import load_description
+
+    text = load_description("zim_browse")
+    return text[text.index("ERRORS:") :]
+
+
+def test_d05_description_documents_the_soft_reject_shape() -> None:
+    """namespace.py deliberately soft-rejects an unknown letter with
+    ``isError=false`` (pinned by test_browse_namespace_d11_v2a9); the
+    ERRORS section claimed an error envelope, so clients branching on
+    ``isError`` never saw the reject."""
+    errors = _browse_errors_section()
+
+    assert "rejected_unknown_namespace" in errors, errors
+    assert "bad_namespace" in errors, errors
+    assert "isError=false" in errors, errors
+    assert "unknown\n  namespace returns the underlying data-layer error" not in errors

@@ -14,9 +14,8 @@ PARAMETERS:
   namespace         REQUIRED. ZIM namespace letter (e.g. "C" for
                     content, "A" for articles in legacy archives,
                     "I" for images).
-  mode              "page" (default) — paginated browse via cursor.
-                    "walk" — full namespace enumeration via cursor
-                    state.
+  mode              "page" (default) — paginated browse.
+                    "walk" — full namespace enumeration.
   cursor            Phase B cursor pagination handle.
   limit             Page size (default depends on mode).
   offset            Page-mode pagination offset (ignored in walk).
@@ -30,5 +29,7 @@ RESPONSE:
   metadata in `page_info`.
 
 ERRORS:
-  Invalid `mode` returns `invalid_mode`. Missing or unknown
-  namespace returns the underlying data-layer error envelope.
+  Invalid `mode` returns `invalid_mode`; an empty `namespace` returns
+  a validation envelope. An unknown namespace letter is a soft reject
+  (isError=false): `total: 0`, `discovery_method:
+  "rejected_unknown_namespace"`, `_meta.reason: "bad_namespace"`.
