@@ -317,3 +317,40 @@ class TestD46PaginationFollowUpsAreMetaOnly:
 
     def test_guidance_stays_short(self) -> None:
         assert len(SimpleToolsHandler._meta_query_guidance()) < 1000
+
+
+# ---------------------------------------------------------------------------
+# D47: documented ``offset`` silently ignored by suggestions / find_by_title
+# ---------------------------------------------------------------------------
+
+
+def _description_arg_block(name: str) -> str:
+    """Return the indented ``Args:`` paragraph for ``name`` from the
+    zim_query description (up to the next ``<arg>:`` line at the same
+    indentation).
+    """
+    from openzim_mcp.tools.zim_query import _DESCRIPTION
+
+    lines = _DESCRIPTION.splitlines()
+    start = next(i for i, line in enumerate(lines) if line.startswith(f"    {name}:"))
+    block = [lines[start]]
+    for line in lines[start + 1 :]:
+        if line.startswith("    ") and not line.startswith("     "):
+            break
+        block.append(line)
+    return "\n".join(block)
+
+
+class TestD47OffsetExclusionsDocumented:
+    """``offset`` was documented as generic pagination with no per-intent
+    exclusion, yet ``suggestions for`` and ``find article titled`` never
+    read it: ``offset=3`` returned the identical first page. The
+    backends take no offset (suggestions is declared non-paginated), so
+    the contract is documented at the tool surface instead.
+    """
+
+    def test_offset_doc_names_the_intents_that_ignore_it(self) -> None:
+        block = _description_arg_block("offset")
+        assert "suggestions for" in block
+        assert "find article titled" in block
+        assert "limit" in block, "must tell the caller what to do instead"
