@@ -443,3 +443,49 @@ def test_d60_short_details_are_untouched(temp_dir: Path) -> None:
     )
 
     assert msg.endswith("**Technical Details**: Archive corrupted"), msg[-80:]
+
+
+# ---------------------------------------------------------------------------
+# D61 — tab / newline / CR do not survive sanitize_context_for_error
+# ---------------------------------------------------------------------------
+
+
+def test_d61_context_sanitizer_strips_every_c0_control_character() -> None:
+    """The docstring promises raw user values "cannot embed control
+    characters ... in the response"; the class skipped \\x09, \\x0a, \\x0d,
+    so an injected LF split the "**Context**" line of the markdown."""
+    from openzim_mcp.security import sanitize_context_for_error
+
+    out = sanitize_context_for_error("Path: foo\n\tbar\r.zim")
+
+    assert "\n" not in out and "\t" not in out and "\r" not in out, repr(out)
+    assert "foo" in out and "bar" in out, out
+    # Every C0 control plus DEL, not just the three the field report named.
+    for code in list(range(0x00, 0x20)) + [0x7F]:
+        assert chr(code) not in sanitize_context_for_error(f"a{chr(code)}b"), hex(code)
+
+
+def test_d61_envelope_context_and_message_are_single_line(temp_dir: Path) -> None:
+    from openzim_mcp.tools._common import tool_error_response
+
+    config = OpenZimMcpConfig(allowed_directories=[str(temp_dir)], tool_mode="advanced")
+    server = OpenZimMcpServer(config)
+    err = OpenZimMcpSecurityError("Access denied - Path is outside allowed directories")
+
+    payload = tool_error_response(
+        server, operation="zim_metadata", error=err, context="Path: foo\n\tbar.zim"
+    )
+
+    assert "\n" not in payload["context"] and "\t" not in payload["context"]
+    context_line = next(
+        ln for ln in payload["message"].splitlines() if ln.startswith("**Context**")
+    )
+    assert "bar.zim" in context_line, context_line
+
+
+def test_d61_sanitize_input_keeps_its_deliberate_whitespace_carve_out() -> None:
+    """``sanitize_input`` cleans multi-line query text and documents its
+    newline/tab exemption; only the context sanitizer changes."""
+    from openzim_mcp.security import sanitize_input
+
+    assert sanitize_input("line one\n\tline two") == "line one\n\tline two"

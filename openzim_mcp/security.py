@@ -541,7 +541,13 @@ def redact_paths_in_message(raw_message: str) -> str:
     return _ABS_PATH_RE.sub(_replace, message)
 
 
-_CONTEXT_CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]+")
+# Every C0 control character plus DEL — including tab, LF, and CR. Unlike
+# ``sanitize_input`` (which cleans legitimately multi-line query text and
+# keeps newlines/tabs on purpose), a context string is a one-line label
+# inside a markdown message; a caller-supplied LF here splits the
+# ``**Context**`` line, and a log sink that captures the rendered message
+# gets a forged second line (D61).
+_CONTEXT_CONTROL_CHARS_RE = re.compile(r"[\x00-\x1f\x7f]+")
 _CONTEXT_MAX_LENGTH = 1024
 
 
