@@ -501,6 +501,42 @@ def test_d30_operator_words_do_not_anchor_or_highlight_snippets(tmp_path) -> Non
     assert "**and**" not in snippet and "**AND**" not in snippet
 
 
+# ---------------------------------------------------------------------------
+# D31 — one empty-query contract across the three modes
+# ---------------------------------------------------------------------------
+
+
+def test_d31_empty_query_is_a_bad_query_page_in_every_mode(
+    tmp_path, monkeypatch
+) -> None:
+    """``""`` / whitespace yields reason="bad_query" in fulltext, title and
+    suggest alike — not a raise in one mode and a reason-less page in another.
+
+    fulltext already returned the structured reason "so the model can
+    self-correct without parsing an error envelope"; title mode raised a
+    generic validation error and suggest mode returned an empty page with
+    no reason at all.
+    """
+    ops = _make_ops(tmp_path, monkeypatch)
+
+    for blank in ("", "   "):
+        fulltext = ops.search_zim_file_data("/zim/test.zim", blank, limit=5)
+        title = ops.find_entry_by_title_data("/zim/test.zim", blank, limit=5)
+        suggest = ops.get_search_suggestions_data("/zim/test.zim", blank, limit=5)
+        for page in (fulltext, title, suggest):
+            assert page["results"] == []
+            assert page["total"] == 0
+            assert page["done"] is True
+            assert page["_meta"]["reason"] == "bad_query", page
+
+    # Title mode keeps its own envelope keys on the empty page.
+    assert title["query"] == "   "
+    assert title["fast_path_hit"] is False
+    assert title["fuzzy_path_hit"] is False
+    assert title["files_searched"] == 0
+    assert suggest["partial_query"] == "   "
+
+
 def test_d30_description_says_operators_are_literal_terms() -> None:
     """The description advertises Xapian BM25; it must also say that
     Boolean operators, quotes and wildcards are passed through unparsed."""

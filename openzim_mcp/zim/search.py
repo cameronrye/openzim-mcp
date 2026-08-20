@@ -2233,7 +2233,12 @@ class _SearchMixin:
                 "done": True,
                 "page_info": {"offset": 0, "limit": limit, "returned_count": 0},
             }
-            return cast("SearchSuggestionsResponse", attach_meta(empty_payload))
+            # Same structured reason as the fulltext / title modes, so an
+            # empty prefix is distinguishable from a prefix with no matches.
+            return cast(
+                "SearchSuggestionsResponse",
+                attach_meta(empty_payload, reason="bad_query"),
+            )
 
         # Validate and resolve file path
         validated_path = self._validate_zim_path(zim_file_path)
@@ -3219,12 +3224,14 @@ class _SearchMixin:
         fast_path_hit: bool,
         fuzzy_path_hit: bool,
         verified_variants: List[str],
+        reason: Optional[str] = None,
     ) -> "FindEntryResponse":
         """Sort, dedupe, and assemble the contract envelope.
 
         Pure transformation of the per-file accumulated state — no
         archive access, no control flow. Mirrors the legacy post-loop
-        block exactly.
+        block exactly. ``reason`` overrides the derived ``0_hits`` verdict
+        (the blank-query page is ``bad_query``, not a miss).
         """
         structured_suggestions_limit = self.config.search.structured_suggestions_limit
 
@@ -3263,7 +3270,8 @@ class _SearchMixin:
             for resolved in verified_variants[:structured_suggestions_limit]:
                 suggestions.append({"type": "alt_spelling", "value": resolved})
 
-        reason = None if aggregate_results else "0_hits"
+        if reason is None and not aggregate_results:
+            reason = "0_hits"
 
         # Trim to limit and build the contract envelope. ``find_entry_by_title``
         # is non-paginated (no cursor input, no offset), but the v2 Phase B
@@ -3315,13 +3323,24 @@ class _SearchMixin:
              title match is promoted to score 1.0 and flips fast_path_hit.
           3. Return list sorted by score (descending).
         """
-        if not title or not title.strip():
-            raise OpenZimMcpValidationError(
-                "Input is empty or contains only whitespace/control characters"
-            )
         if limit < 1 or limit > 50:
             raise OpenZimMcpValidationError(
                 f"limit must be between 1 and 50 (provided: {limit})"
+            )
+        # Empty / whitespace-only title: the same structured reason the
+        # fulltext and suggest modes return, so a model can self-correct
+        # without parsing an error envelope. This used to raise a generic
+        # validation error — one tool, three contracts for one mistake.
+        if not title or not title.strip():
+            return self._assemble_find_response(
+                [],
+                title=title,
+                limit=limit,
+                files=[],
+                fast_path_hit=False,
+                fuzzy_path_hit=False,
+                verified_variants=[],
+                reason="bad_query",
             )
 
         if cross_file:

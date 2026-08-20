@@ -636,12 +636,17 @@ def test_zero_hits_no_suggestions_when_pool_empty(
 # ---------------------------------------------------------------------------
 
 
-def test_blank_title_raises(test_config: OpenZimMcpConfig) -> None:
+def test_blank_title_returns_bad_query_page(test_config: OpenZimMcpConfig) -> None:
+    """A blank title is the structured ``reason="bad_query"`` page that
+    fulltext and suggest mode return, not a raised validation error (v3
+    field sweep D31 aligned the three modes)."""
     server = _make_server(test_config)
-    from openzim_mcp.exceptions import OpenZimMcpValidationError
 
-    with pytest.raises(OpenZimMcpValidationError):
-        server.zim_operations.find_entry_by_title_data("/zim/test.zim", "   ")
+    out = server.zim_operations.find_entry_by_title_data("/zim/test.zim", "   ")
+
+    assert out["results"] == []
+    assert out["total"] == 0
+    assert out["_meta"]["reason"] == "bad_query"
 
 
 def test_out_of_range_limit_raises(test_config: OpenZimMcpConfig) -> None:
