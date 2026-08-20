@@ -162,7 +162,7 @@ class _ArticleBodyMixin:
     # A sentence boundary: terminal punctuation, optional closing
     # quote/bracket, then whitespace or end. The two classes are
     # disjoint so the engine never backtracks between them.
-    _LEAD_SENTENCE_END_RE = re.compile(r"[.!?](?:[\"')\]]*)(?:\s|$)")
+    _LEAD_SENTENCE_END_RE = re.compile(r"[.!?][\"')\]]*(?:\s|$)")
     # A long unpunctuated line still counts as prose — some leads are a
     # single clause with no terminator; what we want to exclude is the
     # short ``Label: value`` line, not a real sentence missing its stop.
