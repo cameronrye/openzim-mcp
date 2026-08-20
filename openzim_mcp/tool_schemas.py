@@ -52,6 +52,11 @@ class MetaEnvelope(TypedDict, total=False):
     total_chars: int
     suggestions: list[dict[str, str]]
     reason: str
+    # Free-text next step attached after ``build_meta``. Rides the unpaged
+    # lookups (``suggest`` / ``find_entry_by_title``) when ``done=False``
+    # — their only continuation is a larger ``limit``, never ``offset`` —
+    # and cross-archive title mode when promotion was skipped.
+    hint: str
     # Archive-type detection annotations (``meta.build_meta`` emits each
     # only when the caller passes a non-None value). ``detected_type`` /
     # ``detection_confidence`` ride metadata responses (values from

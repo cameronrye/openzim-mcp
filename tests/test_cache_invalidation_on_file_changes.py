@@ -166,8 +166,8 @@ _CONTENT_CACHE_CASES = [
     (
         "suggestions_data",
         lambda zo, p: zo.get_search_suggestions_data(p, "te", 10),
-        lambda vp: f"suggestions_data:v2c:{vp}:te:10",
-        lambda vp, tok: f"suggestions_data:v2c:{vp}:{tok}:te:10",
+        lambda vp: f"suggestions_data:v2d:{vp}:te:10",
+        lambda vp, tok: f"suggestions_data:v2d:{vp}:{tok}:te:10",
     ),
     (
         # Entry content/response caches: an explicit max_content_length keeps
