@@ -79,6 +79,20 @@ class OpenZimMcpArchivePathError(OpenZimMcpValidationError):
     error_code: str = "OPENZIM_ARCHIVE_PATH_ERROR"
 
 
+class OpenZimMcpArchiveNameError(OpenZimMcpArchivePathError):
+    """Raised when a relative ``zim_file_path`` matches no loaded archive.
+
+    A relative input carries no traversal (``..`` is rejected earlier) and
+    no absolute escape, so failing to match is a typo or a stale name, not
+    an attack. Keeping it apart from :class:`OpenZimMcpSecurityError` lets
+    the error surface say "did not match any loaded archive" instead of
+    "blocked for security reasons" — the wording the project already ruled
+    a regression for the simple-mode path.
+    """
+
+    error_code: str = "OPENZIM_ARCHIVE_NAME_UNRESOLVED"
+
+
 class OpenZimMcpFileNotFoundError(OpenZimMcpError):
     """Raised when a ZIM file is not found."""
 

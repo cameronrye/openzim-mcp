@@ -40,7 +40,7 @@ from __future__ import annotations
 import asyncio
 from typing import TYPE_CHECKING, Any, Literal, Optional
 
-from ..constants import MAX_SEARCH_RESULT_LIMIT
+from ..constants import MAX_QUERY_LENGTH, MAX_SEARCH_RESULT_LIMIT
 from ..responses import tool_error
 from ._common import enforce_rate_limit, load_description, tool_error_response
 
@@ -118,6 +118,21 @@ def register(server: "OpenZimMcpServer") -> None:
             rl = enforce_rate_limit(server, _rl_op)
             if rl is not None:
                 return rl
+            # Same front-door cap as zim_query (D59): the query is run
+            # through the misspelling map's regexes and echoed back verbatim
+            # in ``query`` / ``partial_query``, so an unbounded input is both
+            # GIL-held regex work no timeout can interrupt and a 1:1
+            # response amplifier. Checked before ``mode`` so the rejection
+            # never depends on which branch would have echoed it.
+            if len(query) > MAX_QUERY_LENGTH:
+                return tool_error(
+                    operation="invalid_query",
+                    message=(
+                        f"`query` must not exceed {MAX_QUERY_LENGTH} characters "
+                        f"(provided: {len(query)}). Pass search terms, not a "
+                        "document."
+                    ),
+                )
             if mode not in _VALID_MODES:
                 return tool_error(
                     operation="invalid_mode",
