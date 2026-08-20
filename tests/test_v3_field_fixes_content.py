@@ -647,3 +647,57 @@ def test_noscript_boilerplate_is_stripped(
     text = render(content_processor, _MEDLINEPLUS_ENCY_HTML)
     assert _NOSCRIPT_JUNK not in text, text
     assert "Diabetes is a long-term (chronic)" in text
+
+
+# ---------------------------------------------------------------------------
+# D16 — the footer's human-readable count must match what was emitted
+# ---------------------------------------------------------------------------
+
+
+def test_truncation_footer_count_matches_emitted_slice(
+    content_processor: ContentProcessor,
+) -> None:
+    """D16: with a space at index 599 the page emits 599 chars and says
+    ``content_offset=599``, but the prose claimed 'showing first 600'."""
+    import re
+
+    body = ("w" * 599) + " " + ("x" * 2000)
+    out = content_processor.truncate_content(body, 600)
+    emitted = out.partition("\n\n... [Content truncated")[0]
+    assert len(emitted) == 599
+    assert "only showing first 599" in out, out
+    assert "first 600" not in out
+    hint = re.search(r"content_offset=(\d+)", out)
+    assert hint is not None and int(hint.group(1)) == 599
+
+    # Mid-article: the range end must be where the next page starts, not
+    # offset + cap.
+    page2 = content_processor.truncate_content(
+        body[599:], 600, current_offset=599, original_total=len(body)
+    )
+    assert "showing chars 599–1,199 of" in page2, page2
+    hint2 = re.search(r"content_offset=(\d+)", page2)
+    assert hint2 is not None and int(hint2.group(1)) == 1199
+
+
+@patch("openzim_mcp.zim_operations.Archive")
+def test_entry_footer_count_agrees_with_more_at_offset(
+    mock_archive: MagicMock, ops: ZimOperations, zim_file: Path
+) -> None:
+    import re
+
+    path = "medlineplus.gov/bloodglucose.html"
+    html = "<article><h1>Blood Glucose</h1><p>" + ("glucose " * 300) + "</p></article>"
+    mock_archive.return_value = _archive_with(
+        {path: _html_entry(path, "Blood Glucose", html)}
+    )
+    # Pick a cap whose last char is a space so the boundary deferral fires.
+    full = ops.get_zim_entry_data(str(zim_file), path, max_content_length=10_000)
+    cap = full["content"].index(" ", 500) + 1
+
+    result = ops.get_zim_entry_data(str(zim_file), path, max_content_length=cap)
+
+    shown = re.search(r"only showing first ([\d,]+)", result["content"])
+    assert shown is not None, result["content"]
+    assert result["_meta"]["more_at_offset"] == cap - 1
+    assert int(shown.group(1).replace(",", "")) == cap - 1

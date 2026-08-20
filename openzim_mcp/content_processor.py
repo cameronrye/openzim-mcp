@@ -1626,17 +1626,21 @@ class ContentProcessor:
         # whether we're paginating mid-article: at offset 0 the
         # "showing first N" wording is honest; mid-article the user
         # wants to see "chars X–Y of Z" so they can reason about
-        # where they are in the document.
+        # where they are in the document. Both counts come from
+        # ``consumed`` (what this page actually advanced by), not
+        # ``max_length``: boundary whitespace is deferred to the next
+        # page, so a 600-char cap that lands on a space emits 599 chars
+        # and the hint says ``content_offset=599`` — the prose must not
+        # contradict it by claiming 600.
         if current_offset > 0:
-            slice_end = current_offset + max_length
             body_desc = (
-                f"showing chars {current_offset:,}–{slice_end:,} of "
+                f"showing chars {current_offset:,}–{next_offset:,} of "
                 f"{full_length:,}-char body"
             )
         else:
             body_desc = (
                 f"total of {full_length:,} characters of body content, "
-                f"only showing first {max_length:,}"
+                f"only showing first {consumed:,}"
             )
 
         return f"{truncated}\n\n... [Content truncated, {body_desc}.{tail}] ..."
