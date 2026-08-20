@@ -752,3 +752,42 @@ class TestD36OutboundMissingEntry:
         assert "A/does-not-exist.html" in str(err)
         assert "Link extraction failed" not in str(err)
         assert get_error_config(err) is NOT_FOUND_ERROR_CONFIG, str(err)
+
+
+# ---------------------------------------------------------------------------
+# D37 — a non-HTML entry sets the documented LinksResponse.message
+# ---------------------------------------------------------------------------
+
+
+class TestD37NonHtmlLinksMessage:
+    """D37: ``LinksResponse.message`` is documented as 'set when content_type
+    is non-HTML; explains why results is empty', and the sibling TOC surface
+    sets it — the links payload never did, so 'no links in this article'
+    and 'this entry type has no extractable links' were indistinguishable."""
+
+    def test_non_html_entry_carries_message(
+        self, ops: ZimOperations, zim_path: str
+    ) -> None:
+        with patch(ARCHIVE_CTX) as ctx:
+            ctx.return_value.__enter__.return_value = _html_archive(
+                "png-bytes", mime="image/png", entry_path="I/nih.png"
+            )
+            data = ops.extract_article_links_data(zim_path, "I/nih.png")
+
+        assert data["results"] == []
+        assert data["total"] == 0
+        assert (
+            data["message"] == "Link extraction requires HTML content, got: image/png"
+        )
+
+    def test_html_entry_without_links_has_no_message(
+        self, ops: ZimOperations, zim_path: str
+    ) -> None:
+        with patch(ARCHIVE_CTX) as ctx:
+            ctx.return_value.__enter__.return_value = _html_archive(
+                "<html><body><p>No links here.</p></body></html>"
+            )
+            data = ops.extract_article_links_data(zim_path, "Test")
+
+        assert data["results"] == []
+        assert "message" not in data

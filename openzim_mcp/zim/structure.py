@@ -507,6 +507,15 @@ class _StructureMixin:
                     "anchor": anchor_count,
                 },
             }
+            # ``LinksResponse.message`` is documented as set for non-HTML
+            # entries, and the sibling TOC payload sets it; without it an
+            # image entry's empty result was indistinguishable from an
+            # article that simply has no links.
+            if not bundle["content_type"].startswith("text/html"):
+                payload["message"] = (
+                    f"Link extraction requires HTML content, "
+                    f"got: {bundle['content_type']}"
+                )
 
             logger.info(
                 f"Extracted links for: {entry_path} "
