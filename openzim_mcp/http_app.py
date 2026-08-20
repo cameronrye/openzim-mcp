@@ -551,6 +551,10 @@ def _is_initialize_request(body: bytes) -> bool:
     return message.get("params", None) is None or isinstance(message["params"], dict)
 
 
+class _BodyTooLarge(Exception):
+    """A buffered sessionless body crossed the request-size cap mid-stream."""
+
+
 class SessionlessRequestGateMiddleware:
     """Refuse handshake-era requests that have no session and are not ``initialize``.
 
@@ -593,24 +597,7 @@ class SessionlessRequestGateMiddleware:
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         """Pass through every request that cannot leak; answer the rest."""
-        from mcp.server.streamable_http import MCP_SESSION_ID_HEADER
-        from mcp.shared.inbound import MCP_PROTOCOL_VERSION_HEADER
-        from mcp_types.version import HANDSHAKE_PROTOCOL_VERSIONS
-
-        if scope["type"] != "http" or scope["path"] in AUTH_EXEMPT_PATHS:
-            await self.app(scope, receive, send)
-            return
-        headers = Headers(scope=scope)
-        if headers.get(MCP_SESSION_ID_HEADER) is not None:
-            # Existing-session and unknown-session paths never mint.
-            await self.app(scope, receive, send)
-            return
-        protocol_version = headers.get(MCP_PROTOCOL_VERSION_HEADER)
-        if (
-            protocol_version is not None
-            and protocol_version not in HANDSHAKE_PROTOCOL_VERSIONS
-        ):
-            # Era routing sends this to the stateless 2026-07-28 handler.
+        if scope["type"] != "http" or self._never_mints(scope):
             await self.app(scope, receive, send)
             return
 
@@ -629,38 +616,21 @@ class SessionlessRequestGateMiddleware:
                 extra_headers={"Allow": "GET, POST, DELETE"},
             )
             return
+        if self._declares_oversized_body(Headers(scope=scope)):
+            # The SDK's own body-limit middleware rejects this with 413
+            # before its session code runs; no need to read it.
+            await self.app(scope, receive, send)
+            return
 
-        declared = headers.get("content-length")
-        if declared is not None:
-            try:
-                if int(declared) > self._max_body_size:
-                    # The SDK's own body-limit middleware rejects this with
-                    # 413 before its session code runs; no need to read it.
-                    await self.app(scope, receive, send)
-                    return
-            except ValueError:
-                pass
-
-        cached: "deque[Message]" = deque()
-        body = bytearray()
-        while True:
-            message = await receive()
-            if message["type"] != "http.request":
-                # Disconnected mid-body: nothing to classify and nobody to
-                # answer, but the outer middleware needs *a* response.
-                await self._reject_missing_session(scope, receive, send)
-                return
-            chunk = message.get("body", b"")
-            if len(body) + len(chunk) > self._max_body_size:
-                response = Response("Request body too large", status_code=413)
-                await response(scope, receive, send)
-                return
-            body.extend(chunk)
-            cached.append(message)
-            if not message.get("more_body", False):
-                break
-
-        if not _is_initialize_request(bytes(body)):
+        try:
+            cached, body = await self._buffer_body(receive)
+        except _BodyTooLarge:
+            response = Response("Request body too large", status_code=413)
+            await response(scope, receive, send)
+            return
+        if body is None or not _is_initialize_request(body):
+            # ``None``: disconnected mid-body — nothing to classify and nobody
+            # to answer, but the outer middleware needs *a* response.
             await self._reject_missing_session(scope, receive, send)
             return
 
@@ -670,6 +640,65 @@ class SessionlessRequestGateMiddleware:
             return await receive()
 
         await self.app(scope, replay, send)
+
+    @staticmethod
+    def _never_mints(scope: Scope) -> bool:
+        """Whether the SDK serves this HTTP request without minting a session.
+
+        Health endpoints are exempt from every gate; a request that already
+        names a session (live or unknown) takes a path that never mints; and
+        a non-handshake ``MCP-Protocol-Version`` is era-routed to the
+        stateless 2026-07-28 handler.
+        """
+        from mcp.server.streamable_http import MCP_SESSION_ID_HEADER
+        from mcp.shared.inbound import MCP_PROTOCOL_VERSION_HEADER
+        from mcp_types.version import HANDSHAKE_PROTOCOL_VERSIONS
+
+        if scope["path"] in AUTH_EXEMPT_PATHS:
+            return True
+        headers = Headers(scope=scope)
+        if headers.get(MCP_SESSION_ID_HEADER) is not None:
+            return True
+        protocol_version = headers.get(MCP_PROTOCOL_VERSION_HEADER)
+        return (
+            protocol_version is not None
+            and protocol_version not in HANDSHAKE_PROTOCOL_VERSIONS
+        )
+
+    def _declares_oversized_body(self, headers: Headers) -> bool:
+        """Whether ``Content-Length`` already promises more than the body cap."""
+        declared = headers.get("content-length")
+        if declared is None:
+            return False
+        try:
+            return int(declared) > self._max_body_size
+        except ValueError:
+            # A non-numeric Content-Length is not this gate's to police:
+            # treat it as undeclared and let the chunked read enforce the cap.
+            return False
+
+    async def _buffer_body(
+        self, receive: Receive
+    ) -> "tuple[deque[Message], Optional[bytes]]":
+        """Drain the request body, keeping the raw messages for replay.
+
+        Returns the buffered messages and the complete body, or ``None`` for
+        the body when the client disconnected before finishing it. Raises
+        ``_BodyTooLarge`` the moment the running total crosses the cap.
+        """
+        cached: "deque[Message]" = deque()
+        body = bytearray()
+        while True:
+            message = await receive()
+            if message["type"] != "http.request":
+                return cached, None
+            chunk = message.get("body", b"")
+            if len(body) + len(chunk) > self._max_body_size:
+                raise _BodyTooLarge()
+            body.extend(chunk)
+            cached.append(message)
+            if not message.get("more_body", False):
+                return cached, bytes(body)
 
     async def _reject_missing_session(
         self, scope: Scope, receive: Receive, send: Send
