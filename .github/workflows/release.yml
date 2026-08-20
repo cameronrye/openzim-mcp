@@ -246,7 +246,7 @@ jobs:
       - name: Install mcp-publisher
         run: |
           set -euo pipefail
-          curl -sSL -o mcp-publisher.tar.gz \
+          curl --proto '=https' --tlsv1.2 -sSL -o mcp-publisher.tar.gz \
             "https://github.com/modelcontextprotocol/registry/releases/download/v1.8.1/mcp-publisher_linux_amd64.tar.gz"
           echo "a06c9096dcb9727c13555b6be26c7effa707b01f06a4c561ba7a3635443cf2cc  mcp-publisher.tar.gz" | sha256sum -c -
           tar -xzf mcp-publisher.tar.gz
@@ -272,7 +272,7 @@ jobs:
             exit 1
           fi
           for attempt in $(seq 1 30); do
-            if curl -fsS "https://pypi.org/pypi/openzim-mcp/${VERSION}/json" >/dev/null; then
+            if curl --proto '=https' --tlsv1.2 -fsS "https://pypi.org/pypi/openzim-mcp/${VERSION}/json" >/dev/null; then
               echo "PyPI serves openzim-mcp ${VERSION}"
               exit 0
             fi
