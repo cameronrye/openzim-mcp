@@ -1272,6 +1272,8 @@ class SimpleToolsHandler(
             "- `tell me about <topic>` — fetch an article "
             "(e.g. `tell me about Photosynthesis`)\n"
             "- `search for <terms>` — full-text search\n"
+            "- Want the next page of an earlier result? Repeat that "
+            "same query with `offset=N` (the footer names N)\n"
         )
 
     # Intents whose responses are dense markdown-rendered prose (article

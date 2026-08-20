@@ -1952,6 +1952,14 @@ class IntentParser:
             "still",
             "keep",
             "going",
+            # D46: the two-word pagination follow-ups small models emit
+            # after a paged response (``next page`` / ``more results``).
+            # Bare ``next`` / ``more`` were already filler, but the noun
+            # half was not, so the all-tokens-filler check failed and the
+            # pair ran a stop-word-collision full-text search instead of
+            # returning the guidance playbook.
+            "page",
+            "results",
             # Determiners / particles
             "the",
             "a",

@@ -279,3 +279,41 @@ class TestD45ArchiveNameInSearchQuery:
         out = handler.handle_zim_query("search wikipedia for cats")
         assert "No ZIM File Specified" in _text(out)
         assert not mock.search_zim_file.called
+
+
+# ---------------------------------------------------------------------------
+# D46: "next page" / "more results" ran junk full-text searches
+# ---------------------------------------------------------------------------
+
+
+class TestD46PaginationFollowUpsAreMetaOnly:
+    """``next page`` ran a full-text search over ~1699 stop-word hits and
+    ``more results`` searched for the literal words; ``try again`` was
+    already caught by the meta-only filter. ``page`` / ``results`` were
+    missing from the filler-token set, so the two-word forms failed the
+    all-tokens-filler check.
+    """
+
+    @pytest.mark.parametrize(
+        "query",
+        ["next page", "more results", "next", "more"],
+    )
+    def test_pagination_follow_up_returns_guidance(self, query: str) -> None:
+        handler = SimpleToolsHandler(Mock())
+        assert SimpleToolsHandler._is_meta_only_query(query)
+        out = handler.handle_zim_query(query, zim_file_path="/zims/test.zim")
+        assert "Try one of these starting points" in out
+        # The guidance must point at the real continuation mechanism.
+        assert "offset" in out
+        handler.zim_operations.search_zim_file.assert_not_called()
+        handler.zim_operations.search_zim_file_data.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "query",
+        ["search results", "main page", "Page", "results of the 1992 election"],
+    )
+    def test_content_bearing_queries_still_reach_the_parser(self, query: str) -> None:
+        assert not SimpleToolsHandler._is_meta_only_query(query)
+
+    def test_guidance_stays_short(self) -> None:
+        assert len(SimpleToolsHandler._meta_query_guidance()) < 1000
