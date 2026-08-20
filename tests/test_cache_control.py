@@ -196,14 +196,14 @@ def test_get_search_suggestions_does_not_cache_on_error(
 
     tok = archive_stat_token(validated_path)
     # The legacy ``suggestions:`` key was retired in favour of the
-    # dict-shaped ``suggestions_data:v2b:`` cache. Neither key should hold a
+    # dict-shaped ``suggestions_data:v2c:`` cache. Neither key should hold a
     # sentinel response when generation raised.
     assert (
         zim_operations.cache.get(f"suggestions:{validated_path}:warmup:10") is None
     ), "legacy suggestion cache key should not hold an errored response"
     assert (
         zim_operations.cache.get(
-            f"suggestions_data:v2b:{validated_path}:{tok}:warmup:10"
+            f"suggestions_data:v2c:{validated_path}:{tok}:warmup:10"
         )
         is None
     ), "errored suggestion response should not be cached"

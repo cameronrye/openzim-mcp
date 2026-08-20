@@ -2122,7 +2122,7 @@ class _SearchMixin:
         from openzim_mcp.bundle import archive_stat_token
 
         cache_key = (
-            f"suggestions_data:v2b:{validated_path}:"
+            f"suggestions_data:v2c:{validated_path}:"
             f"{archive_stat_token(validated_path)}:{partial_query}:{limit}"
         )
         cached_result = self.cache.get(cache_key)
