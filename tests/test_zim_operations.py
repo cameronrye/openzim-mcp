@@ -3014,7 +3014,7 @@ class TestGetBinaryEntry:
         assert result_data["size"] == 1000
         assert result_data["truncated"] is True
         assert result_data["data"] is None
-        assert "exceeds max_size_bytes" in result_data.get("message", "")
+        assert "exceeds the 100 B byte cap" in result_data.get("message", "")
 
     @patch("openzim_mcp.zim_operations.zim_archive")
     def test_get_binary_entry_not_found(

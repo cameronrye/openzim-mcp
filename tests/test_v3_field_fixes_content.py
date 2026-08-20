@@ -209,3 +209,39 @@ def test_simple_mode_sanitizer_still_strips_reworded_guidance(
     assert "zim_search" not in stripped
     assert "zim_browse" not in stripped
     assert "Entry not found" in stripped
+
+
+# ---------------------------------------------------------------------------
+# D09 — binary oversize hint must name the knob zim_get actually exposes
+# ---------------------------------------------------------------------------
+
+
+@patch("openzim_mcp.zim_operations.zim_archive")
+def test_binary_oversize_message_names_max_content_length(
+    mock_zim_archive: MagicMock, ops: ZimOperations, zim_file: Path
+) -> None:
+    """D09: zim_get maps ``max_content_length`` onto the byte cap; the hint
+    offered ``include_data`` / ``max_size_bytes``, neither reachable over
+    the wire, so following it changed nothing."""
+    entry = MagicMock()
+    entry.is_redirect = False
+    entry.path = "I/big.jpg"
+    entry.title = "big"
+    item = MagicMock()
+    item.mimetype = "image/jpeg"
+    item.size = 9944
+    item.content = b"x" * 9944
+    entry.get_item.return_value = item
+    mock_zim_archive.return_value.__enter__.return_value = _archive_with(
+        {"I/big.jpg": entry}
+    )
+
+    result = ops.get_binary_entry_data(str(zim_file), "I/big.jpg", max_size_bytes=100)
+
+    assert result["truncated"] is True
+    message = result["message"]
+    assert "max_content_length" in message, message
+    assert "include_data" not in message, message
+    assert "max_size_bytes" not in message, message
+    # The cap the caller hit is still reported so they can size the retry.
+    assert "100 B" in message

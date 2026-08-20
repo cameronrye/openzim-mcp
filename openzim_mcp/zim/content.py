@@ -1631,11 +1631,15 @@ class _ContentMixin:
                 result["encoding"] = None
                 result["data"] = None
                 result["truncated"] = True
+                # Name the knob the caller can actually turn: zim_get maps
+                # ``max_content_length`` onto this byte cap and never exposes
+                # ``include_data`` / ``max_size_bytes``, so the old hint sent
+                # callers to parameters the tool silently ignores.
                 result["message"] = (
-                    f"Content size ({self._format_size(size)}) "
-                    f"exceeds max_size_bytes ({self._format_size(max_size_bytes)}). "
-                    f"Set include_data=False for metadata only, "
-                    f"or increase max_size_bytes."
+                    f"Content size ({self._format_size(size)}) exceeds the "
+                    f"{self._format_size(max_size_bytes)} byte cap. The metadata "
+                    f"above is complete; raise max_content_length to at least "
+                    f"{size} to fetch the bytes."
                 )
         else:
             result["encoding"] = None
