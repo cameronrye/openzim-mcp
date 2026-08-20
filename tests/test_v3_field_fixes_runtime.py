@@ -209,7 +209,8 @@ class TestD65AncillaryEntriesDoNotConsumeTheCountCap:
         assert cache.get("resp:a") == {"a": 1}
         assert cache.get("resp:b") == {"b": 2}
         stats = cache.stats()
-        assert stats["size"] == 102
+        assert stats["size"] == 2
+        assert stats["total_entries"] == 102
         assert stats["ancillary_entries"] == 100
 
     def test_ancillary_entries_remain_bounded_by_the_byte_budget(self) -> None:
@@ -217,7 +218,7 @@ class TestD65AncillaryEntriesDoNotConsumeTheCountCap:
         for i in range(10):
             cache.set(f"frag:{i}", "X" * 2048, ancillary=True)
         assert cache.stats()["size_bytes"] <= 6 * 1024 + 1024
-        assert cache.stats()["size"] < 10
+        assert cache.stats()["total_entries"] < 10
 
     def test_ancillary_counts_toward_max_size_when_byte_budget_is_off(self) -> None:
         # With max_bytes=0 nothing else bounds fragments, so the count cap must.
@@ -236,7 +237,7 @@ class TestD65AncillaryEntriesDoNotConsumeTheCountCap:
         cache.set("resp:3", 3)  # must push a response out, not just a fragment
 
         stats = cache.stats()
-        assert stats["size"] - stats["ancillary_entries"] <= 2
+        assert stats["size"] <= 2
         assert cache.get("resp:1") is None
         assert cache.get("resp:2") == 2
         assert cache.get("resp:3") == 3
@@ -266,7 +267,8 @@ class TestD65AncillaryEntriesDoNotConsumeTheCountCap:
 
         second = OpenZimMcpCache(cfg, enable_background_cleanup=False)
         stats = second.stats()
-        assert stats["size"] == 2
+        assert stats["size"] == 1
+        assert stats["total_entries"] == 2
         assert stats["ancillary_entries"] == 1
         second.shutdown()
 
@@ -315,4 +317,51 @@ class TestD65AncillaryEntriesDoNotConsumeTheCountCap:
         ), "the limit=10 search flushed the cached metadata response"
         stats = ops.cache.stats()
         assert stats["ancillary_entries"] == 10
-        assert stats["size"] - stats["ancillary_entries"] <= 8
+        assert stats["size"] <= 8
+
+
+# ---------------------------------------------------------------------------
+# R2-5 — ``size`` must measure what ``max_size`` bounds
+# ---------------------------------------------------------------------------
+
+
+class TestR25CacheSizeNeverExceedsMaxSize:
+    """D65 exempted fragments from the count cap but left ``size`` counting
+    them, so zim_health reported size=107 against max_size=100 and readers
+    concluded the cap was broken. ``size`` now counts only charged entries;
+    the grand total lives under ``total_entries``."""
+
+    def test_size_is_the_charged_count_and_total_entries_is_everything(
+        self,
+    ) -> None:
+        cache = _cache(max_size=3, max_bytes=1024 * 1024)
+        cache.set("resp:a", {"a": 1})
+        cache.set("resp:b", {"b": 2})
+        for i in range(100):
+            cache.set(f"snippet_render:v1:{i}", "x" * 100, ancillary=True)
+
+        stats = cache.stats()
+        assert stats["size"] == 2
+        assert stats["ancillary_entries"] == 100
+        assert stats["total_entries"] == 102
+        assert stats["size"] + stats["ancillary_entries"] == stats["total_entries"]
+
+    def test_size_never_exceeds_max_size_under_fragment_fanout(self) -> None:
+        cache = _cache(max_size=3, max_bytes=1024 * 1024)
+        for i in range(10):
+            cache.set(f"resp:{i}", i)
+            for j in range(20):
+                cache.set(f"frag:{i}:{j}", "x" * 50, ancillary=True)
+            stats = cache.stats()
+            assert stats["size"] <= stats["max_size"], stats
+
+    def test_without_a_byte_budget_the_two_counts_agree(self) -> None:
+        # max_bytes=0 charges fragments to the count cap, so there is no
+        # exempt population and size == total_entries.
+        cache = _cache(max_size=3, max_bytes=0)
+        for i in range(5):
+            cache.set(f"frag:{i}", "x", ancillary=True)
+        stats = cache.stats()
+        assert stats["size"] == 3
+        assert stats["total_entries"] == 3
+        assert stats["ancillary_entries"] == 0

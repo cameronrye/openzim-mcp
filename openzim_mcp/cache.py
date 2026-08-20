@@ -560,12 +560,14 @@ class OpenZimMcpCache:
 
             stats = {
                 "enabled": self.config.enabled,
-                "size": len(self._cache),
+                # ``size`` measures exactly what ``max_size`` bounds, so
+                # ``size <= max_size`` always holds. Per-item fragments are
+                # exempt from the count cap (bounded by ``max_bytes``) and
+                # reported separately; ``total_entries`` is the sum.
+                "size": self._primary_count(),
                 "max_size": self.config.max_size,
-                # Per-item fragments exempt from ``max_size`` (bounded by
-                # ``max_bytes``); ``size - ancillary_entries`` is what the
-                # count cap governs, so ``size`` may legitimately exceed it.
                 "ancillary_entries": len(self._ancillary_keys),
+                "total_entries": len(self._cache),
                 "size_bytes": self._total_bytes,
                 "max_bytes": getattr(self.config, "max_bytes", 0),
                 "ttl_seconds": self.config.ttl_seconds,
