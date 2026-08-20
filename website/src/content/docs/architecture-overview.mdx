@@ -240,7 +240,7 @@ Each mixin uses the same shared services injected into the parent: `config`, `pa
 
 ### Tools package (`tools/`)
 
-One module per tool. Every `zim_*.py` exports a `register(server)` function called from `tools/__init__.py:register_phase_f_tools`. Tools are decorated with `@server.mcp.tool()` (FastMCP) and forward to either `server.async_zim_operations` (for blocking ZIM I/O dispatched via `asyncio.to_thread`) or `server.zim_operations` (for cheap synchronous helpers).
+One module per tool. Every `zim_*.py` exports a `register(server)` function called from `tools/__init__.py:register_phase_f_tools`. Tools are decorated with `@server.mcp.tool()` (MCPServer) and forward to either `server.async_zim_operations` (for blocking ZIM I/O dispatched via `asyncio.to_thread`) or `server.zim_operations` (for cheap synchronous helpers).
 
 ### Smart retrieval fallback
 
@@ -289,7 +289,7 @@ There is no `SecurityConfig` and no `InstanceConfig` — security policy is hard
 ## Data flow — typical tool call (stdio)
 
 ```
-MCP client         FastMCP                Server core         async_zim_operations         ZimOperations         libzim
+MCP client         MCPServer              Server core         async_zim_operations         ZimOperations         libzim
     │                  │                        │                          │                       │                  │
     │── tools/call ───▶│                        │                          │                       │                  │
     │                  │── @mcp.tool wrapper ──▶│                          │                       │                  │
@@ -306,10 +306,10 @@ Errors anywhere in the chain are returned rather than raised, as a structured `T
 
 ## Data flow — HTTP transport
 
-`serve_streamable_http(server)` mounts FastMCP on a Starlette app, then attaches middleware in **LIFO** order so CORS is the *outer* layer and bearer-auth is *inner*:
+`serve_streamable_http(server)` mounts MCPServer on a Starlette app, then attaches middleware in **LIFO** order so CORS is the *outer* layer and bearer-auth is *inner*:
 
 ```
-client → CORS middleware → BearerTokenAuthMiddleware → FastMCP MCP routes
+client → CORS middleware → BearerTokenAuthMiddleware → MCPServer MCP routes
                               │
                               └── /healthz, /readyz exempt (auth bypass)
 ```

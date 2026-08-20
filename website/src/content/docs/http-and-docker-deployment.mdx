@@ -154,7 +154,7 @@ The polling watcher (`MtimeWatcher`) is started via a wrapped lifespan handler s
 - Clients opt in with one long-lived `subscriptions/listen` request. A `.zim` appearing or disappearing publishes `notifications/resources/list_changed`; one replaced in place publishes `notifications/resources/updated` for `zim://{name}`.
 - `OPENZIM_MCP_SUBSCRIPTIONS_ENABLED=false` skips the watcher entirely and withholds the capability: `resources.subscribe` and the `listChanged` flags read `false`, and `subscriptions/listen` fails with method-not-found rather than acknowledging a stream nothing would ever publish to.
 - `OPENZIM_MCP_WATCH_INTERVAL_SECONDS` (default 5, range 1–60) controls poll cadence.
-- Delivery is the SDK's: each listen stream is buffered independently, concurrent streams and per-stream backlog are both capped, and a stream whose client stops reading is ended. There is no replay — a client that loses its stream re-listens and re-reads.
+- Delivery is the SDK's: each listen stream is buffered independently, concurrent streams and per-stream backlog are both capped, and a stream whose client stops reading is ended. The server adds its own admission bound before a stream is acknowledged — at most 256 subscription URIs per stream, each at most 2048 characters, rejected with `INVALID_PARAMS`. There is no replay — a client that loses its stream re-listens and re-reads.
 
 See [Resources, prompts and subscriptions](/openzim-mcp/docs/resources-prompts-subscriptions/) for client-side examples.
 

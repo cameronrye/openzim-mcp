@@ -60,7 +60,7 @@ _LOOPBACK_TRANSPORT_HOSTS = (
 
 
 def _build_transport_allowed_hosts(configured_hosts: list[str]) -> list[str]:
-    """Build FastMCP Host allow-list entries from configured hostnames.
+    """Build SDK Host allow-list entries from configured hostnames.
 
     The MCP SDK matcher (``mcp.server.transport_security``) accepts a request
     whose ``Host`` is ``base_host:port`` only when the allow-list holds a
@@ -155,7 +155,7 @@ def _build_transport_security(
 ) -> tuple[Any, Optional[str]]:
     """Build SDK transport-security settings for an HTTP bind (returns settings + warning).
 
-    Closes the gap where FastMCP, constructed without a ``host`` kwarg, defaults
+    Closes the gap where MCPServer, run without a ``host`` kwarg, defaults
     its DNS-rebinding allow-list to loopback only — so a non-loopback bind
     (0.0.0.0 or a fixed LAN IP) that passes the auth safe-startup check then
     421-rejects every MCP request because the real ``Host`` header is not in the
@@ -482,7 +482,7 @@ class OpenZimMcpServer:
             >>> server = OpenZimMcpServer(config)
             >>> server.run()  # uses config.transport
         """
-        # 'http' is our short name for FastMCP's 'streamable-http' wire value.
+        # 'http' is our short name for the SDK's 'streamable-http' wire value.
         config_transport: Literal["stdio", "sse", "streamable-http"] = (
             "streamable-http"
             if self.config.transport == "http"

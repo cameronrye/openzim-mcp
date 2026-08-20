@@ -63,11 +63,11 @@ def register(server: "OpenZimMcpServer") -> None:
         compact_budget: Optional[Union[str, int]] = None,
         synthesize: bool = False,
     ) -> Any:
-        # Annotated ``Any`` — matching the other 7 tools — so FastMCP derives
+        # Annotated ``Any`` — matching the other 7 tools — so the SDK derives
         # no ``outputSchema``. The previous ``Union[str, SynthesizeResponse,
         # ToolErrorPayload]`` annotation generated a 4.7KB schema (16% of the
         # whole advanced surface) that described a ``{"result": "<markdown>"}``
-        # wrapper: FastMCP wraps non-dict returns, and this tool's ordinary
+        # wrapper: the SDK wraps non-dict returns, and this tool's ordinary
         # return is a markdown string. Clients got a schema promising nothing
         # they couldn't already read from the text block, and the surface paid
         # for it in every request. The runtime return shapes are unchanged.

@@ -1,6 +1,6 @@
 """HTTP-mode helpers for OpenZIM MCP.
 
-Provides the Starlette app the FastMCP server is mounted on, plus health
+Provides the Starlette app the MCP server is mounted on, plus health
 endpoints, auth middleware, and CORS for streamable-HTTP transport.
 
 This module exists so server.py stays focused on MCP-protocol concerns and
@@ -532,7 +532,7 @@ def serve_streamable_http(
     """Serve OpenZIM MCP over streamable-HTTP transport.
 
     Validates the safe-startup matrix, registers /healthz and /readyz on the
-    underlying FastMCP Starlette app, applies bearer-token auth and CORS,
+    underlying MCPServer Starlette app, applies bearer-token auth and CORS,
     then runs uvicorn.
 
     Args:

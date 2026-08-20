@@ -195,6 +195,8 @@ Real defaults (verify against [openzim_mcp/defaults.py](https://github.com/camer
 | Query input cap | 500 chars | `INPUT_LIMITS.QUERY` |
 | Concurrent `subscriptions/listen` streams | 1024 | SDK `ListenHandler.max_subscriptions` |
 | Buffered events per listen stream | 1024 | SDK `ListenHandler.max_buffered_events` |
+| Subscription URIs per listen stream | 256 | `subscriptions.MAX_SUBSCRIPTION_URIS` |
+| Subscription URI length | 2048 chars | `subscriptions.MAX_SUBSCRIPTION_URI_LENGTH` |
 
 ## Reporting vulnerabilities
 

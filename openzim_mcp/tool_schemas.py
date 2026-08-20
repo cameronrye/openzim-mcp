@@ -5,14 +5,14 @@ TypedDicts (or ``ToolErrorPayload`` from openzim_mcp.responses on
 failure).
 
 Wire contract caveat: these TypedDicts describe the JSON SHAPE, not the
-MCP envelope. All 8 tools are annotated ``-> Any``, so FastMCP's
+MCP envelope. All 8 tools are annotated ``-> Any``, so the SDK's
 ``func_metadata`` produces ``output_schema=None`` and serializes the
 payload as JSON TEXT inside a ``TextContent`` block. **No tool emits
 ``structuredContent``** — parse the text content as JSON.
 
 ``zim_query`` was the exception until v2.6.0: its typed ``Union[...]``
 return annotation generated a 4.7KB ``outputSchema`` describing a
-``{"result": "<markdown string>"}`` wrapper (FastMCP wraps non-dict
+``{"result": "<markdown string>"}`` wrapper (the SDK wraps non-dict
 returns), which told clients nothing the text block didn't and cost 16%
 of the advanced surface budget. Dropping the annotation aligned it with
 the other seven. Restoring an output schema anywhere means describing

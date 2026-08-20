@@ -587,7 +587,7 @@ class _ContentMixin:
         """Structured variant of ``get_zim_entry``.
 
         Returns the entry dict directly (path/title/content/content_type)
-        so MCP tools can hand it to FastMCP's structured-content path.
+        so MCP tools can hand it to the SDK's structured-content path.
         Honours the same smart-retrieval and path-mapping logic as the
         legacy text variant.
 
@@ -987,7 +987,7 @@ class _ContentMixin:
         """Structured variant of ``get_entries``.
 
         Returns the result dict directly (not a JSON string) so MCP tools
-        can hand it straight to FastMCP's structured-content path.
+        can hand it straight to the SDK's structured-content path.
 
         Per-entry partial success: one failure does not abort the batch.
         Each result carries the input ``index`` so callers can correlate
@@ -1416,7 +1416,7 @@ class _ContentMixin:
         """Structured variant of ``get_binary_entry``.
 
         Returns the result dict directly (not a JSON string) so MCP tools
-        can hand it straight to FastMCP's structured-content path. The
+        can hand it straight to the SDK's structured-content path. The
         ``data`` field, when populated, remains a base64-encoded string.
 
         Args:
@@ -1626,7 +1626,7 @@ class _ContentMixin:
         """Structured variant of ``get_entry_summary``.
 
         Returns the result dict directly (not a JSON string) so MCP tools
-        can hand it straight to FastMCP's structured-content path.
+        can hand it straight to the SDK's structured-content path.
 
         Raises:
             OpenZimMcpFileNotFoundError: If ZIM file not found

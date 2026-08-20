@@ -494,7 +494,7 @@ class _SearchMixin:
         """Structured variant of ``search_zim_file``.
 
         Returns the raw search payload as a Python dict so MCP tool functions
-        and aggregators (``search_all``) can hand it straight to FastMCP's
+        and aggregators (``search_all``) can hand it straight to the SDK's
         structured-output path without the json.dumps + re-parse round trip
         the legacy string variant required.
 
@@ -2086,7 +2086,7 @@ class _SearchMixin:
         """Structured variant of ``get_search_suggestions``.
 
         Returns the result dict directly (not a JSON string) so MCP tools
-        can hand it straight to FastMCP's structured-content path.
+        can hand it straight to the SDK's structured-content path.
 
         ``get_search_suggestions`` is non-paginated (no cursor input,
         no offset), but the v2 Phase B contract still applies for
@@ -3119,7 +3119,7 @@ class _SearchMixin:
         """Structured variant of ``find_entry_by_title``.
 
         Returns the result dict directly (not a JSON string) so MCP tools
-        can hand it straight to FastMCP's structured-content path.
+        can hand it straight to the SDK's structured-content path.
 
         Implementation order:
           1. Direct path probe in C/ and A/ namespaces against a small set of

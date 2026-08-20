@@ -368,7 +368,7 @@ Your `/etc/hosts` maps `localhost` away from `127.0.0.1`. The server emits a war
 
 ### `zim://wikipedia/entry/A/Climate_change` not found
 
-Clients MUST URL-encode `/` as `%2F` in the path segment because FastMCP's URI template engine treats `/` as a segment separator. Correct form:
+Clients MUST URL-encode `/` as `%2F` in the path segment because the SDK's URI template engine treats `/` as a segment separator. Correct form:
 
 ```
 zim://wikipedia/entry/A%2FClimate_change
@@ -443,7 +443,7 @@ When reporting issues, include:
 
 - **Operating system** and version
 - **Python version**: `python --version`
-- **OpenZIM MCP version**: `python -c "import openzim_mcp; print(openzim_mcp.__version__)"` or check `zim_health` → `.configuration.configuration.config_hash` (the outer key is the block, the inner one the report) and the MCP `serverInfo.version` (reads from `importlib.metadata`; reports openzim-mcp's actual version, not the FastMCP SDK default)
+- **OpenZIM MCP version**: `python -c "import openzim_mcp; print(openzim_mcp.__version__)"` or check `zim_health` → `.configuration.configuration.config_hash` (the outer key is the block, the inner one the report) and the MCP `serverInfo.version` (reads from `importlib.metadata`; reports openzim-mcp's actual version, not the MCP SDK default)
 - **ZIM file details**: Size, source, name
 - **Error messages**: Full error text
 - **Configuration**: MCP client config (remove sensitive paths)

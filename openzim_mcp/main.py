@@ -208,7 +208,7 @@ def main() -> None:
 
         # ``OpenZimMcpServer.run()`` derives the wire transport from
         # ``config.transport`` directly (translating our short name 'http'
-        # to FastMCP's 'streamable-http'); calling without an argument keeps
+        # to the SDK's 'streamable-http'); calling without an argument keeps
         # the configured transport and the runtime transport in sync.
         # Before ``run()`` blocks: a SIGTERM arriving at any point after this
         # unwinds the interpreter so the cache's atexit flush actually runs.

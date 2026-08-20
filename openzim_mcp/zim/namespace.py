@@ -184,7 +184,7 @@ class _NamespaceMixin:
         """Structured variant of ``list_namespaces``.
 
         Returns the same payload as ``list_namespaces`` but as a Python
-        dict, so MCP tool functions can hand it straight to FastMCP's
+        dict, so MCP tool functions can hand it straight to the SDK's
         structured-output path without the json.dumps + re-parse round
         trip the legacy string variant required.
 
@@ -660,7 +660,7 @@ class _NamespaceMixin:
         """Structured variant of ``browse_namespace``.
 
         Returns the result dict directly (not a JSON string) so MCP tools
-        can hand it straight to FastMCP's structured-content path.
+        can hand it straight to the SDK's structured-content path.
 
         Phase B contract: top-level ``results`` / ``next_cursor`` /
         ``total`` / ``done`` / ``page_info`` plus the ``namespace`` /
@@ -1623,7 +1623,7 @@ class _NamespaceMixin:
         """Structured variant of ``walk_namespace``.
 
         Returns the result dict directly (not a JSON string) so MCP tools
-        can hand it straight to FastMCP's structured-content path.
+        can hand it straight to the SDK's structured-content path.
 
         Phase B contract: top-level ``results`` / ``next_cursor`` (opaque
         str) / ``total`` (always None — walk doesn't know the per-namespace

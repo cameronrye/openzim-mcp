@@ -61,11 +61,11 @@ If a section fails to load (rare — corrupt archive, missing metadata), it's re
 
 ### `zim://{name}/entry/{path}`
 
-Single entry served with native MIME type. The MIME type is detected from libzim's `Item.mimetype` and reported back per request — text entries return text bodies; binary entries (images, PDFs, audio) return raw bytes (FastMCP base64-wraps).
+Single entry served with native MIME type. The MIME type is detected from libzim's `Item.mimetype` and reported back per request — text entries return text bodies; binary entries (images, PDFs, audio) return raw bytes (the SDK base64-wraps them).
 
 #### URL encoding requirement
 
-**Clients MUST URL-encode `/` as `%2F`** in the `{path}` segment. FastMCP's URI template engine treats `/` as a segment separator, so a literal slash won't route. Other RFC 3986 reserved characters in the path also need encoding (e.g. `?` as `%3F`).
+**Clients MUST URL-encode `/` as `%2F`** in the `{path}` segment. The SDK's URI template engine treats `/` as a segment separator, so a literal slash won't route. Other RFC 3986 reserved characters in the path also need encoding (e.g. `?` as `%3F`).
 
 ```
 zim://wikipedia_en/entry/A%2FClimate_change
@@ -77,7 +77,7 @@ Without the encoding, the resource fetch returns a "not found" error even when t
 #### MIME type behavior
 
 - HTML / text → `text/html`, `text/plain`, `application/json`, `application/xml`, `application/javascript` returned as decoded text.
-- Binary (anything else) → returned as raw bytes; FastMCP base64-wraps them on the wire.
+- Binary (anything else) → returned as raw bytes; the SDK base64-wraps them on the wire.
 - Unknown / missing MIME → `application/octet-stream`.
 
 Charset parameters (`text/html; charset=utf-8`) are stripped before reporting; only the bare MIME type ends up in the response.
@@ -272,7 +272,7 @@ The watcher runs under the HTTP transport (`--transport http`) only, so that is 
 | A `.zim` file appears in or disappears from an allowed directory | `notifications/resources/list_changed` | `resourcesListChanged: true` |
 | A `.zim` file is replaced in place | `notifications/resources/updated` for `zim://{name}` | `resourceSubscriptions: ["zim://{name}"]` |
 
-`{name}` is the basename without `.zim`, percent-encoded exactly as the `zim://{name}` template expands it — subscribe with the template expansion (e.g. `zim://wikipedia_es_ni%C3%B1os`), because delivery matches URI strings exactly and a raw non-ASCII or spaced stem would never match. Detection compares both **mtime and size**: same-size archive replacement (common when re-downloading from Kiwix) is caught by the mtime change, and same-mtime rewrites by the size change. Allowed directories are scanned recursively, so ZIMs in subdirectories are watched too.
+`{name}` is the basename without `.zim`; the template expansion percent-encodes it (e.g. `zim://wikipedia_es_ni%C3%B1os`), and that canonical form is the recommended subscription target. Delivery matches URI strings exactly, but every spelling that reads also notifies: a replacement is published under the raw stem, the percent-encoded stem, and both `.zim`-suffixed name forms (the spelling the `zim://files` listing advertises), so whichever string a client successfully read from is also the string that fires. Detection compares both **mtime and size**: same-size archive replacement (common when re-downloading from Kiwix) is caught by the mtime change, and same-mtime rewrites by the size change. Allowed directories are scanned recursively, so ZIMs in subdirectories are watched too.
 
 > **`zim://files` is not a `resourceSubscriptions` target.** Membership changes arrive as `notifications/resources/list_changed`, which carries no URI; a stream that lists `zim://files` under `resourceSubscriptions` is acknowledged and then never hears anything. Re-read `zim://files` on each `list_changed`. (Before 2026-07-28 both kinds of change were flattened into an `updated` for `zim://files`, because `resources/subscribe` gave clients no way to ask about list membership.)
 
@@ -316,7 +316,8 @@ Delivery belongs to the SDK's `ListenHandler`. OpenZIM MCP hands each detected c
 - Concurrent listen streams are capped (`max_subscriptions`, 1024 by default). Past the cap a further `subscriptions/listen` is rejected with an error *before* it is acknowledged.
 - Each stream buffers at most `max_buffered_events` undelivered events (1024 by default). A stream whose client stopped reading and overran that backlog is ended rather than allowed to grow.
 - There is no replay and no resumption. Every event is a level trigger ("this changed, re-read if you care"), so a client whose stream dropped re-listens and re-reads; nothing is lost that the backlog wasn't already losing.
-- Both caps are the SDK's defaults. OpenZIM MCP does not override them, and they are not exposed as environment variables.
+- A stream's requested URI set is bounded by the server before it is acknowledged: at most 256 `resourceSubscriptions` URIs per stream, each at most 2048 characters. An oversized set is rejected with `INVALID_PARAMS` — fix the request, unlike the concurrency cap above, whose rejection means try again later. Carried over from the pre-2026 registry's admission control, and far above any real client: 256 distinct URIs is a client watching 255 archives at once.
+- The two stream caps are the SDK's defaults — OpenZIM MCP does not override them — and none of these limits are exposed as environment variables.
 
 ### Client example
 
@@ -383,7 +384,7 @@ The SDK serves the pre-2026-07-28 handshake era on the same endpoint, so a 2025-
 
 ### Implementation note
 
-Subscription delivery no longer touches SDK internals — the registry, the fan-out, and the capability advertisement this project used to hand-roll are all first-class in the SDK now, so `subscriptions.py` is left with the watcher and a two-line publish. The remaining private-API dependency is on the resource side: the MIME-aware per-entry template is installed straight into the resource manager's `_templates` map, because the public decorator freezes `mime_type` at registration time and this resource has to choose it per read. That is fragile if the SDK changes its internals; the project tracks the risk and will migrate once a stable public hook lands upstream.
+Subscription delivery is the SDK's — the registry, the fan-out, and the capability advertisement this project used to hand-roll are first-class in v2 — but three private-API dependencies remain, each with its own retirement condition. Delivery runs through a project subclass of the SDK's `ListenHandler` that enforces the per-stream URI bounds above; it is installed (and, when subscriptions are disabled, the stock handler withheld) by writing into the lowlevel server's private handler registry, until a public hook for either exists. On the resource side, the MIME-aware per-entry template is installed straight into the resource manager's `_templates` map, because the public decorator freezes `mime_type` at registration time and this resource has to choose it per read. And `sdk_compat.py` patches the dicts under the SDK's per-version method tables so 2026-07-28 clients can `ping` ([python-sdk#3273](https://github.com/modelcontextprotocol/python-sdk/issues/3273)); a canary test retires that one the day the SDK ships its own fix. All three are why the dependency pin holds `mcp` to 2.0.x — raising the ceiling is a deliberate bump that re-audits each seam.
 
 ---
 

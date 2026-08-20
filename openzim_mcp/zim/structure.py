@@ -176,7 +176,7 @@ class _StructureMixin:
         """Structured variant of ``get_article_structure``.
 
         Returns the result dict directly (not a JSON string) so MCP tools
-        can hand it straight to FastMCP's structured-content path.
+        can hand it straight to the SDK's structured-content path.
 
         Raises:
             OpenZimMcpFileNotFoundError: If ZIM file not found
@@ -311,7 +311,7 @@ class _StructureMixin:
         """Structured variant of ``extract_article_links``. v2 Phase B contract.
 
         Returns the result dict directly (not a JSON string) so MCP tools
-        can hand it straight to FastMCP's structured-content path.
+        can hand it straight to the SDK's structured-content path.
 
         v2 Phase B: ``kind`` is required-with-default. Each call returns
         exactly one category in ``results``; ``category_totals`` reports
@@ -515,7 +515,7 @@ class _StructureMixin:
         """Structured variant of ``get_table_of_contents``.
 
         Returns the result dict directly (not a JSON string) so MCP tools
-        can hand it straight to FastMCP's structured-content path.
+        can hand it straight to the SDK's structured-content path.
 
         Raises:
             OpenZimMcpFileNotFoundError: If ZIM file not found
@@ -932,7 +932,7 @@ class _StructureMixin:
         """Structured variant of ``get_related_articles``.
 
         Returns the result dict directly (not a JSON string) so MCP tools
-        can hand it straight to FastMCP's structured-content path.
+        can hand it straight to the SDK's structured-content path.
 
         v2 Phase B contract: the response carries ``results`` /
         ``next_cursor`` / ``total`` / ``done`` / ``page_info`` plus the

@@ -10,10 +10,10 @@ URI scheme:
   main page preview). ``{name}`` is the bare basename without ``.zim``.
 - ``zim://{name}/entry/{path}`` — single entry served with native MIME type.
   Clients MUST URL-encode ``/`` as ``%2F`` in the ``{path}`` segment because
-  FastMCP's URI template engine treats ``/`` as a segment separator.
+  the SDK's URI template engine treats ``/`` as a segment separator.
 
 The per-entry resource detects each entry's MIME type from the libzim Item
-at read time and reports it back in the response. FastMCP's standard
+at read time and reports it back in the response. The SDK's standard
 ``@mcp.resource`` decorator can't express that — it freezes ``mime_type`` at
 registration time — so we register a custom ``ResourceTemplate`` /
 ``Resource`` pair directly on the resource manager.
@@ -121,7 +121,7 @@ class ZimEntryResource(Resource):
     """Resource that reads one ZIM entry and reports its native MIME type.
 
     The MIME type is detected from the libzim ``Item.mimetype`` and assigned
-    to ``self.mime_type`` during ``read()`` so that FastMCP's ``read_resource``
+    to ``self.mime_type`` during ``read()`` so that the SDK's ``read_resource``
     handler — which fetches ``resource.mime_type`` *after* ``read()`` — sees
     the detected value, not the placeholder set at construction time.
     """
@@ -179,7 +179,7 @@ class ZimEntryResource(Resource):
             # boundary instead of letting the SDK discard them.
             raise MCPError(code=INTERNAL_ERROR, message=str(exc)) from exc
 
-        # Mutate so FastMCP's read_resource picks up the detected MIME.
+        # Mutate so the SDK's read_resource picks up the detected MIME.
         # Resource has no validate_assignment, so this is a plain attribute set.
         self.mime_type = mime
 
@@ -205,7 +205,7 @@ class ZimEntryResource(Resource):
                 )
             decoded = raw.decode("utf-8", errors="replace")
             return _truncate_text_body(decoded, DEFAULT_RESOURCE_MAX_BYTES)
-        # Binary — FastMCP base64-wraps when content is bytes. Truncating a
+        # Binary — the SDK base64-wraps when content is bytes. Truncating a
         # binary body silently corrupts it (a clipped PDF / PNG won't open),
         # so refuse oversize binaries with an actionable error pointing at
         # ``get_binary_entry``, which exposes ``max_size_bytes`` so callers
@@ -286,7 +286,7 @@ class ZimEntryTemplate(ResourceTemplate):
             title=self.title,
             description=self.description,
             # Placeholder; ZimEntryResource.read() mutates this to the
-            # detected MIME before FastMCP reads it back.
+            # detected MIME before the SDK reads it back.
             mime_type=DEFAULT_BINARY_MIME,
             archive_path=target_path,
             entry_path=decoded_path,
