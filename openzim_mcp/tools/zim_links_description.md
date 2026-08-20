@@ -37,7 +37,8 @@ RESPONSE:
   dedupes targets and reports `mention_count`.
   `category_totals.internal` excludes `#anchor` links (counted as
   `category_totals.anchor`) and anchor-wrapped assets, which move to
-  the media bucket as `type: "asset"`.
+  the media bucket as `type: "asset"` (or fold into the `<img>` row
+  for the same entry, which then carries `path`).
 
 ERRORS:
   Invalid `direction` → `invalid_direction`. Missing/stale inbound
