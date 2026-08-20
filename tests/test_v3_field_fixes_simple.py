@@ -739,3 +739,31 @@ class TestD52BinaryNotFoundRecovery:
         assert "Missing Entry Path" in out
         assert "extract_article_links" not in out
         assert "links in" in out
+
+
+# ---------------------------------------------------------------------------
+# D53: docstring says compact defaults True "in simple mode" only
+# ---------------------------------------------------------------------------
+
+
+class TestD53CompactDefaultWording:
+    """One registration serves both modes and declares ``compact: bool =
+    True``, so the schema default is ``true`` in advanced mode too; the
+    description's "(default in simple mode)" implied a mode split that
+    does not exist.
+    """
+
+    def test_description_does_not_claim_a_mode_specific_default(self) -> None:
+        block = _description_arg_block("compact")
+        assert "default in simple mode" not in block
+        assert "default" in block.lower()
+
+    def test_registered_default_is_true(self) -> None:
+        import inspect
+
+        from openzim_mcp.tools import zim_query as zim_query_module
+
+        # The registration closes over ``server``; read the default off the
+        # inner function's source rather than spinning up a server.
+        source = inspect.getsource(zim_query_module.register)
+        assert "compact: bool = True" in source

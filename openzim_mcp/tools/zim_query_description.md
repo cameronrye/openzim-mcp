@@ -72,7 +72,7 @@ Args:
         hint — wire that value back here to read the next
         page. Negative values are rejected with an
         `invalid_content_offset` error.
-    compact: When True (default in simple mode), apply
+    compact: When True (the default in both modes), apply
         small-LLM optimizations — strip markdown link-soup,
         drop section previews from structure responses,
         flatten link/title/related listings into compact
