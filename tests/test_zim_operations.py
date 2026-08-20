@@ -2211,8 +2211,8 @@ class TestZimOperations:
 
             error_msg = str(exc_info.value)
             assert "Entry not found: 'A/Nonexistent'" in error_msg
-            assert "Try using search_zim_file()" in error_msg
-            assert "browse_namespace()" in error_msg
+            assert "Try using zim_search()" in error_msg
+            assert "zim_browse()" in error_msg
 
     def test_smart_retrieval_search_failure(
         self, zim_operations: ZimOperations, temp_dir: Path
@@ -2245,7 +2245,7 @@ class TestZimOperations:
                 assert "Failed to retrieve entry 'A/Test'" in error_msg
                 assert "Direct access failed" in error_msg
                 assert "Search-based fallback failed" in error_msg
-                assert "Try using search_zim_file()" in error_msg
+                assert "Try using zim_search()" in error_msg
 
     def test_extract_search_terms_from_path(self, zim_operations: ZimOperations):
         """Test search term extraction from various path formats."""
@@ -3014,7 +3014,7 @@ class TestGetBinaryEntry:
         assert result_data["size"] == 1000
         assert result_data["truncated"] is True
         assert result_data["data"] is None
-        assert "exceeds max_size_bytes" in result_data.get("message", "")
+        assert "exceeds the 100 B byte cap" in result_data.get("message", "")
 
     @patch("openzim_mcp.zim_operations.zim_archive")
     def test_get_binary_entry_not_found(

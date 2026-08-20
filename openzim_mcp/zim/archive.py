@@ -1056,7 +1056,12 @@ class ZimOperations(
             return content
 
     def _main_page_cache_lookup(
-        self, zim_file_path: str, prefix: str, *, compact: bool
+        self,
+        zim_file_path: str,
+        prefix: str,
+        *,
+        compact: bool,
+        max_content_length: Optional[int] = None,
     ) -> Tuple[Path, str, Any]:
         """Validate the path and probe the response cache for a main-page call.
 
@@ -1067,6 +1072,11 @@ class ZimOperations(
         distinct ``prefix`` values so old persisted text entries don't
         collide with the dict shape.
 
+        The key carries a ``v2`` marker (the rendering became chrome-scoped,
+        so a persisted v1 body must not be served) and the caller's cap,
+        which is part of the response identity: an uncapped read must never
+        be answered with a capped rendering or vice versa.
+
         Returns:
             ``(validated_path, cache_key, cached_value)`` —
             ``cached_value`` is ``None`` on a cache miss.
@@ -1075,8 +1085,9 @@ class ZimOperations(
         from openzim_mcp.bundle import archive_stat_token
 
         cache_key = (
-            f"{prefix}:{validated_path}:"
-            f"{archive_stat_token(validated_path)}:compact={compact}"
+            f"{prefix}:v2:{validated_path}:"
+            f"{archive_stat_token(validated_path)}:compact={compact}:"
+            f"cap={max_content_length}"
         )
         return validated_path, cache_key, self.cache.get(cache_key)
 
@@ -1170,19 +1181,29 @@ class ZimOperations(
         return result, content_ok
 
     def get_main_page_data(
-        self, zim_file_path: str, *, compact: bool = False
+        self,
+        zim_file_path: str,
+        *,
+        compact: bool = False,
+        max_content_length: Optional[int] = None,
     ) -> "EntryResponse":
         """Structured variant of ``get_main_page``.
 
         Returns the entry dict directly (path/title/content/content_type)
         so MCP tools can hand it to the SDK's structured-content path.
 
+        ``max_content_length`` caps the body like a path fetch does; when
+        ``None`` the branch keeps its ``DEFAULT_MAIN_PAGE_TRUNCATION`` cap.
+
         Raises:
             OpenZimMcpFileNotFoundError: If ZIM file not found
             OpenZimMcpArchiveError: If main page retrieval fails
         """
         validated_path, cache_key, cached_result = self._main_page_cache_lookup(
-            zim_file_path, "main_page_data", compact=compact
+            zim_file_path,
+            "main_page_data",
+            compact=compact,
+            max_content_length=max_content_length,
         )
         if cached_result is not None:
             logger.debug(f"Returning cached main page dict for: {validated_path}")
@@ -1195,7 +1216,7 @@ class ZimOperations(
         try:
             with _zim_ops_shim.zim_archive(validated_path) as archive:
                 payload, content_ok = self._get_main_page_data_content(
-                    archive, compact=compact
+                    archive, compact=compact, max_content_length=max_content_length
                 )
         except Exception as e:
             logger.error(f"Main page retrieval failed for {validated_path}: {e}")
@@ -1217,7 +1238,11 @@ class ZimOperations(
         return cast("EntryResponse", with_meta)
 
     def _get_main_page_data_content(
-        self, archive: Archive, *, compact: bool = False
+        self,
+        archive: Archive,
+        *,
+        compact: bool = False,
+        max_content_length: Optional[int] = None,
     ) -> Tuple[Dict[str, Any], bool]:
         """Build the main-page dict payload from an open archive.
 
@@ -1229,12 +1254,16 @@ class ZimOperations(
             processing raised; the caller must skip caching it.
         """
         _kind, payload, content_ok, _found_at = self._get_main_page_result(
-            archive, compact=compact
+            archive, compact=compact, max_content_length=max_content_length
         )
         return payload, content_ok
 
     def _get_main_page_result(  # NOSONAR(python:S3776)
-        self, archive: Archive, *, compact: bool = False
+        self,
+        archive: Archive,
+        *,
+        compact: bool = False,
+        max_content_length: Optional[int] = None,
     ) -> Tuple[str, Dict[str, Any], bool, Optional[str]]:
         """Resolve the main page and build its structured payload.
 
@@ -1243,6 +1272,9 @@ class ZimOperations(
         (``_get_main_page_data_content``) presenters: redirect-following,
         the ``main_entry``/fallback-path probing ladder, truncation, and
         the error-sentinel / don't-cache rule.
+
+        ``max_content_length`` overrides the ``DEFAULT_MAIN_PAGE_TRUNCATION``
+        body cap; the default is read at call time so tests can patch it.
 
         Returns:
             ``(kind, payload, content_ok, found_at)``:
@@ -1277,21 +1309,34 @@ class ZimOperations(
             try:
                 item = entry_obj.get_item()
                 mime_type = item.mimetype or ""
+                # ``scope_main_content`` matches the path-fetch branch
+                # (``_build_entry_payload``): the main page of a warc2zim
+                # archive is an ordinary entry wrapped in the same site
+                # chrome, and it used to be the one entry-rendering path
+                # that served the banner / skip-nav / menus.
                 content = self.content_processor.process_mime_content(
-                    bytes(item.content), mime_type, compact=compact
+                    bytes(item.content),
+                    mime_type,
+                    compact=compact,
+                    scope_main_content=True,
                 )
                 total_length = len(content)
+                cap = (
+                    max_content_length
+                    if max_content_length is not None
+                    else DEFAULT_MAIN_PAGE_TRUNCATION
+                )
                 # Truncate content for main page display. ``paginatable
                 # = False`` because ``_handle_main_page`` doesn't
                 # thread ``content_offset`` — point the caller at
                 # ``get article`` for the rest (A11 third pass).
                 truncated_content = self.content_processor.truncate_content(
-                    content, DEFAULT_MAIN_PAGE_TRUNCATION, paginatable=False
+                    content, cap, paginatable=False
                 )
                 # Key on the cap, not the rendered lengths: ``truncate_content``
                 # appends a ~150-char note, so a length comparison reports
                 # "not truncated" whenever the overflow is smaller than the note.
-                was_truncated = total_length > DEFAULT_MAIN_PAGE_TRUNCATION
+                was_truncated = total_length > cap
                 payload: Dict[str, Any] = {
                     "path": path,
                     "title": title,
@@ -1457,5 +1502,5 @@ class ZimOperations(
             return resolved, resolved.path
         raise OpenZimMcpArchiveError(
             f"Entry not found: '{entry_path}'. "
-            f"Try using search_zim_file() to find available entries."
+            f"Try using zim_search() to find available entries."
         ) from None

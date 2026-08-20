@@ -24,6 +24,7 @@ from typing import (
     TypeVar,
     cast,
 )
+from urllib.parse import unquote
 
 from libzim.reader import Archive  # type: ignore[import-untyped]
 
@@ -157,6 +158,31 @@ def _render_entry_payload_text(payload: Dict[str, Any]) -> str:
     result_text += f"Type: {payload.get('content_type') or 'Unknown'}\n"
     offset_line, body = _render_offset_and_body(payload)
     return f"{result_text}{offset_line}## Content\n\n{body}"
+
+
+def _alternate_entry_spellings(entry_path: str) -> List[str]:
+    """Other spellings of ``entry_path`` worth an exact probe, raw one excluded.
+
+    Mirrors ``zim.structure._resolve_entry_spelling``'s raw-first / decoded-
+    fallback order for the entry-fetch ladder: the percent-decoded form is
+    offered only when it differs from the input, so paths with a literal
+    ``%`` (warc2zim asset names) are never decoded away from a working
+    spelling.
+
+    A leading ``/`` is the other common client slip: ZIM paths are never
+    rooted, so ``/medlineplus.gov/diabetes.html`` can only mean the
+    un-slashed entry. The search fallback cannot recover it — its matcher
+    splits the first segment off both sides asymmetrically — and the
+    not-found error then ran the path through the filesystem redactor,
+    echoing ``...diabetes.html`` back at the caller.
+    """
+    candidates = [unquote(entry_path)]
+    candidates.extend(c.lstrip("/") for c in (entry_path, *candidates))
+    spellings: List[str] = []
+    for candidate in candidates:
+        if candidate and candidate != entry_path and candidate not in spellings:
+            spellings.append(candidate)
+    return spellings
 
 
 def _heading_matches(title: str, tokens: Tuple[str, ...]) -> bool:
@@ -517,7 +543,7 @@ class _ContentMixin:
             raise OpenZimMcpArchiveError(
                 f"Entry retrieval failed for '{entry_path}': {e}. "
                 f"This may be due to file access issues or ZIM file corruption. "
-                f"Try using search_zim_file() to verify the file is accessible."
+                f"Try using zim_health() to verify the archive is loaded and readable."
             ) from e
 
     def _get_zim_entry_from_archive(
@@ -574,6 +600,61 @@ class _ContentMixin:
             self.cache.set(cache_key, result)
         logger.info(f"Retrieved entry: {entry_path}")
         return result
+
+    def _get_batch_entry_body(
+        self,
+        archive: Archive,
+        validated_path: Path,
+        entry_path: str,
+        max_content_length: int,
+        *,
+        compact: bool = False,
+    ) -> str:
+        """Resolve one batch entry and return its clean body text.
+
+        Batch items used to carry the legacy rendered document (``# title``
+        / ``Path:`` / ``Type:`` / ``## Content`` header block) while the
+        single-entry branch serves the bare body with path/title as
+        separate fields. The item already identifies the entry through
+        ``entry_path``, so the batch surface now serves the same body the
+        structured payload builder produces — first page, with the
+        batch-specific truncation footer.
+
+        Own cache namespace (``entry_batch``) because the body differs from
+        both the legacy text (``entry:v3``) and the single-entry dict
+        (``entry_data``) renderings of the same entry.
+        """
+        from openzim_mcp.bundle import archive_stat_token
+
+        cache_key = (
+            f"entry_batch:v1:{validated_path}:{archive_stat_token(validated_path)}:"
+            f"{entry_path}:{max_content_length}:compact={compact}"
+        )
+        cached = self.cache.get(cache_key)
+        if cached is not None:
+            return cast(str, cached)
+
+        payload, content_ok = self._smart_retrieve_entry(
+            archive,
+            entry_path,
+            validated_path,
+            build=lambda actual_path: self._build_entry_payload(
+                archive,
+                actual_path,
+                entry_path,
+                max_content_length,
+                0,
+                compact=compact,
+                batch_item=True,
+            ),
+            fetch_metadata=lambda: self._get_metadata_entry_data(
+                archive, entry_path, max_content_length, 0
+            ),
+        )
+        body = str(payload.get("content") or "")
+        if content_ok:
+            self.cache.set(cache_key, body)
+        return body
 
     def get_zim_entry_data(
         self,
@@ -645,7 +726,7 @@ class _ContentMixin:
             raise OpenZimMcpArchiveError(
                 f"Entry retrieval failed for '{entry_path}': {e}. "
                 f"This may be due to file access issues or ZIM file corruption. "
-                f"Try using search_zim_file() to verify the file is accessible."
+                f"Try using zim_health() to verify the archive is loaded and readable."
             ) from e
 
         # ``_truncated`` / ``_total_chars`` / ``_content_chars`` are internal
@@ -767,6 +848,29 @@ class _ContentMixin:
         except Exception as direct_error:
             logger.debug(f"Direct entry access failed for {entry_path}: {direct_error}")
 
+            # Cheap exact probes on alternate spellings of the same path
+            # come BEFORE the search fallback: the archive's own links are
+            # percent-encoded per RFC 3986 while libzim stores raw UTF-8,
+            # so a client following a link zim_get itself served
+            # (``../gau%E1%B8%8Dapad/``) used to dead-end in not-found.
+            # The raw spelling was already tried above — some archives store
+            # a literal ``%`` in a path — so decoding is strictly a fallback.
+            for alternate in _alternate_entry_spellings(entry_path):
+                try:
+                    result, content_ok, resolved_path = build(alternate)
+                except OpenZimMcpArchiveError:
+                    raise
+                except Exception as alternate_error:
+                    logger.debug(
+                        f"Alternate spelling {alternate!r} failed: {alternate_error}"
+                    )
+                    continue
+                self.cache.set(cache_key, resolved_path)
+                logger.info(
+                    f"Resolved {entry_path!r} via alternate spelling {alternate!r}"
+                )
+                return result, content_ok
+
             # Fall back to search-based retrieval
             try:
                 logger.info(f"Falling back to search-based retrieval for: {entry_path}")
@@ -785,8 +889,8 @@ class _ContentMixin:
                     raise OpenZimMcpArchiveError(
                         f"Entry not found: '{entry_path}'. "
                         f"The entry path may not exist in this ZIM file. "
-                        f"Try using search_zim_file() to find available entries, "
-                        f"or browse_namespace() to explore the file structure."
+                        f"Try using zim_search() to find available entries, "
+                        f"or zim_browse() to explore the archive's namespaces."
                     )
             except OpenZimMcpArchiveError:
                 # Re-raise our custom errors with guidance
@@ -802,7 +906,7 @@ class _ContentMixin:
                     f"Direct access failed: {direct_error}. "
                     f"Search-based fallback failed: {search_error}. "
                     f"The entry may not exist or the path format may be incorrect. "
-                    f"Try using search_zim_file() to find the correct entry path."
+                    f"Try using zim_search() to find the correct entry path."
                 ) from search_error
 
     def _get_entry_data_from_archive(
@@ -855,6 +959,7 @@ class _ContentMixin:
         content_offset: int = 0,
         *,
         compact: bool = False,
+        batch_item: bool = False,
     ) -> Tuple[Dict[str, Any], bool, str]:
         """Construct the dict payload for a resolved entry.
 
@@ -862,7 +967,9 @@ class _ContentMixin:
         checks), content extraction, compact link-stripping, and
         offset/truncation accounting. The legacy text surface
         (``_get_entry_content_direct``) renders this payload via
-        ``_render_entry_payload_text``.
+        ``_render_entry_payload_text``. ``batch_item`` selects the
+        truncation footer batch mode can act on (see
+        ``ContentProcessor.truncate_content``).
         """
         entry = archive.get_entry_by_path(actual_path)
 
@@ -934,6 +1041,7 @@ class _ContentMixin:
             max_content_length,
             current_offset=content_offset,
             original_total=total_length,
+            batch_item=batch_item,
         )
         # Compare against the cap, NOT the rendered lengths: ``truncate_content``
         # appends a ~150-char truncation note, so ``len(truncated) < len(content)``
@@ -1079,12 +1187,11 @@ class _ContentMixin:
                             # entry slips through D12 by hiding inside a
                             # batched request.
                             reject_path_traversal(entry_path)
-                            content = self._get_zim_entry_from_archive(
+                            content = self._get_batch_entry_body(
                                 archive,
                                 validated_path,
                                 entry_path,
                                 max_content_length,
-                                0,
                                 compact=compact,
                             )
                             results.append(
@@ -1483,8 +1590,8 @@ class _ContentMixin:
                     else:
                         raise OpenZimMcpArchiveError(
                             f"Entry not found: '{entry_path}'. "
-                            f"Try using search_zim_file() to find available entries, "
-                            f"or browse_namespace() to explore the file structure."
+                            f"Try using zim_search() to find available entries, "
+                            f"or zim_browse() to explore the archive's namespaces."
                         )
 
                 # Resolve the redirect chain — libzim raises RuntimeError on
@@ -1591,11 +1698,15 @@ class _ContentMixin:
                 result["encoding"] = None
                 result["data"] = None
                 result["truncated"] = True
+                # Name the knob the caller can actually turn: zim_get maps
+                # ``max_content_length`` onto this byte cap and never exposes
+                # ``include_data`` / ``max_size_bytes``, so the old hint sent
+                # callers to parameters the tool silently ignores.
                 result["message"] = (
-                    f"Content size ({self._format_size(size)}) "
-                    f"exceeds max_size_bytes ({self._format_size(max_size_bytes)}). "
-                    f"Set include_data=False for metadata only, "
-                    f"or increase max_size_bytes."
+                    f"Content size ({self._format_size(size)}) exceeds the "
+                    f"{self._format_size(max_size_bytes)} byte cap. The metadata "
+                    f"above is complete; raise max_content_length to at least "
+                    f"{size} to fetch the bytes."
                 )
         else:
             result["encoding"] = None

@@ -128,14 +128,14 @@ _CONTENT_CACHE_CASES = [
     (
         "main_page",
         lambda zo, p: zo.get_main_page(p, compact=False),
-        lambda vp: f"main_page:{vp}:compact=False",
-        lambda vp, tok: f"main_page:{vp}:{tok}:compact=False",
+        lambda vp: f"main_page:v2:{vp}:compact=False:cap=None",
+        lambda vp, tok: f"main_page:v2:{vp}:{tok}:compact=False:cap=None",
     ),
     (
         "main_page_data",
         lambda zo, p: zo.get_main_page_data(p, compact=False),
-        lambda vp: f"main_page_data:{vp}:compact=False",
-        lambda vp, tok: f"main_page_data:{vp}:{tok}:compact=False",
+        lambda vp: f"main_page_data:v2:{vp}:compact=False:cap=None",
+        lambda vp, tok: f"main_page_data:v2:{vp}:{tok}:compact=False:cap=None",
     ),
     (
         "browse_ns_data",

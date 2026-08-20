@@ -196,6 +196,12 @@ VALID_TRANSPORT_TYPES = {"stdio", "sse", "streamable-http"}
 UNWANTED_HTML_SELECTORS: List[str] = [
     "script",
     "style",
+    # Browser-only fallbacks ("To use the sharing features on this page,
+    # please enable JavaScript.", tag-manager iframes). warc2zim keeps them
+    # inside the <article> landmark, so on MedlinePlus the no-JS line opened
+    # thousands of encyclopedia / genetics / lab-test bodies and led their
+    # search snippets. The summary fallback already dropped noscript.
+    "noscript",
     "meta",
     "link",
     "head",

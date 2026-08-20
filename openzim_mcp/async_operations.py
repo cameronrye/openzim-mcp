@@ -255,11 +255,18 @@ class AsyncZimOperations:
         return await asyncio.to_thread(self._ops.get_main_page, zim_file_path)
 
     async def get_main_page_data(
-        self, zim_file_path: str, *, compact: bool = False
+        self,
+        zim_file_path: str,
+        *,
+        compact: bool = False,
+        max_content_length: Optional[int] = None,
     ) -> "EntryResponse":
         """Structured variant of ``get_main_page`` (async)."""
         return await asyncio.to_thread(
-            self._ops.get_main_page_data, zim_file_path, compact=compact
+            self._ops.get_main_page_data,
+            zim_file_path,
+            compact=compact,
+            max_content_length=max_content_length,
         )
 
     async def list_namespaces(self, zim_file_path: str) -> str:
