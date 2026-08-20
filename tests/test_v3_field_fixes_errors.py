@@ -12,6 +12,7 @@ uncapped ``Technical Details`` echo (D60), and tab/newline surviving
 
 from __future__ import annotations
 
+import contextlib
 import json
 from pathlib import Path
 
@@ -489,3 +490,190 @@ def test_d61_sanitize_input_keeps_its_deliberate_whitespace_carve_out() -> None:
     from openzim_mcp.security import sanitize_input
 
     assert sanitize_input("line one\n\tline two") == "line one\n\tline two"
+
+
+# ---------------------------------------------------------------------------
+# R2-3 (D61 residual) — control characters do not survive into the
+# "**Technical Details**" echo or the server-side ERROR log line
+# ---------------------------------------------------------------------------
+
+_C0_AND_DEL = [chr(code) for code in list(range(0x00, 0x20)) + [0x7F]]
+_INJECTED_PATH = "/Users/cameron/Developer/zim/foo\n\tbar\r.zim"
+
+
+def _stray_controls(text: str) -> list[str]:
+    """Control characters in ``text`` other than the template's own LFs."""
+    return [ch for ch in text if ch in _C0_AND_DEL and ch != "\n"]
+
+
+def test_r2_3_templated_details_line_is_single_line(temp_dir: Path) -> None:
+    """D61 cleaned the ``context`` argument but the exception text was only
+    length-truncated: a ``zim_file_path`` of ``foo\\n\\tbar.zim`` came back
+    with the raw LF and TAB inside ``**Technical Details**``."""
+    config = OpenZimMcpConfig(allowed_directories=[str(temp_dir)], tool_mode="advanced")
+    server = OpenZimMcpServer(config)
+    err = OpenZimMcpSecurityError(f"Path contains suspicious pattern: {_INJECTED_PATH}")
+
+    msg = server._create_enhanced_error_message(
+        "zim_metadata", err, f"Path: {_INJECTED_PATH}"
+    )
+    clean = server._create_enhanced_error_message(
+        "zim_metadata",
+        OpenZimMcpSecurityError("Path contains suspicious pattern: x"),
+        "Path: x",
+    )
+
+    assert not _stray_controls(msg), repr(msg)
+    # No forged extra lines: same structural line count as a clean render.
+    assert msg.count("\n") == clean.count("\n"), repr(msg)
+    details = msg.splitlines()[-1]
+    assert details.startswith("**Technical Details**:"), details
+    assert "foo" in details and "bar" in details, details
+
+
+def test_r2_3_generic_details_line_is_single_line(temp_dir: Path) -> None:
+    config = OpenZimMcpConfig(allowed_directories=[str(temp_dir)], tool_mode="advanced")
+    server = OpenZimMcpServer(config)
+
+    msg = server._create_enhanced_error_message(
+        "zim_get", RuntimeError("boom\n**Operation**: forged\x7f"), ""
+    )
+    clean = server._create_enhanced_error_message("zim_get", RuntimeError("boom"), "")
+
+    assert "**Operation Failed**" in msg
+    assert not _stray_controls(msg), repr(msg)
+    assert msg.count("\n") == clean.count("\n"), repr(msg)
+    assert "forged" in _technical_details(msg)
+
+
+def test_r2_3_every_c0_control_and_del_is_stripped_from_details() -> None:
+    from openzim_mcp.error_messages import (
+        ERROR_CONFIGS,
+        format_error_message,
+        format_generic_error,
+    )
+
+    config = ERROR_CONFIGS[OpenZimMcpSecurityError]
+    for ch in _C0_AND_DEL:
+        details = f"a{ch}b"
+        templated = format_error_message(config, "zim_get", "ctx", details)
+        generic = format_generic_error("zim_get", "RuntimeError", "ctx", details)
+        assert not _stray_controls(templated), hex(ord(ch))
+        assert not _stray_controls(generic), hex(ord(ch))
+        # An injected LF must not add a line either.
+        assert _technical_details(templated) == "a b", hex(ord(ch))
+        assert _technical_details(generic) == "a b", hex(ord(ch))
+
+
+def test_r2_3_details_are_sanitized_before_the_length_cap() -> None:
+    """The 1024 cap applies to the cleaned text, so the ellipsis marker can
+    never be preceded by a stray control character."""
+    from openzim_mcp.error_messages import _bound_details
+
+    out = _bound_details("x" * 500 + "\n" + "y" * 600)
+
+    assert "\n" not in out, repr(out[490:510])
+    assert out.endswith("...") and len(out) <= 1024 + len("...")
+
+
+@contextlib.contextmanager
+def _captured(caplog: pytest.LogCaptureFixture, logger_name: str):
+    """Attach caplog's handler to one named logger for the duration.
+
+    ``OpenZimMcpServer`` construction runs ``logging.basicConfig(force=True)``,
+    which drops caplog's root handler, so ``caplog.at_level`` alone captures
+    nothing once a real server exists in the process.
+    """
+    import logging
+
+    target = logging.getLogger(logger_name)
+    target.addHandler(caplog.handler)
+    try:
+        with caplog.at_level(logging.ERROR, logger=logger_name):
+            yield
+    finally:
+        target.removeHandler(caplog.handler)
+
+
+def _messages(caplog: pytest.LogCaptureFixture, logger_name: str) -> list[str]:
+    return [r.getMessage() for r in caplog.records if r.name == logger_name]
+
+
+def test_r2_3_tool_error_log_record_is_a_single_line(
+    temp_dir: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """server.err showed ``... suspicious pattern: .../foo`` followed by a
+    separate physical line ``\\tbar.zim`` — log injection at ERROR level."""
+    from openzim_mcp.tools._common import tool_error_response
+
+    config = OpenZimMcpConfig(allowed_directories=[str(temp_dir)], tool_mode="advanced")
+    server = OpenZimMcpServer(config)
+    err = OpenZimMcpSecurityError(f"Path contains suspicious pattern: {_INJECTED_PATH}")
+
+    with _captured(caplog, "openzim_mcp.tools.zim_metadata"):
+        payload = tool_error_response(
+            server,
+            operation="zim_metadata",
+            error=err,
+            context=f"Path: {_INJECTED_PATH}",
+        )
+
+    (logged,) = _messages(caplog, "openzim_mcp.tools.zim_metadata")
+    assert "\n" not in logged and "\t" not in logged and "\r" not in logged, repr(
+        logged
+    )
+    assert logged.startswith("Error in zim_metadata: Path contains suspicious")
+    # Operators still see the offending path, with its controls neutralised.
+    assert "foo bar .zim" in logged, logged
+    # And the client-facing envelope is clean end to end.
+    assert not _stray_controls(payload["message"]), repr(payload["message"])
+
+
+def test_r2_3_zim_query_handler_log_record_is_a_single_line(
+    temp_dir: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """zim_query does not go through ``tool_error_response``; its own broad
+    ``except`` in simple_tools logged the same raw exception text."""
+    from openzim_mcp.cache import OpenZimMcpCache
+    from openzim_mcp.content_processor import ContentProcessor
+    from openzim_mcp.simple_tools import SimpleToolsHandler
+    from openzim_mcp.zim_operations import ZimOperations
+
+    config = OpenZimMcpConfig(allowed_directories=[str(temp_dir)], tool_mode="advanced")
+    ops = ZimOperations(
+        config,
+        PathValidator(config.allowed_directories),
+        OpenZimMcpCache(config.cache),
+        ContentProcessor(snippet_length=100),
+    )
+    handler = SimpleToolsHandler(ops)
+
+    with _captured(caplog, "openzim_mcp.simple_tools"):
+        out = handler.handle_zim_query("summarize main page", _INJECTED_PATH)
+
+    assert isinstance(out, dict) and out["error"] is True, out
+    logged = [
+        m for m in _messages(caplog, "openzim_mcp.simple_tools") if "zim_query" in m
+    ]
+    assert logged, _messages(caplog, "openzim_mcp.simple_tools")
+    for line in logged:
+        assert "\n" not in line and "\t" not in line and "\r" not in line, repr(line)
+    assert any("foo bar .zim" in m for m in logged), logged
+
+
+def test_r2_3_clean_log_message_format_is_unchanged(
+    temp_dir: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """test_tools_common pins ``'Error in <op>: <err>'``; a clean exception
+    must round-trip byte for byte."""
+    from openzim_mcp.tools._common import tool_error_response
+
+    config = OpenZimMcpConfig(allowed_directories=[str(temp_dir)], tool_mode="advanced")
+    server = OpenZimMcpServer(config)
+
+    with _captured(caplog, "openzim_mcp.tools.zim_links"):
+        tool_error_response(server, operation="zim_links", error=RuntimeError("boom"))
+
+    assert _messages(caplog, "openzim_mcp.tools.zim_links") == [
+        "Error in zim_links: boom"
+    ]
