@@ -382,3 +382,64 @@ def test_d59_query_cap_is_one_constant_for_both_tools() -> None:
     from openzim_mcp.tools.zim_query import MAX_QUERY_LENGTH as query_cap
 
     assert query_cap == MAX_QUERY_LENGTH == 4096
+
+
+# ---------------------------------------------------------------------------
+# D60 — the rendered "Technical Details" echo is length-bounded like `context`
+# ---------------------------------------------------------------------------
+
+
+def _technical_details(message: str) -> str:
+    """The details value: from the marker to the next paragraph break (the
+    generic template appends a "**Need Help?**" paragraph after it)."""
+    marker = "**Technical Details**: "
+    tail = message[message.index(marker) + len(marker) :]
+    return tail.split("\n\n", 1)[0]
+
+
+def test_d60_templated_error_bounds_the_details_echo(temp_dir: Path) -> None:
+    """A 1 MB ``entry_path`` produced a ~1.05 MB error body: the data layer's
+    "Entry not found: '<path>'" text was redacted but never capped, while
+    the sibling ``context`` field was capped at 1024."""
+    from openzim_mcp.exceptions import OpenZimMcpArchiveError
+
+    config = OpenZimMcpConfig(allowed_directories=[str(temp_dir)], tool_mode="advanced")
+    server = OpenZimMcpServer(config)
+    huge = "a" * 1_048_576
+    err = OpenZimMcpArchiveError(
+        f"Entry not found: '{huge}'. The entry path may not exist."
+    )
+
+    msg = server._create_enhanced_error_message("zim_get", err, f"Path: {huge}")
+
+    details = _technical_details(msg)
+    assert len(details) <= 1024 + len("..."), len(details)
+    assert details.endswith("..."), details[-40:]
+    assert len(msg) < 4096, len(msg)
+
+
+def test_d60_generic_error_bounds_the_details_echo(temp_dir: Path) -> None:
+    config = OpenZimMcpConfig(allowed_directories=[str(temp_dir)], tool_mode="advanced")
+    server = OpenZimMcpServer(config)
+
+    msg = server._create_enhanced_error_message(
+        "zim_get", RuntimeError("x" * 50_000), ""
+    )
+
+    assert "**Operation Failed**" in msg
+    details = _technical_details(msg)
+    assert len(details) <= 1024 + len("..."), len(details)
+    assert len(msg) < 4096, len(msg)
+
+
+def test_d60_short_details_are_untouched(temp_dir: Path) -> None:
+    from openzim_mcp.exceptions import OpenZimMcpArchiveError
+
+    config = OpenZimMcpConfig(allowed_directories=[str(temp_dir)], tool_mode="advanced")
+    server = OpenZimMcpServer(config)
+
+    msg = server._create_enhanced_error_message(
+        "zim_get", OpenZimMcpArchiveError("Archive corrupted"), "Path: x"
+    )
+
+    assert msg.endswith("**Technical Details**: Archive corrupted"), msg[-80:]

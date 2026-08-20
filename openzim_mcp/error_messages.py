@@ -219,6 +219,21 @@ GENERIC_ERROR_TEMPLATE = """**Operation Failed**
 or try simpler operations first."""
 
 
+# Cap on the "Technical Details" echo. Matches ``security._CONTEXT_MAX_LENGTH``
+# so the two user-influenced fields of an envelope are bounded alike: the
+# exception text often embeds the offending argument verbatim (the data
+# layer's "Entry not found: '<path>'"), and without a cap a 1 MB ``entry_path``
+# came back as a 1 MB error body.
+_DETAILS_MAX_LENGTH = 1024
+
+
+def _bound_details(details: str) -> str:
+    """Truncate an over-long details string, marking the cut with ``...``."""
+    if len(details) <= _DETAILS_MAX_LENGTH:
+        return details
+    return details[:_DETAILS_MAX_LENGTH].rstrip() + "..."
+
+
 def format_error_message(
     config: ErrorConfig,
     operation: str,
@@ -243,7 +258,7 @@ def format_error_message(
         f"**Issue**: {config.issue}\n"
         f"**Context**: {context}\n\n"
         f"**Troubleshooting Steps**:\n{steps_text}\n\n"
-        f"**Technical Details**: {details}"
+        f"**Technical Details**: {_bound_details(details)}"
     )
 
 
@@ -268,7 +283,7 @@ def format_generic_error(
         operation=operation,
         error_type=error_type,
         context=context,
-        details=details,
+        details=_bound_details(details),
     )
 
 
