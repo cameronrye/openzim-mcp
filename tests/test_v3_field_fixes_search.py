@@ -370,3 +370,79 @@ def test_d28_low_relevance_proxy_folds_diacritics_and_stems() -> None:
         )
         is True
     )
+
+
+# ---------------------------------------------------------------------------
+# D29 — snippets skip site boilerplate and navigation blocks
+# ---------------------------------------------------------------------------
+
+# Trimmed from medlineplus.gov/ency/article/000305.htm as rendered at the
+# snippet stage (compact markdown of the main-content landmark).
+_ENCY_MARKDOWN = (
+    "# Type 1 diabetes\n\n"
+    "To use the sharing features on this page, please enable JavaScript.\n\n"
+    "Type 1 diabetes is a lifelong ([chronic](002312.htm)) disease in which "
+    "there is a high level of sugar (glucose) in the blood.\n\n"
+    "## Causes\n\n"
+    "Type 1 diabetes can occur at any age. It is most often diagnosed in "
+    "children, adolescents, or young adults.\n\n"
+    "## Symptoms\n\n"
+    "  * Being very thirsty\n  * Feeling hungry\n  * Having blurry eyesight\n"
+)
+
+# Trimmed from medlineplus.gov/diabetes.html: the "On this page" nav block.
+_TOPIC_MARKDOWN = (
+    "#  Diabetes \n\n"
+    "On this page\n\n"
+    "### Basics\n\n"
+    "  * Summary\n  * Start Here\n  * Diagnosis and Tests\n"
+    "  * Prevention and Risk Factors\n\n"
+    "### Research\n\n"
+    "  * Statistics and Research\n  * Clinical Trials\n\n"
+    "## Summary\n\n"
+    "### What is diabetes?\n\n"
+    "Diabetes, also known as diabetes mellitus, is a disease in which your "
+    "[blood glucose](bloodglucose.html), or blood sugar, levels are too high.\n"
+)
+
+
+def test_d29_snippet_skips_the_no_javascript_boilerplate() -> None:
+    """A query that matches the H1 must not yield '# H1 + enable JavaScript'.
+
+    On MedlinePlus the ``<noscript>`` share-widget sentence sits directly
+    under every H1, and the ``: MedlinePlus Medical Encyclopedia`` title
+    suffix kept the H1 strip from firing — 13 of 30 ``insulin`` snippets
+    were that boilerplate and nothing else.
+    """
+    cp = ContentProcessor(snippet_length=300)
+    snippet = cp.create_snippet(
+        _ENCY_MARKDOWN,
+        query="diabetes",
+        title="Type 1 diabetes: MedlinePlus Medical Encyclopedia",
+        max_paragraphs=2,
+    )
+    assert "sharing features" not in snippet
+    assert "Type 1 **diabetes** is a lifelong" in snippet
+    # The H1 duplicates the (suffixed) title and is stripped like on
+    # Wikipedia-class archives.
+    assert not snippet.startswith("#")
+
+
+def test_d29_snippet_skips_on_this_page_navigation_lists() -> None:
+    """Lead fallback and fill must step over nav lists to reach prose."""
+    cp = ContentProcessor(snippet_length=400)
+    # No query term anywhere: the lead fallback used to be the nav block.
+    lead = cp.create_snippet(
+        _TOPIC_MARKDOWN,
+        query="insulin",
+        title="Diabetes | Type 1 Diabetes | Type 2 Diabetes | MedlinePlus",
+        max_paragraphs=2,
+    )
+    assert "On this page" not in lead
+    assert "Start Here" not in lead
+    assert "Diabetes, also known as diabetes mellitus" in lead
+
+    # A content list (sentence-case items) is NOT navigation and still
+    # anchors a snippet for a term inside it.
+    symptoms = cp.create_snippet(_ENCY_MARKDOWN, query="thirsty", max_paragraphs=1)
+    assert "Being very **thirsty**" in symptoms

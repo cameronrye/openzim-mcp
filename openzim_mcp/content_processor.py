@@ -278,6 +278,118 @@ _COMPLETE_LINK_RE = re.compile(_LINK_RE_SRC)
 _DANGLING_LINK_RE = re.compile(r"\[[^\]\n]*$|\[[^\]\n]*\]\((?:\\.|[^\n)\\])*\\?$")
 
 
+# Paragraphs that are site furniture rather than article text, as they
+# appear in the compact markdown a snippet is cut from. Each pattern is
+# matched against the whole paragraph (anchored), so prose that merely
+# mentions the phrase is untouched.
+#
+# - The MedlinePlus ``<noscript>`` share-widget sentence, which sits
+#   directly under every H1 on that corpus (13 of 30 ``insulin`` snippets
+#   were that sentence and nothing else).
+# - ``On this page`` / ``Skip navigation`` nav headers.
+_BOILERPLATE_PARAGRAPH_RE = re.compile(
+    r"^\s*(?:"
+    r"to use the sharing features on this page, please enable javascript\.?"
+    r"|on this page:?"
+    r"|skip (?:to main content|navigation)"
+    r")\s*$",
+    re.IGNORECASE,
+)
+
+# One markdown list item: the marker and its text.
+_LIST_ITEM_RE = re.compile(r"^\s*(?:[*+-]|\d+[.)])\s+(.*\S)\s*$")
+# ``[text](url)`` -> ``text`` (empty-text image-wrapper links fold to "").
+_LINK_TO_TEXT_RE = re.compile(r"\[([^\]\n]*)\]\((?:\\.|[^\n)\\])*\)")
+_MARKDOWN_HEADING_RE = re.compile(r"^\s*#{1,6}\s")
+# Longest item still read as a navigation label rather than a sentence.
+_NAV_ITEM_MAX_WORDS = 6
+
+
+def _is_nav_list_paragraph(paragraph: str) -> bool:
+    """Whether ``paragraph`` is a list of navigation labels, not content.
+
+    Site-scraped pages carry in-page menus (``* Summary`` / ``* Start
+    Here`` / ``* Diagnosis and Tests``) and tables of contents as plain
+    lists. Those read as short Title-Case labels with no sentence
+    punctuation; a content list (``* Being very thirsty``, ``* Deep,
+    rapid breathing``) does not, and is left alone.
+    """
+    lines = [line for line in paragraph.splitlines() if line.strip()]
+    if not lines:
+        return False
+    for line in lines:
+        item = _LIST_ITEM_RE.match(line)
+        if item is None:
+            return False
+        text = _LINK_TO_TEXT_RE.sub(r"\1", item.group(1)).strip()
+        if not text or text[-1] in ".!?;:":
+            return False
+        words = re.findall(r"[^\W\d_]+", text)
+        if not words or len(text.split()) > _NAV_ITEM_MAX_WORDS:
+            return False
+        if any(len(word) > 3 and not word[0].isupper() for word in words):
+            return False
+    return True
+
+
+def _drop_boilerplate_paragraphs(paragraphs: List[str]) -> List[str]:
+    """Remove site furniture from the paragraphs a snippet may be cut from.
+
+    Dropped: known boilerplate sentences, navigation lists, headings that
+    merely introduce a navigation list, and paragraphs with no visible
+    text (an image-wrapper ``[](…)`` link and nothing else). When that
+    would leave nothing, the original list is returned so a snippet is
+    still produced.
+    """
+    keep: List[str] = []
+    for index, paragraph in enumerate(paragraphs):
+        visible = _LINK_TO_TEXT_RE.sub(r"\1", paragraph).strip()
+        if not visible and index > 0:
+            # Blank/image-only paragraph. Index 0 is left to the caller's
+            # H1 handling so an empty leading slot never shifts it.
+            continue
+        if _BOILERPLATE_PARAGRAPH_RE.match(paragraph):
+            continue
+        if _is_nav_list_paragraph(paragraph):
+            continue
+        if (
+            _MARKDOWN_HEADING_RE.match(paragraph)
+            and index + 1 < len(paragraphs)
+            and _is_nav_list_paragraph(paragraphs[index + 1])
+        ):
+            continue
+        keep.append(paragraph)
+    return keep or list(paragraphs)
+
+
+def _select_snippet_paragraphs(
+    paragraphs: List[str], start_idx: int, max_paragraphs: int
+) -> List[str]:
+    """Take ``max_paragraphs`` content paragraphs from ``start_idx``.
+
+    Headings are context, not content: they do not fill a slot (a page
+    whose lead is ``## Summary`` / ``### What is diabetes?`` used to yield
+    those two lines and no prose), consecutive headings collapse to the
+    one nearest the prose, and a heading with nothing under it is dropped.
+    """
+    selected: List[str] = []
+    content_count = 0
+    for paragraph in paragraphs[start_idx:]:
+        if content_count >= max_paragraphs:
+            break
+        if _MARKDOWN_HEADING_RE.match(paragraph):
+            if selected and _MARKDOWN_HEADING_RE.match(selected[-1]):
+                selected[-1] = paragraph
+            else:
+                selected.append(paragraph)
+            continue
+        selected.append(paragraph)
+        content_count += 1
+    while len(selected) > 1 and _MARKDOWN_HEADING_RE.match(selected[-1]):
+        selected.pop()
+    return selected
+
+
 def _truncate_before_dangling_link(text: str) -> str:
     """Back ``text`` up to before an unterminated trailing markdown link.
 
@@ -1338,7 +1450,11 @@ class ContentProcessor:
             snippet_length if snippet_length is not None else self.snippet_length
         )
 
-        paragraphs = content.split("\n\n")
+        # Site furniture (share-widget boilerplate, in-page navigation
+        # lists) is neither a useful anchor nor useful fill: on MedlinePlus
+        # the paragraph under every H1 was the no-JavaScript sentence, so
+        # an H1 match produced a snippet with no article text at all.
+        paragraphs = _drop_boilerplate_paragraphs(content.split("\n\n"))
         start_idx = 0
 
         if query:
@@ -1371,7 +1487,7 @@ class ContentProcessor:
                             start_idx = i
                             break
 
-        selected = paragraphs[start_idx : start_idx + max_paragraphs]
+        selected = _select_snippet_paragraphs(paragraphs, start_idx, max_paragraphs)
         # H11: join with blank line (``\n\n``), not a single space, so a
         # second paragraph that opens with a markdown heading (``## Foo``)
         # remains a heading instead of becoming inline mid-line text.
@@ -1428,6 +1544,13 @@ class ContentProcessor:
         Match is case-insensitive on the title and tolerant of one
         trailing whitespace run (collapsed by html2text). Leaves
         non-matching headings (real article subheadings) alone.
+
+        Site-scraped archives suffix the title with the site name
+        (``Type 1 diabetes: MedlinePlus Medical Encyclopedia``,
+        ``Diabetes | … | MedlinePlus``) while the H1 carries the bare
+        article name, so an H1 that the title *starts with*, up to a
+        ``:``/``|``/dash separator, is the same duplicate and is stripped
+        too. ``# Geography`` under title ``Berlin`` still stays.
         """
         if not content or not title:
             return content
@@ -1441,7 +1564,20 @@ class ContentProcessor:
             rf"^\s*#\s+{re.escape(norm_title)}\s*\n+",
             flags=re.IGNORECASE,
         )
-        return pattern.sub("", content, count=1)
+        stripped = pattern.sub("", content, count=1)
+        if stripped != content:
+            return stripped
+        leading_h1 = re.match(r"^\s*#\s+(.+?)\s*\n+", content)
+        if leading_h1 is None:
+            return content
+        h1 = leading_h1.group(1).strip()
+        folded_title = norm_title.lower()
+        if not h1 or not folded_title.startswith(h1.lower()):
+            return content
+        rest = folded_title[len(h1) :].lstrip()
+        if rest and rest[0] not in ":|-–—":
+            return content
+        return content[leading_h1.end() :]
 
     def truncate_content(
         self,
