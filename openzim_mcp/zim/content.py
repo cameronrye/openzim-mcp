@@ -404,7 +404,10 @@ class _ContentMixin:
                 )
             if render_cache_key:
                 try:
-                    self.cache.set(render_cache_key, content)
+                    # One entry per result: ``ancillary`` keeps a wide search
+                    # from charging ~limit slots against the response count
+                    # cap and flushing every other warm response (D65).
+                    self.cache.set(render_cache_key, content, ancillary=True)
                 except Exception as exc:  # pragma: no cover - cache is best-effort
                     logger.debug("snippet render cache set failed: %s", exc)
             entry_title = getattr(entry, "title", None) or ""

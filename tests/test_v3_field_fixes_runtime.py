@@ -23,11 +23,15 @@ from pathlib import Path
 
 import pytest
 
+from openzim_mcp.cache import OpenZimMcpCache
 from openzim_mcp.config import CacheConfig, LoggingConfig, OpenZimMcpConfig
+from openzim_mcp.content_processor import ContentProcessor
 from openzim_mcp.exceptions import OpenZimMcpArchiveError
+from openzim_mcp.security import PathValidator
 from openzim_mcp.server import OpenZimMcpServer
 from openzim_mcp.server_state import _build_health_report
 from openzim_mcp.zim import archive as archive_mod
+from openzim_mcp.zim_operations import ZimOperations
 from tests.conftest_v2_fixtures import make_zim_ops
 
 GARBAGE = b"not a zim"
@@ -178,3 +182,137 @@ class TestD64IntegrityCheckRunsOutOfProcess:
         # The broken pool was discarded; the next call gets a fresh worker.
         assert archive_mod._validation_pool() is not pool
         assert ops.get_archive_validation_data(str(v2_phase_a_zim))["is_valid"] is True
+
+
+# ---------------------------------------------------------------------------
+# D65 — per-result snippet fragments must not flush whole responses
+# ---------------------------------------------------------------------------
+
+
+def _cache(max_size: int, max_bytes: int) -> OpenZimMcpCache:
+    return OpenZimMcpCache(
+        CacheConfig(
+            enabled=True, max_size=max_size, ttl_seconds=60, max_bytes=max_bytes
+        ),
+        enable_background_cleanup=False,
+    )
+
+
+class TestD65AncillaryEntriesDoNotConsumeTheCountCap:
+    def test_fragment_fanout_leaves_responses_in_place(self) -> None:
+        cache = _cache(max_size=3, max_bytes=1024 * 1024)
+        cache.set("resp:a", {"a": 1})
+        cache.set("resp:b", {"b": 2})
+        for i in range(100):
+            cache.set(f"snippet_render:v1:{i}", "x" * 100, ancillary=True)
+
+        assert cache.get("resp:a") == {"a": 1}
+        assert cache.get("resp:b") == {"b": 2}
+        stats = cache.stats()
+        assert stats["size"] == 102
+        assert stats["ancillary_entries"] == 100
+
+    def test_ancillary_entries_remain_bounded_by_the_byte_budget(self) -> None:
+        cache = _cache(max_size=100, max_bytes=6 * 1024)
+        for i in range(10):
+            cache.set(f"frag:{i}", "X" * 2048, ancillary=True)
+        assert cache.stats()["size_bytes"] <= 6 * 1024 + 1024
+        assert cache.stats()["size"] < 10
+
+    def test_ancillary_counts_toward_max_size_when_byte_budget_is_off(self) -> None:
+        # With max_bytes=0 nothing else bounds fragments, so the count cap must.
+        cache = _cache(max_size=3, max_bytes=0)
+        for i in range(5):
+            cache.set(f"frag:{i}", "x", ancillary=True)
+        assert cache.stats()["size"] == 3
+        assert cache.stats()["ancillary_entries"] == 0
+
+    def test_count_cap_still_bounds_responses_with_fragments_present(self) -> None:
+        cache = _cache(max_size=2, max_bytes=1024 * 1024)
+        cache.set("frag:1", "x", ancillary=True)
+        cache.set("frag:2", "x", ancillary=True)
+        cache.set("resp:1", 1)
+        cache.set("resp:2", 2)
+        cache.set("resp:3", 3)  # must push a response out, not just a fragment
+
+        stats = cache.stats()
+        assert stats["size"] - stats["ancillary_entries"] <= 2
+        assert cache.get("resp:1") is None
+        assert cache.get("resp:2") == 2
+        assert cache.get("resp:3") == 3
+
+    def test_delete_and_clear_forget_the_ancillary_marker(self) -> None:
+        cache = _cache(max_size=5, max_bytes=1024 * 1024)
+        cache.set("frag:1", "x", ancillary=True)
+        cache.delete("frag:1")
+        assert cache.stats()["ancillary_entries"] == 0
+        cache.set("frag:2", "x", ancillary=True)
+        cache.clear()
+        assert cache.stats()["ancillary_entries"] == 0
+
+    def test_persistence_round_trips_the_ancillary_marker(self, tmp_path: Path) -> None:
+        cfg = CacheConfig(
+            enabled=True,
+            max_size=5,
+            ttl_seconds=60,
+            max_bytes=1024 * 1024,
+            persistence_enabled=True,
+            persistence_path=str(tmp_path / "cache"),
+        )
+        first = OpenZimMcpCache(cfg, enable_background_cleanup=False)
+        first.set("resp:a", {"a": 1})
+        first.set("frag:1", "x", ancillary=True)
+        first.shutdown()
+
+        second = OpenZimMcpCache(cfg, enable_background_cleanup=False)
+        stats = second.stats()
+        assert stats["size"] == 2
+        assert stats["ancillary_entries"] == 1
+        second.shutdown()
+
+    def test_search_fanout_does_not_evict_cached_metadata(self, tmp_path: Path) -> None:
+        """End to end: a search whose result count exceeds ``max_size`` used to
+        flush every other response (the packet's limit=100 repro, scaled down)."""
+        from libzim.writer import Creator
+
+        from tests.conftest_v2_fixtures import _HtmlItem
+
+        zp = tmp_path / "fixture.zim"
+        with Creator(zp).config_indexing(True, "eng") as creator:
+            for i in range(12):
+                creator.add_item(
+                    _HtmlItem(
+                        f"A/Art{i}",
+                        f"Einstein article {i}",
+                        f"<html><body><h1>Einstein {i}</h1><p>Albert Einstein "
+                        f"body {i} relativity physics.</p></body></html>",
+                    )
+                )
+            creator.set_mainpath("A/Art0")
+
+        config = OpenZimMcpConfig(
+            allowed_directories=[str(tmp_path)],
+            tool_mode="advanced",
+            cache=CacheConfig(enabled=True, max_size=8, ttl_seconds=300),
+            logging=LoggingConfig(level="WARNING"),
+        )
+        ops = ZimOperations(
+            config,
+            PathValidator(config.allowed_directories),
+            OpenZimMcpCache(config.cache, enable_background_cleanup=False),
+            ContentProcessor(snippet_length=200),
+        )
+
+        ops.get_zim_metadata_data(str(zp))
+        hits_before = ops.cache.stats()["hits"]
+
+        results = ops.search_zim_file_data(str(zp), "Einstein", limit=10)
+        assert len(results["results"]) == 10  # ten per-result fragments inserted
+
+        ops.get_zim_metadata_data(str(zp))
+        assert (
+            ops.cache.stats()["hits"] == hits_before + 1
+        ), "the limit=10 search flushed the cached metadata response"
+        stats = ops.cache.stats()
+        assert stats["ancillary_entries"] == 10
+        assert stats["size"] - stats["ancillary_entries"] <= 8
