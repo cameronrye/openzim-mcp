@@ -14,11 +14,22 @@ Defect ids refer to the 2026-08-19 field report:
   ``register_prompts.<locals>`` paths and Python ``set`` reprs.
 - D56: the stdio transport silently dropped malformed JSON, batch arrays and
   invalid request frames — no ``-32700`` / ``-32600`` was ever written.
+
+Round-two ids refer to the 2026-08-20 re-verification of the fix branch:
+
+- R2-1: stdin EOF cancelled requests the server had already read, so a
+  one-shot ``printf '<request>' | server`` got no answer at all.
+- R2-2: a request carrying ``"id": null`` validated as a notification and
+  vanished without a response or a log line.
 """
 
 import io
 import json
+import os
+import queue
+import subprocess
 import sys
+import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, AsyncIterator
@@ -425,3 +436,114 @@ async def test_canary_sdk_stdio_still_drops_malformed_frames(
     responses = _responses(stdout_bytes)
     assert [r for r in responses if "error" in r] == []
     assert len(_by_id(responses, 5)) == 1
+
+
+# --------------------------------------------------------------------------
+# R2-1 — stdio: EOF stops reading, not answering
+# --------------------------------------------------------------------------
+
+
+def _modern(request_id: int, method: str) -> str:
+    return json.dumps(
+        {
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "method": method,
+            "params": {"_meta": _MODERN_META},
+        }
+    )
+
+
+def _one_shot_stdio(
+    tmp_path: Path, frames: list[str], *, answer_timeout: float = 30.0
+) -> tuple[list[dict[str, Any]], int, str]:
+    """Pipe ``frames`` then EOF into a real stdio server; what it wrote back.
+
+    Reproduces ``printf '<request>' | server``: stdin closes the instant the
+    last frame is written. The first stdout line is awaited on a reader thread
+    with a deadline, so a server that answers nothing fails the test instead
+    of hanging it; the exit is then awaited separately, so a server that
+    answers but lingers is told apart from one that never answers.
+    """
+    stderr_path = tmp_path / "server.stderr"
+    with stderr_path.open("wb") as stderr:
+        proc = subprocess.Popen(
+            [
+                sys.executable,
+                "-m",
+                "openzim_mcp",
+                "--mode",
+                "advanced",
+                "--transport",
+                "stdio",
+                str(tmp_path),
+            ],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=stderr,
+            env=os.environ.copy(),
+        )
+    assert proc.stdin is not None and proc.stdout is not None
+    lines: queue.Queue[bytes] = queue.Queue()
+    stdout = proc.stdout
+
+    def pump() -> None:
+        for line in stdout:
+            lines.put(line)
+        lines.put(b"")
+
+    threading.Thread(target=pump, daemon=True).start()
+    try:
+        proc.stdin.write("".join(f + "\n" for f in frames).encode())
+        proc.stdin.close()
+        try:
+            first = lines.get(timeout=answer_timeout)
+        except queue.Empty:
+            pytest.fail(
+                f"no response within {answer_timeout}s of EOF; stderr:\n"
+                + stderr_path.read_text()
+            )
+        assert first != b"", "server exited without answering; stderr:\n" + (
+            stderr_path.read_text()
+        )
+        returncode = proc.wait(timeout=20)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()
+    received = [first]
+    while (line := lines.get(timeout=5)) != b"":
+        received.append(line)
+    responses = [json.loads(line) for line in received if line.strip()]
+    return responses, returncode, stderr_path.read_text()
+
+
+@pytest.mark.parametrize(
+    ("frames", "answered_id"),
+    [
+        pytest.param([_modern(1, "tools/list")], 1, id="modern-tools-list"),
+        pytest.param([_ping(1, modern=True)], 1, id="modern-ping"),
+        pytest.param([_modern(1, "prompts/list")], 1, id="modern-prompts-list"),
+        pytest.param(_LEGACY_OPENING[:1], 1, id="legacy-initialize"),
+        pytest.param(
+            [*_LEGACY_OPENING, _ping(2, modern=False)], 2, id="legacy-opening-ping"
+        ),
+    ],
+)
+def test_stdio_one_shot_request_is_answered_after_eof(
+    tmp_path: Path, frames: list[str], answered_id: int
+) -> None:
+    """R2-1: a request read before EOF is answered; EOF only stops reading.
+
+    The frame layer used to close its side the moment stdin hit EOF, and the
+    SDK dispatcher cancels every in-flight handler when its read stream
+    ends — so a modern one-shot lost its only request every time, and a
+    legacy ``initialize`` + ``initialized`` + ``ping`` lost the ping on a
+    scheduler race. The server must drain what it has read, then exit.
+    """
+    responses, returncode, stderr = _one_shot_stdio(tmp_path, frames)
+
+    (answer,) = _by_id(responses, answered_id)
+    assert "result" in answer, answer
+    assert returncode == 0, stderr
+    assert "WARNING" not in stderr, stderr

@@ -49,20 +49,28 @@ Delete the wrapper and the ``run_stdio_async`` override in
 
 import gc
 import logging
+from collections import Counter
 from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
+from types import TracebackType
 from typing import Any, cast
 
 import anyio
 from anyio.streams.memory import MemoryObjectReceiveStream, MemoryObjectSendStream
 from mcp.server.stdio import stdio_server
 from mcp.shared._stream_protocols import ReadStream, WriteStream
+from mcp.shared.dispatcher import coerce_request_id
+from mcp.shared.jsonrpc_dispatcher import cancelled_request_id_from_params
 from mcp.shared.message import SessionMessage
 from mcp_types import (
     INVALID_REQUEST,
     PARSE_ERROR,
     ErrorData,
     JSONRPCError,
+    JSONRPCMessage,
+    JSONRPCNotification,
+    JSONRPCRequest,
+    JSONRPCResponse,
     RequestId,
 )
 from mcp_types.methods import CLIENT_REQUESTS, SERVER_RESULTS
@@ -71,6 +79,18 @@ from pydantic import ValidationError
 logger = logging.getLogger(__name__)
 
 MODERN_PING_ROW = ("ping", "2026-07-28")
+
+# How long, after stdin closes, already-read requests may still be answered.
+#
+# EOF means the client has nothing more to say, not that it has stopped
+# listening: ``printf '<request>' | server`` closes stdin before the server
+# has even parsed the line. The SDK dispatcher cancels every in-flight handler
+# the moment its read stream ends, so the frame layer holds that EOF back
+# until each request it forwarded has been answered — bounded, because a
+# handler that never answers (none of this server's do, but the bound is what
+# makes that claim safe) must not keep the process alive after its client
+# hung up.
+STDIN_EOF_DRAIN_TIMEOUT_S = 30.0
 
 # The newest revision whose ping rows upstream does define. Ping's wire shape
 # did not change in 2026 — the gap is a missing table entry, not a missing
@@ -198,22 +218,129 @@ async def _answer_rejected_frame(
         logger.debug("dropped rejection for a malformed frame: write stream closed")
 
 
+class _InFlightRequests:
+    """Client requests forwarded to the serving loop and not yet answered.
+
+    Keyed the way the dispatcher keys its own in-flight table (``"7"`` and
+    ``7`` are one id), and counted rather than set-membered so two requests
+    that share an id both have to be answered. A ``notifications/cancelled``
+    retires its id: the dispatcher never answers a cancelled request, so
+    waiting for that answer would only delay the exit.
+    """
+
+    def __init__(self) -> None:
+        self._pending: Counter[RequestId] = Counter()
+        self._drained = anyio.Event()
+        self._drained.set()
+
+    def __len__(self) -> int:
+        return sum(self._pending.values())
+
+    def note_read(self, message: JSONRPCMessage) -> None:
+        if isinstance(message, JSONRPCRequest):
+            self._pending[coerce_request_id(message.id)] += 1
+            self._drained = anyio.Event()
+        elif (
+            isinstance(message, JSONRPCNotification)
+            and message.method == "notifications/cancelled"
+        ):
+            cancelled = cancelled_request_id_from_params(message.params)
+            if cancelled is not None:
+                self._retire(cancelled)
+
+    def note_written(self, message: JSONRPCMessage) -> None:
+        if isinstance(message, (JSONRPCResponse, JSONRPCError)) and (
+            message.id is not None
+        ):
+            self._retire(message.id)
+
+    def _retire(self, request_id: RequestId) -> None:
+        key = coerce_request_id(request_id)
+        if self._pending[key] > 1:
+            self._pending[key] -= 1
+            return
+        self._pending.pop(key, None)
+        if not self._pending:
+            self._drained.set()
+
+    async def wait_drained(self) -> None:
+        while self._pending:
+            await self._drained.wait()
+
+
+class _AnsweringWriteStream:
+    """The transport's write stream, retiring each request it answers.
+
+    Retirement happens only after the send has completed — the SDK's stdout
+    writer then owns the frame and flushes it before the transport exits —
+    so EOF can never be released on a response that is still in a buffer.
+    """
+
+    def __init__(
+        self, inner: WriteStream[SessionMessage], in_flight: _InFlightRequests
+    ) -> None:
+        self._inner = inner
+        self._in_flight = in_flight
+
+    async def send(self, item: SessionMessage, /) -> None:
+        await self._inner.send(item)
+        self._in_flight.note_written(item.message)
+
+    async def aclose(self) -> None:
+        await self._inner.aclose()
+
+    async def __aenter__(self) -> "_AnsweringWriteStream":
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
+        await self.aclose()
+
+
+async def _drain_after_eof(in_flight: _InFlightRequests) -> None:
+    """Hold the serving loop's EOF until forwarded requests are answered."""
+    if not in_flight:
+        return
+    logger.debug("stdin closed with %d request(s) in flight; draining", len(in_flight))
+    with anyio.move_on_after(STDIN_EOF_DRAIN_TIMEOUT_S) as drain:
+        await in_flight.wait_drained()
+    if drain.cancelled_caught:
+        logger.warning(
+            "stdin closed %.0fs ago and %d request(s) are still unanswered; "
+            "abandoning them",
+            STDIN_EOF_DRAIN_TIMEOUT_S,
+            len(in_flight),
+        )
+
+
 async def _relay_frames(
     transport_read: ReadStream[SessionMessage | Exception],
     sink: MemoryObjectSendStream[SessionMessage | Exception],
     write_stream: WriteStream[SessionMessage],
+    in_flight: _InFlightRequests,
 ) -> None:
-    """Forward decoded frames; answer the ones the transport could not decode."""
+    """Forward decoded frames; answer the ones the transport could not decode.
+
+    EOF on the transport stops the forwarding, and the sink — whose closing
+    is what ends the serving loop — closes only once the forwarded requests
+    have been answered (or the drain bound has passed).
+    """
     async with sink:
         try:
             async for item in transport_read:
                 if isinstance(item, Exception):
                     await _answer_rejected_frame(item, write_stream)
                     continue
+                in_flight.note_read(item.message)
                 await sink.send(item)
         except (anyio.ClosedResourceError, anyio.BrokenResourceError):
             # The serving loop closed its end first; EOF either way.
             return
+        await _drain_after_eof(in_flight)
 
 
 @asynccontextmanager
@@ -223,7 +350,8 @@ async def stdio_server_answering_malformed_frames() -> AsyncIterator[
         WriteStream[SessionMessage],
     ]
 ]:
-    """``stdio_server()`` whose undecodable frames get -32700 / -32600 answers.
+    """``stdio_server()`` whose undecodable frames get -32700 / -32600 answers
+    and whose stdin EOF waits for the requests already read to be answered.
 
     Same yield shape as the SDK's, so ``run_stdio_async`` swaps it in
     unchanged. The relay is sequential, so a rejection is written before any
@@ -231,13 +359,15 @@ async def stdio_server_answering_malformed_frames() -> AsyncIterator[
     write stream — the stdio server diverts fd 1 while serving, so nothing
     else can reach the wire.
     """
-    async with stdio_server() as (transport_read, write_stream):
+    async with stdio_server() as (transport_read, transport_write):
+        in_flight = _InFlightRequests()
+        write_stream = _AnsweringWriteStream(transport_write, in_flight)
         relay_send, relay_receive = anyio.create_memory_object_stream[
             SessionMessage | Exception
         ](0)
         async with anyio.create_task_group() as task_group:
             task_group.start_soon(
-                _relay_frames, transport_read, relay_send, write_stream
+                _relay_frames, transport_read, relay_send, write_stream, in_flight
             )
             try:
                 yield relay_receive, write_stream
