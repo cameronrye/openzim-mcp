@@ -104,6 +104,26 @@ _ASSET_MIME_EXACT = frozenset(
 _ASSET_MIME_PREFIXES = ("image/", "video/", "audio/", "font/")
 
 
+def _entry_not_found_error(entry_path: str) -> OpenZimMcpArchiveError:
+    """Typed not-found error for a missing ``entry_path``.
+
+    libzim reports a miss as a bare ``KeyError('Cannot find entry')``. Left
+    unwrapped it reaches the tool wrappers' broad ``except`` and renders as
+    a generic "Operation Failed / KeyError" envelope advising retries and a
+    health check; wrapped as a generic archive error it renders as
+    "verify the ZIM file is not corrupted". Neither points at the one thing
+    actually wrong — the path. The "Entry not found" phrasing is what
+    ``error_messages.get_error_config`` pattern-matches onto the focused
+    *Resource Not Found* template, the same envelope ``zim_get`` produces
+    for the identical miss.
+    """
+    return OpenZimMcpArchiveError(
+        f"Entry not found: '{entry_path}'. Double-check the spelling and "
+        "path (entry paths are case-sensitive), or use "
+        "`zim_search(mode='title')` to locate the entry."
+    )
+
+
 def _section_preview(
     md: str, char_start: int, char_end: int, preview_chars: int
 ) -> str:
@@ -169,6 +189,37 @@ class _StructureMixin:
             self, archive: Archive, entry_path: str
         ) -> Tuple[Any, str]:
             """Resolve via ``ZimOperations`` on the concrete coordinator."""
+
+    def _build_bundle(
+        self,
+        archive: Archive,
+        entry_path: str,
+        *,
+        validated_path: Path,
+        compact: bool = True,
+    ) -> Any:
+        """``get_or_build_bundle`` with the libzim miss surfaced as not-found.
+
+        Every bundle consumer in this mixin (structure / TOC / links /
+        section) used to let the lookup ``KeyError`` escape into a broad
+        ``except Exception`` that re-labelled it an extraction failure.
+        Converting it here, at the single place the lookup happens, keeps
+        all four surfaces on the same not-found classification as
+        ``zim_get``.
+        """
+        from openzim_mcp.bundle import get_or_build_bundle
+
+        try:
+            return get_or_build_bundle(
+                archive,
+                entry_path,
+                cache=self.cache,
+                validated_path=validated_path,
+                content_processor=self.content_processor,
+                compact=compact,
+            )
+        except KeyError as e:
+            raise _entry_not_found_error(entry_path) from e
 
     def get_article_structure_data(
         self, zim_file_path: str, entry_path: str
@@ -693,15 +744,8 @@ class _StructureMixin:
 
         Returns a ToolErrorPayload if the section_id is not found in the bundle.
         """
-        from openzim_mcp.bundle import get_or_build_bundle
-
-        bundle = get_or_build_bundle(
-            archive,
-            entry_path,
-            cache=self.cache,
-            validated_path=validated_path,
-            content_processor=self.content_processor,
-            compact=compact,
+        bundle = self._build_bundle(
+            archive, entry_path, validated_path=validated_path, compact=compact
         )
 
         section_idx = next(
