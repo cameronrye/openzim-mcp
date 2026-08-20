@@ -186,9 +186,10 @@ def test_binary_not_found_guidance_names_real_tools(
 def test_resolve_with_fallback_guidance_names_real_tools(ops: ZimOperations) -> None:
     from openzim_mcp.exceptions import OpenZimMcpArchiveError
 
+    archive = _archive_with({})
     with patch.object(ops, "_find_entry_by_search", MagicMock(return_value=None)):
         with pytest.raises(OpenZimMcpArchiveError) as exc:
-            ops._resolve_entry_with_fallback(_archive_with({}), "A/nope")
+            ops._resolve_entry_with_fallback(archive, "A/nope")
     _assert_names_real_tools(str(exc.value))
 
 
@@ -565,7 +566,8 @@ def test_fragment_nav_strip_keeps_mixed_and_list_only_shapes() -> None:
     )
     assert "Table of Contents" in text
     assert "Life and Works" in text
-    assert "Advaita" in text and "top" in text
+    assert "Advaita" in text
+    assert "top" in text
 
 
 @patch("openzim_mcp.zim_operations.Archive")
@@ -668,7 +670,8 @@ def test_truncation_footer_count_matches_emitted_slice(
     assert "only showing first 599" in out, out
     assert "first 600" not in out
     hint = re.search(r"content_offset=(\d+)", out)
-    assert hint is not None and int(hint.group(1)) == 599
+    assert hint is not None
+    assert int(hint.group(1)) == 599
 
     # Mid-article: the range end must be where the next page starts, not
     # offset + cap.
@@ -677,7 +680,8 @@ def test_truncation_footer_count_matches_emitted_slice(
     )
     assert "showing chars 599–1,199 of" in page2, page2
     hint2 = re.search(r"content_offset=(\d+)", page2)
-    assert hint2 is not None and int(hint2.group(1)) == 1199
+    assert hint2 is not None
+    assert int(hint2.group(1)) == 1199
 
 
 @patch("openzim_mcp.zim_operations.Archive")

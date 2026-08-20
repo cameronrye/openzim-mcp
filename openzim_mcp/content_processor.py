@@ -296,11 +296,22 @@ _BOILERPLATE_PARAGRAPH_RE = re.compile(
     re.IGNORECASE,
 )
 
-# One markdown list item: the marker and its text.
-_LIST_ITEM_RE = re.compile(r"^\s*(?:[*+-]|\d+[.)])\s+(.*\S)\s*$")
+# One markdown list item: the marker and its text (outer whitespace
+# excluded). The text must open with a non-space so the marker gap
+# ``\s+`` has exactly one way to end; ``\s+(.*\S)`` let the two share a
+# trailing space run and went quadratic on ``* `` + spaces.
+_LIST_ITEM_RE = re.compile(r"^\s*(?:[*+-]|\d+[.)])\s+(\S(?:.*\S)?)\s*$")
 # ``[text](url)`` -> ``text`` (empty-text image-wrapper links fold to "").
 _LINK_TO_TEXT_RE = re.compile(r"\[([^\]\n]*)\]\((?:\\.|[^\n)\\])*\)")
 _MARKDOWN_HEADING_RE = re.compile(r"^\s*#{1,6}\s")
+# A leading H1 line and the line break(s) that close it: the heading text
+# in group 1 (outer whitespace excluded), the match ending after the last
+# newline of the blank run that follows. The text opens and closes on a
+# non-space and the tail is ``(non-newline whitespace, newline)+`` so no
+# two quantifiers compete for the same characters — the reluctant
+# ``(.+?)\s*\n+`` it replaces re-scanned the gap for every candidate end
+# and took minutes on ``# `` followed by a few thousand spaces.
+_LEADING_H1_RE = re.compile(r"^\s*#\s+(\S(?:.*\S)?)(?:[^\S\n]*\n)+")
 # Longest item still read as a navigation label rather than a sentence.
 _NAV_ITEM_MAX_WORDS = 6
 
@@ -1737,12 +1748,12 @@ class ContentProcessor:
         stripped = pattern.sub("", content, count=1)
         if stripped != content:
             return stripped
-        leading_h1 = re.match(r"^\s*#\s+(.+?)\s*\n+", content)
+        leading_h1 = _LEADING_H1_RE.match(content)
         if leading_h1 is None:
             return content
         h1 = leading_h1.group(1).strip()
         folded_title = norm_title.lower()
-        if not h1 or not folded_title.startswith(h1.lower()):
+        if not folded_title.startswith(h1.lower()):
             return content
         rest = folded_title[len(h1) :].lstrip()
         if rest and rest[0] not in ":|-–—":
