@@ -949,26 +949,44 @@ class SimpleToolsHandler(
                     reason_text = self._path_failure_reason(
                         zim_file_path, error_lower, safe_error
                     )
-                    return (
-                        f"**ZIM File Not Found**\n\n"
-                        f"**Query**: {safe_query}\n"
-                        f"**Issue**: the `zim_file_path` value passed "
-                        f"doesn't match any loaded archive.\n"
-                        f"**Reason**: {reason_text}\n\n"
-                        f"{hint}\n\n"
-                        f"<!-- intent=zim_path_not_found cert=1.00 -->"
+                    # D58: a path-resolution / security failure is a
+                    # failure. Pre-fix this guidance was returned as a
+                    # plain string and travelled the SDK success path,
+                    # so zim_query reported a security denial as
+                    # isError=false while the other seven tools flagged
+                    # the identical path — in simple mode, the only
+                    # tool a client has gave it no error signal at all.
+                    # The prose is unchanged; it rides in the envelope's
+                    # ``message`` and ``operation`` replaces the inline
+                    # telemetry marker.
+                    return tool_error(
+                        operation="zim_path_not_found",
+                        message=(
+                            f"**ZIM File Not Found**\n\n"
+                            f"**Query**: {safe_query}\n"
+                            f"**Issue**: the `zim_file_path` value passed "
+                            f"doesn't match any loaded archive.\n"
+                            f"**Reason**: {reason_text}\n\n"
+                            f"{hint}"
+                        ),
                     )
-            return (
-                f"**Error Processing Query**\n\n"
-                f"**Query**: {safe_query}\n"
-                f"**Error**: {safe_error}\n\n"
-                f"**Troubleshooting**:\n"
-                f"1. Omit `zim_file_path` to auto-select the loaded "
-                f"archive (single-archive setups), or call "
-                f"`list available ZIM files` to see real paths\n"
-                f"2. Verify the query format\n"
-                f"3. Try a simpler query\n"
-                f"4. Check server logs for details"
+            # D58: same envelope for every other failure the catch-all
+            # absorbs (``..`` traversal rejections, unexpected backend
+            # errors) — the sibling tools' broad excepts all return one.
+            return tool_error(
+                operation="zim_query",
+                message=(
+                    f"**Error Processing Query**\n\n"
+                    f"**Query**: {safe_query}\n"
+                    f"**Error**: {safe_error}\n\n"
+                    f"**Troubleshooting**:\n"
+                    f"1. Omit `zim_file_path` to auto-select the loaded "
+                    f"archive (single-archive setups), or call "
+                    f"`list available ZIM files` to see real paths\n"
+                    f"2. Verify the query format\n"
+                    f"3. Try a simpler query\n"
+                    f"4. Check server logs for details"
+                ),
             )
 
     def _finalize_compact_response(  # NOSONAR(python:S3776)

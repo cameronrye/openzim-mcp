@@ -17,6 +17,7 @@ import pytest
 
 from openzim_mcp.exceptions import (
     OpenZimMcpArchivePathError,
+    OpenZimMcpSecurityError,
     OpenZimMcpValidationError,
 )
 from openzim_mcp.mcp_envelope import is_tool_error_envelope
@@ -767,3 +768,69 @@ class TestD53CompactDefaultWording:
         # inner function's source rather than spinning up a server.
         source = inspect.getsource(zim_query_module.register)
         assert "compact: bool = True" in source
+
+
+# ---------------------------------------------------------------------------
+# D58: path-resolution / security failures delivered as isError=False
+# ---------------------------------------------------------------------------
+
+
+class TestD58PathFailuresAreErrorEnvelopes:
+    """For the identical out-of-sandbox path, zim_metadata returned the
+    structured envelope (isError=True) while zim_query returned a plain
+    "ZIM File Not Found" string on the success path — and the same for
+    ".." traversal, a missing file, and every other zim_file_path
+    failure. In simple mode zim_query is the only tool, so a client had
+    no isError signal for any security denial. The friendly markdown
+    stays; it now rides in the envelope's ``message``.
+    """
+
+    def _two_archive_handler(self) -> tuple[SimpleToolsHandler, MagicMock]:
+        handler, mock = _handler_with()
+        mock.list_zim_files_data.return_value = [{"path": MEDLINE}, {"path": IEP}]
+        return handler, mock
+
+    def test_security_denial_is_an_error_envelope_with_the_guidance(self) -> None:
+        handler, mock = self._two_archive_handler()
+        mock.get_main_page.side_effect = OpenZimMcpSecurityError(
+            "Access denied - Path is outside allowed directories"
+        )
+        out = handler.handle_zim_query("show main page", zim_file_path="/etc/hosts")
+        assert is_tool_error_envelope(out), out
+        assert out["operation"] == "zim_path_not_found"
+        assert "ZIM File Not Found" in out["message"]
+        assert "outside allowed directories" in out["message"]
+        assert MEDLINE in out["message"], "recovery hint must still list archives"
+        assert "<!-- intent=" not in out["message"]
+
+    def test_missing_file_is_an_error_envelope(self) -> None:
+        handler, mock = self._two_archive_handler()
+        mock.get_main_page.side_effect = Exception(
+            "File does not exist: /zims/totally-fake.zim"
+        )
+        out = handler.handle_zim_query(
+            "show main page", zim_file_path="/zims/totally-fake.zim"
+        )
+        assert is_tool_error_envelope(out), out
+        assert out["operation"] == "zim_path_not_found"
+        assert "ZIM File Not Found" in out["message"]
+
+    def test_traversal_rejection_is_an_error_envelope(self) -> None:
+        handler, mock = self._two_archive_handler()
+        mock.get_main_page.side_effect = OpenZimMcpSecurityError(
+            "Path contains suspicious pattern: .."
+        )
+        out = handler.handle_zim_query(
+            "show main page", zim_file_path="/zims/../zims/x.zim"
+        )
+        assert is_tool_error_envelope(out), out
+        assert out["operation"] == "zim_query"
+        assert "Error Processing Query" in out["message"]
+        assert "suspicious pattern" in out["message"]
+
+    def test_successful_calls_are_untouched(self) -> None:
+        handler, mock = _handler_with()
+        mock.get_main_page.return_value = "# Main\n\nbody"
+        out = handler.handle_zim_query("show main page", zim_file_path="/zims/test.zim")
+        assert isinstance(out, str)
+        assert "body" in out

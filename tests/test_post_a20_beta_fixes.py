@@ -1093,14 +1093,17 @@ class TestPD24FileNotFoundRecoveryHint:
             "show main page",
             zim_file_path="/totally/fake.zim",
         )
-        assert isinstance(out, str)
+        # v3 field fix D58: a path-resolution failure is a failure — it now
+        # travels as the structured error envelope (isError at the MCP
+        # layer) with the PD2-4 recovery markdown in ``message``.
+        assert isinstance(out, dict) and out.get("operation") == "zim_path_not_found"
         # New error shape.
-        assert "**ZIM File Not Found**" in out
+        assert "**ZIM File Not Found**" in _body(out)
         # Real paths surfaced.
-        assert "/var/lib/zim/wikipedia.zim" in out
-        assert "/var/lib/zim/wiktionary.zim" in out
+        assert "/var/lib/zim/wikipedia.zim" in _body(out)
+        assert "/var/lib/zim/wiktionary.zim" in _body(out)
         # Generic troubleshooting block is replaced.
-        assert "Check server logs" not in out
+        assert "Check server logs" not in _body(out)
 
     def test_single_archive_path_error_falls_through_to_pd23_auto_select(
         self,
