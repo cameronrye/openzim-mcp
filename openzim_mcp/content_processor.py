@@ -870,12 +870,20 @@ def paged_slice_length(content: str, max_length: int, current_offset: int = 0) -
     Trailing whitespace is emitted by neither page but consumed by neither
     either: it belongs to the next one. Leading whitespace is consumed only at
     the very top of the article, where no preceding page can own it.
+
+    Deferral has a floor: when the whole mid-article slice is whitespace,
+    deferring it to the next page defers it to *this* page again — the hint
+    and ``more_at_offset`` would name the offset the caller is already at,
+    and a client following either would loop forever. Such a page consumes
+    its full slice, and ``truncate_content`` emits it verbatim so
+    reassembly stays lossless.
     """
     if not content or len(content) <= max_length:
         return len(content)
     raw = content[:max_length]
     lead = len(raw) - len(raw.lstrip()) if current_offset == 0 else 0
-    return lead + len(raw[lead:].rstrip())
+    consumed = lead + len(raw[lead:].rstrip())
+    return consumed if consumed else len(raw)
 
 
 class ContentProcessor:
@@ -1500,6 +1508,12 @@ class ContentProcessor:
         lead = len(raw) - len(raw.lstrip()) if current_offset == 0 else 0
         truncated = raw[lead:].rstrip()
         consumed = paged_slice_length(content, max_length, current_offset)
+        if not truncated and current_offset > 0:
+            # An all-whitespace mid-article page: ``paged_slice_length``
+            # consumes the whole slice (see its deferral-floor note), so the
+            # run must ship verbatim — an empty body here would drop it from
+            # the reassembled document and fuse the words on either side.
+            truncated = raw
         # A11 post-a11 M4: prefer the caller-supplied pre-slice length;
         # fall back to a computed approximation that still beats the
         # previous "len(post-slice content)" bug. Either way the

@@ -77,6 +77,25 @@ def test_leading_whitespace_is_trimmed_once_at_the_top(
     assert _page_through(processor, body, 25) == body.lstrip()
 
 
+def test_interior_whitespace_run_wider_than_a_page_still_advances(
+    processor: ContentProcessor,
+) -> None:
+    """A page landing entirely inside a whitespace run must not stall.
+
+    ``paged_slice_length`` returned 0 for an all-whitespace mid-article slice
+    (``lead`` is 0 past the top of the article and ``rstrip`` empties the
+    rest), so the footer hint and ``_meta.more_at_offset`` both named the
+    offset the caller was already at — an infinite loop for any client
+    following either, on any preformatted body with a whitespace run at least
+    one page wide. The run is emitted verbatim rather than deferred (deferring
+    it to the next page defers it to the same page forever) or dropped
+    (dropping it fuses the words on either side of the run — the defect this
+    file exists to prevent).
+    """
+    body = "leading words here" + (" " * 60) + "trailing words here"
+    assert _page_through(processor, body, 25) == body
+
+
 class TestMachineReadableOffsetAgrees:
     """``_meta.more_at_offset`` must advance exactly as the body hint does.
 
@@ -126,6 +145,19 @@ class TestMachineReadableOffsetAgrees:
         assert paged_slice_length("aa   bb", 4, 10) == 2
         # At the top of the article, leading whitespace is consumed.
         assert paged_slice_length("  aabb", 4, 0) == 4
+
+    def test_whitespace_only_page_consumes_its_whole_slice(self) -> None:
+        """Deferral has a floor: a page that is ALL gap must still advance.
+
+        Newlines are asserted at this layer deliberately — the reassembly
+        harness above strips the footer with a ``\\n*``-prefixed regex, so a
+        newline-terminated body is ambiguous there, but the advance itself
+        must hold for every whitespace flavor.
+        """
+        from openzim_mcp.content_processor import paged_slice_length
+
+        assert paged_slice_length(" " * 30 + "text", 10, 50) == 10
+        assert paged_slice_length("\n" * 30 + "text", 10, 50) == 10
 
 
 class TestMetadataEntryPaginationOffset:
