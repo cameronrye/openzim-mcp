@@ -45,7 +45,7 @@ from .rerank import (
     _RerankMixin,
 )
 from .responses import ToolErrorPayload, tool_error
-from .security import sanitize_context_for_error
+from .security import sanitize_context_for_error, sanitize_control_chars
 from .subject_section import _SubjectSectionMixin
 from .text_utils import _TOKEN_RE
 from .title_promotion import (
@@ -896,7 +896,9 @@ class SimpleToolsHandler(
             return result
 
         except Exception as e:
-            logger.error(f"Error handling zim_query: {e}")
+            # Single-line log: a ``zim_file_path`` with an embedded LF is
+            # echoed verbatim by the validator (R2-3).
+            logger.error("Error handling zim_query: %s", sanitize_control_chars(str(e)))
             # Sanitize both the query and error text to avoid leaking
             # absolute filesystem paths back to the MCP client.
             safe_query = sanitize_context_for_error(query)

@@ -551,6 +551,22 @@ _CONTEXT_CONTROL_CHARS_RE = re.compile(r"[\x00-\x1f\x7f]+")
 _CONTEXT_MAX_LENGTH = 1024
 
 
+def sanitize_control_chars(text: str) -> str:
+    """Collapse every run of C0 control characters / DEL to one space.
+
+    The one-line-label contract behind ``sanitize_context_for_error``,
+    exposed on its own for text that must stay a single line but must NOT
+    be path-redacted: the ``**Technical Details**`` echo (already redacted
+    upstream) and the server-side ERROR log line, where the operator needs
+    the real path. A caller-supplied LF in a ``zim_file_path`` otherwise
+    reaches the client inside the exception text and forges a second
+    physical line in the log (R2-3, D61 residual).
+    """
+    if not text:
+        return text
+    return _CONTEXT_CONTROL_CHARS_RE.sub(" ", text)
+
+
 def sanitize_context_for_error(context: str) -> str:
     """Sanitize context strings for error messages.
 
@@ -585,7 +601,7 @@ def sanitize_context_for_error(context: str) -> str:
 
     # Strip control characters before redaction so a bytes-rendered
     # control char inside a path doesn't survive into the error message.
-    decoded_context = _CONTEXT_CONTROL_CHARS_RE.sub(" ", decoded_context)
+    decoded_context = sanitize_control_chars(decoded_context)
 
     redacted = redact_paths_in_message(decoded_context)
 

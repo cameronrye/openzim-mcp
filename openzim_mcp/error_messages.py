@@ -19,6 +19,7 @@ from .exceptions import (
     OpenZimMcpSecurityError,
     OpenZimMcpValidationError,
 )
+from .security import sanitize_control_chars
 
 logger = logging.getLogger(__name__)
 
@@ -228,7 +229,16 @@ _DETAILS_MAX_LENGTH = 1024
 
 
 def _bound_details(details: str) -> str:
-    """Truncate an over-long details string, marking the cut with ``...``."""
+    """Keep the details echo a single bounded line.
+
+    Control characters are collapsed first (the same C0/DEL class
+    ``sanitize_context_for_error`` strips from ``context``): the exception
+    text embeds the offending argument verbatim, so a ``zim_file_path`` of
+    ``foo\\n\\tbar.zim`` otherwise split the ``**Technical Details**`` line
+    even after the context line was cleaned (R2-3). Then truncate, marking
+    the cut with ``...``.
+    """
+    details = sanitize_control_chars(details)
     if len(details) <= _DETAILS_MAX_LENGTH:
         return details
     return details[:_DETAILS_MAX_LENGTH].rstrip() + "..."
