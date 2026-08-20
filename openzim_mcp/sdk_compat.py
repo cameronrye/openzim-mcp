@@ -225,9 +225,12 @@ def null_id_rejection(line: str) -> JSONRPCError | None:
     without a trace. JSON-RPC 2.0 and the MCP schema both define a request
     id as a string or a number; null is reserved for error responses to
     undecodable requests, so a frame with a ``method`` and a null id is an
-    invalid Request, answered with id null like the other -32600s here. A
-    response (``result`` or ``error``, no ``method``) with a null id is legal
-    and passes through untouched.
+    invalid Request, answered with id null like the other -32600s here. This
+    helper leaves every frame without a ``method`` alone: an ``error``
+    response with a null id is legal and passes through untouched, while a
+    ``result`` response with a null id is rejected downstream by the SDK's
+    adapter with the generic -32600 (JSON-RPC 2.0 permits a null id only on
+    error responses).
     """
     if '"id"' not in line or "null" not in line:
         return None
