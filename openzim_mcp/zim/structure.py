@@ -20,6 +20,7 @@ from libzim.reader import Archive  # type: ignore[import-untyped]
 import openzim_mcp.zim_operations as _zim_ops_mod
 from openzim_mcp.exceptions import (
     OpenZimMcpArchiveError,
+    OpenZimMcpCursorMismatchError,
     OpenZimMcpFileNotFoundError,
     OpenZimMcpValidationError,
 )
@@ -421,7 +422,7 @@ class _StructureMixin:
                     tool="extract_article_links",
                 )
             except CursorMismatchError as e:
-                raise OpenZimMcpValidationError(str(e)) from e
+                raise OpenZimMcpCursorMismatchError(str(e)) from e
 
         try:
             with _zim_ops_mod.zim_archive(validated_path) as archive:
@@ -1303,7 +1304,7 @@ class _StructureMixin:
                     tool="get_inbound_links",
                 )
             except CursorMismatchError as e:
-                raise OpenZimMcpValidationError(str(e)) from e
+                raise OpenZimMcpCursorMismatchError(str(e)) from e
 
         with _zim_ops_mod.zim_archive(Path(validated_str)) as archive:
             live_uuid = str(archive.uuid)

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Literal, Optional
 
+from ..exceptions import OpenZimMcpCursorMismatchError
 from ..linkgraph.reader import LinkGraphUnavailable
 from ..responses import tool_error
 from ._common import (
@@ -161,6 +162,15 @@ def register(server: "OpenZimMcpServer") -> None:
                 zim_file_path,
                 entry_path,
                 limit=limit if limit is not None else 10,
+            )
+        except OpenZimMcpCursorMismatchError as e:
+            # The archive-identity check needs the validated path, so it runs
+            # in the data layer; render it under the same code the entry/kind
+            # cursor guards above use, not the generic validation envelope.
+            return tool_error(
+                operation="cursor_context_mismatch",
+                message=str(e),
+                context="field=ai",
             )
         except Exception as e:  # noqa: BLE001 — broad catch matches b13 envelope
             return tool_error_response(

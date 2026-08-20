@@ -892,3 +892,80 @@ class TestD39OccurrenceLevelDocumented:
         assert "occurrence" in text
         assert "duplicates" in text
         assert "mention_count" in text
+
+
+# ---------------------------------------------------------------------------
+# D40 — cursor archive-identity mismatch gets a cursor_* operation code
+# ---------------------------------------------------------------------------
+
+
+class TestD40CursorArchiveMismatchCode:
+    """D40: wrong entry / wrong kind / wrong tool / garbage cursors all emit
+    targeted ``cursor_*`` codes, but the archive-identity check runs in the
+    data layer and its rejection fell into the wrapper's broad except as a
+    generic ``zim_links`` validation envelope."""
+
+    @pytest.mark.parametrize(
+        "method", ["extract_article_links_data", "get_inbound_links_data"]
+    )
+    def test_data_layer_raises_typed_cursor_mismatch(
+        self, ops: ZimOperations, zim_path: str, method: str
+    ) -> None:
+        from openzim_mcp.exceptions import (
+            OpenZimMcpCursorMismatchError,
+            OpenZimMcpValidationError,
+        )
+
+        with patch(ARCHIVE_CTX) as ctx:
+            ctx.return_value.__enter__.return_value = _html_archive("<p>x</p>")
+            with pytest.raises(OpenZimMcpCursorMismatchError) as excinfo:
+                getattr(ops, method)(
+                    zim_path, "Test", cursor_archive_identity="not-this-archive"
+                )
+        # Still a validation error for callers that catch the broad class.
+        assert isinstance(excinfo.value, OpenZimMcpValidationError)
+        assert "archive" in str(excinfo.value)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("direction", ["outbound", "inbound"])
+    async def test_tool_renders_cursor_context_mismatch(
+        self, monkeypatch: pytest.MonkeyPatch, direction: str
+    ) -> None:
+        from unittest.mock import AsyncMock
+
+        from openzim_mcp.exceptions import OpenZimMcpCursorMismatchError
+        from openzim_mcp.pagination import Cursor
+        from openzim_mcp.tools.zim_links import register
+
+        tool = (
+            "extract_article_links" if direction == "outbound" else "get_inbound_links"
+        )
+        cursor = Cursor.encode(
+            tool=tool,
+            state={"o": 5, "l": 5, "ep": "A/Cat", "k": "internal", "ai": "aaaa"},
+        )
+        boom = OpenZimMcpCursorMismatchError(
+            "Cursor for extract_article_links was issued against a different "
+            "archive. Drop the cursor and start over."
+        )
+        mock_ops = MagicMock()
+        mock_ops.extract_article_links_data = AsyncMock(side_effect=boom)
+        mock_ops.get_inbound_links_data = AsyncMock(side_effect=boom)
+        monkeypatch.setattr(
+            "openzim_mcp.async_operations.AsyncZimOperations", lambda _o: mock_ops
+        )
+        server = _tool_server()
+        register(server)
+        fn, _ = server._tools_store["zim_links"]
+
+        result = await fn(
+            zim_file_path="/other.zim",
+            entry_path="A/Cat",
+            direction=direction,
+            cursor=cursor,
+        )
+
+        assert result["error"] is True
+        assert result["operation"] == "cursor_context_mismatch"
+        assert "different archive" in result["message"]
+        assert "Input Validation Error" not in result["message"]
