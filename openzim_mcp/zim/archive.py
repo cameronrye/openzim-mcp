@@ -73,14 +73,44 @@ __all__ = [
     "Query",
     "Searcher",
     "SuggestionSearcher",
+    "ZIM_MAGIC",
     "ZimOperations",
     "configure_libzim_caches",
+    "has_zim_signature",
     "zim_archive",
 ]
 
 
 # Timeout for opening ZIM archives (seconds)
 ARCHIVE_OPEN_TIMEOUT = 30.0
+
+# Every ZIM file starts with the little-endian magic number 72173914
+# (0x044D495A). Checking these four bytes is the cheapest possible
+# readability probe: it needs no libzim call and no header parse.
+ZIM_MAGIC = b"ZIM\x04"
+
+# Message attached to listing entries whose file fails the signature probe.
+UNREADABLE_ZIM_WARNING = (
+    "Not a ZIM archive: the file does not start with the ZIM signature "
+    "and cannot be opened"
+)
+
+
+def has_zim_signature(path: Path) -> bool:
+    """Return whether ``path`` begins with the ZIM magic bytes.
+
+    A ``False`` result means the file is not an openable archive (plain
+    text, a truncated download, a stray file renamed ``.zim``). A ``True``
+    result is only a cheap plausibility check — it does not verify the
+    archive's integrity; that is what ``Archive.check()`` is for. Read
+    errors (permissions, vanished file) count as unreadable.
+    """
+    try:
+        with open(path, "rb") as fh:
+            return fh.read(len(ZIM_MAGIC)) == ZIM_MAGIC
+    except OSError:
+        return False
+
 
 # Maximum redirect chain length before bailing out. See
 # ``ContentDefaults.MAX_REDIRECT_DEPTH`` in ``defaults.py``.
@@ -464,18 +494,28 @@ class ZimOperations(
                     seen_resolved.add(str(resolved))
                     try:
                         stats = file_path.stat()
-                        all_zim_files.append(
-                            {
-                                "name": file_path.name,
-                                "path": str(file_path),
-                                "directory": str(directory),
-                                "size": f"{stats.st_size / (1024 * 1024):.2f} MB",
-                                "size_bytes": stats.st_size,
-                                "modified": datetime.fromtimestamp(
-                                    stats.st_mtime
-                                ).isoformat(),
-                            }
-                        )
+                        entry: Dict[str, Any] = {
+                            "name": file_path.name,
+                            "path": str(file_path),
+                            "directory": str(directory),
+                            "size": f"{stats.st_size / (1024 * 1024):.2f} MB",
+                            "size_bytes": stats.st_size,
+                            "modified": datetime.fromtimestamp(
+                                stats.st_mtime
+                            ).isoformat(),
+                        }
+                        # The extension glob accepts anything named ``*.zim``.
+                        # Probe the signature so a garbage file is marked
+                        # rather than presented as a loaded archive; it stays
+                        # in the listing so the operator can see and fix it.
+                        entry["readable"] = has_zim_signature(file_path)
+                        if not entry["readable"]:
+                            entry["warning"] = UNREADABLE_ZIM_WARNING
+                            logger.warning(
+                                f"{file_path} is named .zim but lacks the ZIM "
+                                "signature; listed as unreadable"
+                            )
+                        all_zim_files.append(entry)
                     except OSError as e:
                         logger.warning(f"Error reading file stats for {file_path}: {e}")
             except Exception as e:
@@ -498,13 +538,14 @@ class ZimOperations(
 
         Returns:
             List of dictionaries containing ZIM file information.
-            Each dict has: name, path, directory, size, size_bytes, modified
+            Each dict has: name, path, directory, size, size_bytes, modified,
+            readable — plus ``warning`` when ``readable`` is False.
         """
-        # Cache key bumped to v2b (Phase B) so v1.x cached per-file list
-        # entries don't leak through if the inner shape ever drifts. Today
-        # the per-file dict shape (name/path/directory/size/size_bytes/
-        # modified) is unchanged; the v2b rename happens one layer up in
-        # ``list_zim_files_summary_data`` (files→results, count→total).
+        # Cache key bumped to v2c when the per-file dict gained the
+        # ``readable`` / ``warning`` signature-probe fields, so a persisted
+        # v2b listing (no marker) can't be served as if it had been probed.
+        # The files→results / count→total rename happens one layer up in
+        # ``list_zim_files_summary_data``.
         #
         # The directory signature is folded into the key so that adding,
         # removing, or renaming a ``.zim`` file at runtime invalidates the
@@ -514,7 +555,7 @@ class ZimOperations(
         # the cache rather than rescanning. The tree is globbed once here
         # and reused for both the signature and (on a miss) the scan.
         grouped = self._glob_zim_paths()
-        cache_key = f"zim_files_list_data_v2b:{self._zim_dir_signature(grouped)}"
+        cache_key = f"zim_files_list_data_v2c:{self._zim_dir_signature(grouped)}"
         cached_result = self.cache.get(cache_key)
         if cached_result is not None:
             logger.debug("Returning cached ZIM files list data")
