@@ -589,3 +589,61 @@ def test_summary_view_skips_on_this_page_nav(
     for marker in _NAV_MARKERS:
         assert marker not in summary, summary
     assert "Measles is an infectious disease" in summary, summary
+
+
+# ---------------------------------------------------------------------------
+# D15 — <noscript> share-widget boilerplate must not open article bodies
+# ---------------------------------------------------------------------------
+
+# Trimmed from medlineplus.gov/ency/article/001214.htm: the no-JS message is
+# a <noscript> block INSIDE <article>, directly under the H1, so the main-
+# content scoper kept it and it led thousands of encyclopedia / genetics /
+# lab-test bodies and their search snippets.
+_MEDLINEPLUS_ENCY_HTML = """\
+<html><body>
+<article><div id="d-article"><div class="page-info"><div class="page-title">
+<a name="start" id="start"></a><h1 class="with-also" itemprop="name">Diabetes</h1>
+</div><div class="page-actions"></div>
+<noscript>
+  <span class="js-disabled-message">To use the sharing features on this page, please enable JavaScript.</span>
+</noscript></div>
+<div class="main"><div id="ency_summary"><p>Diabetes is a long-term (chronic)
+disease in which the body cannot regulate the amount of sugar in the blood.</p></div>
+<section><div class="section"><div class="section-title"><h2>Causes</h2></div>
+<div class="section-body"><p>Insulin is a hormone produced by the pancreas to
+control blood sugar.</p></div></div></section></div></div></article>
+</body></html>
+"""
+
+_NOSCRIPT_JUNK = "To use the sharing features on this page, please enable JavaScript."
+
+
+@pytest.mark.parametrize(
+    "render",
+    [
+        pytest.param(
+            lambda cp, html: cp.process_mime_content(
+                html.encode(), "text/html", scope_main_content=True
+            ),
+            id="entry-body",
+        ),
+        pytest.param(
+            lambda cp, html: cp.process_mime_content(
+                html.encode(), "text/html", snippet_mode=True
+            ),
+            id="search-snippet",
+        ),
+        pytest.param(
+            lambda cp, html: cp.html_to_plain_text(html),
+            id="plain",
+        ),
+    ],
+)
+def test_noscript_boilerplate_is_stripped(
+    content_processor: ContentProcessor, render
+) -> None:
+    """D15: browser-only <noscript> text carries nothing for an offline reader
+    and ate into summary budgets and small max_content_length windows."""
+    text = render(content_processor, _MEDLINEPLUS_ENCY_HTML)
+    assert _NOSCRIPT_JUNK not in text, text
+    assert "Diabetes is a long-term (chronic)" in text
