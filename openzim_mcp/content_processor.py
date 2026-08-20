@@ -362,6 +362,118 @@ def _drop_boilerplate_paragraphs(paragraphs: List[str]) -> List[str]:
     return keep or list(paragraphs)
 
 
+# An empty-text markdown link: what html2text leaves of a zimit
+# anchor-wrapped image once ``ignore_images`` drops the <img>.
+_EMPTY_LINK_RE = re.compile(r"\[\s*\]\((?:\\.|[^\n)\\])*\)")
+# MathJax spans as html2text escapes them: ``\\( … \\)``, ``\\[ … \\]``
+# and display ``$$ … $$``.
+_MATHJAX_RE = re.compile(
+    r"\\\\\((.+?)\\\\\)|\\\\\[(.+?)\\\\\]|\$\$(.+?)\$\$", re.DOTALL
+)
+# ``\text{…}``-style wrappers whose argument is the readable part.
+_TEX_WRAPPER_RE = re.compile(
+    r"\\(?:text|textit|textbf|textrm|textsf|texttt|mathrm|mathbf|mathit"
+    r"|mathsf|mathtt|mathcal|mathbb|mathfrak|operatorname)\{([^{}]*)\}"
+)
+_TEX_COMMAND_RE = re.compile(r"\\([A-Za-z]+)")
+_TEX_SYMBOLS = {
+    "alpha": "α",
+    "beta": "β",
+    "gamma": "γ",
+    "Gamma": "Γ",
+    "delta": "δ",
+    "Delta": "Δ",
+    "epsilon": "ε",
+    "varepsilon": "ε",
+    "theta": "θ",
+    "kappa": "κ",
+    "lambda": "λ",
+    "Lambda": "Λ",
+    "mu": "μ",
+    "nu": "ν",
+    "pi": "π",
+    "Pi": "Π",
+    "rho": "ρ",
+    "sigma": "σ",
+    "Sigma": "Σ",
+    "tau": "τ",
+    "phi": "φ",
+    "varphi": "φ",
+    "Phi": "Φ",
+    "chi": "χ",
+    "psi": "ψ",
+    "Psi": "Ψ",
+    "omega": "ω",
+    "Omega": "Ω",
+    "aleph": "ℵ",
+    "infty": "∞",
+    "vDash": "⊨",
+    "models": "⊨",
+    "vdash": "⊢",
+    "neg": "¬",
+    "lnot": "¬",
+    "land": "∧",
+    "wedge": "∧",
+    "lor": "∨",
+    "vee": "∨",
+    "to": "→",
+    "rightarrow": "→",
+    "Rightarrow": "⇒",
+    "leftrightarrow": "↔",
+    "Leftrightarrow": "⇔",
+    "forall": "∀",
+    "exists": "∃",
+    "in": "∈",
+    "notin": "∉",
+    "subseteq": "⊆",
+    "subset": "⊂",
+    "cup": "∪",
+    "cap": "∩",
+    "emptyset": "∅",
+    "leq": "≤",
+    "le": "≤",
+    "geq": "≥",
+    "ge": "≥",
+    "neq": "≠",
+    "ne": "≠",
+    "times": "×",
+    "cdot": "·",
+    "ldots": "…",
+    "dots": "…",
+}
+
+
+def _tex_to_text(tex: str) -> str:
+    """Render a TeX fragment as plain text: ``\\phi(\\kappa)`` -> ``φ(κ)``.
+
+    Best effort for snippets, not a typesetter: wrapper macros keep their
+    argument, known symbols become their Unicode glyph, unknown commands
+    keep their name, grouping braces go, and escaped set braces stay.
+    """
+    tex = _TEX_WRAPPER_RE.sub(r"\1", tex)
+    tex = tex.replace("\\\\{", "\x00").replace("\\\\}", "\x01")
+    tex = _TEX_COMMAND_RE.sub(lambda m: _TEX_SYMBOLS.get(m.group(1), m.group(1)), tex)
+    tex = tex.replace("{", "").replace("}", "")
+    tex = tex.replace("\x00", "{").replace("\x01", "}")
+    return re.sub(r"\s+", " ", tex).strip()
+
+
+def _strip_snippet_render_junk(text: str) -> str:
+    """Drop rendering leftovers that read as junk in a snippet.
+
+    zimit archives wrap lead images in anchors; with images ignored the
+    anchor survives as a zero-text ``[](../media/kant2.jpg)`` link. Pages
+    using MathJax carry ``\\\\(\\phi(\\kappa)\\\\)`` — backslash soup once
+    html2text has escaped it. Both go before the length cap so they stop
+    consuming snippet budget.
+    """
+    text = _EMPTY_LINK_RE.sub("", text)
+    return _MATHJAX_RE.sub(
+        lambda m: _tex_to_text(next(g for g in m.groups() if g is not None)),
+        text,
+    )
+
+
 def _select_snippet_paragraphs(
     paragraphs: List[str], start_idx: int, max_paragraphs: int
 ) -> List[str]:
@@ -1498,6 +1610,7 @@ class ContentProcessor:
             if len(selected) > 1
             else (selected[0] if selected else "")
         )
+        snippet_text = _strip_snippet_render_junk(snippet_text)
 
         # Truncate if too long. Reserve 3 chars for the trailing "..." so the
         # final string respects snippet_length rather than overshooting it.

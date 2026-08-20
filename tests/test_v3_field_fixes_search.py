@@ -537,6 +537,45 @@ def test_d31_empty_query_is_a_bad_query_page_in_every_mode(
     assert suggest["partial_query"] == "   "
 
 
+# ---------------------------------------------------------------------------
+# D32 — IEP snippets: no empty image links, no MathJax backslash soup
+# ---------------------------------------------------------------------------
+
+# Trimmed from iep.utm.edu/kantmind/ and iep.utm.edu/compactness/ as
+# rendered at the snippet stage. html2text drops the <img> but keeps the
+# wrapping <a> (an empty-text link), and escapes the MathJax delimiters.
+_IEP_MARKDOWN = (
+    "# Kant: Philosophy of Mind\n\n"
+    "[](../wp-content/media/kant2.jpg)[Immanuel Kant](../kantview/) "
+    "(1724-1804) was one of the most important philosophers of the "
+    "Enlightenment Period.\n\n"
+    "Both weakly- and strongly-compact cardinals are _large cardinal_ "
+    "properties. (A sentence \\\\(\\phi(\\kappa)\\\\) is a large cardinal "
+    "property if it satisfies \\\\(\\Gamma^\\text{fin} \\vDash \\delta\\\\) "
+    "for \\\\(\\Gamma \\cup \\\\{\\neg \\delta\\\\}\\\\).)\n"
+)
+
+
+def test_d32_snippet_drops_empty_image_links_and_renders_mathjax() -> None:
+    """Image remnants vanish and TeX reads as text, not backslash soup."""
+    cp = ContentProcessor(snippet_length=400)
+
+    kant = cp.create_snippet(
+        _IEP_MARKDOWN,
+        query="Kant",
+        title="Kant: Philosophy of Mind | Internet Encyclopedia of Philosophy",
+        max_paragraphs=1,
+    )
+    assert "[](" not in kant
+    assert kant.startswith("[Immanuel Kant](../kantview/) (1724-1804)"), kant
+
+    math = cp.create_snippet(_IEP_MARKDOWN, query="cardinal", max_paragraphs=1)
+    assert "\\\\(" not in math and "\\phi" not in math and "\\vDash" not in math
+    assert "φ(κ)" in math, math
+    assert "Γ^fin ⊨ δ" in math, math
+    assert "Γ ∪ {¬ δ}" in math, math
+
+
 def test_d30_description_says_operators_are_literal_terms() -> None:
     """The description advertises Xapian BM25; it must also say that
     Boolean operators, quotes and wildcards are passed through unparsed."""
