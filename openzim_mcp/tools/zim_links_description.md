@@ -33,12 +33,14 @@ PARAMETERS:
 RESPONSE:
   LinksResponse (outbound) or RelatedArticlesResponse (inbound /
   related). Outbound/inbound paginate; related is one ranked set.
-  Outbound rows keep the raw href as `url`; internal rows add `path`,
-  the resolved entry path to pass to `zim_get`.
-  Outbound `category_totals.internal` excludes in-page `#anchor`
-  links — those are counted separately as `category_totals.anchor` —
-  and anchor-wrapped assets (images, fonts, scripts), which land in
-  the media bucket as `type: "asset"`.
+  Outbound is occurrence-level: every link in document order,
+  duplicates included, and `total` counts occurrences. Rows keep the
+  raw href as `url`; internal rows add `path`, the resolved entry
+  path to pass to `zim_get`. Related dedupes targets and reports
+  `mention_count`. Outbound `category_totals.internal` excludes
+  in-page `#anchor` links (counted as `category_totals.anchor`) and
+  anchor-wrapped assets (images, fonts, scripts), which land in the
+  media bucket as `type: "asset"`.
 
 ERRORS:
   Invalid `direction` → `invalid_direction`. Missing/stale inbound

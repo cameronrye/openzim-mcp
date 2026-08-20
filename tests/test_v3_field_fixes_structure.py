@@ -848,3 +848,47 @@ class TestD38AnchorWrappedAssets:
         assert asset["type"] == "asset"
         assert asset["path"] == "iep.utm.edu/wp-content/media/aristotle1.jpg"
         assert data["total"] == 3
+
+
+# ---------------------------------------------------------------------------
+# D39 — outbound is occurrence-level; the description must say so
+# ---------------------------------------------------------------------------
+
+REPEATED_LINKS_HTML = """\
+<html><body>
+<h1>Diabetes</h1>
+<p><a href="a1c.html">A1C</a> <a href="prediabetes.html">Prediabetes</a>
+<a href="a1c.html">A1C again</a> <img src="images/nih.png"><img src="images/nih.png"></p>
+</body></html>
+"""
+
+
+class TestD39OccurrenceLevelDocumented:
+    """D39: outbound preserves every occurrence in document order (``total``
+    counts occurrences), while related dedupes with ``mention_count`` —
+    neither description nor schema said which, so ``total`` read as a
+    unique-link count. Pin the behaviour and the wording together."""
+
+    def test_outbound_preserves_occurrences_in_document_order(
+        self, ops: ZimOperations, zim_path: str
+    ) -> None:
+        with patch(ARCHIVE_CTX) as ctx:
+            ctx.return_value.__enter__.return_value = _html_archive(REPEATED_LINKS_HTML)
+            internal = ops.extract_article_links_data(zim_path, "Test", kind="internal")
+            media = ops.extract_article_links_data(zim_path, "Test", kind="media")
+
+        assert [r["url"] for r in internal["results"]] == [
+            "a1c.html",
+            "prediabetes.html",
+            "a1c.html",
+        ]
+        assert internal["total"] == 3
+        assert [r["url"] for r in media["results"]] == ["images/nih.png"] * 2
+
+    def test_description_states_occurrence_semantics(self) -> None:
+        from openzim_mcp.tools._common import load_description
+
+        text = load_description("zim_links")
+        assert "occurrence" in text
+        assert "duplicates" in text
+        assert "mention_count" in text
