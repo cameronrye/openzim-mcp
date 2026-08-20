@@ -14,6 +14,7 @@ from unittest.mock import MagicMock, Mock
 
 import pytest
 
+from openzim_mcp.pagination import Cursor
 from openzim_mcp.simple_tools import SimpleToolsHandler
 
 
@@ -123,3 +124,90 @@ def _handler_with(**overrides: Any) -> tuple[SimpleToolsHandler, MagicMock]:
     for name, value in overrides.items():
         setattr(mock, name, value)
     return SimpleToolsHandler(mock), mock
+
+
+def _text(out: Any) -> str:
+    """Human-readable body of a handler result, whatever its envelope."""
+    if isinstance(out, str):
+        return out
+    if isinstance(out, dict):
+        return str(out.get("message", ""))
+    return str(out)
+
+
+def _browse_cursor(*, offset: int = 5, limit: int = 5) -> str:
+    state: Dict[str, Any] = {"o": offset, "l": limit, "ns": "C", "ai": "6d0b22d20314"}
+    return Cursor.encode(tool="browse_namespace", state=state)  # type: ignore[arg-type]
+
+
+# ---------------------------------------------------------------------------
+# D44: foreign cursors silently accepted by the intents without a guard
+# ---------------------------------------------------------------------------
+
+
+class TestD44ForeignCursorRejectedUniformly:
+    """The dispatcher projects a decoded cursor's offset / limit into
+    ``options`` for EVERY intent, but only five handlers rejected a
+    cursor minted by another tool. A ``browse_namespace`` cursor handed
+    to ``find article titled Measles`` was silently applied and resized
+    the page from 10 to 5; ``tell me about`` swallowed it too.
+    """
+
+    @pytest.mark.parametrize(
+        ("query", "backend_method"),
+        [
+            ("find article titled Measles", "find_entry_by_title_data"),
+            ("find article titled Measles", "find_entry_by_title"),
+            ("tell me about Measles", "search_zim_file_data"),
+            ("suggestions for meas", "get_search_suggestions"),
+            ("articles related to Measles", "get_related_entries"),
+            ("get article Measles", "get_zim_entry"),
+        ],
+    )
+    def test_unguarded_intents_reject_foreign_cursor(
+        self, query: str, backend_method: str
+    ) -> None:
+        handler, mock = _handler_with()
+        out = handler.handle_zim_query(
+            query,
+            zim_file_path="/zims/test.zim",
+            options={"compact": True, "cursor": _browse_cursor()},
+        )
+        body = _text(out)
+        assert "Cursor / Tool Mismatch" in body
+        assert "browse_namespace" in body
+        assert not getattr(mock, backend_method).called
+
+    def test_find_by_title_page_size_not_resized_by_foreign_cursor(self) -> None:
+        """Without a cursor the default page (10) reaches the backend; the
+        foreign cursor's ``l=5`` must never get there.
+        """
+        handler, mock = _handler_with()
+        handler.handle_zim_query(
+            "find article titled Measles",
+            zim_file_path="/zims/test.zim",
+            options={"compact": True},
+        )
+        assert mock.find_entry_by_title_data.call_args.kwargs["limit"] == 10
+        mock.find_entry_by_title_data.reset_mock()
+        handler.handle_zim_query(
+            "find article titled Measles",
+            zim_file_path="/zims/test.zim",
+            options={"compact": True, "cursor": _browse_cursor(limit=5)},
+        )
+        assert not mock.find_entry_by_title_data.called
+
+    def test_guarded_handlers_keep_their_own_diagnosis(self) -> None:
+        """The existing handler-edge guards stay authoritative for the
+        cursor-consuming intents (no double rejection, same diagnosis).
+        """
+        handler, mock = _handler_with()
+        out = handler.handle_zim_query(
+            "walk namespace C",
+            zim_file_path="/zims/test.zim",
+            options={"compact": True, "cursor": _browse_cursor()},
+        )
+        body = _text(out)
+        assert "Cursor / Tool Mismatch" in body
+        assert "walk_namespace" in body
+        assert not mock.walk_namespace_data.called

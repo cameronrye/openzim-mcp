@@ -739,6 +739,21 @@ class SimpleToolsHandler(
             if low_confidence_note:
                 self._track("low_confidence_note")
 
+            # D44: the cursor's offset / limit were projected into
+            # ``options`` above for EVERY intent, but only the
+            # cursor-consuming handlers (browse / walk / links / search /
+            # filtered search) reject a cursor minted by another tool.
+            # Every other intent silently applied the foreign state — a
+            # ``browse_namespace`` cursor resized ``find article titled``
+            # from 10 hits to the cursor's 5. No other intent ever mints
+            # a cursor, so a tool-tagged cursor reaching one is foreign
+            # by definition: reject it here with the same diagnosis the
+            # guarded handlers emit.
+            if intent not in self._CURSOR_CONSUMING_INTENTS:
+                foreign_cursor = self._cursor_tool_mismatch(options, intent)
+                if foreign_cursor is not None:
+                    return foreign_cursor
+
             # ``list_files`` is the only intent that doesn't need a ZIM file.
             # It still goes through the finalize pipeline so the response
             # carries the intent telemetry marker and respects the compact
@@ -1375,6 +1390,15 @@ class SimpleToolsHandler(
     # q-overlap check skips that case so the handler-level
     # ``_cursor_tool_mismatch`` can fire with the correct diagnosis.
     _Q_EMITTING_CURSOR_TOOLS = frozenset({"search_zim_file", "search_with_filters"})
+
+    # Intents whose handlers page with a cursor and therefore carry their
+    # own handler-edge ``_cursor_tool_mismatch`` check (after their
+    # argument validation, so the diagnosis order those handlers pin is
+    # preserved). Every other intent is guarded once, in the dispatcher,
+    # because no tool ever mints a cursor for it (D44).
+    _CURSOR_CONSUMING_INTENTS = frozenset(
+        {"browse", "walk_namespace", "links", "search", "filtered_search"}
+    )
 
     @staticmethod
     def _cursor_tool_mismatch(
