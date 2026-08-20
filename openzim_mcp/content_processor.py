@@ -278,6 +278,230 @@ _COMPLETE_LINK_RE = re.compile(_LINK_RE_SRC)
 _DANGLING_LINK_RE = re.compile(r"\[[^\]\n]*$|\[[^\]\n]*\]\((?:\\.|[^\n)\\])*\\?$")
 
 
+# Paragraphs that are site furniture rather than article text, as they
+# appear in the compact markdown a snippet is cut from. Each pattern is
+# matched against the whole paragraph (anchored), so prose that merely
+# mentions the phrase is untouched.
+#
+# - The MedlinePlus ``<noscript>`` share-widget sentence, which sits
+#   directly under every H1 on that corpus (13 of 30 ``insulin`` snippets
+#   were that sentence and nothing else).
+# - ``On this page`` / ``Skip navigation`` nav headers.
+_BOILERPLATE_PARAGRAPH_RE = re.compile(
+    r"^\s*(?:"
+    r"to use the sharing features on this page, please enable javascript\.?"
+    r"|on this page:?"
+    r"|skip (?:to main content|navigation)"
+    r")\s*$",
+    re.IGNORECASE,
+)
+
+# One markdown list item: the marker and its text.
+_LIST_ITEM_RE = re.compile(r"^\s*(?:[*+-]|\d+[.)])\s+(.*\S)\s*$")
+# ``[text](url)`` -> ``text`` (empty-text image-wrapper links fold to "").
+_LINK_TO_TEXT_RE = re.compile(r"\[([^\]\n]*)\]\((?:\\.|[^\n)\\])*\)")
+_MARKDOWN_HEADING_RE = re.compile(r"^\s*#{1,6}\s")
+# Longest item still read as a navigation label rather than a sentence.
+_NAV_ITEM_MAX_WORDS = 6
+
+
+def _is_nav_list_paragraph(paragraph: str) -> bool:
+    """Whether ``paragraph`` is a list of navigation labels, not content.
+
+    Site-scraped pages carry in-page menus (``* Summary`` / ``* Start
+    Here`` / ``* Diagnosis and Tests``) and tables of contents as plain
+    lists. Those read as short Title-Case labels with no sentence
+    punctuation; a content list (``* Being very thirsty``, ``* Deep,
+    rapid breathing``) does not, and is left alone.
+    """
+    lines = [line for line in paragraph.splitlines() if line.strip()]
+    if not lines:
+        return False
+    for line in lines:
+        item = _LIST_ITEM_RE.match(line)
+        if item is None:
+            return False
+        text = _LINK_TO_TEXT_RE.sub(r"\1", item.group(1)).strip()
+        if not text or text[-1] in ".!?;:":
+            return False
+        words = re.findall(r"[^\W\d_]+", text)
+        if not words or len(text.split()) > _NAV_ITEM_MAX_WORDS:
+            return False
+        if any(len(word) > 3 and not word[0].isupper() for word in words):
+            return False
+    return True
+
+
+def _drop_boilerplate_paragraphs(paragraphs: List[str]) -> List[str]:
+    """Remove site furniture from the paragraphs a snippet may be cut from.
+
+    Dropped: known boilerplate sentences, navigation lists, headings that
+    merely introduce a navigation list, and paragraphs with no visible
+    text (an image-wrapper ``[](…)`` link and nothing else). When that
+    would leave nothing, the original list is returned so a snippet is
+    still produced.
+    """
+    keep: List[str] = []
+    for index, paragraph in enumerate(paragraphs):
+        visible = _LINK_TO_TEXT_RE.sub(r"\1", paragraph).strip()
+        if not visible and index > 0:
+            # Blank/image-only paragraph. Index 0 is left to the caller's
+            # H1 handling so an empty leading slot never shifts it.
+            continue
+        if _BOILERPLATE_PARAGRAPH_RE.match(paragraph):
+            continue
+        if _is_nav_list_paragraph(paragraph):
+            continue
+        if (
+            _MARKDOWN_HEADING_RE.match(paragraph)
+            and index + 1 < len(paragraphs)
+            and _is_nav_list_paragraph(paragraphs[index + 1])
+        ):
+            continue
+        keep.append(paragraph)
+    return keep or list(paragraphs)
+
+
+# An empty-text markdown link: what html2text leaves of a zimit
+# anchor-wrapped image once ``ignore_images`` drops the <img>.
+_EMPTY_LINK_RE = re.compile(r"\[\s*\]\((?:\\.|[^\n)\\])*\)")
+# MathJax spans as html2text escapes them: ``\\( … \\)``, ``\\[ … \\]``
+# and display ``$$ … $$``.
+_MATHJAX_RE = re.compile(
+    r"\\\\\((.+?)\\\\\)|\\\\\[(.+?)\\\\\]|\$\$(.+?)\$\$", re.DOTALL
+)
+# ``\text{…}``-style wrappers whose argument is the readable part.
+_TEX_WRAPPER_RE = re.compile(
+    r"\\(?:text|textit|textbf|textrm|textsf|texttt|mathrm|mathbf|mathit"
+    r"|mathsf|mathtt|mathcal|mathbb|mathfrak|operatorname)\{([^{}]*)\}"
+)
+_TEX_COMMAND_RE = re.compile(r"\\([A-Za-z]+)")
+_TEX_SYMBOLS = {
+    "alpha": "α",
+    "beta": "β",
+    "gamma": "γ",
+    "Gamma": "Γ",
+    "delta": "δ",
+    "Delta": "Δ",
+    "epsilon": "ε",
+    "varepsilon": "ε",
+    "theta": "θ",
+    "kappa": "κ",
+    "lambda": "λ",
+    "Lambda": "Λ",
+    "mu": "μ",
+    "nu": "ν",
+    "pi": "π",
+    "Pi": "Π",
+    "rho": "ρ",
+    "sigma": "σ",
+    "Sigma": "Σ",
+    "tau": "τ",
+    "phi": "φ",
+    "varphi": "φ",
+    "Phi": "Φ",
+    "chi": "χ",
+    "psi": "ψ",
+    "Psi": "Ψ",
+    "omega": "ω",
+    "Omega": "Ω",
+    "aleph": "ℵ",
+    "infty": "∞",
+    "vDash": "⊨",
+    "models": "⊨",
+    "vdash": "⊢",
+    "neg": "¬",
+    "lnot": "¬",
+    "land": "∧",
+    "wedge": "∧",
+    "lor": "∨",
+    "vee": "∨",
+    "to": "→",
+    "rightarrow": "→",
+    "Rightarrow": "⇒",
+    "leftrightarrow": "↔",
+    "Leftrightarrow": "⇔",
+    "forall": "∀",
+    "exists": "∃",
+    "in": "∈",
+    "notin": "∉",
+    "subseteq": "⊆",
+    "subset": "⊂",
+    "cup": "∪",
+    "cap": "∩",
+    "emptyset": "∅",
+    "leq": "≤",
+    "le": "≤",
+    "geq": "≥",
+    "ge": "≥",
+    "neq": "≠",
+    "ne": "≠",
+    "times": "×",
+    "cdot": "·",
+    "ldots": "…",
+    "dots": "…",
+}
+
+
+def _tex_to_text(tex: str) -> str:
+    """Render a TeX fragment as plain text: ``\\phi(\\kappa)`` -> ``φ(κ)``.
+
+    Best effort for snippets, not a typesetter: wrapper macros keep their
+    argument, known symbols become their Unicode glyph, unknown commands
+    keep their name, grouping braces go, and escaped set braces stay.
+    """
+    tex = _TEX_WRAPPER_RE.sub(r"\1", tex)
+    tex = tex.replace("\\\\{", "\x00").replace("\\\\}", "\x01")
+    tex = _TEX_COMMAND_RE.sub(lambda m: _TEX_SYMBOLS.get(m.group(1), m.group(1)), tex)
+    tex = tex.replace("{", "").replace("}", "")
+    tex = tex.replace("\x00", "{").replace("\x01", "}")
+    return re.sub(r"\s+", " ", tex).strip()
+
+
+def _strip_snippet_render_junk(text: str) -> str:
+    """Drop rendering leftovers that read as junk in a snippet.
+
+    zimit archives wrap lead images in anchors; with images ignored the
+    anchor survives as a zero-text ``[](../media/kant2.jpg)`` link. Pages
+    using MathJax carry ``\\\\(\\phi(\\kappa)\\\\)`` — backslash soup once
+    html2text has escaped it. Both go before the length cap so they stop
+    consuming snippet budget.
+    """
+    text = _EMPTY_LINK_RE.sub("", text)
+    return _MATHJAX_RE.sub(
+        lambda m: _tex_to_text(next(g for g in m.groups() if g is not None)),
+        text,
+    )
+
+
+def _select_snippet_paragraphs(
+    paragraphs: List[str], start_idx: int, max_paragraphs: int
+) -> List[str]:
+    """Take ``max_paragraphs`` content paragraphs from ``start_idx``.
+
+    Headings are context, not content: they do not fill a slot (a page
+    whose lead is ``## Summary`` / ``### What is diabetes?`` used to yield
+    those two lines and no prose), consecutive headings collapse to the
+    one nearest the prose, and a heading with nothing under it is dropped.
+    """
+    selected: List[str] = []
+    content_count = 0
+    for paragraph in paragraphs[start_idx:]:
+        if content_count >= max_paragraphs:
+            break
+        if _MARKDOWN_HEADING_RE.match(paragraph):
+            if selected and _MARKDOWN_HEADING_RE.match(selected[-1]):
+                selected[-1] = paragraph
+            else:
+                selected.append(paragraph)
+            continue
+        selected.append(paragraph)
+        content_count += 1
+    while len(selected) > 1 and _MARKDOWN_HEADING_RE.match(selected[-1]):
+        selected.pop()
+    return selected
+
+
 def _truncate_before_dangling_link(text: str) -> str:
     """Back ``text`` up to before an unterminated trailing markdown link.
 
@@ -1395,7 +1619,11 @@ class ContentProcessor:
             snippet_length if snippet_length is not None else self.snippet_length
         )
 
-        paragraphs = content.split("\n\n")
+        # Site furniture (share-widget boilerplate, in-page navigation
+        # lists) is neither a useful anchor nor useful fill: on MedlinePlus
+        # the paragraph under every H1 was the no-JavaScript sentence, so
+        # an H1 match produced a snippet with no article text at all.
+        paragraphs = _drop_boilerplate_paragraphs(content.split("\n\n"))
         start_idx = 0
 
         if query:
@@ -1428,7 +1656,7 @@ class ContentProcessor:
                             start_idx = i
                             break
 
-        selected = paragraphs[start_idx : start_idx + max_paragraphs]
+        selected = _select_snippet_paragraphs(paragraphs, start_idx, max_paragraphs)
         # H11: join with blank line (``\n\n``), not a single space, so a
         # second paragraph that opens with a markdown heading (``## Foo``)
         # remains a heading instead of becoming inline mid-line text.
@@ -1439,6 +1667,7 @@ class ContentProcessor:
             if len(selected) > 1
             else (selected[0] if selected else "")
         )
+        snippet_text = _strip_snippet_render_junk(snippet_text)
 
         # Truncate if too long. Reserve 3 chars for the trailing "..." so the
         # final string respects snippet_length rather than overshooting it.
@@ -1485,6 +1714,13 @@ class ContentProcessor:
         Match is case-insensitive on the title and tolerant of one
         trailing whitespace run (collapsed by html2text). Leaves
         non-matching headings (real article subheadings) alone.
+
+        Site-scraped archives suffix the title with the site name
+        (``Type 1 diabetes: MedlinePlus Medical Encyclopedia``,
+        ``Diabetes | … | MedlinePlus``) while the H1 carries the bare
+        article name, so an H1 that the title *starts with*, up to a
+        ``:``/``|``/dash separator, is the same duplicate and is stripped
+        too. ``# Geography`` under title ``Berlin`` still stays.
         """
         if not content or not title:
             return content
@@ -1498,7 +1734,20 @@ class ContentProcessor:
             rf"^\s*#\s+{re.escape(norm_title)}\s*\n+",
             flags=re.IGNORECASE,
         )
-        return pattern.sub("", content, count=1)
+        stripped = pattern.sub("", content, count=1)
+        if stripped != content:
+            return stripped
+        leading_h1 = re.match(r"^\s*#\s+(.+?)\s*\n+", content)
+        if leading_h1 is None:
+            return content
+        h1 = leading_h1.group(1).strip()
+        folded_title = norm_title.lower()
+        if not h1 or not folded_title.startswith(h1.lower()):
+            return content
+        rest = folded_title[len(h1) :].lstrip()
+        if rest and rest[0] not in ":|-–—":
+            return content
+        return content[leading_h1.end() :]
 
     def truncate_content(
         self,

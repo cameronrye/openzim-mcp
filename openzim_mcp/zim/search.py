@@ -13,6 +13,7 @@ reference at import time.
 """
 
 import logging
+import unicodedata
 import urllib.parse
 from dataclasses import dataclass
 from pathlib import Path
@@ -27,7 +28,7 @@ from openzim_mcp.exceptions import (
     OpenZimMcpValidationError,
 )
 from openzim_mcp.meta import attach_meta
-from openzim_mcp.text_utils import tokenize_for_relevance
+from openzim_mcp.text_utils import strip_site_suffix, tokenize_for_relevance
 from openzim_mcp.title_promotion import find_title_match
 from openzim_mcp.zim._ops_base import _json
 from openzim_mcp.zim.redirects import best_effort_redirect_chain
@@ -197,6 +198,18 @@ def _suggestion_display_title(archive: Archive, path: str) -> str:
     return segment
 
 
+def _starts_with_whole_word(text: str, prefix: str) -> bool:
+    """Whether ``text`` starts with ``prefix`` ending on a word boundary.
+
+    ``Diabetes | MedlinePlus`` starts with the whole word ``diabetes``
+    but not with ``diabete``; ``Kant, Immanuel`` starts with ``kant``.
+    Both arguments are expected pre-folded (lowercased, stripped).
+    """
+    if not prefix or not text.startswith(prefix):
+        return False
+    return len(text) == len(prefix) or not text[len(prefix)].isalnum()
+
+
 def _query_title_already_on_page(results: List[Dict[str, Any]], query: str) -> bool:
     """Whether a filtered hit already carries the queried title verbatim.
 
@@ -219,9 +232,63 @@ def _query_title_already_on_page(results: List[Dict[str, Any]], query: str) -> b
         if not isinstance(result, dict):
             continue
         title = str(result.get("title", ""))
-        head, sep, _tail = title.partition(" | ")
-        if (head if sep else title).strip().lower() == wanted:
+        if strip_site_suffix(title).lower() == wanted:
             return True
+    return False
+
+
+# Xapian query-syntax operator words. The query itself is handed to libzim
+# verbatim (operators are not parsed, and the tool description says so);
+# these only have to stay out of the *snippet* terms, where ``and``/``not``
+# otherwise anchored the extract on nav junk (``* Diagnosis **and** Tests``)
+# and got bolded as if they were content.
+_QUERY_OPERATOR_WORDS = frozenset({"and", "or", "not", "xor", "near", "adj"})
+
+
+def _snippet_query(query: str) -> Optional[str]:
+    """``query`` without Boolean-operator words, for snippet selection.
+
+    ``(insulin) AND (NOT glucose)`` -> ``insulin glucose``: operator words
+    go, and grouping/quoting/wildcard punctuation is peeled off the words
+    that stay (inner hyphens as in ``insulin-like`` survive). Returns
+    ``None`` when nothing remains, so the caller falls back to the lead
+    paragraph.
+    """
+    kept = []
+    for word in query.split():
+        bare = word.strip("()\"'+-*")
+        if bare and bare.lower() not in _QUERY_OPERATOR_WORDS:
+            kept.append(bare)
+    return " ".join(kept) or None
+
+
+# Shortest shared prefix that counts as a common stem in the relevance
+# proxy: ``diabet``/``diabetes`` and ``symptom``/``symptoms`` share one,
+# ``cat``/``catalogue`` do not.
+_RELEVANCE_STEM_MIN_LEN = 4
+
+
+def _fold_for_relevance(text: str) -> str:
+    """NFKD-fold ``text`` so ``Gödel`` tokenises as ``godel``, not ``del``."""
+    decomposed = unicodedata.normalize("NFKD", text)
+    return "".join(ch for ch in decomposed if not unicodedata.combining(ch))
+
+
+def _tokens_share_a_stem(query_tokens: set, result_tokens: set) -> bool:
+    """Whether any query token matches a result token modulo inflection.
+
+    Xapian's English stemmer and ``*`` wildcards both match on a stem,
+    so ``diabet*`` and ``symptoms`` legitimately retrieve ``Diabetes`` and
+    ``Symptom``. Accept an exact token or a shared prefix at least
+    ``_RELEVANCE_STEM_MIN_LEN`` long where one token extends the other.
+    """
+    if query_tokens & result_tokens:
+        return True
+    for q in query_tokens:
+        for r in result_tokens:
+            short, long_ = (q, r) if len(q) <= len(r) else (r, q)
+            if len(short) >= _RELEVANCE_STEM_MIN_LEN and long_.startswith(short):
+                return True
     return False
 
 
@@ -235,18 +302,23 @@ def _all_results_weakly_match(results: List[Dict[str, Any]], query: str) -> bool
     on the response so the model can pivot (try alt spellings, broaden
     the query) rather than treat noisy results as authoritative.
 
+    Both sides are diacritic-folded and compared modulo a shared stem,
+    matching what Xapian itself did to produce the hits: ``diabet*`` and
+    ``Godel`` used to flag the very Diabetes / Gödel articles they asked
+    for, telling the model to distrust the best possible results.
+
     Returns False when ``results`` is empty (callers gate on
     ``total_results > 0`` so empty lists never reach this path; defensive).
     """
     if not results:
         return False
-    query_tokens = tokenize_for_relevance(query)
+    query_tokens = tokenize_for_relevance(_fold_for_relevance(query))
     if not query_tokens:
         return False
     for r in results:
         haystack = f"{r.get('path', '')} {r.get('title', '')}"
-        r_tokens = tokenize_for_relevance(haystack)
-        if query_tokens & r_tokens:
+        r_tokens = tokenize_for_relevance(_fold_for_relevance(haystack))
+        if _tokens_share_a_stem(query_tokens, r_tokens):
             return False
     return True
 
@@ -784,40 +856,59 @@ class _SearchMixin:
                 total_results,
             )
 
-        result_count = min(limit, total_results - offset)
-        result_entries = list(search.getResults(offset, result_count))
-
         results: List[Dict[str, Any]] = []
-        for i, entry_id in enumerate(result_entries):
-            try:
-                entry = archive.get_entry_by_path(entry_id)
-                title = entry.title or "Untitled"
-                snippet = self._get_entry_snippet(
-                    entry,
-                    query=query,
-                    snippet_length=snippet_length,
-                    max_paragraphs=max_paragraphs,
-                    validated_path=str(validated_path) if validated_path else None,
-                )
-                results.append({"path": entry_id, "title": title, "snippet": snippet})
-            except Exception as e:
-                logger.warning(f"Error processing search result {entry_id}: {e}")
-                results.append(
-                    {
-                        "path": entry_id,
-                        "title": f"Entry {offset + i + 1}",
-                        "snippet": f"(Error getting entry details: {e})",
-                    }
-                )
-
-        returned_count = len(results)
-        last_index = offset + returned_count
+        # warc2zim stores query-string variants of a page as separate entries
+        # (``quiz.htm`` and ``quiz.htm?quiz=1``), and Xapian ranks them side
+        # by side — a MedlinePlus page of 40 carried 19 duplicates. Collapse
+        # on the canonical path, as the filtered scanner does, and keep
+        # pulling ranked rows until the page holds ``limit`` distinct pages.
+        # Page-scoped (not scan-scoped) so ``offset`` stays a plain ranked-row
+        # offset and a high offset never triggers a scan from zero; the rows
+        # actually consumed are reported in ``page_info.source_consumed`` so
+        # a client resumes at ``offset + source_consumed``.
+        seen_canonical: set[str] = set()
+        consumed = 0
         # ``total_results`` is Xapian's ESTIMATE and can exceed the real hit
         # count. When ``getResults`` hands back fewer entries than requested,
         # the real stream is exhausted — treating the estimate as authoritative
         # here re-minted the same cursor forever (empty page, done=False,
         # offset unchanged: a livelock for contract-following clients).
-        done = last_index >= total_results or returned_count < result_count
+        exhausted = False
+        while len(results) < limit and not exhausted:
+            want = min(limit - len(results), total_results - offset - consumed)
+            if want <= 0:
+                break
+            batch = list(search.getResults(offset + consumed, want))
+            if len(batch) < want:
+                exhausted = True
+            for entry_id in batch:
+                consumed += 1
+                canonical = canonical_result_path(entry_id)
+                if canonical in seen_canonical:
+                    continue
+                seen_canonical.add(canonical)
+                results.append(
+                    self._search_result_row(
+                        archive,
+                        entry_id,
+                        rank=offset + consumed,
+                        query=query,
+                        snippet_length=snippet_length,
+                        max_paragraphs=max_paragraphs,
+                        validated_path=validated_path,
+                    )
+                )
+
+        returned_count = len(results)
+        last_index = offset + consumed
+        done = last_index >= total_results or exhausted
+        page_info: Dict[str, Any] = {
+            "offset": offset,
+            "limit": limit,
+            "returned_count": returned_count,
+        }
+        if consumed != returned_count:
+            page_info["source_consumed"] = consumed
         next_cursor: Optional[str] = None
         if not done:
             # Post-a20 P1-D1 / post-a21 P1-D5 contract: any tool whose
@@ -848,14 +939,45 @@ class _SearchMixin:
                 "next_cursor": next_cursor,
                 "total": total_results,
                 "done": done,
-                "page_info": {
-                    "offset": offset,
-                    "limit": limit,
-                    "returned_count": returned_count,
-                },
+                "page_info": page_info,
             },
             total_results,
         )
+
+    def _search_result_row(
+        self,
+        archive: Archive,
+        entry_id: str,
+        *,
+        rank: int,
+        query: str,
+        snippet_length: Optional[int],
+        max_paragraphs: Optional[int],
+        validated_path: Optional[Path],
+    ) -> Dict[str, Any]:
+        """Project one ranked hit onto a SearchHit row; never raises.
+
+        ``rank`` is the 1-based position in the ranked stream, used only to
+        label a row whose entry could not be read.
+        """
+        try:
+            entry = archive.get_entry_by_path(entry_id)
+            title = entry.title or "Untitled"
+            snippet = self._get_entry_snippet(
+                entry,
+                query=_snippet_query(query),
+                snippet_length=snippet_length,
+                max_paragraphs=max_paragraphs,
+                validated_path=str(validated_path) if validated_path else None,
+            )
+            return {"path": entry_id, "title": title, "snippet": snippet}
+        except Exception as e:
+            logger.warning(f"Error processing search result {entry_id}: {e}")
+            return {
+                "path": entry_id,
+                "title": f"Entry {rank}",
+                "snippet": f"(Error getting entry details: {e})",
+            }
 
     def _format_search_text(
         self,
@@ -2043,10 +2165,11 @@ class _SearchMixin:
         when the scan produced an empty value.
         """
         results: List[Dict[str, Any]] = []
+        snippet_query = _snippet_query(query) if query else None
         for i, (entry_id, entry, entry_namespace, content_mime) in enumerate(page):
             try:
                 title = entry.title or "Untitled"
-                snippet = self._get_entry_snippet(entry, query=query)
+                snippet = self._get_entry_snippet(entry, query=snippet_query)
                 if not content_type:
                     # No content_type filter means the scan never fetched
                     # the mimetype (tuple carries ""), so backfill it here.
@@ -2110,7 +2233,12 @@ class _SearchMixin:
                 "done": True,
                 "page_info": {"offset": 0, "limit": limit, "returned_count": 0},
             }
-            return cast("SearchSuggestionsResponse", attach_meta(empty_payload))
+            # Same structured reason as the fulltext / title modes, so an
+            # empty prefix is distinguishable from a prefix with no matches.
+            return cast(
+                "SearchSuggestionsResponse",
+                attach_meta(empty_payload, reason="bad_query"),
+            )
 
         # Validate and resolve file path
         validated_path = self._validate_zim_path(zim_file_path)
@@ -2784,11 +2912,13 @@ class _SearchMixin:
                 seen.add(v)
                 variants.append(v)
 
-        # Single character deletion. Capped to titles >= 5 chars on the
-        # *result* (i.e. >= 6 on the input) — below that, deletions match
+        # Single character deletion. Capped to titles >= 4 chars on the
+        # *result* (i.e. >= 5 on the input) — below that, deletions match
         # too many spurious short articles ("test" -> "tes" -> any 3-char
-        # title is a false positive).
-        if len(title) >= 6:
+        # title is a false positive). The floor used to be 6, which never
+        # generated the doubled-letter typo of a short name ("Kannt" ->
+        # "Kant"); 5 keeps the 3-char spray out while admitting it.
+        if len(title) >= 5:
             for i in range(len(title)):
                 v = title[:i] + title[i + 1 :]
                 if v and v not in seen:
@@ -2880,6 +3010,10 @@ class _SearchMixin:
         extra_probes = 0
         verified: List[str] = []
         seen_titles: set[str] = set()
+        # One suggestion searcher for the whole sweep; built lazily so a
+        # sweep that resolves every variant through the exact probes never
+        # pays for it.
+        title_index: Optional[Any] = None
         for variant in self._typo_variants(title):
             # Early-out once we have a canonical hit AND enough suggestions.
             best_is_done = best is not None and (
@@ -2890,6 +3024,12 @@ class _SearchMixin:
 
             try:
                 entry = self._find_entry_fast_path(archive, variant)
+                if entry is None:
+                    if title_index is None:
+                        title_index = _zim_ops_mod.SuggestionSearcher(archive)
+                    entry = self._verify_variant_via_title_index(
+                        archive, variant, searcher=title_index
+                    )
             except Exception:
                 if best is not None and not best_is_done:
                     extra_probes += 1
@@ -2919,6 +3059,56 @@ class _SearchMixin:
                 if not best_is_done:
                     extra_probes += 1
         return best, verified
+
+    # Suggestion rows examined per typo variant when verifying it against
+    # the title index. The top few prefix matches are enough to tell a real
+    # word from a non-word; deeper rows only add cost.
+    _TYPO_VERIFY_SUGGESTION_ROWS = 3
+
+    def _verify_variant_via_title_index(
+        self, archive: Any, variant: str, *, searcher: Optional[Any] = None
+    ) -> Optional[Any]:
+        """Resolve a typo ``variant`` through the title index.
+
+        ``_find_entry_fast_path`` verifies a candidate only through exact
+        title equality and the ``C/``/``A/`` path conventions. On
+        site-scraped archives neither can ever hold — titles carry a site
+        suffix (``Diabetes | MedlinePlus``) and paths are URLs
+        (``medlineplus.gov/diabetes.html``) — so the whole Levenshtein-1
+        sweep verified nothing and the advertised typo tolerance never
+        fired. Ask libzim's suggestion index instead and accept a row whose
+        title starts with the variant as a *whole word*: ``Diabetes`` is
+        verified by ``Diabetes | Type 1 Diabetes ...`` and ``Kant`` by
+        ``Kant, Immanuel | ...``, while the non-word ``Diabete`` (which the
+        prefix index matches just as happily) is not.
+
+        ``searcher`` lets the sweep reuse one ``SuggestionSearcher`` across
+        its ~400 variants. Returns the matching Entry (pre-redirect; the
+        caller walks the chain) or ``None``. Never raises.
+        """
+        wanted = variant.strip().lower()
+        if not wanted:
+            return None
+        try:
+            if searcher is None:
+                searcher = _zim_ops_mod.SuggestionSearcher(archive)
+            suggestion = searcher.suggest(variant)
+            if suggestion.getEstimatedMatches() <= 0:
+                return None
+            paths = list(suggestion.getResults(0, self._TYPO_VERIFY_SUGGESTION_ROWS))
+        except Exception as e:
+            logger.debug(f"title-index verification of {variant!r} failed: {e}")
+            return None
+        for path in paths:
+            try:
+                entry = archive.get_entry_by_path(path)
+            except Exception as e:
+                logger.debug(f"title-index verification read failed for {path}: {e}")
+                continue
+            entry_title = (getattr(entry, "title", "") or "").strip().lower()
+            if _starts_with_whole_word(entry_title, wanted):
+                return entry
+        return None
 
     @staticmethod
     def _follow_redirect_chain(entry: Any) -> Any:
@@ -3034,12 +3224,14 @@ class _SearchMixin:
         fast_path_hit: bool,
         fuzzy_path_hit: bool,
         verified_variants: List[str],
+        reason: Optional[str] = None,
     ) -> "FindEntryResponse":
         """Sort, dedupe, and assemble the contract envelope.
 
         Pure transformation of the per-file accumulated state — no
         archive access, no control flow. Mirrors the legacy post-loop
-        block exactly.
+        block exactly. ``reason`` overrides the derived ``0_hits`` verdict
+        (the blank-query page is ``bad_query``, not a miss).
         """
         structured_suggestions_limit = self.config.search.structured_suggestions_limit
 
@@ -3078,7 +3270,8 @@ class _SearchMixin:
             for resolved in verified_variants[:structured_suggestions_limit]:
                 suggestions.append({"type": "alt_spelling", "value": resolved})
 
-        reason = None if aggregate_results else "0_hits"
+        if reason is None and not aggregate_results:
+            reason = "0_hits"
 
         # Trim to limit and build the contract envelope. ``find_entry_by_title``
         # is non-paginated (no cursor input, no offset), but the v2 Phase B
@@ -3130,13 +3323,24 @@ class _SearchMixin:
              title match is promoted to score 1.0 and flips fast_path_hit.
           3. Return list sorted by score (descending).
         """
-        if not title or not title.strip():
-            raise OpenZimMcpValidationError(
-                "Input is empty or contains only whitespace/control characters"
-            )
         if limit < 1 or limit > 50:
             raise OpenZimMcpValidationError(
                 f"limit must be between 1 and 50 (provided: {limit})"
+            )
+        # Empty / whitespace-only title: the same structured reason the
+        # fulltext and suggest modes return, so a model can self-correct
+        # without parsing an error envelope. This used to raise a generic
+        # validation error — one tool, three contracts for one mistake.
+        if not title or not title.strip():
+            return self._assemble_find_response(
+                [],
+                title=title,
+                limit=limit,
+                files=[],
+                fast_path_hit=False,
+                fuzzy_path_hit=False,
+                verified_variants=[],
+                reason="bad_query",
             )
 
         if cross_file:
@@ -3253,7 +3457,17 @@ class _SearchMixin:
                                 suggest_post_path = getattr(entry, "path", None)
                                 redirect_walked = suggest_pre_path != suggest_post_path
                                 resolved_title = entry.title or path
-                                exact_ci = resolved_title.lower() == title_lower
+                                # A site-suffixed title whose own name is
+                                # the query (``Virtue Ethics | Internet
+                                # Encyclopedia of Philosophy``) is an exact
+                                # match too: without this, scraped archives
+                                # topped out at 0.95 and the strict 1.0
+                                # promotion gates could never fire.
+                                exact_ci = (
+                                    resolved_title.lower() == title_lower
+                                    or strip_site_suffix(resolved_title).lower()
+                                    == title_lower
+                                )
                                 if exact_ci:
                                     score: float = 1.0
                                     fast_path_hit = True

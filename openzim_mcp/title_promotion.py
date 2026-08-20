@@ -20,6 +20,8 @@ import logging
 import re
 from typing import Any, Callable, Dict, Iterator, Optional
 
+from openzim_mcp.text_utils import strip_site_suffix
+
 logger = logging.getLogger(__name__)
 
 
@@ -181,6 +183,32 @@ def _strip_namespace(path: str) -> str:
     (``len(cand_tokens) == 1``) can never fire on an old-scheme archive.
     """
     return path.split("/", 1)[1] if _NAMESPACE_PREFIX_RE.match(path) else path
+
+
+# A path whose first segment is a dotted hostname: the shape zimit /
+# warc2zim archives store (``medlineplus.gov/diabetes.html``,
+# ``iep.utm.edu/virtue/``).
+_URL_PATH_RE = re.compile(r"^[a-z0-9-]+(?:\.[a-z0-9-]+)+/", re.IGNORECASE)
+
+
+def _candidate_name(promoted: Dict[str, Any]) -> str:
+    """The candidate's *name* as the shape predicates below expect it.
+
+    On Wikipedia-class archives the path IS the title (``Virtue_ethics``),
+    so every predicate tokenizes ``_strip_namespace(path)``. On site-scraped
+    archives the path is a URL — ``iep.utm.edu/virtue/`` tokenizes as
+    ``iep utm edu virtue`` — so a perfectly on-topic candidate read as a
+    multi-token tangential one and promotion never fired on that whole
+    archive class. For URL-shaped paths use the site-suffix-stripped
+    title instead (``Virtue Ethics | Internet Encyclopedia of
+    Philosophy`` -> ``Virtue_Ethics``); everything else is unchanged.
+    """
+    path = str(promoted.get("path", ""))
+    if _URL_PATH_RE.match(path):
+        name = strip_site_suffix(str(promoted.get("title", "") or ""))
+        if name:
+            return name.replace(" ", "_")
+    return _strip_namespace(path)
 
 
 def _punctuation_smear_detected(topic: str, candidate_path: str) -> bool:
@@ -571,7 +599,7 @@ def _accept_non_possessive(
     topic_tokens_seq = _TAIL_TOKEN_RE.findall(topic.lower())
     if len(topic_tokens_seq) < 3:
         return True
-    cand_path = _strip_namespace(str(promoted.get("path", "")))
+    cand_path = _candidate_name(promoted)
     cand_tokens_seq = _TAIL_TOKEN_RE.findall(cand_path.lower())
     if len(cand_tokens_seq) == 1 and cand_tokens_seq == topic_tokens_seq[-1:]:
         return False
@@ -605,7 +633,7 @@ def is_tail_hijack_shape(promoted: Dict[str, Any], topic: str) -> bool:
     topic_tokens_seq = _TAIL_TOKEN_RE.findall(topic.lower())
     if len(topic_tokens_seq) < 3:
         return False
-    cand_path = _strip_namespace(str(promoted.get("path", "")))
+    cand_path = _candidate_name(promoted)
     cand_tokens_seq = _TAIL_TOKEN_RE.findall(cand_path.lower())
     return len(cand_tokens_seq) == 1 and cand_tokens_seq == topic_tokens_seq[-1:]
 
@@ -627,7 +655,7 @@ def is_single_token_tail_match(promoted: Dict[str, Any], topic: str) -> bool:
     topic_tokens_seq = _TAIL_TOKEN_RE.findall(topic.lower())
     if not topic_tokens_seq:
         return False
-    cand_path = _strip_namespace(str(promoted.get("path", "")))
+    cand_path = _candidate_name(promoted)
     cand_tokens_seq = _TAIL_TOKEN_RE.findall(cand_path.lower())
     return len(cand_tokens_seq) == 1 and cand_tokens_seq == topic_tokens_seq[-1:]
 
@@ -865,7 +893,7 @@ def is_tangential_multi_token_shape(promoted: Dict[str, Any], topic: str) -> boo
     topic_tokens_seq = _TAIL_TOKEN_RE.findall(topic.lower())
     if len(topic_tokens_seq) < 2:
         return False
-    cand_path = _strip_namespace(str(promoted.get("path", "")))
+    cand_path = _candidate_name(promoted)
     cand_tokens_seq = _TAIL_TOKEN_RE.findall(cand_path.lower())
     if len(cand_tokens_seq) < 2:
         return False
@@ -1051,7 +1079,7 @@ def has_topic_prefix_canonical_extension(promoted: Dict[str, Any], topic: str) -
         canonical prefix [``symphony``, ``no``] not contiguous in
         topic.
     """
-    cand_path = _strip_namespace(str(promoted.get("path", "")))
+    cand_path = _candidate_name(promoted)
     cand_tokens = _TAIL_TOKEN_RE.findall(cand_path.lower())
     if len(cand_tokens) < 2:
         return False
@@ -1095,7 +1123,7 @@ def _accept_possessive_fuzzy_suggest(promoted: Dict[str, Any], topic: str) -> bo
     the possessor list — the same tokenizer the redirect-branch subset
     rule uses, keeping both branches symmetric.
     """
-    cand_path = _strip_namespace(str(promoted.get("path", "")))
+    cand_path = _candidate_name(promoted)
     cand_tokens = set(_UNICODE_TOKEN_RE.findall(cand_path.lower()))
     possessors = set(extract_possessor_tokens(topic))
     return bool(possessors & cand_tokens)
@@ -1144,7 +1172,7 @@ def _accept_possessive_redirect(promoted: Dict[str, Any], topic: str) -> bool:
     topic_tokens = set(_UNICODE_TOKEN_RE.findall(topic.lower()))
     if pre_tokens.issubset(topic_tokens):
         return True
-    cand_path = _strip_namespace(str(promoted.get("path", "")))
+    cand_path = _candidate_name(promoted)
     cand_tokens = set(_UNICODE_TOKEN_RE.findall(cand_path.lower()))
     possessors = set(extract_possessor_tokens(topic))
     return bool(possessors & cand_tokens)
