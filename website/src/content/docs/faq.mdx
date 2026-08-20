@@ -21,6 +21,14 @@ v2.0.0 collapsed the 22-tool advanced surface into 8 consolidated tools: `zim_qu
 
 Functionally nothing was removed; the surface area just shrank. See the [migration table on the API reference page](/openzim-mcp/docs/api-reference/#v1--v2-migration) and the [CHANGELOG migration table](https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md#migrating-from-v1x--v2-beta) for the full mechanical mapping.
 
+### What changed in v3.0.0?
+
+v3.0.0 ports the server to MCP Python SDK v2 and the 2026-07-28 ("stateless") protocol revision. The tool surface is untouched — all 8 tools, 3 resources, and 3 prompts behave as before — and clients that connect with the legacy `initialize` handshake keep working for tools, resources, and prompts with no changes.
+
+Two things break. **`resources/subscribe` and `resources/unsubscribe` are no longer served**: a legacy client gets `-32601` and can no longer receive change notifications; live updates now mean negotiating 2026-07-28 and opening a `subscriptions/listen` stream. Subscriptions have always been HTTP-only here, so no stdio client is affected. Relatedly, `zim://files` is no longer a subscription target — archives appearing or disappearing arrive as `resources/list_changed` (opt in with `resourcesListChanged: true`), while in-place replacements arrive as `resources/updated` for `zim://{name}`. And **link-graph sidecars built by 2.x are rejected after upgrade** (sidecar schema v3): rebuild each with `openzim-mcp build link-graph --force <archive>.zim`, or `zim_links(direction="inbound")` returns `inbound_sidecar_unavailable` until you do.
+
+New in the same release: results carry cache hints (`ttlMs`/`cacheScope`), and `OPENZIM_MCP_RESOURCE_CACHE_TTL_SECONDS` (default 3600, `0` disables) governs how long a client may cache archive-overview reads. Details: [Resources, prompts & subscriptions](/openzim-mcp/docs/resources-prompts-subscriptions/) and the [CHANGELOG 3.0.0 entry](https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md#300-2026-08-20).
+
 ### What makes it different from other file readers?
 
 Unlike basic file readers, OpenZIM MCP provides:
@@ -151,7 +159,7 @@ For the full mechanical mapping see the [migration table on the API reference pa
 
 ### When is v1.x EOL?
 
-v1.x reached end-of-maintenance when v2.5.0 shipped (2026-06-18) — that was the first of the two policy triggers (`{v2.5.0 ships, 2026-11-27}`). It no longer receives security, data-corruption, or crash fixes. The `ghcr.io/cameronrye/openzim-mcp:1.3.0` image (the final v1.x release) stays available, but the supported path is v2: flip to Simple mode (one tool, `zim_query`) and let natural-language routing absorb the v1 → v2 differences.
+v1.x reached end-of-maintenance when v2.5.0 shipped (2026-06-18) — that was the first of the two policy triggers (`{v2.5.0 ships, 2026-11-27}`). It no longer receives security, data-corruption, or crash fixes. The `ghcr.io/cameronrye/openzim-mcp:1.3.0` image (the final v1.x release) stays available, but the supported path is the current release: flip to Simple mode (one tool, `zim_query`) and let natural-language routing absorb the v1 → v2 differences.
 
 If you're still on v1.x and the migration looks costly, the simplest path is to flip to v2 Simple mode (one tool, `zim_query`) and let natural-language routing absorb the v1 → v2 differences for you — then opt into Advanced mode later when you want explicit control.
 
@@ -372,4 +380,4 @@ Learn more about ZIM files:
 
 **Still have questions?** Check the other docs pages or [ask in GitHub Discussions](https://github.com/cameronrye/openzim-mcp/discussions).
 
-*The v1.x maintenance window closed when v2.5.0 shipped (2026-06-18); the 2.x line is the only supported series. See [CHANGELOG](https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md) for the v1 → v2 migration table.*
+*The v1.x maintenance window closed when v2.5.0 shipped (2026-06-18); only the current major line is supported — see [SECURITY.md](https://github.com/cameronrye/openzim-mcp/blob/main/SECURITY.md) for the policy. The [CHANGELOG](https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md) carries the v1 → v2 migration table and the v3.0.0 breaking-changes entry.*

@@ -29,7 +29,7 @@ Check for it with `isinstance(result, dict) and result.get("error") is True`. Si
 - `invalid_direction` / `invalid_kind` — `zim_links` got a `direction` outside `{outbound, inbound, related}`, or (on `direction="outbound"`) a `kind` outside `{internal, external, media}`. `zim_links` never emits `invalid_mode`.
 - `invalid_section` — `zim_get_section` got an empty/missing `section_id`
 - `invalid_content_offset` — `zim_get` / `zim_query` got a negative `content_offset`
-- `invalid_limit` — `zim_search` / `zim_query` got a `limit` below 1, or above the cap (50 for `mode="title"` / `mode="suggest"`, 1000 otherwise)
+- `invalid_limit` — `zim_search` / `zim_query` got a `limit` below 1, or above the cap (50 for `mode="title"` / `mode="suggest"` and for `cross_file=True`; 100 for `fulltext` with `namespace`/`content_type` filters; 1000 for plain single-archive `fulltext`)
 - `invalid_offset` — `zim_search` / `zim_query` got a negative `offset` (`offset=0` is the valid default)
 - `invalid_max_content_length` — `zim_get` / `zim_query` got a `max_content_length` below 1 (`zim_search` has no such parameter)
 - `invalid_combination` — `zim_search` got mutually exclusive arguments (any `cursor`, a non-zero `offset` outside single-archive fulltext, `cross_file` + `zim_file_path`, `mode="suggest"` + `cross_file`, or `namespace`/`content_type` filters + `cross_file`)
@@ -453,4 +453,4 @@ When reporting issues, include:
 
 **Still having issues?** [Open an issue](https://github.com/cameronrye/openzim-mcp/issues) with detailed information about your problem.
 
-*The v1.x maintenance window closed when v2.5.0 shipped (2026-06-18); the 2.x line is the only supported series. See [CHANGELOG](https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md) for the v1 → v2 migration table.*
+*The v1.x maintenance window closed when v2.5.0 shipped (2026-06-18); only the current major line is supported — see [SECURITY.md](https://github.com/cameronrye/openzim-mcp/blob/main/SECURITY.md) for the policy. The [CHANGELOG](https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md) carries the v1 → v2 migration table and the v3.0.0 breaking-changes entry.*

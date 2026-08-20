@@ -111,7 +111,7 @@ zim_search(
 | `zim_file_path` | Optional when `cross_file=True`; otherwise required (unless only one ZIM in allowed dirs) |
 | `cross_file` | When `True`, queries every allowed ZIM file. The `SearchAllResponse` carries one row per file in `results`; each row's `result` is that file's `SearchResponse` |
 | `namespace`, `content_type` | Optional filters (only meaningful for `mode="fulltext"`) |
-| `limit` | 1–1000 for `fulltext`; 1–50 for `title`/`suggest` |
+| `limit` | 1–1000 for plain single-archive `fulltext`; 1–100 when `namespace`/`content_type` filters are set; 1–50 for `cross_file=True` and for `title`/`suggest` |
 | `cursor` | Accepted for surface uniformity but **rejected** when non-empty (`invalid_combination` envelope) — paginate single-archive fulltext with `offset` instead |
 
 **Returns:** mode-shaped response — `SearchResponse` / `SearchAllResponse` / `SearchWithFiltersResponse` / `FindEntryResponse` / `SearchSuggestionsResponse` — or `ToolErrorPayload` on validation failure. Every `next_cursor` in these responses is nulled; page with `offset`.
@@ -153,7 +153,7 @@ The four branches are **mutually exclusive**. Setting more than one (e.g. `entry
 |-----------|-------|
 | `view` | `"full"` (default; article body), `"summary"` (opening paragraph), `"toc"` (hierarchical TOC), `"structure"` (headings + section anchors). Ignored when `binary=True` or `main_page=True` |
 | `binary` | When `True`, returns raw bytes (base64) with native MIME type. Default per-entry cap 10 MiB |
-| `max_content_length` | Per-entry char cap, min 100 |
+| `max_content_length` | Per-entry char cap, min 1 (the `OPENZIM_MCP_CONTENT__MAX_CONTENT_LENGTH` config field has its own ≥ 100 floor) |
 | `content_offset` | Page through long articles without re-fetching the prefix |
 | `compact` | Compact-mode prose (default `False` — preserves legacy byte-identical behavior; a default flip was considered and explicitly deferred for lack of adoption telemetry) |
 | `compact_budget` | Optional budget override for compact mode |
@@ -200,6 +200,7 @@ zim_browse(
     cursor: Optional[str] = None,
     limit: Optional[int] = None,
     offset: int = 0,
+    include_assets: bool = False,
 ) -> Any
 ```
 
@@ -213,6 +214,7 @@ zim_browse(
 | `namespace` | | `C`, `M`, `W`, `X`, `A`, `I` for legacy schemes; domain-style names for modern archives |
 | `limit` | 1–500 | Default 50 (`page`) / 200 (`walk`) |
 | `cursor`, `offset` | | `cursor` only valid with `mode="walk"`; `offset` only valid with `mode="page"` |
+| `include_assets` | | `mode="page"` browses of C-namespace pages on domain-scheme archives hide css/js/font assets by default and set `page_info.assets_filtered`; pass `True` to include them |
 
 **Returns:** a paginated envelope for both modes — `{results, next_cursor, total, done, page_info, namespace, …}` — with `next_cursor` driving `walk` iteration until `done: true`.
 
@@ -432,7 +434,7 @@ All tools are subject to a global token-bucket limiter (default 20 work units/s,
 |-----------|--------------------|------|
 | `zim_search(mode="fulltext")` or `zim_search(mode="title")` | `search` / `find_entry_by_title` | 2 |
 | `zim_search(mode="suggest")` | `suggestions` | 1 |
-| `zim_search(cross_file=True)` | charged per archive scanned | varies |
+| `zim_search(cross_file=True)` | `search` (charged once per call, not per archive scanned) | 2 |
 | `zim_get(entry_path=...)` | `get_entry` | 1 |
 | `zim_get(entry_paths=[...])` | `get_zim_entries` (per-entry charge) | N |
 | `zim_get(binary=True)` | `get_binary_entry` | 3 |
@@ -509,4 +511,4 @@ There are no on-the-wire aliases at v2.0 — old tool names disappear cleanly pe
 
 **Need configuration help?** See [Configuration](/openzim-mcp/docs/configuration/). **Deploying over HTTP?** See [HTTP and Docker Deployment](/openzim-mcp/docs/http-and-docker-deployment/). **Using resources / subscriptions?** See [Resources, prompts & subscriptions](/openzim-mcp/docs/resources-prompts-subscriptions/).
 
-*The v1.x maintenance window closed when v2.5.0 shipped (2026-06-18); the 2.x line is the only supported series. See [CHANGELOG](https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md) for the v1 → v2 migration table.*
+*The v1.x maintenance window closed when v2.5.0 shipped (2026-06-18); only the current major line is supported — see [SECURITY.md](https://github.com/cameronrye/openzim-mcp/blob/main/SECURITY.md) for the policy. The [CHANGELOG](https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md) carries the v1 → v2 migration table and the v3.0.0 breaking-changes entry.*
