@@ -369,3 +369,51 @@ class TestD24CaseInsensitiveClosestMatch:
             result = ops.get_section_data(zim_path, "Test", section_id="Sh2E")
 
         assert result["closest_match"] == "SH2e"
+
+
+# ---------------------------------------------------------------------------
+# D25 — the rate-limit message must never say "wait 0.00 seconds"
+# ---------------------------------------------------------------------------
+
+
+class TestD25RateLimitWaitFloor:
+    """D25: a sub-centisecond (or, via the post-acquire refill race, exactly
+    zero) wait formatted as 0.00 is a nonsensical instruction. Floor it."""
+
+    @pytest.mark.parametrize("wait", [0.0, 0.0004, 0.0099])
+    def test_wait_is_floored_to_a_displayable_value(
+        self, monkeypatch: pytest.MonkeyPatch, wait: float
+    ) -> None:
+        from openzim_mcp.exceptions import OpenZimMcpRateLimitError
+        from openzim_mcp.rate_limiter import (
+            RateLimitConfig,
+            RateLimiter,
+            TokenBucket,
+        )
+
+        monkeypatch.setattr(TokenBucket, "acquire", lambda self, tokens=1: False)
+        monkeypatch.setattr(TokenBucket, "get_wait_time", lambda self, tokens=1: wait)
+        limiter = RateLimiter(RateLimitConfig(requests_per_second=200.0, burst_size=5))
+
+        with pytest.raises(OpenZimMcpRateLimitError) as excinfo:
+            limiter.check_rate_limit("op", cost=1, client_id="c")
+
+        message = str(excinfo.value)
+        assert "0.00 seconds" not in message
+        assert "0.01 seconds" in message
+        assert "wait_time=0.01s" in str(excinfo.value.details)
+
+    def test_real_wait_is_untouched(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from openzim_mcp.exceptions import OpenZimMcpRateLimitError
+        from openzim_mcp.rate_limiter import (
+            RateLimitConfig,
+            RateLimiter,
+            TokenBucket,
+        )
+
+        monkeypatch.setattr(TokenBucket, "acquire", lambda self, tokens=1: False)
+        monkeypatch.setattr(TokenBucket, "get_wait_time", lambda self, tokens=1: 1.5)
+        limiter = RateLimiter(RateLimitConfig(requests_per_second=2.0, burst_size=1))
+
+        with pytest.raises(OpenZimMcpRateLimitError, match=r"1\.50 seconds"):
+            limiter.check_rate_limit("op", cost=1, client_id="c")

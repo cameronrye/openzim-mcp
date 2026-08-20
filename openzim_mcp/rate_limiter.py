@@ -141,6 +141,18 @@ class TokenBucket:
             return self.tokens
 
 
+# Smallest wait the two-decimal rendering can express. ``get_wait_time``
+# re-refills the bucket after ``acquire`` has already failed, so it can
+# return a value arbitrarily close to — or exactly — 0.0; rendered with
+# ``:.2f`` that told the caller to "wait 0.00 seconds before retrying".
+_MIN_DISPLAY_WAIT_S = 0.01
+
+
+def _displayable_wait(wait_time: float) -> str:
+    """Two-decimal wait, floored so the guidance is never "wait 0.00"."""
+    return f"{max(wait_time, _MIN_DISPLAY_WAIT_S):.2f}"
+
+
 class RateLimiter:
     """Rate limiter with support for multiple operation types and clients.
 
@@ -347,29 +359,27 @@ class RateLimiter:
 
             # Check global limit first
             if not global_bucket.acquire(global_cost):
-                wait_time = global_bucket.get_wait_time(global_cost)
+                wait_s = _displayable_wait(global_bucket.get_wait_time(global_cost))
                 raise OpenZimMcpRateLimitError(
                     f"Rate limit exceeded for operation '{operation}'. "
-                    f"Please wait {wait_time:.2f} seconds before retrying.",
+                    f"Please wait {wait_s} seconds before retrying.",
                     details=(
-                        f"operation={operation}, cost={cost}, "
-                        f"wait_time={wait_time:.2f}s"
+                        f"operation={operation}, cost={cost}, wait_time={wait_s}s"
                     ),
                 )
 
             # Check operation-specific limit if configured
             if op_bucket is not None and not op_bucket.acquire(op_cost):
-                wait_time = op_bucket.get_wait_time(op_cost)
+                wait_s = _displayable_wait(op_bucket.get_wait_time(op_cost))
                 # Refund the amount actually debited, or the global bucket
                 # leaks tokens whenever the two clamps differ.
                 global_bucket.refund(global_cost)
                 raise OpenZimMcpRateLimitError(
                     f"Per-operation rate limit exceeded for "
-                    f"'{operation}'. Please wait {wait_time:.2f} "
+                    f"'{operation}'. Please wait {wait_s} "
                     f"seconds before retrying.",
                     details=(
-                        f"operation={operation}, cost={cost}, "
-                        f"wait_time={wait_time:.2f}s"
+                        f"operation={operation}, cost={cost}, wait_time={wait_s}s"
                     ),
                 )
 
