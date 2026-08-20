@@ -428,3 +428,164 @@ def test_batch_item_content_is_the_clean_body(
     single_body = single["content"].partition("\n\n... [Content truncated")[0]
     assert batch_body == single_body
     assert batch_body.startswith("# Diabetes")
+
+
+# ---------------------------------------------------------------------------
+# D14 — view=summary on a MedlinePlus topic page must not spend its budget on
+# the in-page "On this page" navigation block
+# ---------------------------------------------------------------------------
+
+# Trimmed from medlineplus.gov/measles.html (warc2zim, 2025-01). The in-page
+# TOC is NOT a <nav>, has no .toc class, and its group labels are <h3>s, so
+# it escaped every existing chrome/furniture strip.
+_MEDLINEPLUS_TOPIC_HTML = """\
+<html><body>
+<a class="usa-skipnav" href="#main">Skip navigation</a>
+<header><nav><a href="../healthtopics.html">Health Topics</a></nav></header>
+<article>
+  <div class="page-info">
+    <div class="page-title syndicate">
+      <a id="start" name="start"></a>
+      <h1 itemprop="name" class="with-also">Measles</h1>
+      <span class="alsocalled">Also called: Rubeola</span>
+    </div>
+    <div class="page-actions"></div>
+  </div>
+  <div class="main">
+    <section id="toc-section">
+      <div id="table-of-contents">
+        <span class="toc-label">On this page</span>
+        <div class="toccolumn">
+          <h3>Basics</h3>
+          <ul class="bulletlist">
+            <li><a title="Go to: Summary" href="#summary">Summary</a></li>
+            <li><a title="Go to: Start Here" href="#cat_51">Start Here</a></li>
+            <li><a title="Go to: Symptoms" href="#cat_95">Symptoms</a></li>
+          </ul>
+        </div>
+        <div class="toccolumn">
+          <h3>Learn More</h3>
+          <ul class="bulletlist">
+            <li><a title="Go to: Related Issues" href="#cat_47">Related Issues</a></li>
+          </ul>
+        </div>
+        <p class="evencols clearsection hrdividor"></p>
+        <div class="toccolumn">
+          <h3>For You</h3>
+          <ul class="bulletlist">
+            <li><a title="Go to: Children" href="#cat_8">Children</a></li>
+            <li><a title="Go to: Women" href="#cat_7">Women</a></li>
+          </ul>
+        </div>
+      </div>
+    </section>
+    <a name="summary"></a>
+    <section id="topsum_section">
+      <div class="summary-title syndicate"><h2>Summary</h2></div>
+      <div id="topic-summary" class="syndicate">
+        <p>Measles is an infectious disease caused by a virus. It spreads
+        easily from person to person. It causes a blotchy red rash. The rash
+        often starts on the head and moves down the body. Other symptoms
+        include:</p>
+        <ul><li>Fever</li><li>Cough</li><li>Runny nose</li></ul>
+        <p>Sometimes measles can lead to serious problems. There is no
+        treatment for measles, but the measles-mumps-rubella (MMR) vaccine
+        can prevent it.</p>
+        <p>"German measles", also known as <a href="rubella.html">rubella</a>,
+        is a completely different illness.</p>
+        <p class="attribution">Centers for Disease Control and Prevention</p>
+      </div>
+    </section>
+    <a name="cat_51"></a>
+    <section id="cat_51_section">
+      <div class="section">
+        <div class="section-header expanded">
+          <div class="section-title syndicate"><h2>Start Here</h2></div>
+        </div>
+        <div class="section-body">
+          <ul class="bulletlist">
+            <li><a href="../www.cdc.gov/measles/about/index.html">About Measles</a>
+              (Centers for Disease Control and Prevention)</li>
+            <li><a href="ency/article/001569.htm">Measles</a> (Medical Encyclopedia)</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+    <a name="cat_95"></a>
+    <section id="cat_95_section">
+      <div class="section-title syndicate"><h2>Symptoms</h2></div>
+      <ul class="bulletlist">
+        <li><a href="../www.cdc.gov/measles/signs-symptoms/">Signs and Symptoms</a></li>
+      </ul>
+    </section>
+  </div>
+</article>
+<footer><p>Stay Connected</p></footer>
+</body></html>
+"""
+
+_NAV_MARKERS = ("On this page", "Go to:", "### Basics", "### For You", "* Start Here")
+
+
+def test_select_main_content_drops_in_page_fragment_nav() -> None:
+    from bs4 import BeautifulSoup
+
+    from openzim_mcp.content_processor import HTML_PARSER, select_main_content
+
+    scoped = select_main_content(BeautifulSoup(_MEDLINEPLUS_TOPIC_HTML, HTML_PARSER))
+    text = scoped.get_text(" ", strip=True)
+    assert "On this page" not in text
+    assert "Related Issues" not in text  # lived only in the nav block
+    # Real content survives: the summary prose and the sections that follow.
+    assert "Measles is an infectious disease" in text
+    assert "Start Here" in text
+    assert "About Measles" in text
+
+
+def test_fragment_nav_strip_keeps_mixed_and_list_only_shapes() -> None:
+    """Guard rails: a container with any non-fragment link is content, and an
+    IEP-style bare <ol> of anchors (no wrapping nav/section/div of its own) is
+    left to the furniture pass, not this one."""
+    from bs4 import BeautifulSoup
+
+    from openzim_mcp.content_processor import HTML_PARSER, select_main_content
+
+    html = """<html><body><article>
+    <h1>Gaudapada</h1>
+    <div class="entry-content">
+      <p>Gaudapada is one of the early philosophers of the Vedanta school.</p>
+      <h3>Table of Contents</h3>
+      <ol><li><a href="#H1">Life and Works</a></li><li><a href="#H2">Overview</a></li>
+      <li><a href="#H3">Legacy</a></li></ol>
+      <div class="see-also"><a href="#H1">top</a><a href="../adv-veda/">Advaita</a>
+      <a href="#H2">mid</a></div>
+    </div></article></body></html>"""
+    text = select_main_content(BeautifulSoup(html, HTML_PARSER)).get_text(
+        " ", strip=True
+    )
+    assert "Table of Contents" in text
+    assert "Life and Works" in text
+    assert "Advaita" in text and "top" in text
+
+
+@patch("openzim_mcp.zim_operations.Archive")
+def test_summary_view_skips_on_this_page_nav(
+    mock_archive: MagicMock, ops: ZimOperations, zim_file: Path
+) -> None:
+    """D14: ~55 of the 200 summary words were the nav menu; the budget must go
+    to the page's own Summary prose."""
+    path = "medlineplus.gov/measles.html"
+    mock_archive.return_value = _archive_with(
+        {
+            path: _html_entry(
+                path, "Measles | Rubeola | MedlinePlus", _MEDLINEPLUS_TOPIC_HTML
+            )
+        }
+    )
+
+    result = ops.get_entry_summary_data(str(zim_file), path, max_words=60)
+
+    summary = result["summary"]
+    for marker in _NAV_MARKERS:
+        assert marker not in summary, summary
+    assert "Measles is an infectious disease" in summary, summary

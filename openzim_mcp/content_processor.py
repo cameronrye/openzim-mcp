@@ -548,6 +548,61 @@ def _strip_furniture_sections(soup: BeautifulSoup) -> None:
                 node.extract()  # NavigableString has no decompose()
 
 
+# In-page navigation blocks on ZIMIT/warc2zim pages. MedlinePlus renders its
+# "On this page" menu as ``<section id="toc-section">`` INSIDE the <article>
+# landmark — not a <nav>, no ``.toc`` class, group labels as <h3>, label as a
+# <span> — so it survived landmark scoping, ``UNWANTED_HTML_SELECTORS`` and
+# the heading-keyed furniture strip, and opened every topic page's body,
+# summary slice, and lead. Detected by SHAPE rather than by site id so the
+# next archive with the same pattern is covered: a nav/section/div whose
+# anchors ALL point at same-page fragments, with at least a few of them and
+# no prose of its own. Only containers are candidates — a bare <ol> of
+# fragment links (IEP's "Table of Contents") is left alone.
+_IN_PAGE_NAV_CONTAINERS = ["nav", "section", "div"]
+_IN_PAGE_NAV_MIN_LINKS = 3
+_IN_PAGE_NAV_MAX_PARAGRAPH_CHARS = 80
+_IN_PAGE_NAV_MAX_NON_LINK_CHARS = 200
+
+
+def _is_in_page_nav(node: Tag) -> bool:
+    """True if ``node`` is a link menu that only points into the same page."""
+    anchors = [a for a in node.find_all("a") if isinstance(a, Tag) and a.get("href")]
+    if len(anchors) < _IN_PAGE_NAV_MIN_LINKS:
+        return False
+    if not all(str(a.get("href")).startswith("#") for a in anchors):
+        return False
+    for paragraph in node.find_all("p"):
+        if (
+            isinstance(paragraph, Tag)
+            and len(paragraph.get_text(strip=True)) > _IN_PAGE_NAV_MAX_PARAGRAPH_CHARS
+        ):
+            return False
+    link_chars = sum(len(a.get_text(strip=True)) for a in anchors)
+    non_link_chars = len(node.get_text(strip=True)) - link_chars
+    return non_link_chars <= _IN_PAGE_NAV_MAX_NON_LINK_CHARS
+
+
+def _strip_in_page_nav(soup: BeautifulSoup) -> None:
+    """Remove same-page link menus in place (see ``_is_in_page_nav``).
+
+    Outermost match wins: the MedlinePlus block nests ``#toc-section`` >
+    ``#table-of-contents`` > ``.toccolumn``, all of which match on their
+    own, so descendants of a doomed container are skipped rather than
+    decomposed twice. Call sites must gate this to landmark-scoped content
+    (``select_main_content``) so chrome-free pages stay byte-identical.
+    """
+    doomed = [
+        node
+        for node in soup.find_all(_IN_PAGE_NAV_CONTAINERS)
+        if isinstance(node, Tag) and _is_in_page_nav(node)
+    ]
+    doomed_ids = {id(node) for node in doomed}
+    for node in doomed:
+        if any(id(parent) in doomed_ids for parent in node.parents):
+            continue
+        node.decompose()
+
+
 def select_main_content(soup: BeautifulSoup) -> BeautifulSoup:
     """Return the page's main-content subtree, or ``soup`` if none is clear.
 
@@ -568,9 +623,11 @@ def select_main_content(soup: BeautifulSoup) -> BeautifulSoup:
         nodes = soup.select(selector)
         if len(nodes) == 1 and nodes[0].get_text(strip=True):
             scoped = BeautifulSoup(str(nodes[0]), HTML_PARSER)
-            # Only landmark-scoped content gets the furniture strip; the
-            # whole-document fallback below stays byte-identical.
+            # Only landmark-scoped content gets the furniture and in-page
+            # nav strips; the whole-document fallback below stays
+            # byte-identical.
             _strip_furniture_sections(scoped)
+            _strip_in_page_nav(scoped)
             return scoped
     return soup
 
