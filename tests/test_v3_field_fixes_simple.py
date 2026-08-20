@@ -15,6 +15,10 @@ from unittest.mock import MagicMock, Mock
 
 import pytest
 
+from openzim_mcp.exceptions import (
+    OpenZimMcpArchivePathError,
+    OpenZimMcpValidationError,
+)
 from openzim_mcp.mcp_envelope import is_tool_error_envelope
 from openzim_mcp.pagination import Cursor, archive_identity
 from openzim_mcp.simple_tools import IntentParser, SimpleToolsHandler
@@ -666,3 +670,72 @@ class TestD51CursorMismatchEnvelope:
         )
         assert is_tool_error_envelope(out)
         assert out["operation"] == "cursor_decode"
+
+
+# ---------------------------------------------------------------------------
+# D52: binary intent's not-found error leaked internal API names
+# ---------------------------------------------------------------------------
+
+
+class TestD52BinaryNotFoundRecovery:
+    """``get pdf easy-to-read-materials`` fell to the generic "Error
+    Processing Query" envelope carrying the backend's hint "Try using
+    search_zim_file() ... or browse_namespace()" — function names that
+    are not tools in simple mode. Every sibling entry-taking handler
+    routes not-found through ``_render_not_found_recovery``; binary was
+    the only one without it, and its missing-path tip named
+    ``extract_article_links`` verbatim.
+    """
+
+    BACKEND_HINT = (
+        "Entry not found: easy-to-read-materials. Try using search_zim_file() "
+        "to find available entries, or browse_namespace() to explore the "
+        "file structure."
+    )
+
+    def test_not_found_uses_the_natural_language_recovery_block(self) -> None:
+        handler, mock = _handler_with()
+        mock.get_binary_entry.side_effect = Exception(self.BACKEND_HINT)
+        out = handler.handle_zim_query(
+            "get pdf easy-to-read-materials", zim_file_path="/zims/test.zim"
+        )
+        assert "Error Processing Query" not in out
+        assert "search_zim_file()" not in out
+        assert "browse_namespace()" not in out
+        assert "Check server logs" not in out
+        assert "search for easy-to-read-materials" in out
+        assert "suggestions for easy-to-read-materials" in out
+        assert "<!-- intent=binary" in out
+
+    def test_invalid_request_uses_the_sibling_shape(self) -> None:
+        handler, mock = _handler_with()
+        mock.get_binary_entry.side_effect = OpenZimMcpValidationError(
+            "max_size_bytes must be positive"
+        )
+        out = handler.handle_zim_query(
+            "get pdf easy-to-read-materials", zim_file_path="/zims/test.zim"
+        )
+        assert "Error Processing Query" not in out
+        assert "max_size_bytes must be positive" in out
+
+    def test_archive_level_failure_still_reaches_the_path_envelope(self) -> None:
+        handler, mock = _handler_with()
+        mock.get_binary_entry.side_effect = OpenZimMcpArchivePathError(
+            "File does not exist: /zims/missing.zim"
+        )
+        out = _text(
+            handler.handle_zim_query(
+                "get pdf easy-to-read-materials", zim_file_path="/zims/missing.zim"
+            )
+        )
+        assert "ZIM File Not Found" in out or "Error Processing Query" in out
+        assert "Article not found" not in out
+
+    def test_missing_path_tip_names_a_simple_mode_operation(self) -> None:
+        handler, _ = _handler_with()
+        out = handler.handle_zim_query(
+            "get binary content", zim_file_path="/zims/test.zim"
+        )
+        assert "Missing Entry Path" in out
+        assert "extract_article_links" not in out
+        assert "links in" in out

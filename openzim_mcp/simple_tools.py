@@ -2324,15 +2324,30 @@ class SimpleToolsHandler(
                 "- 'get binary content from \"I/image.png\"'\n"
                 "- 'extract pdf \"I/document.pdf\"'\n"
                 "- 'retrieve image I/logo.png'\n\n"
-                "**Tip**: Use `extract_article_links` to discover "
-                "embedded media paths."
+                "**Tip**: `links in <article>` lists the media paths an "
+                "article embeds."
             )
-        return self.zim_operations.get_binary_entry(
-            zim_file_path,
-            entry_path,
-            options.get("max_size_bytes"),
-            params.get("include_data", True),
-        )
+        # D52: the sibling entry-taking handlers (structure / summary /
+        # links / get article) route a backend miss through
+        # ``_render_not_found_recovery``; this one let the exception
+        # escape to the catch-all, which surfaced the backend's
+        # ``Try using search_zim_file()`` hint — function names that are
+        # not tools in simple mode — and pointed at server logs.
+        try:
+            return self.zim_operations.get_binary_entry(
+                zim_file_path,
+                entry_path,
+                options.get("max_size_bytes"),
+                params.get("include_data", True),
+            )
+        except OpenZimMcpArchivePathError:
+            # Archive-level failure: the catch-all owns that envelope (it
+            # lists the archives that really are loaded).
+            raise
+        except OpenZimMcpValidationError as e:
+            return self._render_invalid_request(entry_path, e, "get binary content")
+        except Exception as e:
+            return self._render_not_found_recovery(entry_path, e, "get binary content")
 
     def _handle_suggestions(
         self,
