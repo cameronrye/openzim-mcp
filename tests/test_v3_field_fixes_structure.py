@@ -286,3 +286,45 @@ class TestD22TocStructureMissingEntry:
         err = excinfo.value
         assert "A/Nope" in str(err)
         assert get_error_config(err) is NOT_FOUND_ERROR_CONFIG, str(err)
+
+
+# ---------------------------------------------------------------------------
+# D23 — section_not_found on a section-free entry must say why
+# ---------------------------------------------------------------------------
+
+
+class TestD23SectionFreeEntries:
+    """D23: when the entry can have no sections, the error must say so and
+    why (non-HTML / no headings) instead of listing zero ids and sending
+    the caller on a TOC round-trip that can only confirm the same."""
+
+    def test_non_html_entry_explains_content_type(
+        self, ops: ZimOperations, zim_path: str
+    ) -> None:
+        with patch(ARCHIVE_CTX) as ctx:
+            ctx.return_value.__enter__.return_value = _html_archive(
+                "binary", mime="image/jpeg", entry_path="I/plato.jpg"
+            )
+            result = ops.get_section_data(zim_path, "I/plato.jpg", section_id="x")
+
+        assert result["operation"] == "section_not_found"
+        assert result["reason"] == "non_html"
+        assert result["content_type"] == "image/jpeg"
+        assert "image/jpeg" in result["message"]
+        assert "no sections" in result["message"].lower()
+        assert "view='toc'" not in result["message"]
+
+    def test_heading_free_html_explains_no_headings(
+        self, ops: ZimOperations, zim_path: str
+    ) -> None:
+        with patch(ARCHIVE_CTX) as ctx:
+            ctx.return_value.__enter__.return_value = _html_archive(
+                "<html><body><p>Just prose, no headings.</p></body></html>"
+            )
+            result = ops.get_section_data(zim_path, "Test", section_id="summary")
+
+        assert result["operation"] == "section_not_found"
+        assert result["reason"] == "no_headings"
+        assert "no headings" in result["message"].lower()
+        assert "zim_get" in result["message"]
+        assert "view='toc'" not in result["message"]

@@ -740,6 +740,39 @@ class _StructureMixin:
             (i for i, s in enumerate(bundle["sections"]) if s["id"] == section_id),
             None,
         )
+        if section_idx is None and not bundle["sections"]:
+            # The entry cannot have sections at all, so the wrong-id advice
+            # below ("list the IDs with view='toc'") would only send the
+            # caller on a round-trip that confirms the same thing. Say why
+            # — the bundle already knows — and point at the fetch that can
+            # actually serve the entry.
+            content_type = bundle["content_type"]
+            if not content_type.startswith("text/html"):
+                reason = "non_html"
+                message = (
+                    f"Entry {entry_path!r} has no sections: it is not an HTML "
+                    f"article (content_type: {content_type}). Sections exist "
+                    "only for HTML entries; fetch it with `zim_get` "
+                    "(`binary=True` for media)."
+                )
+            else:
+                reason = "no_headings"
+                message = (
+                    f"Entry {entry_path!r} has no sections: the article "
+                    "contains no headings. Read the whole body with "
+                    "`zim_get(view='full')`."
+                )
+            return tool_error(
+                operation="section_not_found",
+                message=message,
+                extras={
+                    "reason": reason,
+                    "content_type": content_type,
+                    "available_section_ids": [],
+                    "available_section_ids_truncated": False,
+                    "available_section_ids_total": 0,
+                },
+            )
         if section_idx is None:
             # M25: cap the returned ID list. A long Wikipedia article
             # (United States, World War II) carries 80-150 section IDs;
