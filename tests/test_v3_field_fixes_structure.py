@@ -258,3 +258,31 @@ class TestD21IncludeSubsections:
             compact=True,
         )
         assert "include_subsections" in description
+
+
+# ---------------------------------------------------------------------------
+# D22 — view=toc / view=structure on a missing entry classify as not-found
+# ---------------------------------------------------------------------------
+
+
+class TestD22TocStructureMissingEntry:
+    """D22: the same missing entry must get the same not-found classification
+    from the toc/structure views that the full view gives — not an
+    'Archive Operation Error ... verify the ZIM file is not corrupted'."""
+
+    @pytest.mark.parametrize(
+        "method", ["get_table_of_contents_data", "get_article_structure_data"]
+    )
+    def test_missing_entry_renders_not_found_template(
+        self, ops: ZimOperations, zim_path: str, method: str
+    ) -> None:
+        from openzim_mcp.error_messages import NOT_FOUND_ERROR_CONFIG, get_error_config
+
+        with patch(ARCHIVE_CTX) as ctx:
+            ctx.return_value.__enter__.return_value = _missing_entry_archive()
+            with pytest.raises(Exception) as excinfo:
+                getattr(ops, method)(zim_path, "A/Nope")
+
+        err = excinfo.value
+        assert "A/Nope" in str(err)
+        assert get_error_config(err) is NOT_FOUND_ERROR_CONFIG, str(err)

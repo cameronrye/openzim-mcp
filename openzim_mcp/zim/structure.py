@@ -281,8 +281,6 @@ class _StructureMixin:
         validated_path: "Optional[Path]" = None,
     ) -> "ArticleStructureResponse":
         """Extract structure from article content via bundle."""
-        from openzim_mcp.bundle import get_or_build_bundle
-
         if validated_path is None:
             # Falling back to Path(entry_path) makes the bundle cache key
             # archive-agnostic — the same key collides across every ZIM
@@ -293,12 +291,8 @@ class _StructureMixin:
             )
 
         try:
-            bundle = get_or_build_bundle(
-                archive,
-                entry_path,
-                cache=self.cache,
-                validated_path=validated_path,
-                content_processor=self.content_processor,
+            bundle = self._build_bundle(
+                archive, entry_path, validated_path=validated_path
             )
 
             md = bundle["rendered_markdown"]
@@ -623,8 +617,6 @@ class _StructureMixin:
         validated_path: "Optional[Path]" = None,
     ) -> "TableOfContentsResponse":
         """Extract hierarchical table of contents from article via bundle."""
-        from openzim_mcp.bundle import get_or_build_bundle
-
         if validated_path is None:
             # Same archive-binding requirement as
             # _extract_article_structure_data — without a real archive
@@ -634,12 +626,8 @@ class _StructureMixin:
             )
 
         try:
-            bundle = get_or_build_bundle(
-                archive,
-                entry_path,
-                cache=self.cache,
-                validated_path=validated_path,
-                content_processor=self.content_processor,
+            bundle = self._build_bundle(
+                archive, entry_path, validated_path=validated_path
             )
 
             payload: "TableOfContentsResponse" = cast(
