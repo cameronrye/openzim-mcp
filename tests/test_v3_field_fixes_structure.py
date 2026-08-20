@@ -615,3 +615,114 @@ class TestD34OutboundResolvedPath:
 
         assert external["results"] and all("path" not in r for r in external["results"])
         assert media["results"] and all("path" not in r for r in media["results"])
+
+
+# ---------------------------------------------------------------------------
+# D35 — inbound canonicalizes redirect spellings; missing entries error
+# ---------------------------------------------------------------------------
+
+
+def _inbound_archive(uuid: str, entries: dict[str, MagicMock]) -> MagicMock:
+    """Mock archive with the sidecar's uuid and the given resolvable entries."""
+    archive = MagicMock()
+    archive.uuid = uuid
+
+    def lookup(path: str) -> MagicMock:
+        if path in entries:
+            return entries[path]
+        raise KeyError("Cannot find entry")
+
+    archive.get_entry_by_path.side_effect = lookup
+    return archive
+
+
+def _plain_entry(path: str, title: str = "") -> MagicMock:
+    entry = MagicMock()
+    entry.is_redirect = False
+    entry.path = path
+    entry.title = title
+    return entry
+
+
+class TestD35InboundCanonicalization:
+    """D35: the sidecar indexes canonical (post-redirect) paths, so a redirect
+    spelling looked up verbatim returned a confident total=0, and so did a
+    path that does not exist at all. Canonicalize first; error on missing."""
+
+    @staticmethod
+    def _sidecar(tmp_path: Path) -> Path:
+        from openzim_mcp.linkgraph.builder import build_from_link_stream
+        from openzim_mcp.linkgraph.reader import sidecar_path_for
+
+        archive = tmp_path / "iep.zim"
+        build_from_link_stream(
+            sidecar_path_for(archive),
+            archive_uuid="u-iep",
+            link_stream=iter(
+                [
+                    ("iep.utm.edu/aristotle/", [("iep.utm.edu/plato/", "Plato")]),
+                    ("iep.utm.edu/socrates/", [("iep.utm.edu/plato/", "Plato")]),
+                ]
+            ),
+        )
+        return archive
+
+    def test_redirect_spelling_resolves_to_canonical_inbound(
+        self, tmp_path: Path
+    ) -> None:
+        from openzim_mcp.zim.structure import _StructureMixin
+
+        archive_path = self._sidecar(tmp_path)
+        canonical = _plain_entry("iep.utm.edu/plato/", "Plato | IEP")
+        stub = MagicMock()
+        stub.is_redirect = True
+        stub.path = "iep.utm.edu/plato"
+        stub.get_redirect_entry.return_value = canonical
+        entries = {
+            "iep.utm.edu/plato": stub,
+            "iep.utm.edu/plato/": canonical,
+            "iep.utm.edu/aristotle/": _plain_entry("iep.utm.edu/aristotle/"),
+            "iep.utm.edu/socrates/": _plain_entry("iep.utm.edu/socrates/"),
+        }
+        stub_self = MagicMock()
+        stub_self._validate_zim_path.return_value = archive_path
+        stub_self._resolve_outbound_titles = _StructureMixin._resolve_outbound_titles
+
+        with patch(ARCHIVE_CTX) as ctx:
+            ctx.return_value.__enter__.return_value = _inbound_archive("u-iep", entries)
+            result = _StructureMixin.get_inbound_links_data(
+                stub_self, str(archive_path), "iep.utm.edu/plato", limit=10, offset=0
+            )
+
+        assert result["total"] == 2
+        assert {r["path"] for r in result["results"]} == {
+            "iep.utm.edu/aristotle/",
+            "iep.utm.edu/socrates/",
+        }
+        # The caller's spelling is echoed (cursor ``ep`` matching relies on
+        # it); the canonical one is reported alongside.
+        assert result["entry_path"] == "iep.utm.edu/plato"
+        assert result["resolved_path"] == "iep.utm.edu/plato/"
+
+    def test_nonexistent_entry_raises_not_found(self, tmp_path: Path) -> None:
+        from openzim_mcp.error_messages import NOT_FOUND_ERROR_CONFIG, get_error_config
+        from openzim_mcp.exceptions import OpenZimMcpArchiveError
+        from openzim_mcp.zim.structure import _StructureMixin
+
+        archive_path = self._sidecar(tmp_path)
+        stub_self = MagicMock()
+        stub_self._validate_zim_path.return_value = archive_path
+
+        with patch(ARCHIVE_CTX) as ctx:
+            ctx.return_value.__enter__.return_value = _inbound_archive("u-iep", {})
+            with pytest.raises(OpenZimMcpArchiveError) as excinfo:
+                _StructureMixin.get_inbound_links_data(
+                    stub_self,
+                    str(archive_path),
+                    "iep.utm.edu/does-not-exist/",
+                    limit=10,
+                    offset=0,
+                )
+
+        assert "iep.utm.edu/does-not-exist/" in str(excinfo.value)
+        assert get_error_config(excinfo.value) is NOT_FOUND_ERROR_CONFIG

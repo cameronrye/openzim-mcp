@@ -342,6 +342,11 @@ class RelatedArticlesResponse(TypedDict):
     page_info: PageInfo
     _meta: MetaEnvelope
     entry_path: str
+    # Inbound only, and only when the caller's ``entry_path`` was a
+    # redirect (or percent-encoded) spelling: the canonical path the
+    # sidecar was actually queried with. ``entry_path`` keeps echoing the
+    # caller's spelling because cursor ``ep`` matching compares against it.
+    resolved_path: NotRequired[str]
     # Set on partial-success when archive- or extraction-level failure
     # downgrades the response to an empty list with a textual reason.
     outbound_error: NotRequired[str]

@@ -47,11 +47,21 @@ def _stub_self(archive_path: Path) -> _StructureMixin:
 def _patch_archive_open(monkeypatch: pytest.MonkeyPatch, *, uuid: str) -> None:
     """Patch the module-level archive-open to yield a MagicMock with ``.uuid``.
 
-    ``get_entry_by_path`` raises so title resolution falls back to path.
+    Every path resolves to a plain (non-redirect) entry with an empty title,
+    so the queried target passes the existence check while title resolution
+    still falls back to the path.
     """
     archive = MagicMock()
     archive.uuid = uuid
-    archive.get_entry_by_path.side_effect = RuntimeError("no real archive")
+
+    def _entry(path: str) -> MagicMock:
+        entry = MagicMock()
+        entry.is_redirect = False
+        entry.path = path
+        entry.title = ""
+        return entry
+
+    archive.get_entry_by_path.side_effect = _entry
 
     class _Ctx:
         def __enter__(self) -> MagicMock:

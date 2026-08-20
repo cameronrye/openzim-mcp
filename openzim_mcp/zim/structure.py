@@ -1223,11 +1223,18 @@ class _StructureMixin:
         tool layer renders that as a structured error). Phase-B five-key
         contract; paginated.
 
-        ``entry_path`` is looked up in the sidecar exactly as passed — the
-        sidecar stores scheme-native paths (prefix-less on new-scheme
-        archives, ``C/``-prefixed on old-scheme), and the runtime caller
-        passes the archive-native path the search/get tools already use, so
-        no namespace munging is applied here.
+        ``entry_path`` is first resolved against the live archive: it must
+        exist (a path the archive cannot serve raises the same not-found
+        error the outbound direction raises, instead of a silent
+        ``total=0`` indistinguishable from "genuinely no inbound links"),
+        and a redirect spelling is canonicalized through its chain because
+        the sidecar builder indexes canonical targets — looked up verbatim,
+        ``iep.utm.edu/plato`` returned 0 while ``iep.utm.edu/plato/`` had
+        106 linkers. No namespace munging is applied: the sidecar stores
+        scheme-native paths and the caller passes the archive-native path
+        the search/get tools already use. The caller's spelling is echoed
+        as ``entry_path`` (cursor ``ep`` matching relies on it); the
+        canonical one is reported as ``resolved_path`` when it differs.
         """
         if limit < 1 or limit > 100:
             raise OpenZimMcpValidationError(
@@ -1265,6 +1272,13 @@ class _StructureMixin:
 
         with _zim_ops_mod.zim_archive(Path(validated_str)) as archive:
             live_uuid = str(archive.uuid)
+            entry, _spelling = _resolve_entry_spelling(archive, entry_path)
+            if entry is None:
+                raise _entry_not_found_error(entry_path)
+            # Class-qualified: the helper is static, and the unit tests drive
+            # this method through a stub ``self`` exposing only the seams it
+            # already needed.
+            lookup_path = _StructureMixin._canonical_target_path(archive, entry_path)
         reader = LinkGraphReader.open_for(validated_str, live_archive_uuid=live_uuid)
         if reader is None:
             raise LinkGraphUnavailable(
@@ -1276,7 +1290,7 @@ class _StructureMixin:
                 "refuses to overwrite without `--force`."
             )
         try:
-            page = reader.query_inbound(entry_path, limit=limit, offset=offset)
+            page = reader.query_inbound(lookup_path, limit=limit, offset=offset)
         finally:
             reader.close()
 
@@ -1316,6 +1330,8 @@ class _StructureMixin:
                 "returned_count": returned,
             },
         }
+        if lookup_path != entry_path:
+            payload["resolved_path"] = lookup_path
         return cast("RelatedArticlesResponse", attach_meta(payload, reason=None))
 
     @staticmethod
