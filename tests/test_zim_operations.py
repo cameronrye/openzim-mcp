@@ -11,6 +11,7 @@ from openzim_mcp.config import OpenZimMcpConfig
 from openzim_mcp.content_processor import ContentProcessor
 from openzim_mcp.exceptions import (
     OpenZimMcpArchiveError,
+    OpenZimMcpArchiveNameError,
     OpenZimMcpSecurityError,
     OpenZimMcpValidationError,
 )
@@ -831,12 +832,18 @@ class TestZimOperations:
         # Path validation must fire when the namespace is recognized
         # (so the canonicalisation can't pre-empt with a fast-reject).
         # ``C`` is the most common new-scheme content namespace and
-        # always passes the D11 known-namespace check.
+        # always passes the D11 known-namespace check. A bare name that
+        # matches no loaded archive is a not-found, not a security block
+        # (v3 field fix D03); ``/etc/passwd``-style escapes still are.
+        with pytest.raises(
+            OpenZimMcpArchiveNameError, match="did not match any loaded archive"
+        ):
+            zim_operations.browse_namespace("test.zim", "C", limit=10)
         with pytest.raises(
             OpenZimMcpSecurityError,
             match="Access denied - Path is outside allowed directories",
         ):
-            zim_operations.browse_namespace("test.zim", "C", limit=10)
+            zim_operations.browse_namespace("/etc/test.zim", "C", limit=10)
 
     def test_browse_namespace_raises_validation_error_for_bad_limit(
         self, zim_operations: ZimOperations

@@ -11,6 +11,7 @@ from typing import Callable, Dict, List, Optional, Type
 
 from .exceptions import (
     OpenZimMcpArchiveError,
+    OpenZimMcpArchiveNameError,
     OpenZimMcpArchivePathError,
     OpenZimMcpError,
     OpenZimMcpFileNotFoundError,
@@ -80,6 +81,20 @@ ERROR_CONFIGS: Dict[Type[OpenZimMcpError], ErrorConfig] = {
             'Use `zim_query("list available ZIM files")` to see the real paths',
             "Pass one of those paths verbatim as `zim_file_path`",
             "Confirm the file is a readable `.zim` file, not a directory",
+        ],
+    ),
+    # A relative ``zim_file_path`` that matched nothing. Not a security
+    # event (``..`` and absolute escapes raise ``OpenZimMcpSecurityError``
+    # instead), so the advice is "copy the real path", not "check for
+    # traversal". Shares the archive-path omission logic above.
+    OpenZimMcpArchiveNameError: ErrorConfig(
+        title="Archive Not Found",
+        issue="`zim_file_path` did not match any loaded archive.",
+        steps=[
+            "Use `zim_health()` and pass a `loaded_archives[].path` value "
+            "verbatim as `zim_file_path`",
+            "Relative names resolve only against the server's archive "
+            "directories — check the spelling and the `.zim` extension",
         ],
     ),
     OpenZimMcpValidationError: ErrorConfig(
@@ -298,6 +313,10 @@ def get_error_config(
     # "File does not exist: <path>", which the "does not exist" pattern below
     # would route to the entry-level not-found template — five steps telling
     # the caller to browse and search inside an archive that was never opened.
+    if isinstance(error, OpenZimMcpArchiveNameError):
+        return _archive_path_config(
+            ERROR_CONFIGS[OpenZimMcpArchiveNameError], operation, count_archives
+        )
     if isinstance(error, OpenZimMcpArchivePathError):
         return _archive_path_config(
             ERROR_CONFIGS[OpenZimMcpArchivePathError], operation, count_archives

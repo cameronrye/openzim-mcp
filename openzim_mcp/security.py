@@ -5,11 +5,12 @@ import os
 import re
 import threading
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 from urllib.parse import unquote
 
 from .constants import ZIM_FILE_EXTENSION
 from .exceptions import (
+    OpenZimMcpArchiveNameError,
     OpenZimMcpArchivePathError,
     OpenZimMcpSecurityError,
     OpenZimMcpValidationError,
@@ -135,13 +136,30 @@ class PathValidator:
         Returns:
             Validated Path object
 
+        Relative inputs are resolved against the allowed directories first —
+        the bare ``name`` that ``zim_health()`` publishes in
+        ``loaded_archives[]`` is the form LLM clients most often echo back.
+        A relative input that matches nothing is reported as
+        :class:`OpenZimMcpArchiveNameError` (a not-found), not as a security
+        violation: ``..`` was already rejected by ``_normalize_path`` and a
+        relative path cannot name a host directory, so the security framing
+        is reserved for absolute escapes.
+
         Raises:
-            OpenZimMcpSecurityError: When path is outside allowed directories
+            OpenZimMcpSecurityError: When an absolute path is outside allowed
+                directories (or any input carries a traversal pattern)
+            OpenZimMcpArchiveNameError: When a relative path matches no
+                loaded archive, or matches more than one
             OpenZimMcpValidationError: When path is invalid
         """
         try:
             normalized_path = self._normalize_path(requested_path)
+            relative_input = not os.path.isabs(normalized_path)
             resolved_path = Path(normalized_path).resolve()
+            if relative_input:
+                matched = self._resolve_relative_archive(normalized_path)
+                if matched is not None:
+                    resolved_path = matched
         except (OSError, ValueError) as e:
             raise OpenZimMcpValidationError(f"Invalid path: {requested_path}") from e
 
@@ -152,6 +170,13 @@ class PathValidator:
         )
 
         if not is_allowed:
+            if relative_input:
+                # No traversal and no absolute escape: the name simply isn't
+                # one the server serves. The input is the client's own string
+                # (no host layout in it), so it can be echoed.
+                raise OpenZimMcpArchiveNameError(
+                    f"Path did not match any loaded archive: {requested_path}"
+                )
             # Defence in depth: the client already knows what it asked for, but
             # ``resolved_path`` is the *server-side* canonicalisation — for a
             # symlinked or ``~``-expanded input it names host directories the
@@ -165,6 +190,47 @@ class PathValidator:
 
         logger.debug(f"Path validation successful: {resolved_path}")
         return resolved_path
+
+    def _resolve_relative_archive(self, relative: str) -> Optional[Path]:
+        """Match a relative input against the archives the server serves.
+
+        Tries ``<allowed_dir>/<relative>`` first, then — for a bare
+        ``*.zim`` filename — the same ``**/*.zim`` walk ``list_zim_files``
+        uses, so every name that listing publishes resolves. Returns the
+        single match, ``None`` when nothing matches (the caller decides how
+        to report that), and raises when the name is ambiguous rather than
+        guessing between same-named archives in different subdirectories.
+        """
+        rel = Path(relative)
+        is_bare_zim_name = (
+            len(rel.parts) == 1 and rel.suffix.lower() == ZIM_FILE_EXTENSION
+        )
+        candidates: set[Path] = set()
+        for directory in self.allowed_directories:
+            try:
+                direct = directory / rel
+                if direct.exists():
+                    candidates.add(direct.resolve())
+                    continue
+                if is_bare_zim_name:
+                    candidates.update(
+                        p.resolve()
+                        for p in directory.glob("**/*.zim")
+                        if p.name == rel.name and p.is_file()
+                    )
+            except (OSError, ValueError) as exc:
+                # A directory that can't be walked is skipped, mirroring the
+                # listing scan's resilience; the caller falls back to the
+                # cwd-resolved path and the containment check.
+                logger.debug("Relative archive match failed in %s: %s", directory, exc)
+        if not candidates:
+            return None
+        if len(candidates) > 1:
+            raise OpenZimMcpArchiveNameError(
+                f"Relative name matches {len(candidates)} loaded archives; pass "
+                f"the absolute path instead: {relative}"
+            )
+        return next(iter(candidates))
 
     def _is_path_within_directory(self, path: Path, directory: Path) -> bool:
         """Securely check if path is within directory.
