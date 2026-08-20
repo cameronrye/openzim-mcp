@@ -27,7 +27,7 @@ from openzim_mcp.exceptions import (
     OpenZimMcpValidationError,
 )
 from openzim_mcp.meta import attach_meta
-from openzim_mcp.text_utils import tokenize_for_relevance
+from openzim_mcp.text_utils import strip_site_suffix, tokenize_for_relevance
 from openzim_mcp.title_promotion import find_title_match
 from openzim_mcp.zim._ops_base import _json
 from openzim_mcp.zim.redirects import best_effort_redirect_chain
@@ -197,6 +197,18 @@ def _suggestion_display_title(archive: Archive, path: str) -> str:
     return segment
 
 
+def _starts_with_whole_word(text: str, prefix: str) -> bool:
+    """Whether ``text`` starts with ``prefix`` ending on a word boundary.
+
+    ``Diabetes | MedlinePlus`` starts with the whole word ``diabetes``
+    but not with ``diabete``; ``Kant, Immanuel`` starts with ``kant``.
+    Both arguments are expected pre-folded (lowercased, stripped).
+    """
+    if not prefix or not text.startswith(prefix):
+        return False
+    return len(text) == len(prefix) or not text[len(prefix)].isalnum()
+
+
 def _query_title_already_on_page(results: List[Dict[str, Any]], query: str) -> bool:
     """Whether a filtered hit already carries the queried title verbatim.
 
@@ -219,8 +231,7 @@ def _query_title_already_on_page(results: List[Dict[str, Any]], query: str) -> b
         if not isinstance(result, dict):
             continue
         title = str(result.get("title", ""))
-        head, sep, _tail = title.partition(" | ")
-        if (head if sep else title).strip().lower() == wanted:
+        if strip_site_suffix(title).lower() == wanted:
             return True
     return False
 
@@ -2784,11 +2795,13 @@ class _SearchMixin:
                 seen.add(v)
                 variants.append(v)
 
-        # Single character deletion. Capped to titles >= 5 chars on the
-        # *result* (i.e. >= 6 on the input) — below that, deletions match
+        # Single character deletion. Capped to titles >= 4 chars on the
+        # *result* (i.e. >= 5 on the input) — below that, deletions match
         # too many spurious short articles ("test" -> "tes" -> any 3-char
-        # title is a false positive).
-        if len(title) >= 6:
+        # title is a false positive). The floor used to be 6, which never
+        # generated the doubled-letter typo of a short name ("Kannt" ->
+        # "Kant"); 5 keeps the 3-char spray out while admitting it.
+        if len(title) >= 5:
             for i in range(len(title)):
                 v = title[:i] + title[i + 1 :]
                 if v and v not in seen:
@@ -2880,6 +2893,10 @@ class _SearchMixin:
         extra_probes = 0
         verified: List[str] = []
         seen_titles: set[str] = set()
+        # One suggestion searcher for the whole sweep; built lazily so a
+        # sweep that resolves every variant through the exact probes never
+        # pays for it.
+        title_index: Optional[Any] = None
         for variant in self._typo_variants(title):
             # Early-out once we have a canonical hit AND enough suggestions.
             best_is_done = best is not None and (
@@ -2890,6 +2907,12 @@ class _SearchMixin:
 
             try:
                 entry = self._find_entry_fast_path(archive, variant)
+                if entry is None:
+                    if title_index is None:
+                        title_index = _zim_ops_mod.SuggestionSearcher(archive)
+                    entry = self._verify_variant_via_title_index(
+                        archive, variant, searcher=title_index
+                    )
             except Exception:
                 if best is not None and not best_is_done:
                     extra_probes += 1
@@ -2919,6 +2942,56 @@ class _SearchMixin:
                 if not best_is_done:
                     extra_probes += 1
         return best, verified
+
+    # Suggestion rows examined per typo variant when verifying it against
+    # the title index. The top few prefix matches are enough to tell a real
+    # word from a non-word; deeper rows only add cost.
+    _TYPO_VERIFY_SUGGESTION_ROWS = 3
+
+    def _verify_variant_via_title_index(
+        self, archive: Any, variant: str, *, searcher: Optional[Any] = None
+    ) -> Optional[Any]:
+        """Resolve a typo ``variant`` through the title index.
+
+        ``_find_entry_fast_path`` verifies a candidate only through exact
+        title equality and the ``C/``/``A/`` path conventions. On
+        site-scraped archives neither can ever hold — titles carry a site
+        suffix (``Diabetes | MedlinePlus``) and paths are URLs
+        (``medlineplus.gov/diabetes.html``) — so the whole Levenshtein-1
+        sweep verified nothing and the advertised typo tolerance never
+        fired. Ask libzim's suggestion index instead and accept a row whose
+        title starts with the variant as a *whole word*: ``Diabetes`` is
+        verified by ``Diabetes | Type 1 Diabetes ...`` and ``Kant`` by
+        ``Kant, Immanuel | ...``, while the non-word ``Diabete`` (which the
+        prefix index matches just as happily) is not.
+
+        ``searcher`` lets the sweep reuse one ``SuggestionSearcher`` across
+        its ~400 variants. Returns the matching Entry (pre-redirect; the
+        caller walks the chain) or ``None``. Never raises.
+        """
+        wanted = variant.strip().lower()
+        if not wanted:
+            return None
+        try:
+            if searcher is None:
+                searcher = _zim_ops_mod.SuggestionSearcher(archive)
+            suggestion = searcher.suggest(variant)
+            if suggestion.getEstimatedMatches() <= 0:
+                return None
+            paths = list(suggestion.getResults(0, self._TYPO_VERIFY_SUGGESTION_ROWS))
+        except Exception as e:
+            logger.debug(f"title-index verification of {variant!r} failed: {e}")
+            return None
+        for path in paths:
+            try:
+                entry = archive.get_entry_by_path(path)
+            except Exception as e:
+                logger.debug(f"title-index verification read failed for {path}: {e}")
+                continue
+            entry_title = (getattr(entry, "title", "") or "").strip().lower()
+            if _starts_with_whole_word(entry_title, wanted):
+                return entry
+        return None
 
     @staticmethod
     def _follow_redirect_chain(entry: Any) -> Any:
@@ -3253,7 +3326,17 @@ class _SearchMixin:
                                 suggest_post_path = getattr(entry, "path", None)
                                 redirect_walked = suggest_pre_path != suggest_post_path
                                 resolved_title = entry.title or path
-                                exact_ci = resolved_title.lower() == title_lower
+                                # A site-suffixed title whose own name is
+                                # the query (``Virtue Ethics | Internet
+                                # Encyclopedia of Philosophy``) is an exact
+                                # match too: without this, scraped archives
+                                # topped out at 0.95 and the strict 1.0
+                                # promotion gates could never fire.
+                                exact_ci = (
+                                    resolved_title.lower() == title_lower
+                                    or strip_site_suffix(resolved_title).lower()
+                                    == title_lower
+                                )
                                 if exact_ci:
                                     score: float = 1.0
                                     fast_path_hit = True
