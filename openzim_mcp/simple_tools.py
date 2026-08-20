@@ -3182,23 +3182,41 @@ class SimpleToolsHandler(
         # *fewer* than 3 hits.
         search_limit = min(options.get("limit") or 3, 3)
         max_content_length = options.get("max_content_length") or 8000
+        # D42: the rendered weak-match page ends with ``pass offset=N for
+        # the next page``, but every call below used to pass a literal 0 —
+        # so the advertised continuation returned page 1 forever and hits
+        # 4+ were unreachable through this intent. Thread the caller's
+        # offset (explicit or cursor-projected) into every search call.
+        offset = int(options.get("offset", 0) or 0)
 
         try:
             payload = self.zim_operations.search_zim_file_data(
-                zim_file_path, topic, search_limit, 0
+                zim_file_path, topic, search_limit, offset
             )
         except Exception:
             # If the structured search fails, fall through to the legacy
             # rendered search so the caller still gets useful output.
             return self.zim_operations.search_zim_file(
-                zim_file_path, topic, search_limit, 0
+                zim_file_path, topic, search_limit, offset
             )
 
         results = payload.get("results", []) if isinstance(payload, dict) else []
         if not results:
             return self._swap_tell_me_about_recovery_hint(
                 self.zim_operations.search_zim_file(
-                    zim_file_path, topic, search_limit, 0
+                    zim_file_path, topic, search_limit, offset
+                ),
+                topic,
+            )
+        if offset > 0:
+            # A continuation request is walking the weak-match list the
+            # page-1 footer advertised. Auto-fetch / disambiguation are
+            # page-1 decisions: promoting page N's top hit to an article
+            # body here would turn "show me hits 4-6" into a surprise
+            # article dump, so render the requested page and stop.
+            return self._swap_tell_me_about_recovery_hint(
+                self.zim_operations.search_zim_file(
+                    zim_file_path, topic, search_limit, offset
                 ),
                 topic,
             )
@@ -3211,7 +3229,7 @@ class SimpleToolsHandler(
             if promoted is None:
                 return self._swap_tell_me_about_recovery_hint(
                     self.zim_operations.search_zim_file(
-                        zim_file_path, topic, search_limit, 0
+                        zim_file_path, topic, search_limit, offset
                     ),
                     topic,
                 )
