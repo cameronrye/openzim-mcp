@@ -814,7 +814,15 @@ def _is_in_page_nav(node: Tag) -> bool:
             return False
     link_chars = sum(len(a.get_text(strip=True)) for a in anchors)
     non_link_chars = len(node.get_text(strip=True)) - link_chars
-    return non_link_chars <= _IN_PAGE_NAV_MAX_NON_LINK_CHARS
+    if non_link_chars > _IN_PAGE_NAV_MAX_NON_LINK_CHARS:
+        return False
+    # A menu is its links; whatever else it carries are group labels, so the
+    # links must outweigh them. Without this a Wikipedia ``div.reflist`` --
+    # ``^`` backlinks to ``#cite_ref-N`` wrapping short citations -- and any
+    # short article whose wrapper holds a lead paragraph plus a fragment TOC
+    # both read as pure nav, and the whole References list / article body was
+    # decomposed.
+    return non_link_chars <= link_chars
 
 
 def _strip_in_page_nav(soup: BeautifulSoup) -> None:
@@ -863,7 +871,13 @@ def select_main_content(soup: BeautifulSoup) -> BeautifulSoup:
             # byte-identical.
             _strip_furniture_sections(scoped)
             _strip_in_page_nav(scoped)
-            return scoped
+            if scoped.get_text(strip=True):
+                return scoped
+            # Restore-if-empty, as _drop_boilerplate_paragraphs does: both
+            # strips match on shape, so a short article that is all furniture
+            # heading or all fragment links by shape would otherwise be served
+            # as nothing at all. Better a page of menu than a blank entry.
+            return BeautifulSoup(str(nodes[0]), HTML_PARSER)
     return soup
 
 

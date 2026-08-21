@@ -1,0 +1,77 @@
+"""Regression tests for over-eager content stripping in ``content_processor``.
+
+The D14/D43 strips (in-page fragment nav, nav-list snippet paragraphs) are
+shape-based, and the shapes they match also describe ordinary article
+content: a Wikipedia reference list, a short article whose body is mostly
+a table of contents, a Title-Case list of proper nouns. These tests pin
+the content side of that trade-off; the MedlinePlus side stays pinned by
+tests/test_v3_field_fixes_content.py and test_v3_field_fixes_search.py.
+"""
+
+from bs4 import BeautifulSoup
+
+from openzim_mcp.content_processor import HTML_PARSER, select_main_content
+
+# ---------------------------------------------------------------------------
+# In-page fragment nav strip must not eat article content
+# ---------------------------------------------------------------------------
+
+_LEAD = "Foo is a small village in Bar county. " * 20
+
+# Wikipedia's ``<div class="reflist">``: every anchor is a ``#cite_ref``
+# backlink and every citation is short, so the block matched the in-page
+# nav shape exactly — but its text is the citations, not the links.
+_REFLIST_HTML = f"""<html><body><article>
+<h1>Foo</h1>
+<p>{_LEAD}</p>
+<h2>References</h2>
+<div class="reflist"><ol>
+<li><a href="#cite_ref-1">^</a> Smith, J. (2001). A History of Foo. p. 12.</li>
+<li><a href="#cite_ref-2">^</a> Jones, A. (2005). Bar County. p. 44.</li>
+<li><a href="#cite_ref-3">^</a> Lee, K. (2010). Villages of Bar. p. 7.</li>
+</ol></div>
+</article></body></html>"""
+
+# The PR's own guard-rail fixture with the outbound-link ``.see-also`` div
+# removed: without it the whole ``.entry-content`` wrapper is a container
+# whose only links are fragments, and the article body went with it.
+_SHORT_ARTICLE_HTML = """<html><body><article>
+<h1>Gaudapada</h1>
+<div class="entry-content">
+  <p>Gaudapada is one of the early philosophers of the Vedanta school.</p>
+  <h3>Table of Contents</h3>
+  <ol><li><a href="#H1">Life and Works</a></li><li><a href="#H2">Overview</a></li>
+  <li><a href="#H3">Legacy</a></li></ol>
+</div></article></body></html>"""
+
+# A container that really is nothing but its links, and nothing else in the
+# landmark: stripping it leaves an empty document, so the restore-if-empty
+# fallback has to hand the caller the unstripped landmark back.
+_NAV_ONLY_ARTICLE_HTML = """<html><body><article>
+<nav><a href="#a">Summary</a><a href="#b">Start Here</a><a href="#c">Symptoms</a></nav>
+</article></body></html>"""
+
+
+def test_reference_list_of_short_citations_survives_nav_strip() -> None:
+    text = select_main_content(BeautifulSoup(_REFLIST_HTML, HTML_PARSER)).get_text(
+        " ", strip=True
+    )
+    assert "A History of Foo" in text
+    assert "Bar County" in text
+    assert "Villages of Bar" in text
+
+
+def test_short_article_body_survives_nav_strip_without_outbound_link() -> None:
+    text = select_main_content(
+        BeautifulSoup(_SHORT_ARTICLE_HTML, HTML_PARSER)
+    ).get_text(" ", strip=True)
+    assert "early philosophers of the Vedanta school" in text
+    assert "Table of Contents" in text
+    assert "Life and Works" in text
+
+
+def test_strip_that_empties_the_landmark_restores_it() -> None:
+    text = select_main_content(
+        BeautifulSoup(_NAV_ONLY_ARTICLE_HTML, HTML_PARSER)
+    ).get_text(" ", strip=True)
+    assert "Summary" in text
