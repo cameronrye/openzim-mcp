@@ -1080,3 +1080,44 @@ class TestD41LimitBoundsDocumented:
                 ops.get_related_articles_data(zim_path, "Test", limit=101)
             with pytest.raises(OpenZimMcpValidationError, match="1 and 100"):
                 ops.get_inbound_links_data(zim_path, "Test", limit=101)
+
+
+# ---------------------------------------------------------------------------
+# zim_links ERRORS section — the `related` direction has no not-found envelope
+# ---------------------------------------------------------------------------
+
+
+class TestZimLinksErrorsDocumentRelated:
+    """The ERRORS section promised a not-found envelope for an unknown
+    ``entry_path`` in every direction. ``direction="related"`` catches the
+    archive error into its partial-success branch instead, so the one
+    direction the clause is read for most contradicted it."""
+
+    def test_related_reports_an_unknown_entry_as_total_zero(
+        self, ops: ZimOperations, zim_path: str
+    ) -> None:
+        archive = MagicMock()
+        archive.get_entry_by_path.side_effect = KeyError("Cannot find entry")
+        with patch(ARCHIVE_CTX) as ctx:
+            ctx.return_value.__enter__.return_value = archive
+            result = ops.get_related_articles_data(zim_path, "A/Nope", limit=5)
+
+        assert result["total"] == 0
+
+    def test_related_carries_the_miss_in_outbound_error(
+        self, ops: ZimOperations, zim_path: str
+    ) -> None:
+        archive = MagicMock()
+        archive.get_entry_by_path.side_effect = KeyError("Cannot find entry")
+        with patch(ARCHIVE_CTX) as ctx:
+            ctx.return_value.__enter__.return_value = archive
+            result = ops.get_related_articles_data(zim_path, "A/Nope", limit=5)
+
+        assert "Entry not found" in result["outbound_error"]
+
+    def test_errors_section_names_the_related_exception(self) -> None:
+        from openzim_mcp.tools._common import load_description
+
+        errors = load_description("zim_links").split("ERRORS:")[1]
+
+        assert "outbound_error" in errors

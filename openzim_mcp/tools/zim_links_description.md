@@ -14,7 +14,7 @@ DIRECTIONS:
   `"outbound"` (default) — paginated.
   `"inbound"`  — ranked by linker importance; paginated. Requires a
                  built link-graph sidecar (`openzim-mcp build
-                 link-graph`); absent/stale → structured error.
+                 link-graph`).
   `"related"`  — one ranked set (no pagination).
 
 PARAMETERS:
@@ -32,9 +32,9 @@ PARAMETERS:
 RESPONSE:
   LinksResponse (outbound) or RelatedArticlesResponse (inbound /
   related). Outbound is occurrence-level (document order, duplicates
-  kept; `total` counts occurrences). `url` is the raw href; internal
-  rows add `path`, the resolved entry path for `zim_get`. Related
-  dedupes targets and reports `mention_count`.
+  kept; `total` counts them). `url` is the raw href; internal rows
+  add `path`, the entry path for `zim_get`. Related dedupes targets
+  and reports `mention_count`.
   `category_totals.internal` excludes `#anchor` links (counted as
   `category_totals.anchor`) and anchor-wrapped assets, which move to
   the media bucket as `type: "asset"` (or fold into the `<img>` row
@@ -43,5 +43,6 @@ RESPONSE:
 ERRORS:
   Invalid `direction` → `invalid_direction`. Missing/stale inbound
   sidecar → `inbound_sidecar_unavailable`. Unknown `entry_path` →
-  not-found envelope. Cursor from another archive/entry/tool →
+  not-found envelope (`related`: `outbound_error`, `total: 0`).
+  Cursor from another archive/entry/tool →
   `cursor_context_mismatch` / `cursor_mismatch`.
