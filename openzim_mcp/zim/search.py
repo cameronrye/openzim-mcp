@@ -3198,7 +3198,7 @@ class _SearchMixin:
                     entry = self._verify_variant_via_title_index(
                         archive, variant, searcher=title_index
                     )
-            except Exception:
+            except Exception:  # nosec B112 - a variant that raises did not resolve
                 continue
             if entry is None:
                 continue
