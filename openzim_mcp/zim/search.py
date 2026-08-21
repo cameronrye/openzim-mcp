@@ -61,6 +61,19 @@ _FILTERED_MAX_SCAN = 10000
 # same score whatever was requested.
 _SUGGESTION_SCORE_DECAY_WINDOW = 10
 
+# How many ranked rows before a page ``_collect_distinct_hits`` re-reads to
+# seed its canonical set. Within-page dedup alone lets a duplicate pair leak
+# whenever it straddles a page boundary; a lookbehind makes the rule
+# "suppress a row whose canonical appeared within the previous K rows",
+# which does not depend on where the boundary falls. Deliberately a module
+# constant rather than a config knob: no caller can reason about it, and the
+# right value is a property of how ZIM writers emit variants, not of the
+# request. Measured on the shipped warc2zim shape (MedlinePlus, 4251 ranked
+# rows over five queries) the gap between two rows sharing a canonical never
+# exceeded 2 — 78 pairs at gap 1, 7 at gap 2 — so 8 is margin at the cost of
+# one extra ``getResults`` of path strings per paged request.
+_CANONICAL_LOOKBEHIND = 8
+
 
 def canonical_result_path(path: str) -> str:
     """Strip the query string and fragment from a result path.
@@ -936,11 +949,24 @@ class _SearchMixin:
         warc2zim stores query-string variants of a page as separate entries
         (``quiz.htm`` and ``quiz.htm?quiz=1``), and Xapian ranks them side
         by side — a MedlinePlus page of 40 carried 19 duplicates. Collapse
-        on the canonical path, as the filtered scanner does. Page-scoped
-        (not scan-scoped) so ``offset`` stays a plain ranked-row offset and
-        a high offset never triggers a scan from zero; the rows actually
-        consumed are reported in ``page_info.source_consumed`` so a client
-        resumes at ``offset + source_consumed``.
+        on the canonical path, as the filtered scanner does. Not scan-scoped
+        (the filtered scanner's answer) so ``offset`` stays a plain ranked-row
+        offset and a high offset never triggers a scan from zero; the rows
+        actually consumed are reported in ``page_info.source_consumed`` so a
+        client resumes at ``offset + source_consumed``.
+
+        Purely page-scoped dedup still leaked whenever a duplicate pair
+        straddled the boundary — the last row of one page and the first row
+        of the next were the same article, because the next page started
+        with an empty set. So the set is seeded from the
+        ``_CANONICAL_LOOKBEHIND`` rows immediately BEFORE the page, making
+        the rule "suppress a row whose canonical appeared within the
+        previous K rows" — independent of where the boundary falls, and
+        stateless (no cursor payload, no contract change). RESIDUAL: this is
+        correct only for duplicate chains whose links are ≤K apart. An
+        archive that ranked a variant hundreds of rows from its canonical
+        would still leak; only the filtered path's scan-from-zero is fully
+        general, and that costs O(offset) per page.
 
         Returns ``(rows, consumed, exhausted)``. ``total_results`` is
         Xapian's ESTIMATE and can exceed the real hit count; when
@@ -954,6 +980,20 @@ class _SearchMixin:
         seen_canonical: set[str] = set()
         consumed = 0
         exhausted = False
+        # Seed the lookbehind window. Clamped at 0 — ``getResults`` takes an
+        # absolute start index, and a negative one reads from the tail of the
+        # stream rather than the head. This fetch is deliberately kept out of
+        # the ``len(batch) < want -> exhausted`` test below: it is short
+        # whenever the window runs off the front, and treating that as the
+        # end of the stream would make every early page claim to be the last.
+        lookbehind_start = max(0, offset - _CANONICAL_LOOKBEHIND)
+        if offset > lookbehind_start:
+            seen_canonical.update(
+                canonical_result_path(entry_id)
+                for entry_id in search.getResults(
+                    lookbehind_start, offset - lookbehind_start
+                )
+            )
         while len(results) < limit and not exhausted:
             want = min(limit - len(results), total_results - offset - consumed)
             if want <= 0:
