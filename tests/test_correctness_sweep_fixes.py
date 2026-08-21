@@ -825,7 +825,7 @@ class TestRerankerLifecycleAndPageIntegrity:
 
         release = threading.Event()
 
-        def slow_load(_model_id, _cache_dir):
+        def slow_load(_model_id, _cache_dir, **_kwargs):
             release.wait(timeout=30)
             return MagicMock()
 
