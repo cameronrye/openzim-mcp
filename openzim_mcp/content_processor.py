@@ -3,7 +3,7 @@
 import logging
 import re
 import unicodedata
-from typing import Any, Dict, List, Optional, Tuple, Union, cast
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union, cast
 from urllib.parse import urlparse
 
 import html2text
@@ -314,6 +314,8 @@ _MARKDOWN_HEADING_RE = re.compile(r"^\s*#{1,6}\s")
 _LEADING_H1_RE = re.compile(r"^\s*#\s+(\S(?:.*\S)?)(?:[^\S\n]*\n)+")
 # Longest item still read as a navigation label rather than a sentence.
 _NAV_ITEM_MAX_WORDS = 6
+# A one-item "list" is a bullet, not a menu: too little shape to convict on.
+_NAV_LIST_MIN_ITEMS = 2
 
 
 def _is_nav_list_paragraph(paragraph: str) -> bool:
@@ -326,7 +328,7 @@ def _is_nav_list_paragraph(paragraph: str) -> bool:
     rapid breathing``) does not, and is left alone.
     """
     lines = [line for line in paragraph.splitlines() if line.strip()]
-    if not lines:
+    if len(lines) < _NAV_LIST_MIN_ITEMS:
         return False
     for line in lines:
         item = _LIST_ITEM_RE.match(line)
@@ -343,7 +345,10 @@ def _is_nav_list_paragraph(paragraph: str) -> bool:
     return True
 
 
-def _drop_boilerplate_paragraphs(paragraphs: List[str]) -> List[str]:
+def _drop_boilerplate_paragraphs(
+    paragraphs: List[str],
+    is_query_hit: Optional[Callable[[str], bool]] = None,
+) -> List[str]:
     """Remove site furniture from the paragraphs a snippet may be cut from.
 
     Dropped: known boilerplate sentences, navigation lists, headings that
@@ -351,7 +356,22 @@ def _drop_boilerplate_paragraphs(paragraphs: List[str]) -> List[str]:
     text (an image-wrapper ``[](…)`` link and nothing else). When that
     would leave nothing, the original list is returned so a snippet is
     still produced.
+
+    ``is_query_hit`` exempts a paragraph from the navigation-list rule
+    alone. By shape a menu is indistinguishable from a Title-Case content
+    list (sister cities, cast lists, official languages), and dropping the
+    one paragraph that carries the search term before the anchor is chosen
+    cost the snippet all its relevance — it silently fell back to the lead.
+    The named boilerplate sentences stay unconditional; they are furniture
+    whichever term matches them.
     """
+
+    def _is_droppable_nav(index: int) -> bool:
+        paragraph = paragraphs[index]
+        if is_query_hit is not None and is_query_hit(paragraph):
+            return False
+        return _is_nav_list_paragraph(paragraph)
+
     keep: List[str] = []
     for index, paragraph in enumerate(paragraphs):
         visible = _LINK_TO_TEXT_RE.sub(r"\1", paragraph).strip()
@@ -361,12 +381,12 @@ def _drop_boilerplate_paragraphs(paragraphs: List[str]) -> List[str]:
             continue
         if _BOILERPLATE_PARAGRAPH_RE.match(paragraph):
             continue
-        if _is_nav_list_paragraph(paragraph):
+        if _is_droppable_nav(index):
             continue
         if (
             _MARKDOWN_HEADING_RE.match(paragraph)
             and index + 1 < len(paragraphs)
-            and _is_nav_list_paragraph(paragraphs[index + 1])
+            and _is_droppable_nav(index + 1)
         ):
             continue
         keep.append(paragraph)
@@ -814,7 +834,15 @@ def _is_in_page_nav(node: Tag) -> bool:
             return False
     link_chars = sum(len(a.get_text(strip=True)) for a in anchors)
     non_link_chars = len(node.get_text(strip=True)) - link_chars
-    return non_link_chars <= _IN_PAGE_NAV_MAX_NON_LINK_CHARS
+    if non_link_chars > _IN_PAGE_NAV_MAX_NON_LINK_CHARS:
+        return False
+    # A menu is its links; whatever else it carries are group labels, so the
+    # links must outweigh them. Without this a Wikipedia ``div.reflist`` --
+    # ``^`` backlinks to ``#cite_ref-N`` wrapping short citations -- and any
+    # short article whose wrapper holds a lead paragraph plus a fragment TOC
+    # both read as pure nav, and the whole References list / article body was
+    # decomposed.
+    return non_link_chars <= link_chars
 
 
 def _strip_in_page_nav(soup: BeautifulSoup) -> None:
@@ -863,7 +891,13 @@ def select_main_content(soup: BeautifulSoup) -> BeautifulSoup:
             # byte-identical.
             _strip_furniture_sections(scoped)
             _strip_in_page_nav(scoped)
-            return scoped
+            if scoped.get_text(strip=True):
+                return scoped
+            # Restore-if-empty, as _drop_boilerplate_paragraphs does: both
+            # strips match on shape, so a short article that is all furniture
+            # heading or all fragment links by shape would otherwise be served
+            # as nothing at all. Better a page of menu than a blank entry.
+            return BeautifulSoup(str(nodes[0]), HTML_PARSER)
     return soup
 
 
@@ -1630,15 +1664,23 @@ class ContentProcessor:
             snippet_length if snippet_length is not None else self.snippet_length
         )
 
+        terms = [t for t in _split_query_terms(query) if len(t) >= 3] if query else []
+
         # Site furniture (share-widget boilerplate, in-page navigation
         # lists) is neither a useful anchor nor useful fill: on MedlinePlus
         # the paragraph under every H1 was the no-JavaScript sentence, so
-        # an H1 match produced a snippet with no article text at all.
-        paragraphs = _drop_boilerplate_paragraphs(content.split("\n\n"))
+        # an H1 match produced a snippet with no article text at all. A
+        # paragraph the query actually hits is kept regardless — see
+        # ``_drop_boilerplate_paragraphs``.
+        paragraphs = _drop_boilerplate_paragraphs(
+            content.split("\n\n"),
+            is_query_hit=(
+                (lambda p: any(_word_in(_fold(p), t) for t in terms)) if terms else None
+            ),
+        )
         start_idx = 0
 
         if query:
-            terms = [t for t in _split_query_terms(query) if len(t) >= 3]
             if terms:
                 folded_paragraphs = [_fold(p) for p in paragraphs]
                 # Pass 1: whole-word match (most precise — preserves the
@@ -1753,9 +1795,13 @@ class ContentProcessor:
             return content
         h1 = leading_h1.group(1).strip()
         folded_title = norm_title.lower()
-        if not folded_title.startswith(h1.lower()):
+        folded_h1 = h1.lower()
+        if not folded_title.startswith(folded_h1):
             return content
-        rest = folded_title[len(h1) :].lstrip()
+        # Index the folded title by the FOLDED length: str.lower() expands
+        # some characters ('İ' -> two code points), so the raw H1 length
+        # would read the separator probe one character early.
+        rest = folded_title[len(folded_h1) :].lstrip()
         if rest and rest[0] not in ":|-–—":
             return content
         return content[leading_h1.end() :]
