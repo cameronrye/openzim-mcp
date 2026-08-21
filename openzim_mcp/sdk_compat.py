@@ -266,12 +266,21 @@ async def _send_rejection(
 
 
 async def _answer_rejected_frame(
-    exc: Exception, write_stream: WriteStream[SessionMessage]
+    exc: Exception,
+    write_stream: WriteStream[SessionMessage],
+    in_flight: "_InFlightRequests",
 ) -> None:
     rejection = rejection_for_frame(exc)
     if rejection is None:
         logger.debug("ignoring blank stdio line")
         return
+    if rejection.id is not None and rejection.id in in_flight:
+        # A malformed frame may borrow the id of a request still being
+        # handled. Echoing it would answer that id twice — and the write
+        # stream retires whatever id it sees, so the live request would be
+        # dropped from the in-flight table and cancelled at EOF. The frame
+        # is not that request, so it is rejected with a null id instead.
+        rejection = _rejection(rejection.error.code, rejection.error.message, None)
     await _send_rejection(rejection, write_stream)
 
 
@@ -324,6 +333,11 @@ class _InFlightRequests:
 
     def __len__(self) -> int:
         return sum(self._pending.values())
+
+    def __contains__(self, request_id: object) -> bool:
+        if isinstance(request_id, bool) or not isinstance(request_id, (int, str)):
+            return False
+        return coerce_request_id(request_id) in self._pending
 
     def note_read(self, message: JSONRPCMessage) -> None:
         if isinstance(message, JSONRPCRequest):
@@ -422,7 +436,7 @@ async def _relay_frames(
         try:
             async for item in transport_read:
                 if isinstance(item, Exception):
-                    await _answer_rejected_frame(item, write_stream)
+                    await _answer_rejected_frame(item, write_stream, in_flight)
                     continue
                 in_flight.note_read(item.message)
                 await sink.send(item)
