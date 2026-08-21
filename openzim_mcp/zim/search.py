@@ -651,13 +651,16 @@ class _SearchMixin:
             )
 
         # Cache key bumped to v2b (Phase B) so v1.x cached responses (old shape)
-        # don't leak through after the upgrade. The stat token (mtime_ns:size)
-        # invalidates results when the archive is replaced in place
-        # (archive_stat_token contract).
+        # don't leak through after the upgrade, then to v2c when the page
+        # gained canonical-path dedup, ``page_info.source_consumed`` and
+        # ``_snippet_query`` anchoring — a persisted v2b payload would keep
+        # re-serving the duplicate-laden page for its TTL. The stat token
+        # (mtime_ns:size) invalidates results when the archive is replaced in
+        # place (archive_stat_token contract).
         from openzim_mcp.bundle import archive_stat_token
 
         cache_key = (
-            f"search_v2b:{validated_path}:"
+            f"search_v2c:{validated_path}:"
             f"{archive_stat_token(validated_path)}:{query}:{limit}:{offset}"
         )
         cached_result = self.cache.get(cache_key)
@@ -1574,13 +1577,15 @@ class _SearchMixin:
         # Post-b1 P3-D1: include display_query in the cache key. Two calls
         # with the same matched query but different display forms must
         # render different text; a stale cache would echo the wrong
-        # casing back to the second caller.
+        # casing back to the second caller. Versioned to v1b when snippets
+        # moved to ``_snippet_query`` anchoring — a persisted unversioned
+        # payload would keep re-serving Boolean-operator snippets for its TTL.
         # The stat token (mtime_ns:size) invalidates results when the archive
         # is replaced in place (archive_stat_token contract).
         from openzim_mcp.bundle import archive_stat_token
 
         cache_key = (
-            f"search_filtered:{validated_path}:"
+            f"search_filtered:v1b:{validated_path}:"
             f"{archive_stat_token(validated_path)}:{query}:{namespace}:"
             f"{content_type}:{limit}:{offset}:dq={display_query or ''}"
         )
@@ -1714,12 +1719,13 @@ class _SearchMixin:
         # Cache key bumped to v2b (Phase B) so v1.x cached responses (markdown
         # strings under the legacy ``search_filtered:`` prefix) don't leak
         # through after the upgrade — different prefix, different cache slot.
-        # The stat token (mtime_ns:size) invalidates results when the archive
+        # Bumped again to v2c for the ``_snippet_query`` anchoring and
+        # ``page_info.total_is_lower_bound``. The stat token (mtime_ns:size) invalidates results when the archive
         # is replaced in place (archive_stat_token contract).
         from openzim_mcp.bundle import archive_stat_token
 
         cache_key = (
-            f"search_filtered_v2b:{validated_path}:"
+            f"search_filtered_v2c:{validated_path}:"
             f"{archive_stat_token(validated_path)}:{query}:{namespace}:"
             f"{content_type}:{limit}:{offset}"
         )
@@ -3461,14 +3467,16 @@ class _SearchMixin:
         # archive content, so the stat-token key invalidates on file change.
         # This also collapses the M30 Pass-1/Pass-3 and L4 duplicate-probe
         # re-queries into cache hits. cross_file aggregates multiple archives,
-        # so it is left uncached.
+        # so it is left uncached. Bumped to v2 when ``done``,
+        # ``page_info.total_is_lower_bound`` and the site-suffixed ``exact_ci``
+        # score changed the payload for an unchanged archive.
         find_cache_key: Optional[str] = None
         if not cross_file:
             try:
                 from openzim_mcp.bundle import archive_stat_token
 
                 find_cache_key = (
-                    f"find_title:v1:{files[0]}:"
+                    f"find_title:v2:{files[0]}:"
                     f"{archive_stat_token(Path(files[0]))}:{title}:{limit}"
                 )
             except Exception:

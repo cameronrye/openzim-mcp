@@ -7,6 +7,8 @@ names, the typo sweep running unbounded, the unconditional "about" peel and
 the archive-hint term strip on a non-routed call.
 """
 
+import re
+from pathlib import Path
 from unittest.mock import patch
 
 # ---------------------------------------------------------------------------
@@ -60,3 +62,37 @@ def test_rendered_footer_unchanged_without_dedup(tmp_path) -> None:
 
     assert "source_consumed" not in page["page_info"]
     assert "pass `offset=2` for the next page" in ops._format_search_text(page)
+
+
+# ---------------------------------------------------------------------------
+# search.py — cache keys must move when their payload shape moves
+# ---------------------------------------------------------------------------
+
+
+_SEARCH_SRC = Path("openzim_mcp/zim/search.py").read_text(encoding="utf-8")
+
+# The pre-3.0.1 spellings. Each of these payloads changed in the v3
+# field-defect pass (dedup + ``page_info.source_consumed``, the
+# ``_snippet_query`` anchoring, ``total_is_lower_bound``, the widened
+# ``exact_ci`` score), so a cache persisted by 3.0.0 must not satisfy them.
+_STALE_SEARCH_KEYS = (
+    'f"search_v2b:{validated_path}:"',
+    'f"search_filtered:{validated_path}:"',
+    'f"search_filtered_v2b:{validated_path}:"',
+    'f"find_title:v1:{files[0]}:"',
+)
+
+
+def test_changed_search_payloads_left_their_stale_cache_keys_behind() -> None:
+    for stale in _STALE_SEARCH_KEYS:
+        assert stale not in _SEARCH_SRC, stale
+
+
+def test_every_search_cache_key_carries_a_version_token() -> None:
+    keys = re.findall(
+        r'f"(search[a-z_]*|find_title):[^"]*\{(?:validated_path|files\[0\])\}',
+        _SEARCH_SRC,
+    )
+    assert keys, "no search cache keys found"
+    for prefix in keys:
+        assert re.search(r"_?v\d", prefix) or f'f"{prefix}:v' in _SEARCH_SRC, prefix
