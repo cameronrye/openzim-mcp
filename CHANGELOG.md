@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.1.0](https://github.com/cameronrye/openzim-mcp/compare/v3.0.0...v3.1.0) (2026-08-21)
+
+
+### Added
+
+* close the pre-existing follow-ups surfaced by the v3 field sweep ([#377](https://github.com/cameronrye/openzim-mcp/issues/377)) ([97e7ab2](https://github.com/cameronrye/openzim-mcp/commit/97e7ab2a69be8a4911cd7250ce55c795710791a2))
+
+
+### Fixed
+
+* resolve the v3.0.0 field-test defect sweep ([#374](https://github.com/cameronrye/openzim-mcp/issues/374)) ([a59eb03](https://github.com/cameronrye/openzim-mcp/commit/a59eb03ed9577f01e19a10a5feeef0cfe1e644fe))
+
+
+### Documentation
+
+* catch the release surface up to the 3.0.0 it describes ([#372](https://github.com/cameronrye/openzim-mcp/issues/372)) ([3a48bba](https://github.com/cameronrye/openzim-mcp/commit/3a48bba7f174398ba6af6cdefda1de7c18576118))
+
 ## [3.0.0](https://github.com/cameronrye/openzim-mcp/compare/v2.7.0...v3.0.0) (2026-08-20)
 
 
