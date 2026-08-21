@@ -1405,11 +1405,14 @@ class _StructureMixin:
         tool layer renders that as a structured error). Phase-B five-key
         contract; paginated.
 
-        ``entry_path`` is first resolved against the live archive: it must
-        exist (a path the archive cannot serve raises the same not-found
-        error the outbound direction raises, instead of a silent
-        ``total=0`` indistinguishable from "genuinely no inbound links"),
-        and a redirect spelling is canonicalized through its chain because
+        ``entry_path`` is first resolved against the live archive: a path
+        neither the archive nor the index has heard of raises the same
+        not-found error the outbound direction raises, instead of a silent
+        ``total=0`` indistinguishable from "genuinely no inbound links". A
+        target the archive cannot serve but the index does carry — a red
+        link the builder kept on purpose — still reports its linkers, since
+        that is exactly what "what links here?" is asking. A redirect
+        spelling is canonicalized through its chain because
         the sidecar builder indexes canonical targets — looked up verbatim,
         ``iep.utm.edu/plato`` returned 0 while ``iep.utm.edu/plato/`` had
         106 linkers. No namespace munging is applied: the sidecar stores
@@ -1455,8 +1458,7 @@ class _StructureMixin:
         with _zim_ops_mod.zim_archive(Path(validated_str)) as archive:
             live_uuid = str(archive.uuid)
             entry, _spelling = _resolve_entry_spelling(archive, entry_path)
-            if entry is None:
-                raise _entry_not_found_error(entry_path)
+            in_archive = entry is not None
             # Class-qualified: the helper is static, and the unit tests drive
             # this method through a stub ``self`` exposing only the seams it
             # already needed.
@@ -1475,6 +1477,16 @@ class _StructureMixin:
             page = reader.query_inbound(lookup_path, limit=limit, offset=offset)
         finally:
             reader.close()
+
+        # Not-found is decided AFTER the query, on both sources: the builder
+        # deliberately keeps edges whose target the archive cannot verify
+        # (red links and broken cross-references — see
+        # ``_parse_internal_link_edges``), so "absent from the archive" alone
+        # is not "unknown path". Only a target neither the archive nor the
+        # index has heard of is a miss; a dangling one still has real linkers
+        # to report, which is the whole question "what links here?" asks.
+        if not in_archive and page.total == 0:
+            raise _entry_not_found_error(entry_path)
 
         results: List[Dict[str, Any]] = [
             {

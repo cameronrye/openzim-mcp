@@ -16,6 +16,7 @@ from typing import Any, Dict, Iterator, List, Optional, Tuple, cast
 
 import pytest
 
+from openzim_mcp.exceptions import OpenZimMcpArchiveError
 from openzim_mcp.linkgraph.builder import build_from_link_stream
 from openzim_mcp.linkgraph.reader import sidecar_path_for
 from openzim_mcp.zim.structure import _StructureMixin
@@ -114,3 +115,31 @@ class TestInboundLookupKey:
             )
 
         assert canonical == edges[0][0]
+
+
+class TestInboundExistenceGate:
+    """Not-found is for targets nothing knows about, not for dangling ones."""
+
+    def test_dangling_target_still_lists_its_linkers(self, small_archive: Path) -> None:
+        """Red links are indexed on purpose; "what links here" must still answer."""
+        _build_sidecar(
+            small_archive, [("index.html", [("missing_page.html", "Missing")])]
+        )
+
+        assert _inbound(small_archive, "missing_page.html")["total"] == 1
+
+    def test_dangling_target_names_its_linker(self, small_archive: Path) -> None:
+        _build_sidecar(
+            small_archive, [("index.html", [("missing_page.html", "Missing")])]
+        )
+
+        result = _inbound(small_archive, "missing_page.html")
+
+        assert result["results"][0]["path"] == "index.html"
+
+    def test_unknown_target_raises_not_found(self, small_archive: Path) -> None:
+        """Neither the archive nor the sidecar knows it -> still a hard miss."""
+        _build_sidecar(small_archive, [("index.html", [("main.html", "Main")])])
+
+        with pytest.raises(OpenZimMcpArchiveError, match="Entry not found"):
+            _inbound(small_archive, "nowhere.html")
