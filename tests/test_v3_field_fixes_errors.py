@@ -608,13 +608,20 @@ def _captured(caplog: pytest.LogCaptureFixture, logger_name: str):
     ``OpenZimMcpServer`` construction runs ``logging.basicConfig(force=True)``,
     which drops caplog's root handler, so ``caplog.at_level`` alone captures
     nothing once a real server exists in the process.
+
+    Captures at WARNING, not ERROR: caller faults (a security denial, a
+    validation rejection) now log at WARNING, and an ``at_level(ERROR)``
+    capture discards them silently — the record-shape assertions below would
+    then pass by capturing nothing. WARNING still captures ERROR, so the
+    server-fault cases are unaffected. The level itself is pinned in
+    ``test_v3_field_fixes_logging.py``.
     """
     import logging
 
     target = logging.getLogger(logger_name)
     target.addHandler(caplog.handler)
     try:
-        with caplog.at_level(logging.ERROR, logger=logger_name):
+        with caplog.at_level(logging.WARNING, logger=logger_name):
             yield
     finally:
         target.removeHandler(caplog.handler)
