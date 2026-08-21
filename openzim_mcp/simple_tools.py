@@ -3280,7 +3280,9 @@ class SimpleToolsHandler(
         # the next page``, but every call below used to pass a literal 0 —
         # so the advertised continuation returned page 1 forever and hits
         # 4+ were unreachable through this intent. Thread the caller's
-        # offset (explicit or cursor-projected) into every search call.
+        # explicit offset into every search call — a cursor cannot reach
+        # here, since D44 rejects one on any intent outside
+        # ``_CURSOR_CONSUMING_INTENTS``, which tell_me_about is not in.
         offset = int(options.get("offset", 0) or 0)
 
         try:

@@ -255,3 +255,20 @@ def test_archive_hint_is_still_stripped_when_it_names_the_routed_archive() -> No
     handler.handle_zim_query("search medlineplus for diabetes", zim_file_path=MEDLINE)
 
     assert mock.search_zim_file.call_args.args[1] == "diabetes"
+
+
+# ---------------------------------------------------------------------------
+# simple_tools.py — the tell_me_about offset comment vs the cursor guard
+# ---------------------------------------------------------------------------
+
+
+def test_tell_me_about_offset_comment_does_not_claim_a_cursor_projection() -> None:
+    """D42's comment says the threaded offset may be "cursor-projected",
+    but D44 landed later on the same branch and rejects any cursor whose
+    intent is outside ``_CURSOR_CONSUMING_INTENTS`` — which tell_me_about
+    is. The projected offset can never reach the handler."""
+    from openzim_mcp.simple_tools import SimpleToolsHandler
+
+    src = Path("openzim_mcp/simple_tools.py").read_text(encoding="utf-8")
+    assert "tell_me_about" not in SimpleToolsHandler._CURSOR_CONSUMING_INTENTS
+    assert "explicit or cursor-projected" not in src
