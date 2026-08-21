@@ -6,16 +6,20 @@ and the directory health probe.
 """
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, Iterator, Tuple
+from typing import Any, Dict, Iterator, List, Tuple
 
 import pytest
 from mcp_types import INVALID_REQUEST
 from starlette.testclient import TestClient
 
 from openzim_mcp.server import OpenZimMcpServer
+from openzim_mcp.server_state import _check_directory_health
+from openzim_mcp.zim.archive import DENIED_ZIM_WARNING, ZIM_MAGIC
+from tests.conftest_v2_fixtures import make_zim_ops
 from tests.test_v3_field_fixes_http import (
     INITIALIZE_BODY,
     LEGACY_HEADERS,
@@ -189,3 +193,73 @@ def test_integrity_check_survives_an_unguarded_host_main(
 
     assert completed.returncode == 0, completed.stderr
     assert "VALID True" in completed.stdout, completed.stdout
+
+
+# --------------------------------------------------------------------------
+# Health: an unreadable archive is a permission problem, not a bad signature
+# --------------------------------------------------------------------------
+
+
+def _health_of(directory: Path) -> Tuple[Dict[str, Any], List[str], List[str]]:
+    """``_check_directory_health`` over ``directory``, with its scratch state."""
+    health_info: Dict[str, Any] = {"status": "healthy"}
+    health_checks: Dict[str, Any] = {"permissions_ok": True}
+    warnings: List[str] = []
+    recommendations: List[str] = []
+    _check_directory_health(
+        str(directory), health_info, health_checks, warnings, recommendations
+    )
+    return health_checks, warnings, recommendations
+
+
+@pytest.fixture
+def denied_zim(tmp_path: Path) -> Path:
+    """A genuine ZIM header the process is not allowed to read."""
+    if os.getuid() == 0:
+        pytest.skip("root reads a chmod-000 file regardless of its mode")
+    archive = tmp_path / "real.zim"
+    archive.write_bytes(ZIM_MAGIC + b"\x00" * 16)
+    archive.chmod(0o000)
+    return archive
+
+
+def test_permission_denied_zim_is_not_blamed_on_its_signature(
+    tmp_path: Path, denied_zim: Path
+) -> None:
+    """``has_zim_signature`` swallowed the EACCES, so a good archive was
+    reported as garbage — with a recommendation to delete it."""
+    _health_checks, warnings, recommendations = _health_of(tmp_path)
+
+    assert not any("signature" in w for w in warnings), warnings
+    assert not any(r.startswith("Remove or replace") for r in recommendations)
+
+
+def test_permission_denied_zim_clears_permissions_ok(
+    tmp_path: Path, denied_zim: Path
+) -> None:
+    """The one field an operator reads to spot a permission problem said
+    everything was fine."""
+    health_checks, _warnings, _recommendations = _health_of(tmp_path)
+
+    assert health_checks["permissions_ok"] is False
+
+
+def test_garbage_zim_is_still_reported_as_a_bad_signature(tmp_path: Path) -> None:
+    """The readable-but-not-a-ZIM verdict, and its advice, are unchanged."""
+    (tmp_path / "junk.zim").write_bytes(b"not a zim at all")
+
+    _health_checks, warnings, recommendations = _health_of(tmp_path)
+
+    assert any("missing ZIM signature" in w for w in warnings), warnings
+    assert any(r.startswith("Remove or replace") for r in recommendations)
+
+
+def test_listing_marks_a_denied_zim_as_unread_not_as_garbage(
+    tmp_path: Path, denied_zim: Path
+) -> None:
+    """``list_zim_files_data`` stamped the same "not a ZIM archive" verdict on
+    a file it was never allowed to look at."""
+    (entry,) = make_zim_ops(str(tmp_path)).list_zim_files_data()
+
+    assert entry["readable"] is False
+    assert entry["warning"] == DENIED_ZIM_WARNING

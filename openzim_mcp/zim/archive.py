@@ -84,6 +84,7 @@ __all__ = [
     "configure_libzim_caches",
     "has_zim_signature",
     "zim_archive",
+    "zim_signature_error",
 ]
 
 
@@ -101,6 +102,31 @@ UNREADABLE_ZIM_WARNING = (
     "and cannot be opened"
 )
 
+# Message for a listing entry this process is not allowed to read at all.
+# Kept distinct from UNREADABLE_ZIM_WARNING: the file may be a perfectly good
+# archive, and the fix is a permission change, not a deletion.
+DENIED_ZIM_WARNING = (
+    "Cannot read this file: the server lacks permission to open it, so "
+    "whether it is a ZIM archive is unknown"
+)
+
+
+def zim_signature_error(path: Path) -> Optional[OSError]:
+    """The error that stopped ``path`` from being read, or None if it was read.
+
+    ``has_zim_signature`` collapses "could not open the file" into the same
+    ``False`` as "opened it, wrong magic bytes", which is right for "can
+    libzim use this?" and wrong for telling an operator what to do about it:
+    a permission problem answered with "not a ZIM archive, delete it"
+    destroys a good archive. Callers that give advice ask this first.
+    """
+    try:
+        with open(path, "rb") as fh:
+            fh.read(len(ZIM_MAGIC))
+        return None
+    except OSError as e:
+        return e
+
 
 def has_zim_signature(path: Path) -> bool:
     """Return whether ``path`` begins with the ZIM magic bytes.
@@ -109,7 +135,8 @@ def has_zim_signature(path: Path) -> bool:
     text, a truncated download, a stray file renamed ``.zim``). A ``True``
     result is only a cheap plausibility check — it does not verify the
     archive's integrity; that is what ``Archive.check()`` is for. Read
-    errors (permissions, vanished file) count as unreadable.
+    errors (permissions, vanished file) count as unreadable; use
+    ``zim_signature_error`` to tell those two apart.
     """
     try:
         with open(path, "rb") as fh:
@@ -644,11 +671,16 @@ class ZimOperations(
                         # in the listing so the operator can see and fix it.
                         entry["readable"] = has_zim_signature(file_path)
                         if not entry["readable"]:
-                            entry["warning"] = UNREADABLE_ZIM_WARNING
-                            logger.warning(
-                                f"{file_path} is named .zim but lacks the ZIM "
-                                "signature; listed as unreadable"
-                            )
+                            denied = zim_signature_error(file_path)
+                            if denied is not None:
+                                entry["warning"] = DENIED_ZIM_WARNING
+                                logger.warning(f"{file_path} cannot be read: {denied}")
+                            else:
+                                entry["warning"] = UNREADABLE_ZIM_WARNING
+                                logger.warning(
+                                    f"{file_path} is named .zim but lacks the ZIM "
+                                    "signature; listed as unreadable"
+                                )
                         all_zim_files.append(entry)
                     except OSError as e:
                         logger.warning(f"Error reading file stats for {file_path}: {e}")

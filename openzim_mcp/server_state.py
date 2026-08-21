@@ -27,7 +27,7 @@ from .constants import CACHE_HIGH_HIT_RATE_THRESHOLD, CACHE_LOW_HIT_RATE_THRESHO
 from .responses import ToolErrorPayload, tool_error
 from .security import redact_paths_in_message, sanitize_path_for_error
 from .tool_schemas import HealthStatus, ServerConfigurationResponse
-from .zim.archive import has_zim_signature
+from .zim.archive import has_zim_signature, zim_signature_error
 
 if TYPE_CHECKING:
     from .server import OpenZimMcpServer
@@ -53,6 +53,7 @@ def _downgrade_to_warning(health_info: Dict[str, Any]) -> None:
 def _count_readable_zim_files(
     dir_path: Path,
     health_info: Dict[str, Any],
+    health_checks: Dict[str, Any],
     warnings: List[str],
     recommendations: List[str],
 ) -> int:
@@ -61,20 +62,33 @@ def _count_readable_zim_files(
 
     Probes the directory with ``iterdir`` first so a permission problem
     surfaces as the exception the caller classifies, not as a silent zero.
+
+    A file the process cannot read is reported as the permission problem it
+    is, not as a bad signature: the advice for the two is opposite, and
+    "remove or replace it" aimed at a merely unreadable archive destroys a
+    good one.
     """
     list(dir_path.iterdir())
     zim_files = [p for p in dir_path.glob("**/*.zim") if p.is_file()]
     unreadable = [p for p in zim_files if not has_zim_signature(p)]
+    denied = [p for p in unreadable if zim_signature_error(p) is not None]
     for bad in unreadable:
-        warnings.append(
-            "Unreadable .zim file (missing ZIM signature): "
-            f"{sanitize_path_for_error(str(bad))}"
+        redacted = sanitize_path_for_error(str(bad))
+        if bad in denied:
+            warnings.append(f"Cannot read .zim file: {redacted}")
+        else:
+            warnings.append(f"Unreadable .zim file (missing ZIM signature): {redacted}")
+    if denied:
+        recommendations.append(
+            "Check read permissions for the .zim file(s) this server cannot open"
         )
-    if unreadable:
+        health_checks["permissions_ok"] = False
+    if len(unreadable) > len(denied):
         recommendations.append(
             "Remove or replace the unreadable .zim file(s); "
             "they cannot be opened as archives"
         )
+    if unreadable:
         _downgrade_to_warning(health_info)
     return len(zim_files) - len(unreadable)
 
@@ -104,7 +118,7 @@ def _check_directory_health(
         dir_path = Path(directory)
         if dir_path.exists() and dir_path.is_dir():
             readable = _count_readable_zim_files(
-                dir_path, health_info, warnings, recommendations
+                dir_path, health_info, health_checks, warnings, recommendations
             )
             return 1, readable
         warnings.append(f"Directory not accessible: {redacted}")
