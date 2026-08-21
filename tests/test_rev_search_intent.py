@@ -11,6 +11,8 @@ import re
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 # ---------------------------------------------------------------------------
 # search.py — the rendered footer must advance by the dedup resume point
 # ---------------------------------------------------------------------------
@@ -96,3 +98,45 @@ def test_every_search_cache_key_carries_a_version_token() -> None:
     assert keys, "no search cache keys found"
     for prefix in keys:
         assert re.search(r"_?v\d", prefix) or f'f"{prefix}:v' in _SEARCH_SRC, prefix
+
+
+# ---------------------------------------------------------------------------
+# title_promotion.py — the Last, First inversion must not eat City, State
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("topic", "path", "title"),
+    [
+        ("Texas", "A/Paris,_Texas", "Paris, Texas"),
+        ("Illinois", "A/Springfield,_Illinois", "Springfield, Illinois"),
+        ("Missouri", "A/Kansas_City,_Missouri", "Kansas City, Missouri"),
+    ],
+)
+def test_city_state_titles_do_not_strong_match_the_bare_state(
+    topic: str, path: str, title: str
+) -> None:
+    """``Paris, Texas`` inverts to ``Texas Paris``, which the unconditional
+    candidate-extends-topic rule read as the article for ``Texas`` — so a
+    weak top hit was accepted as canonical and the title-index probe that
+    would have found ``A/Texas`` never ran."""
+    from openzim_mcp.title_promotion import is_strong_title_match
+
+    assert is_strong_title_match(topic, path, title) is False
+
+
+@pytest.mark.parametrize(
+    ("topic", "title"),
+    [
+        ("immanuel kant", "Kant, Immanuel | Internet Encyclopedia of Philosophy"),
+        ("Immanuel Kant", "Kant, Immanuel: Aesthetics"),
+        ("kansas city missouri", "Kansas City, Missouri"),
+    ],
+)
+def test_inversion_still_matches_a_topic_that_names_both_halves(
+    topic: str, title: str
+) -> None:
+    """D49's case is a topic naming the whole person; that still matches."""
+    from openzim_mcp.title_promotion import is_strong_title_match
+
+    assert is_strong_title_match(topic, "iep.utm.edu/x/", title) is True

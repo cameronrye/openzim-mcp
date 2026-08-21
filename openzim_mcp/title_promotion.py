@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Any, Callable, Dict, Iterator, Optional
+from typing import Any, Callable, Dict, Iterator, Optional, Tuple
 
 from openzim_mcp.text_utils import strip_site_suffix
 
@@ -66,15 +66,19 @@ def _strip_site_suffix(candidate: str) -> str:
     return (head if sep else candidate).strip()
 
 
-def _invert_name(stripped: str) -> Optional[str]:
-    """``Last, First[: rest]`` → ``First Last[: rest]``, or ``None`` when
-    ``stripped`` is not that shape.
+def _invert_name(stripped: str) -> Optional[Tuple[str, int]]:
+    """``Last, First[: rest]`` → ``(First Last[: rest], name_token_count)``,
+    or ``None`` when ``stripped`` is not that shape.
 
     The halves sit around the FIRST comma. The first-name half runs to the
     first ``:`` / ``(`` (kept verbatim as the tail) or to the end. A second
     comma or a pipe inside the name, or a ``:`` / ``(`` in the last-name
     half, means this is a list or a plain ``Title: Subtitle`` rather than
     a ``Last, First`` title, and nothing is inverted.
+
+    ``name_token_count`` is how many tokens the swapped name itself spans
+    (the tail excluded) — the floor a topic must reach before the inverted
+    spelling may match; see ``_candidate_matchers``.
     """
     last, comma, rest = stripped.partition(",")
     last = last.strip()
@@ -87,21 +91,39 @@ def _invert_name(stripped: str) -> Optional[str]:
     first, tail = rest[:cut].strip(), rest[cut:]
     if not first or _FORBIDDEN_IN_FIRST_NAME & set(first):
         return None
-    return f"{first} {last}{tail}"
+    name = f"{first} {last}"
+    return f"{name}{tail}", len(_UNICODE_TOKEN_RE.findall(name.lower()))
+
+
+def _candidate_matchers(candidate: str) -> Iterator[Tuple[str, int]]:
+    """Yield each candidate spelling with the minimum topic-token count
+    allowed to match it (deduplicated, original first).
+
+    Only the inversion carries a floor. ``Paris, Texas`` is the same shape
+    as ``Kant, Immanuel`` and inverts just as willingly to ``Texas
+    Paris``, whereupon the unconditional candidate-extends-topic rule read
+    a bare ``Texas`` as strong-matching the town — and Wikipedia-class
+    archives are full of ``City, State`` titles. D49 only ever needed the
+    inversion for a topic naming the whole person, so the inverted
+    spelling is offered only to a topic that spans both halves of the
+    swap.
+    """
+    seen = {candidate}
+    yield candidate, 0
+    stripped = _strip_site_suffix(candidate)
+    if stripped and stripped not in seen:
+        seen.add(stripped)
+        yield stripped, 0
+    inversion = _invert_name(stripped)
+    if inversion is not None and inversion[0] not in seen:
+        yield inversion
 
 
 def _candidate_forms(candidate: str) -> Iterator[str]:
     """Yield ``candidate`` plus its site-suffix-stripped and comma-inverted
     spellings (deduplicated, original first)."""
-    seen = {candidate}
-    yield candidate
-    stripped = _strip_site_suffix(candidate)
-    if stripped and stripped not in seen:
-        seen.add(stripped)
-        yield stripped
-    inverted = _invert_name(stripped)
-    if inverted and inverted not in seen:
-        yield inverted
+    for form, _min_topic_tokens in _candidate_matchers(candidate):
+        yield form
 
 
 def _tokens_strong_match(topic_tokens: tuple, cand_tokens: tuple) -> bool:
@@ -161,7 +183,9 @@ def is_strong_title_match(topic: str, path: str, title: str) -> bool:
     for candidate in (path, title):
         if not candidate:
             continue
-        for form in _candidate_forms(candidate):
+        for form, min_topic_tokens in _candidate_matchers(candidate):
+            if len(topic_tokens) < min_topic_tokens:
+                continue
             cand_tokens = tuple(_UNICODE_TOKEN_RE.findall(form.lower()))
             if cand_tokens and _tokens_strong_match(topic_tokens, cand_tokens):
                 return True
