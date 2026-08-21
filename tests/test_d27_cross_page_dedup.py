@@ -27,7 +27,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any, Dict, List
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -208,6 +208,92 @@ class TestCrossPageCanonicalDedup:
                     offset - _CANONICAL_LOOKBEHIND,
                     _CANONICAL_LOOKBEHIND,
                 )
+
+
+class TestSpliceKeepsBackendConsumedCount:
+    """D27c — the canonical splice clobbered ``source_consumed``."""
+
+    @staticmethod
+    def _handler(monkeypatch: Any):
+        import openzim_mcp.simple_tools as st
+
+        monkeypatch.setattr(
+            st,
+            "find_title_match",
+            lambda *a, **k: {"path": "A/Biofuel", "title": "Biofuel"},
+        )
+        monkeypatch.setattr(
+            st, "is_strong_canonical_title_match", lambda *a, **k: False
+        )
+        return st.SimpleToolsHandler(MagicMock())
+
+    @staticmethod
+    def _payload(paths: List[str], limit: int, **page_info: Any) -> Dict[str, Any]:
+        return {
+            "query": "biomass fuel",
+            "results": [
+                {"path": p, "title": p.split("/")[-1], "snippet": "..."} for p in paths
+            ],
+            "total": 70,
+            "done": False,
+            "next_cursor": "opaque",
+            "page_info": {
+                "offset": 0,
+                "limit": limit,
+                "returned_count": len(paths),
+                **page_info,
+            },
+            "_meta": {},
+        }
+
+    def test_splice_keeps_the_backends_larger_consumed_count(
+        self, monkeypatch: Any
+    ) -> None:
+        """The backend deduped two variants inside the window, so it walked
+        5 ranked rows to emit 3. Overwriting that with the emitted-row count
+        rewinds the resume point into rows this page already showed.
+        """
+        handler = self._handler(monkeypatch)
+        payload = self._payload(
+            ["A/Biomass_(energy)", "A/Biomass_briquettes", "A/Aviation_biofuel"],
+            limit=3,
+            source_consumed=5,
+        )
+        out = handler._splice_title_match_into_search(payload, "/x.zim", "biomass fuel")
+
+        assert out["page_info"]["source_consumed"] == 5
+        assert out["page_info"]["returned_count"] == 4
+
+    def test_splice_still_records_consumed_when_the_backend_did_not(
+        self, monkeypatch: Any
+    ) -> None:
+        """No incoming key (the clean-page case): the splice must still say
+        how many ranked rows the page went through, or ``returned_count``
+        — inflated by the synthetic row — becomes the resume point."""
+        handler = self._handler(monkeypatch)
+        payload = self._payload(
+            ["A/Biomass_(energy)", "A/Biomass_briquettes", "A/Aviation_biofuel"],
+            limit=3,
+        )
+        out = handler._splice_title_match_into_search(payload, "/x.zim", "biomass fuel")
+
+        assert out["page_info"]["source_consumed"] == 3
+
+    @pytest.mark.parametrize("bogus", [None, True, "5", -1])
+    def test_splice_ignores_a_non_count_consumed_value(
+        self, monkeypatch: Any, bogus: Any
+    ) -> None:
+        """``max()`` must not be fed a bool, a string or a negative — the
+        emitted-row count is the floor in every one of those cases."""
+        handler = self._handler(monkeypatch)
+        payload = self._payload(
+            ["A/Biomass_(energy)", "A/Biomass_briquettes", "A/Aviation_biofuel"],
+            limit=3,
+            source_consumed=bogus,
+        )
+        out = handler._splice_title_match_into_search(payload, "/x.zim", "biomass fuel")
+
+        assert out["page_info"]["source_consumed"] == 3
 
 
 # ---------------------------------------------------------------------------

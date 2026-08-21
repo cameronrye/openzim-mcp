@@ -2920,12 +2920,23 @@ class SimpleToolsHandler(
         # ``returned_count`` counts rendered rows, so it now includes the
         # synthetic one. That makes it unusable as "how far through the ranked
         # stream this page went", which is what a resume point needs — so
-        # record that separately. ``limit`` is deliberately left alone: the
-        # page consumed exactly ``len(results)`` ranked rows, so the
-        # renderer's ``offset + limit`` still lands on the first row this page
-        # did not show.
+        # record that separately. ``limit`` is deliberately left alone; the
+        # renderer resumes at ``offset + source_consumed``.
+        #
+        # ``max``, not a plain assignment: the backend may already have
+        # recorded a LARGER ranked-row count, because ``_collect_distinct_hits``
+        # skips query-string variants inside the window and reports the rows it
+        # walked, not the rows it emitted. Overwriting that with the emitted
+        # count walked the resume point BACKWARDS into rows this page already
+        # showed. The splice itself consumes no extra ranked rows — the
+        # synthetic row comes from the title index — so the emitted count is
+        # only ever the floor. Guarded against a bool (``isinstance(True, int)``
+        # is True) and any non-count value a caller might have put there.
+        backend_consumed = page_info.get("source_consumed")
+        if not isinstance(backend_consumed, int) or isinstance(backend_consumed, bool):
+            backend_consumed = 0
         page_info["returned_count"] = len(spliced)
-        page_info["source_consumed"] = len(results)
+        page_info["source_consumed"] = max(backend_consumed, len(results))
         payload["page_info"] = page_info
         return payload
 
