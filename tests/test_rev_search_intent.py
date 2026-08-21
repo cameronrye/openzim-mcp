@@ -220,3 +220,38 @@ def test_about_is_still_peeled_after_the_object_noun(query: str) -> None:
 
     _intent, params, _ = IntentParser.parse_intent(query)
     assert params.get("entry_path", "").lower() == "immanuel kant"
+
+
+# ---------------------------------------------------------------------------
+# simple_tools.py — the archive-name strip must follow the routing
+# ---------------------------------------------------------------------------
+
+
+def test_archive_hint_is_kept_in_the_terms_when_it_does_not_route() -> None:
+    """An explicit ``zim_file_path`` wins for routing, so a hint naming a
+    DIFFERENT archive routes nothing — deleting it from the terms searched
+    the explicit archive for a truncated query and echoed the truncation
+    back as if the caller had typed it."""
+    from tests.test_v3_field_fixes_simple import IEP, MEDLINE, _handler_with
+
+    handler, mock = _handler_with()
+    mock.list_zim_files_data.return_value = [{"path": MEDLINE}, {"path": IEP}]
+    mock.search_zim_file.return_value = "rendered"
+
+    handler.handle_zim_query("search medlineplus for diabetes", zim_file_path=IEP)
+
+    call = mock.search_zim_file.call_args
+    assert call.args[0] == IEP
+    assert call.args[1] == "medlineplus for diabetes"
+
+
+def test_archive_hint_is_still_stripped_when_it_names_the_routed_archive() -> None:
+    from tests.test_v3_field_fixes_simple import IEP, MEDLINE, _handler_with
+
+    handler, mock = _handler_with()
+    mock.list_zim_files_data.return_value = [{"path": MEDLINE}, {"path": IEP}]
+    mock.search_zim_file.return_value = "rendered"
+
+    handler.handle_zim_query("search medlineplus for diabetes", zim_file_path=MEDLINE)
+
+    assert mock.search_zim_file.call_args.args[1] == "diabetes"

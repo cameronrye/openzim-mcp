@@ -785,10 +785,13 @@ class SimpleToolsHandler(
             # D45: ``search <archive> for <terms>`` names its target in
             # plain text. Resolve the name against the loaded archives
             # BEFORE the gate (same precedent as the metadata hint
-            # below) and strip it from the terms either way — an
-            # explicit ``zim_file_path`` still wins for routing.
+            # below). An explicit ``zim_file_path`` still wins for
+            # routing, and the name is only stripped when it agrees with
+            # where the search actually goes.
             if intent == "search" and isinstance(params, dict):
-                hinted_archive = self._apply_search_archive_hint(params)
+                hinted_archive = self._apply_search_archive_hint(
+                    params, explicit_path=zim_file_path
+                )
                 if hinted_archive and not zim_file_path:
                     zim_file_path = hinted_archive
             if intent == "search_all":
@@ -4600,7 +4603,9 @@ class SimpleToolsHandler(
         re.IGNORECASE | re.DOTALL,
     )
 
-    def _apply_search_archive_hint(self, params: Dict[str, Any]) -> Optional[str]:
+    def _apply_search_archive_hint(
+        self, params: Dict[str, Any], *, explicit_path: Optional[str] = None
+    ) -> Optional[str]:
         """Resolve a leading ``<archive> for`` in the extracted search terms.
 
         When the leading token names exactly one loaded archive (exact
@@ -4609,6 +4614,12 @@ class SimpleToolsHandler(
         path. Returns ``None`` — and leaves the terms untouched — when
         the token matches no archive (it is a search term) or more than
         one (the caller must disambiguate, so the gate still fires).
+
+        ``explicit_path`` wins for routing, so a hint naming a DIFFERENT
+        archive routes nothing: stripping it there searched the explicit
+        archive for truncated terms and echoed the truncation back as if
+        the caller had typed it. The token only leaves the terms when it
+        names the archive the search will actually run against.
         """
         terms = params.get("query")
         if not isinstance(terms, str):
@@ -4619,6 +4630,10 @@ class SimpleToolsHandler(
         resolved = self._match_archive_by_name(match.group("hint"))
         if resolved is None:
             return None
+        if explicit_path:
+            routed = self._resolve_zim_path(explicit_path) or explicit_path
+            if routed != resolved:
+                return None
         params["query"] = match.group("terms").strip()
         self._track("search_archive_hint_resolved")
         return resolved
