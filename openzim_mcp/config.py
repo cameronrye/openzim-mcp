@@ -255,6 +255,21 @@ class RerankerConfig(BaseModel):
             "~/.cache/openzim-mcp/models/fastembed."
         ),
     )
+    # Defaults to False to keep the shipped MCP `instructions` honest and to
+    # honour the offline-first principle in docs/roadmap.md — not to save
+    # bandwidth. A cold cache used to make the first rerank-eligible query
+    # open connections to huggingface.co and stall for
+    # `first_call_timeout_seconds`, which no caller consented to.
+    allow_model_download: bool = Field(
+        default=False,
+        description=(
+            "Allow the first model load to fetch from HuggingFace. False (the "
+            "default) loads only from the local cache and falls back to "
+            "Xapian-only ranking if the model was never staged. Pre-stage with "
+            "`openzim-mcp download-models`, or set this True to accept ~1.1GB "
+            "of first-call egress."
+        ),
+    )
 
 
 class MLConfig(BaseModel):
