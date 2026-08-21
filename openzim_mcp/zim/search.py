@@ -275,15 +275,24 @@ def _snippet_query(query: str) -> Optional[str]:
     """``query`` without Boolean-operator words, for snippet selection.
 
     ``(insulin) AND (NOT glucose)`` -> ``insulin glucose``: operator words
-    go, and grouping/quoting/wildcard punctuation is peeled off the words
-    that stay (inner hyphens as in ``insulin-like`` survive). Returns
-    ``None`` when nothing remains, so the caller falls back to the lead
-    paragraph.
+    go, and grouping/quoting punctuation is peeled off the words that stay
+    (inner hyphens as in ``insulin-like`` survive). Returns ``None`` when
+    nothing remains, so the caller falls back to the lead paragraph.
+
+    A TRAILING ``*`` is deliberately kept: it tells the highlighter to bold
+    the whole word the stemmer actually matched (``climat*`` -> **climate**)
+    instead of hunting a literal "climat" that never occurs in prose.
     """
     kept = []
     for word in query.split():
         bare = word.strip("()\"'+-*")
-        if bare and bare.lower() not in _QUERY_OPERATOR_WORDS:
+        # ``rstrip`` the closing grouping/quoting characters first, so the
+        # marker is still seen in ``(climat*)``.
+        if bare and word.rstrip("()\"'").endswith("*"):
+            bare += "*"
+        # ``rstrip("*")`` on the operator test, or ``and*`` slips past the
+        # filter and gets bolded as content.
+        if bare and bare.rstrip("*").lower() not in _QUERY_OPERATOR_WORDS:
             kept.append(bare)
     return " ".join(kept) or None
 
