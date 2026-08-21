@@ -60,7 +60,9 @@ def test_d02_required_param_tools_are_not_told_to_omit_it() -> None:
 
 
 def test_d02_omittable_tools_advertise_omission_only_for_a_single_archive() -> None:
-    for operation in ("zim_query", "zim_search", "zim_health"):
+    # zim_health also accepts omission but does not auto-select — its own
+    # wording is pinned by tests/test_v3_review_health_advice.py.
+    for operation in ("zim_query", "zim_search"):
         config = get_error_config(_GHOST, operation=operation, count_archives=lambda: 1)
         assert config is not None
         (step,) = _omission_steps(config)

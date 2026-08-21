@@ -130,6 +130,12 @@ ERROR_CONFIGS: Dict[Type[OpenZimMcpError], ErrorConfig] = {
 # raw pydantic "Field required" rejection.
 _ARCHIVE_OMITTABLE_OPERATIONS = frozenset({"zim_query", "zim_search", "zim_health"})
 
+# ...and of those, the ones that answer the SAME question with the path left
+# out. ``zim_health(None)`` does not auto-select the failing archive: it
+# branches to ``get_health_data`` and reports combined server state, so
+# promising auto-select there sends the caller to a different answer.
+_ARCHIVE_AUTOSELECT_OPERATIONS = frozenset({"zim_query", "zim_search"})
+
 
 def _archive_path_config(
     base: ErrorConfig,
@@ -146,6 +152,13 @@ def _archive_path_config(
     """
     if operation not in _ARCHIVE_OMITTABLE_OPERATIONS:
         return base
+
+    if operation not in _ARCHIVE_AUTOSELECT_OPERATIONS:
+        return _with_omission_step(
+            base,
+            "Omit `zim_file_path` entirely for the server-state report "
+            "(it lists every loaded archive rather than validating one)",
+        )
 
     count: Optional[int] = None
     if count_archives is not None:
@@ -171,8 +184,12 @@ def _archive_path_config(
             f"{count} archives are loaded, so `zim_file_path` must name one of them "
             "(auto-select needs exactly one)"
         )
-    # Insert after "pass one of those paths verbatim" so the list still reads
-    # list → pick → (omit) → confirm.
+    return _with_omission_step(base, extra)
+
+
+def _with_omission_step(base: ErrorConfig, extra: str) -> ErrorConfig:
+    """Splice the omission step in after "pass one of those paths verbatim"
+    so the list still reads list → pick → (omit) → confirm."""
     steps = list(base.steps)
     steps.insert(2, extra)
     return ErrorConfig(title=base.title, issue=base.issue, steps=steps)
