@@ -140,3 +140,45 @@ def test_inversion_still_matches_a_topic_that_names_both_halves(
     from openzim_mcp.title_promotion import is_strong_title_match
 
     assert is_strong_title_match(topic, "iep.utm.edu/x/", title) is True
+
+
+# ---------------------------------------------------------------------------
+# search.py — the typo sweep must honour its own extra-probe budget
+# ---------------------------------------------------------------------------
+
+
+def test_typo_sweep_stops_within_its_extra_probe_budget(tmp_path, monkeypatch) -> None:
+    """The sweep documents a ``first_hit + _TYPO_MAX_EXTRA_PROBES`` cap, but
+    the early-out also demanded a FULL suggestion pool — unreachable when
+    the misspelling reaches a single article, so every one of the ~400
+    variants was swept and (since D26) paid for a title-index suggestion
+    query. The canonical hit must still be returned."""
+    from openzim_mcp.zim.search import _SearchMixin
+    from tests.test_v3_field_fixes_search import (
+        _DIABETES_PATH,
+        _DIABETES_TITLE,
+        _entry,
+        _make_ops,
+        _medlineplus_lookup,
+        _patch_archive,
+        _scraped_archive,
+        _suggester_by_query,
+    )
+
+    calls: list[str] = []
+
+    def _counting_lookup(text: str) -> list[str]:
+        calls.append(text)
+        return _medlineplus_lookup(text)
+
+    ops = _make_ops(tmp_path, monkeypatch)
+    archive = _scraped_archive(
+        {_DIABETES_PATH: _entry(_DIABETES_PATH, _DIABETES_TITLE)}
+    )
+    _patch_archive(monkeypatch, archive, _suggester_by_query(_counting_lookup))
+
+    out = ops.find_entry_by_title_data("/zim/test.zim", "Diabtes", limit=10)
+
+    assert out["results"][0]["path"] == _DIABETES_PATH
+    variant_count = len(_SearchMixin._typo_variants("Diabtes"))
+    assert len(calls) < variant_count, "the sweep ran every variant"

@@ -3116,12 +3116,19 @@ class _SearchMixin:
         # pays for it.
         title_index: Optional[Any] = None
         for variant in self._typo_variants(title):
-            # Early-out once we have a canonical hit AND enough suggestions.
-            best_is_done = best is not None and (
-                best_is_canonical or extra_probes >= self._TYPO_MAX_EXTRA_PROBES
-            )
-            if best_is_done and len(verified) >= suggestion_limit:
-                break
+            # Stop once the extra-probe budget after the first hit is spent,
+            # or earlier if the best entry is already canonical and the
+            # suggestion pool is full. The pool alone can never end the
+            # sweep: ``seen_titles`` dedupes by title, so a misspelling that
+            # reaches a single article leaves ``verified`` at 1 forever and
+            # the sweep ran every variant — each one a title-index
+            # suggestion query since the D26 verification landed.
+            if best is not None:
+                if extra_probes >= self._TYPO_MAX_EXTRA_PROBES or (
+                    best_is_canonical and len(verified) >= suggestion_limit
+                ):
+                    break
+                extra_probes += 1
 
             try:
                 entry = self._find_entry_fast_path(archive, variant)
@@ -3132,12 +3139,8 @@ class _SearchMixin:
                         archive, variant, searcher=title_index
                     )
             except Exception:
-                if best is not None and not best_is_done:
-                    extra_probes += 1
                 continue
             if entry is None:
-                if best is not None and not best_is_done:
-                    extra_probes += 1
                 continue
 
             source_is_canonical = not bool(getattr(entry, "is_redirect", False))
@@ -3156,9 +3159,6 @@ class _SearchMixin:
             elif source_is_canonical and not best_is_canonical:
                 best = resolved
                 best_is_canonical = True
-            else:
-                if not best_is_done:
-                    extra_probes += 1
         return best, verified
 
     # Suggestion rows examined per typo variant when verifying it against
