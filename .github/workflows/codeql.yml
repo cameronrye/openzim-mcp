@@ -9,6 +9,14 @@ on:
   schedule:
     - cron: "0 6 * * 1" # Weekly on Mondays at 6 AM UTC
 
+# Least-privilege default: every job below either declares its own
+# ``permissions`` (which replaces this wholesale) or needs nothing beyond
+# reading the checkout. Without a top-level block a job inherits the
+# repository default, which is a setting that can be widened out from under
+# this file (Scorecard Token-Permissions).
+permissions:
+  contents: read
+
 jobs:
   analyze:
     name: Analyze Code
@@ -26,17 +34,17 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@v4.37.7
+        uses: github/codeql-action/init@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
         with:
           languages: ${{ matrix.language }}
           queries: security-extended,security-and-quality
           config-file: ./.github/codeql/codeql-config.yml
 
       - name: Set up Python
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: "3.12"
 
@@ -50,6 +58,6 @@ jobs:
           uv sync --locked
 
       - name: Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@v4.37.7
+        uses: github/codeql-action/analyze@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
         with:
           category: "/language:${{matrix.language}}"

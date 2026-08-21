@@ -25,6 +25,14 @@ on:
           - major
         default: patch
 
+# Least-privilege default: every job below either declares its own
+# ``permissions`` (which replaces this wholesale) or needs nothing beyond
+# reading the checkout. Without a top-level block a job inherits the
+# repository default, which is a setting that can be widened out from under
+# this file (Scorecard Token-Permissions).
+permissions:
+  contents: read
+
 jobs:
   validate-and-prepare:
     name: Validate and Prepare Release
@@ -36,16 +44,19 @@ jobs:
       tag_name: ${{ steps.prepare.outputs.tag_name }}
       should_create_tag: ${{ steps.prepare.outputs.should_create_tag }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
 
       - name: Validate and prepare release
         id: prepare
+        env:
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+          INPUT_RELEASE_TYPE: ${{ github.event.inputs.release_type }}
         run: |
-          if [ -n "${{ github.event.inputs.tag }}" ]; then
+          if [ -n "$INPUT_TAG" ]; then
             # Use provided tag
-            TAG="${{ github.event.inputs.tag }}"
+            TAG="$INPUT_TAG"
             if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+.*$ ]]; then
               echo "Error: Invalid tag format. Expected format: v1.2.3"
               exit 1
@@ -60,7 +71,7 @@ jobs:
             IFS='.' read -r MAJOR MINOR PATCH <<< "$VERSION"
 
             # Increment based on release type
-            case "${{ github.event.inputs.release_type }}" in
+            case "$INPUT_RELEASE_TYPE" in
               major)
                 MAJOR=$((MAJOR + 1))
                 MINOR=0
@@ -113,7 +124,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && (needs.validate-and-prepare.outputs.tag_name || github.event.inputs.tag) || github.ref }}
 
@@ -146,7 +157,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && (needs.validate-and-prepare.outputs.tag_name || github.event.inputs.tag) || github.ref }}
 
@@ -163,7 +174,7 @@ jobs:
           uv build
 
       - name: Upload build artifacts
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: dist
           path: dist/
@@ -180,7 +191,7 @@ jobs:
         run: uv run --locked python scripts/build_mcpb.py --output dist-mcpb
 
       - name: Upload .mcpb bundle
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: mcpb
           path: dist-mcpb/
@@ -198,12 +209,22 @@ jobs:
       id-token: write # Required for trusted publishing to PyPI
     steps:
       - name: Validate deployment context
+        # Everything below arrives through env, never through ``${{ }}`` inside
+        # the script. Branch, tag and ref names are attacker-chooseable strings:
+        # interpolated into the shell source they are executed, while as env
+        # vars they are only ever data. TAG especially — it is a
+        # workflow_dispatch input, and the regex check under it cannot help
+        # when the assignment itself is the injection point.
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          HEAD_BRANCH: ${{ github.head_ref || github.ref_name }}
+          TAG: ${{ needs.validate-and-prepare.outputs.tag_name || github.event.inputs.tag }}
         run: |
-          echo "Event: ${{ github.event_name }}"
-          echo "Ref: ${{ github.ref }}"
-          echo "Head branch: ${{ github.head_ref || github.ref_name }}"
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            TAG="${{ needs.validate-and-prepare.outputs.tag_name || github.event.inputs.tag }}"
+          echo "Event: $EVENT_NAME"
+          echo "Ref: $REF"
+          echo "Head branch: $HEAD_BRANCH"
+          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
             echo "Tag input: $TAG"
             # Ensure the tag input is provided and starts with 'v'
             if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+.*$ ]]; then
@@ -213,7 +234,7 @@ jobs:
           fi
 
       - name: Download build artifacts
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: dist
           path: dist/
@@ -239,7 +260,7 @@ jobs:
       id-token: write # GitHub OIDC login to the registry (io.github.* namespace)
       contents: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && (needs.validate-and-prepare.outputs.tag_name || github.event.inputs.tag) || github.ref }}
 
@@ -258,12 +279,16 @@ jobs:
       # serve a freshly uploaded release. Assert the version lockstep on the
       # manual-tag path too, then wait for PyPI rather than racing it.
       - name: Wait for PyPI to serve the released version
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          DISPATCH_TAG: ${{ needs.validate-and-prepare.outputs.tag_name || github.event.inputs.tag }}
+          REF_NAME: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            TAG="${{ needs.validate-and-prepare.outputs.tag_name || github.event.inputs.tag }}"
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            TAG="$DISPATCH_TAG"
           else
-            TAG="${{ github.ref_name }}"
+            TAG="$REF_NAME"
           fi
           VERSION="${TAG#v}"
           SERVERJSON_VERSION=$(jq -r '.packages[0].version' server.json)
@@ -335,13 +360,13 @@ jobs:
     permissions:
       contents: write # Creates GitHub release and uploads release assets
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
           ref: ${{ github.event_name == 'workflow_dispatch' && (needs.validate-and-prepare.outputs.tag_name || github.event.inputs.tag) || github.ref }}
 
       - name: Download build artifacts
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: dist
           path: dist/
@@ -350,18 +375,22 @@ jobs:
       # dist/* upload paths below attach it to the GitHub release. This artifact
       # is intentionally kept out of the PyPI publish (see the build job).
       - name: Download .mcpb bundle
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: mcpb
           path: dist/
 
       - name: Determine tag name
         id: tag
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          DISPATCH_TAG: ${{ needs.validate-and-prepare.outputs.tag_name || github.event.inputs.tag }}
+          REF_NAME: ${{ github.ref_name }}
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            TAG_NAME="${{ needs.validate-and-prepare.outputs.tag_name || github.event.inputs.tag }}"
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            TAG_NAME="$DISPATCH_TAG"
           else
-            TAG_NAME="${{ github.ref_name }}"
+            TAG_NAME="$REF_NAME"
           fi
           echo "tag_name=$TAG_NAME" >> $GITHUB_OUTPUT
           echo "Tag name: $TAG_NAME"
