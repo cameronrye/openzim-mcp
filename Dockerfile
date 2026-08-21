@@ -16,11 +16,18 @@ COPY --from=ghcr.io/astral-sh/uv:0.11 /uv /usr/local/bin/uv
 
 WORKDIR /app
 
-# Copy dep files and install (cached separately from source)
+# Copy dep files and install (cached separately from source).
+# --no-build refuses to build any source distribution, so no third-party
+# setup.py runs in this image: every dependency must arrive as a prebuilt
+# wheel. The lockfile already resolves to wheels for this platform, so this
+# costs nothing today and turns a future sdist-only dependency into a loud
+# build failure instead of an arbitrary script execution.
 COPY pyproject.toml uv.lock ./
-RUN uv sync --frozen --no-dev --no-install-project
+RUN uv sync --frozen --no-dev --no-install-project --no-build
 
-# Copy source and install the project itself
+# Copy source and install the project itself. No --no-build here on purpose:
+# every dependency is already installed by the step above, so the only thing
+# left to build is this project's own wheel — which is the point of the step.
 COPY openzim_mcp ./openzim_mcp
 COPY README.md ./
 RUN uv sync --frozen --no-dev
