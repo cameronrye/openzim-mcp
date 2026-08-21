@@ -123,6 +123,39 @@ _ASSET_MIME_PREFIXES = ("image/", "video/", "audio/", "font/")
 _LINK_KINDS = frozenset({"internal", "external", "media"})
 
 
+def _canonical_entry(archive: Any, path: str) -> Tuple[Optional[Any], str]:
+    """Return ``(entry, canonical_path)`` for whatever ``path`` names.
+
+    The single canonicalisation every link surface shares — outbound and
+    related rows, the inbound lookup key, and the sidecar builder's index
+    key — so all of them name one entry the same way. It was copy-pasted
+    into three helpers that had already drifted apart, which is how an
+    inbound query could pass the archive's existence check and then miss
+    the index built from the very same archive.
+
+    Two steps beyond ``_resolve_entry_spelling``: a redirect stub is
+    followed to the entry actually served, and that entry's OWN ``path``
+    wins over the spelling that resolved, because libzim matches a
+    namespace prefix leniently (``C/main.html`` serves the entry stored as
+    ``main.html``). Falls back to the resolved spelling when the served
+    path is unusable — the mock archives used across the test suite hand
+    back MagicMock entries whose ``path`` is itself a truthy MagicMock —
+    and returns ``(None, path)`` when nothing resolves, so a caller that
+    cannot verify a target keeps its best-effort spelling rather than
+    dropping the row.
+    """
+    from openzim_mcp.zim.redirects import best_effort_redirect_chain
+
+    entry, spelling = _resolve_entry_spelling(archive, path)
+    if entry is None:
+        return None, spelling
+    resolved = best_effort_redirect_chain(entry)
+    resolved_path = getattr(resolved, "path", None)
+    if isinstance(resolved_path, str) and resolved_path:
+        return resolved, resolved_path
+    return entry, spelling
+
+
 def _resolve_outbound_item(archive: Any, item: Dict[str, Any]) -> None:
     """Rewrite one outbound row's ``path`` to the servable spelling; fill ``title``.
 
@@ -130,24 +163,14 @@ def _resolve_outbound_item(archive: Any, item: Dict[str, Any]) -> None:
     target arrived here as ``A/El_Ni%C3%B1o`` — which both failed the title
     lookup (leaving the raw path as the "title" placeholder) and, worse,
     went out on the wire as a ``path`` the caller could not fetch.
-    ``_resolve_entry_spelling`` picks whichever spelling the archive serves.
-
-    A redirect stub is followed to its canonical target before the title is
+    ``_canonical_entry`` picks whichever spelling the archive serves and
+    follows a redirect stub to its canonical target before the title is
     read; ``title`` is left alone when nothing resolvable has one, so the
     caller's placeholder survives. Raises whatever the archive raises — the
     caller (``_resolve_outbound_titles``) treats any failure as "keep the
     placeholder".
     """
-    from openzim_mcp.zim.redirects import best_effort_redirect_chain
-
-    entry, spelling = _resolve_entry_spelling(archive, item["path"])
-    # ``is True``: the mock archives used across the test suite hand back
-    # MagicMock entries whose ``is_redirect`` is itself a truthy MagicMock.
-    if entry is not None and getattr(entry, "is_redirect", False) is True:
-        resolved = best_effort_redirect_chain(entry)
-        resolved_path = getattr(resolved, "path", None)
-        if isinstance(resolved_path, str) and resolved_path:
-            entry, spelling = resolved, resolved_path
+    entry, spelling = _canonical_entry(archive, item["path"])
     item["path"] = spelling
     title = getattr(entry, "title", None) if entry else None
     if title:
@@ -1405,11 +1428,14 @@ class _StructureMixin:
         tool layer renders that as a structured error). Phase-B five-key
         contract; paginated.
 
-        ``entry_path`` is first resolved against the live archive: it must
-        exist (a path the archive cannot serve raises the same not-found
-        error the outbound direction raises, instead of a silent
-        ``total=0`` indistinguishable from "genuinely no inbound links"),
-        and a redirect spelling is canonicalized through its chain because
+        ``entry_path`` is first resolved against the live archive: a path
+        neither the archive nor the index has heard of raises the same
+        not-found error the outbound direction raises, instead of a silent
+        ``total=0`` indistinguishable from "genuinely no inbound links". A
+        target the archive cannot serve but the index does carry — a red
+        link the builder kept on purpose — still reports its linkers, since
+        that is exactly what "what links here?" is asking. A redirect
+        spelling is canonicalized through its chain because
         the sidecar builder indexes canonical targets — looked up verbatim,
         ``iep.utm.edu/plato`` returned 0 while ``iep.utm.edu/plato/`` had
         106 linkers. No namespace munging is applied: the sidecar stores
@@ -1455,8 +1481,7 @@ class _StructureMixin:
         with _zim_ops_mod.zim_archive(Path(validated_str)) as archive:
             live_uuid = str(archive.uuid)
             entry, _spelling = _resolve_entry_spelling(archive, entry_path)
-            if entry is None:
-                raise _entry_not_found_error(entry_path)
+            in_archive = entry is not None
             # Class-qualified: the helper is static, and the unit tests drive
             # this method through a stub ``self`` exposing only the seams it
             # already needed.
@@ -1475,6 +1500,16 @@ class _StructureMixin:
             page = reader.query_inbound(lookup_path, limit=limit, offset=offset)
         finally:
             reader.close()
+
+        # Not-found is decided AFTER the query, on both sources: the builder
+        # deliberately keeps edges whose target the archive cannot verify
+        # (red links and broken cross-references — see
+        # ``_parse_internal_link_edges``), so "absent from the archive" alone
+        # is not "unknown path". Only a target neither the archive nor the
+        # index has heard of is a miss; a dangling one still has real linkers
+        # to report, which is the whole question "what links here?" asks.
+        if not in_archive and page.total == 0:
+            raise _entry_not_found_error(entry_path)
 
         results: List[Dict[str, Any]] = [
             {
@@ -1564,25 +1599,14 @@ class _StructureMixin:
     def _canonical_target_path(archive: Any, target: str) -> str:
         """Best-effort canonical spelling of a resolved link ``target``.
 
-        Tries the raw and percent-decoded spellings (``_resolve_entry_spelling``)
-        and, when the entry resolves to a redirect, walks the chain to the
-        served entry's path. Returns ``target`` unchanged when nothing in the
-        archive can verify it, so the caller keeps a best-effort path rather
-        than dropping the row. Same walk ``_parse_internal_link_edges`` uses
-        for the sidecar, so outbound rows, related rows, and the inbound index
-        all name one entry the same way.
+        The path half of ``_canonical_entry``, wrapped so a failing archive
+        never costs the caller its row: returns ``target`` unchanged when
+        nothing in the archive can verify it. Same helper the sidecar
+        builder keys on, so outbound rows, related rows, and the inbound
+        index all name one entry the same way.
         """
-        from openzim_mcp.zim.redirects import best_effort_redirect_chain
-
         try:
-            entry, spelling = _resolve_entry_spelling(archive, target)
-            # ``is True``: test-suite mock archives return MagicMock entries
-            # whose ``is_redirect`` is itself a truthy MagicMock.
-            if entry is not None and getattr(entry, "is_redirect", False) is True:
-                resolved_path = getattr(best_effort_redirect_chain(entry), "path", None)
-                if isinstance(resolved_path, str) and resolved_path:
-                    return resolved_path
-            return spelling
+            return _canonical_entry(archive, target)[1]
         except Exception as e:  # pragma: no cover - defensive
             logger.debug(f"canonical path for {target} failed: {e}")
             return target
@@ -1692,10 +1716,9 @@ class _StructureMixin:
           in anchors, so they leak into the internal bucket otherwise.
 
         When ``archive`` is provided, each resolved target is additionally
-        followed through its redirect chain (best-effort via
-        ``best_effort_redirect_chain``) so the returned path is the
-        canonical (non-redirect) entry actually served — this is what the
-        offline builder needs to invert into a stable reverse-edge graph.
+        canonicalized through ``_canonical_entry`` so the returned path is
+        the (non-redirect) entry actually served — this is what the offline
+        builder needs to invert into a stable reverse-edge graph.
         When ``archive`` is ``None`` the redirect step is skipped and the
         path-normalized target is returned as-is, which keeps the helper
         unit-testable without a ZIM.
@@ -1708,7 +1731,6 @@ class _StructureMixin:
             HTML_PARSER,
             _classify_anchor,
         )
-        from openzim_mcp.zim.redirects import best_effort_redirect_chain
 
         try:
             soup = BeautifulSoup(html, HTML_PARSER)
@@ -1747,17 +1769,12 @@ class _StructureMixin:
                 # back to the path-normalized target rather than dropping
                 # an otherwise-valid edge.
                 try:
-                    # Percent-decode fallback first: the href these targets
-                    # come from is RFC 3986-encoded, so a non-ASCII article
-                    # arrives as ``A/El_Ni%C3%B1o`` and this lookup would miss
-                    # it entirely — indexing the edge under a key nothing can
-                    # fetch.
-                    entry, target = _resolve_entry_spelling(archive, target)
-                    if entry is not None:
-                        resolved = best_effort_redirect_chain(entry)
-                        resolved_path = getattr(resolved, "path", None)
-                        if resolved_path:
-                            target = resolved_path
+                    # ``_canonical_entry`` also percent-decodes as a fallback:
+                    # the href these targets come from is RFC 3986-encoded, so
+                    # a non-ASCII article arrives as ``A/El_Ni%C3%B1o`` and a
+                    # raw lookup would miss it entirely — indexing the edge
+                    # under a key nothing can fetch.
+                    _entry, target = _canonical_entry(archive, target)
                 except Exception as e:
                     logger.debug(f"redirect canonicalization for {target} failed: {e}")
             if target in seen or target == source_path:

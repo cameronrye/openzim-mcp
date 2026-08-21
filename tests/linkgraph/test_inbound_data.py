@@ -4,8 +4,9 @@ A real sidecar is built via ``build_from_link_stream``; the archive-open and
 path-validation seams are stubbed so no real ZIM is needed. The archive-open
 context manager is monkeypatched to yield a ``MagicMock`` whose ``.uuid``
 matches the sidecar's built-in UUID, so ``LinkGraphReader.open_for``'s
-fingerprint check passes. ``get_entry_by_path`` raises so title resolution
-falls back to the path (keeping ``title == path`` deterministic).
+fingerprint check passes. Every entry it hands back has an empty title, so
+title resolution keeps its path placeholder (``title == path`` stays
+deterministic).
 """
 
 from __future__ import annotations
@@ -27,7 +28,8 @@ class _StubSelf:
 
     ``_validate_zim_path`` echoes the archive path; ``_resolve_outbound_titles``
     is the real (static) implementation, which is harmless because the patched
-    archive's ``get_entry_by_path`` raises (titles stay at their path fallback).
+    archive hands back entries with no title (titles stay at their path
+    fallback).
     """
 
     def __init__(self, archive_path: Path) -> None:
@@ -123,7 +125,7 @@ def test_inbound_returns_ranked_results(
     assert [r["path"] for r in result["results"]] == ["C/A", "C/B"]
     assert result["results"][0]["inbound_degree"] == 2
     assert result["results"][1]["inbound_degree"] == 1
-    # Title falls back to path since the stubbed archive lookup raises.
+    # Title falls back to path since the stubbed entries carry no title.
     assert result["results"][0]["title"] == "C/A"
     assert result["total"] == 2
     assert result["done"] is True

@@ -7,6 +7,7 @@ order. Each docstring names the defect id and the behaviour it pins.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Optional
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -425,9 +426,22 @@ class TestD25RateLimitWaitFloor:
 # D33 — related rows must follow redirects: real title, canonical path
 # ---------------------------------------------------------------------------
 
-CLIMATE_ZIM = Path(
-    "test_data/zim-testing-suite/withns/wikipedia_en_climate_change_mini_2024-06.zim"
-)
+
+@pytest.fixture
+def climate_zim(zim_test_data_dir: Optional[Path]) -> Path:
+    """The withns climate archive, located the way the rest of the suite is.
+
+    A bare relative ``Path`` skipped this — the only real-libzim test in the
+    file — whenever pytest ran from anywhere but the repo root, and ignored
+    the ``ZIM_TEST_DATA_DIR`` override the corpus is actually provisioned
+    through (``test_data/`` is gitignored).
+    """
+    if zim_test_data_dir is None:
+        pytest.skip("test ZIM corpus absent")
+    path = zim_test_data_dir / "withns" / "wikipedia_en_climate_change_mini_2024-06.zim"
+    if not path.exists():
+        pytest.skip("test ZIM corpus absent")
+    return path
 
 
 def _redirect_archive() -> MagicMock:
@@ -483,12 +497,11 @@ class TestD33RelatedFollowsRedirects:
         assert rows[0]["path"] == "C/aristotle/"
         assert rows[0]["title"].startswith("Aristotle")
 
-    @pytest.mark.skipif(not CLIMATE_ZIM.exists(), reason="test ZIM corpus absent")
-    def test_real_archive_redirect_is_followed(self) -> None:
+    def test_real_archive_redirect_is_followed(self, climate_zim: Path) -> None:
         from openzim_mcp.zim.structure import _StructureMixin
 
         rows = [{"path": 'A/"dry_spell"', "title": 'A/"dry_spell"'}]
-        _StructureMixin._resolve_outbound_titles(str(CLIMATE_ZIM), rows)
+        _StructureMixin._resolve_outbound_titles(str(climate_zim), rows)
 
         assert rows[0]["path"] == "A/Drought"
         assert rows[0]["title"] != rows[0]["path"]
@@ -1080,3 +1093,44 @@ class TestD41LimitBoundsDocumented:
                 ops.get_related_articles_data(zim_path, "Test", limit=101)
             with pytest.raises(OpenZimMcpValidationError, match="1 and 100"):
                 ops.get_inbound_links_data(zim_path, "Test", limit=101)
+
+
+# ---------------------------------------------------------------------------
+# zim_links ERRORS section — the `related` direction has no not-found envelope
+# ---------------------------------------------------------------------------
+
+
+class TestZimLinksErrorsDocumentRelated:
+    """The ERRORS section promised a not-found envelope for an unknown
+    ``entry_path`` in every direction. ``direction="related"`` catches the
+    archive error into its partial-success branch instead, so the one
+    direction the clause is read for most contradicted it."""
+
+    def test_related_reports_an_unknown_entry_as_total_zero(
+        self, ops: ZimOperations, zim_path: str
+    ) -> None:
+        archive = MagicMock()
+        archive.get_entry_by_path.side_effect = KeyError("Cannot find entry")
+        with patch(ARCHIVE_CTX) as ctx:
+            ctx.return_value.__enter__.return_value = archive
+            result = ops.get_related_articles_data(zim_path, "A/Nope", limit=5)
+
+        assert result["total"] == 0
+
+    def test_related_carries_the_miss_in_outbound_error(
+        self, ops: ZimOperations, zim_path: str
+    ) -> None:
+        archive = MagicMock()
+        archive.get_entry_by_path.side_effect = KeyError("Cannot find entry")
+        with patch(ARCHIVE_CTX) as ctx:
+            ctx.return_value.__enter__.return_value = archive
+            result = ops.get_related_articles_data(zim_path, "A/Nope", limit=5)
+
+        assert "Entry not found" in result["outbound_error"]
+
+    def test_errors_section_names_the_related_exception(self) -> None:
+        from openzim_mcp.tools._common import load_description
+
+        errors = load_description("zim_links").split("ERRORS:")[1]
+
+        assert "outbound_error" in errors
