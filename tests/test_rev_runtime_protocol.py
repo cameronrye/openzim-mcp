@@ -6,6 +6,8 @@ and the directory health probe.
 """
 
 import json
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any, Iterator, Tuple
 
@@ -154,3 +156,36 @@ def test_sessionless_tools_list_is_still_gated(
     assert response.status_code == 400
     assert response.json() == MISSING_SESSION_BODY
     assert _sessions(server) == {}
+
+
+# --------------------------------------------------------------------------
+# Validation worker: an unguarded host __main__ must not break every check
+# --------------------------------------------------------------------------
+
+_UNGUARDED_SCRIPT = """\
+from pathlib import Path
+
+from openzim_mcp.zim.archive import check_archive_integrity
+
+print("VALID", check_archive_integrity(Path({zim!r})))
+"""
+
+
+def test_integrity_check_survives_an_unguarded_host_main(
+    tmp_path: Path, v2_phase_a_zim: Path
+) -> None:
+    """``spawn`` re-executes the host's ``__main__`` in the worker, so an
+    embedding script with no ``if __name__ == "__main__":`` guard killed every
+    worker in bootstrap and turned validation into a permanent failure."""
+    script = tmp_path / "embed.py"
+    script.write_text(_UNGUARDED_SCRIPT.format(zim=str(v2_phase_a_zim)))
+
+    completed = subprocess.run(  # noqa: S603
+        [sys.executable, str(script)],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert "VALID True" in completed.stdout, completed.stdout

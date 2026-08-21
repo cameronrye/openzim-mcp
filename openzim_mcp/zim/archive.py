@@ -139,15 +139,40 @@ def has_zim_signature(path: Path) -> bool:
 _VALIDATION_POOL: Optional[ProcessPoolExecutor] = None
 _VALIDATION_POOL_LOCK = threading.Lock()
 
+# None until a worker has been asked to start: True once one has, False once
+# one has failed to. See ``_validation_pool``.
+_WORKERS_START: Optional[bool] = None
+
+
+def _worker_started() -> bool:
+    """Worker-process body for the bootstrap probe. Module-level to be picklable."""
+    return True
+
 
 def _validation_pool() -> ProcessPoolExecutor:
-    """Return the shared single-worker validation pool, spawning it on first use."""
-    global _VALIDATION_POOL
+    """Return the shared single-worker validation pool, spawning it on first use.
+
+    The pool is probed with a no-op before it is kept, because ``spawn``
+    re-executes the host's ``__main__`` in the child: an embedding script
+    without an ``if __name__ == "__main__":`` guard kills every worker in
+    bootstrap, forever. Probing separates that from a worker a particular
+    archive crashes — the first has to be worked around, the second must stay
+    a failed validation rather than take this process down with it.
+    """
+    global _VALIDATION_POOL, _WORKERS_START
     with _VALIDATION_POOL_LOCK:
         if _VALIDATION_POOL is None:
-            _VALIDATION_POOL = ProcessPoolExecutor(
+            pool = ProcessPoolExecutor(
                 max_workers=1, mp_context=multiprocessing.get_context("spawn")
             )
+            try:
+                pool.submit(_worker_started).result()
+            except BrokenProcessPool:
+                pool.shutdown(wait=False, cancel_futures=True)
+                _WORKERS_START = False
+                raise
+            _WORKERS_START = True
+            _VALIDATION_POOL = pool
         return _VALIDATION_POOL
 
 
@@ -179,19 +204,43 @@ def _check_archive_integrity(path: str) -> bool:
         raise RuntimeError(f"{type(e).__name__}: {e}") from None
 
 
+def _check_here(path: Path) -> bool:
+    """``Archive.check()`` in this process, for hosts where no worker starts.
+
+    Stalls this interpreter for the whole pass — the very thing the worker
+    exists to avoid — but a host that cannot spawn one is better served by a
+    slow answer than by a validation that can never succeed.
+    """
+    logger.warning(
+        "Integrity-check workers cannot start in this process (spawn "
+        "re-executes the host's __main__; an embedding script needs an "
+        'if __name__ == "__main__": guard). Checking %s in-process, which '
+        "blocks this interpreter until it finishes.",
+        path,
+    )
+    return bool(Archive(str(path)).check())
+
+
 def check_archive_integrity(path: Path) -> bool:
     """Run ``Archive.check()`` for ``path`` in the validation worker process.
+
+    Falls back to this process when no worker can start at all; see
+    ``_validation_pool``.
 
     Raises:
         OpenZimMcpArchiveError: if the worker died mid-check. The broken pool
             is discarded so the next call gets a fresh worker — a child crash
             must surface as a failed validation, never take the server down.
     """
+    if _WORKERS_START is False:
+        return _check_here(path)
     try:
         future = _validation_pool().submit(_check_archive_integrity, str(path))
         return bool(future.result())
     except BrokenProcessPool as e:
         _discard_validation_pool()
+        if _WORKERS_START is False:
+            return _check_here(path)
         raise OpenZimMcpArchiveError(
             f"Integrity check worker crashed while checking {path}"
         ) from e
