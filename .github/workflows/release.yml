@@ -288,7 +288,31 @@ jobs:
           ./mcp-publisher validate
           ./mcp-publisher login github-oidc
           ./mcp-publisher publish
-          ./mcp-publisher status
+
+      # `mcp-publisher status` is NOT a post-publish check — it MUTATES a
+      # version's lifecycle state and exits 1 without `--status`, so using it
+      # here reddened the job on every release. Read the entry back from the
+      # registry API instead: that search endpoint is what consumers (and
+      # docs/distribution.md) look at, so a green job now means the release is
+      # really live rather than merely uploaded.
+      - name: Verify the registry serves the published version
+        run: |
+          set -euo pipefail
+          SERVER_NAME=$(jq -r '.name' server.json)
+          VERSION=$(jq -r '.version' server.json)
+          for attempt in $(seq 1 12); do
+            if curl --proto '=https' --tlsv1.2 -fsS \
+              "https://registry.modelcontextprotocol.io/v0/servers?search=${SERVER_NAME}&version=${VERSION}" \
+              | jq -e --arg n "$SERVER_NAME" --arg v "$VERSION" \
+                'any(.servers[]; .server.name == $n and .server.version == $v)' >/dev/null; then
+              echo "Registry serves ${SERVER_NAME} ${VERSION}"
+              exit 0
+            fi
+            echo "Registry does not serve ${VERSION} yet (attempt ${attempt}/12)"
+            sleep 10
+          done
+          echo "::error::${SERVER_NAME} ${VERSION} never appeared in the MCP Registry"
+          exit 1
 
   create-release:
     name: Create GitHub Release
