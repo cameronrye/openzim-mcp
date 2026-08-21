@@ -179,6 +179,7 @@ dev = [
     "pytest-cov>=7.1.0",
     "pre-commit>=4.6.0",
     "bandit[toml]>=1.9.4",
+    "bandit-sarif-formatter>=1.1.1",
     "pip-audit>=2.10.0",
 ]
 

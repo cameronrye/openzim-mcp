@@ -199,6 +199,19 @@ def test_manifest_runtime_and_config(manifest: dict) -> None:
     assert cfg["multiple"] is True
 
 
+def test_dockerfile_registers_the_advanced_tool_surface() -> None:
+    """The image must advertise all 8 tools, like the other packaged channels.
+
+    Registry directories launch this image with no configuration, so whatever
+    the Dockerfile sets is what the world sees in the listing. The code default
+    is ``simple`` (one tool), which once left the Glama listing advertising
+    ``zim_query`` alone. The .mcpb bundle and server.json both pin ``advanced``;
+    this keeps the container from drifting back out of that set.
+    """
+    dockerfile = (REPO / "Dockerfile").read_text(encoding="utf-8")
+    assert "ENV OPENZIM_MCP_TOOL_MODE=advanced" in dockerfile
+
+
 def test_manifest_static_template_identity(manifest: dict) -> None:
     """Guard the static-template fields build_manifest does NOT overwrite.
 
