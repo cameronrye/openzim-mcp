@@ -72,12 +72,20 @@ def register_completions(server: "OpenZimMcpServer") -> None:
         allowed directory (glob + stat) before any cache lookup — run inline
         it would block the event loop, and a hung network mount would wedge
         every session on one completion request.
+
+        Sorted by path because the underlying scan globs the directory and
+        returns it in filesystem order, which differs between filesystems and
+        between two runs on the same one. A picker that reorders itself
+        between keystrokes is unusable, and an unordered list also made
+        ``test_completion_reflects_archives_added_after_startup`` fail on CI
+        runners whose glob happened to return the newer file first.
         """
         try:
-            return await asyncio.to_thread(server.zim_operations.list_zim_files_data)
+            rows = await asyncio.to_thread(server.zim_operations.list_zim_files_data)
         except Exception:  # noqa: BLE001 - a picker must not break the session
             logger.warning("completion: archive listing failed", exc_info=True)
             return []
+        return sorted(rows, key=lambda row: str(row.get("path", "")))
 
     def _matching(values: List[str], typed: str) -> List[str]:
         """Values consistent with what the user has typed so far.
