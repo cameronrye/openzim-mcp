@@ -3,7 +3,7 @@
 Sibling of ``test_v3_field_fixes_errors.py``. That module pinned the SHAPE of
 a log record (one physical line, R2-3); this one pins its LEVEL and its SIZE.
 
-A follow-up from PR #374, proved against ``a59eb03``:
+Two follow-ups from PR #374, both proved against ``a59eb03``:
 
 * every caller mistake on the whole tool surface — a mistyped ``entry_path``,
   a path outside ``allowed_directories``, a rejected argument, a rate-limit
@@ -11,6 +11,9 @@ A follow-up from PR #374, proved against ``a59eb03``:
   called ``.error(...)`` unconditionally. An ERROR channel that fires on user
   typos trains an operator to ignore it, which is how a real archive
   corruption gets missed.
+* PR #374 bounded the CLIENT-facing echo (``error_messages._bound_details``)
+  but not the log: a 1,000,000-char ``entry_path`` produced a 2,474-char
+  client message and a 1,000,067-char log record.
 """
 
 import contextlib
@@ -22,11 +25,24 @@ import pytest
 
 from openzim_mcp.config import OpenZimMcpConfig
 from openzim_mcp.exceptions import (
+    ArchiveOpenTimeoutError,
     OpenZimMcpArchiveError,
+    OpenZimMcpArchiveNameError,
+    OpenZimMcpCursorMismatchError,
     OpenZimMcpEntryNotFoundError,
+    OpenZimMcpFileNotFoundError,
+    OpenZimMcpRateLimitError,
+    OpenZimMcpSecurityError,
+    OpenZimMcpValidationError,
 )
+from openzim_mcp.security import _CONTEXT_MAX_LENGTH, sanitize_for_log
 from openzim_mcp.server import OpenZimMcpServer
 from openzim_mcp.tools._common import tool_error_response
+
+# A control-character-bearing path, mirroring ``_INJECTED_PATH`` in
+# ``test_v3_field_fixes_errors``: the new length bound must not be added in a
+# way that bypasses the R2-3 single-line guarantee.
+_INJECTED_PATH = "/tmp/foo\n\tbar\r.zim"
 
 
 @contextlib.contextmanager
@@ -65,6 +81,61 @@ def _records(caplog: pytest.LogCaptureFixture, logger_name: str):
 def advanced_server(temp_dir: Path) -> OpenZimMcpServer:
     config = OpenZimMcpConfig(allowed_directories=[str(temp_dir)], tool_mode="advanced")
     return OpenZimMcpServer(config)
+
+
+# --------------------------------------------------------------------------
+# Level: a caller mistake is not a server fault
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        OpenZimMcpValidationError("limit must be between 1 and 100"),
+        OpenZimMcpCursorMismatchError("cursor was issued for another archive"),
+        OpenZimMcpArchiveNameError("did not match any loaded archive"),
+        OpenZimMcpSecurityError("Access denied - Path is outside allowed directories"),
+        OpenZimMcpFileNotFoundError("File does not exist: /nowhere/x.zim"),
+        OpenZimMcpRateLimitError("Rate limit exceeded"),
+        OpenZimMcpEntryNotFoundError("Entry not found: 'A/Nope'."),
+    ],
+    ids=lambda e: type(e).__name__,
+)
+def test_caller_fault_logs_at_warning_not_error(
+    advanced_server: OpenZimMcpServer,
+    caplog: pytest.LogCaptureFixture,
+    error: Exception,
+) -> None:
+    """The request was wrong and the same request will always be wrong; the
+    process is healthy and no operator action exists."""
+    with _captured(caplog, "openzim_mcp.tools.zim_get", logging.WARNING):
+        tool_error_response(advanced_server, operation="zim_get", error=error)
+
+    (record,) = _records(caplog, "openzim_mcp.tools.zim_get")
+    assert record.levelno == logging.WARNING
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        RuntimeError("boom"),
+        OpenZimMcpArchiveError("libzim could not decode the cluster"),
+        ArchiveOpenTimeoutError("timed out opening archive"),
+    ],
+    ids=lambda e: type(e).__name__,
+)
+def test_server_fault_still_logs_at_error(
+    advanced_server: OpenZimMcpServer,
+    caplog: pytest.LogCaptureFixture,
+    error: Exception,
+) -> None:
+    """The guard that the demotion did not swallow real faults: without it a
+    later widening of the caller-fault tuple silences archive corruption."""
+    with _captured(caplog, "openzim_mcp.tools.zim_links", logging.WARNING):
+        tool_error_response(advanced_server, operation="zim_links", error=error)
+
+    (record,) = _records(caplog, "openzim_mcp.tools.zim_links")
+    assert record.levelno == logging.ERROR
 
 
 def test_entry_not_found_is_a_subclass_of_archive_error() -> None:
@@ -130,3 +201,67 @@ def test_missing_entry_path_raises_the_typed_error(
 
     with pytest.raises(OpenZimMcpEntryNotFoundError):
         ops.get_zim_entry(str(zim_path), "A/NoSuchEntryXyz")
+
+
+# --------------------------------------------------------------------------
+# Size: the log was the last unbounded amplifier
+# --------------------------------------------------------------------------
+
+
+def test_sanitize_for_log_bounds_oversized_text() -> None:
+    out = sanitize_for_log("z" * 1_000_000)
+
+    assert len(out) < 1200, len(out)
+    assert out.endswith("chars elided]"), out[-40:]
+
+
+def test_sanitize_for_log_leaves_a_legal_max_length_path_intact() -> None:
+    """The cap sits above ``INPUT_LIMITS.FILE_PATH`` (1000), the largest
+    documented argument, so a LEGAL value is never trimmed. This is the pin
+    that stops someone "tidying" the cap below it."""
+    legal = "/" + "p" * 999
+
+    assert sanitize_for_log(legal) == legal
+    assert len(legal) <= _CONTEXT_MAX_LENGTH
+
+
+def test_sanitize_for_log_still_collapses_control_chars() -> None:
+    """The bound must not be added in a way that bypasses R2-3."""
+    out = sanitize_for_log(f"Path contains suspicious pattern: {_INJECTED_PATH}")
+
+    assert "\n" not in out
+    assert "\t" not in out
+    assert "\r" not in out
+
+
+def test_tool_error_log_record_is_bounded_for_a_1mb_entry_path(
+    advanced_server: OpenZimMcpServer, caplog: pytest.LogCaptureFixture
+) -> None:
+    """THE regression test: at ``a59eb03`` this record measured 1,000,067
+    characters while the client envelope was already capped at ~2,500."""
+    huge = "A/" + "z" * 1_000_000
+    error = OpenZimMcpEntryNotFoundError(
+        f"Entry not found: '{huge}'. Double-check the spelling."
+    )
+
+    with _captured(caplog, "openzim_mcp.tools.zim_get", logging.WARNING):
+        tool_error_response(
+            advanced_server, operation="zim_get", error=error, context=f"Path: {huge}"
+        )
+
+    (record,) = _records(caplog, "openzim_mcp.tools.zim_get")
+    assert len(record.getMessage()) < 2000, len(record.getMessage())
+
+
+def test_short_log_message_round_trips_byte_for_byte(
+    advanced_server: OpenZimMcpServer, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The bound is a no-op below the cap — ``test_tools_common`` pins the
+    exact ``'Error in <op>: <err>'`` rendering."""
+    with _captured(caplog, "openzim_mcp.tools.zim_links", logging.WARNING):
+        tool_error_response(
+            advanced_server, operation="zim_links", error=RuntimeError("boom")
+        )
+
+    (record,) = _records(caplog, "openzim_mcp.tools.zim_links")
+    assert record.getMessage() == "Error in zim_links: boom"

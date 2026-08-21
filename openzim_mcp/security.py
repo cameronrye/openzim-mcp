@@ -567,6 +567,32 @@ def sanitize_control_chars(text: str) -> str:
     return _CONTEXT_CONTROL_CHARS_RE.sub(" ", text)
 
 
+def sanitize_for_log(text: str) -> str:
+    """Collapse control chars AND bound the length of caller-influenced log text.
+
+    ``sanitize_control_chars`` stopped a hostile argument forging extra
+    physical log lines (R2-3); it did nothing about VOLUME. A 1 MB
+    ``entry_path`` still wrote a 1 MB log record while the client-facing
+    envelope was capped — the log was the last unbounded amplifier of an
+    attacker-controlled string.
+
+    Deliberately the SAME ``_CONTEXT_MAX_LENGTH`` as the envelope's
+    ``context`` field and the ``**Technical Details**`` echo
+    (``error_messages._DETAILS_MAX_LENGTH``), so one number bounds every
+    user-influenced string that leaves this process, to the client or to
+    disk. It sits above ``INPUT_LIMITS.FILE_PATH`` (1000), the largest
+    documented argument, so a legal value is never trimmed.
+    """
+    text = sanitize_control_chars(text)
+    if len(text) <= _CONTEXT_MAX_LENGTH:
+        return text
+    kept = text[:_CONTEXT_MAX_LENGTH].rstrip()
+    # Count against what survived, not against the cap: a derived
+    # ``len(text) - _CONTEXT_MAX_LENGTH`` would misreport by however much
+    # ``rstrip`` removed.
+    return f"{kept}... [+{len(text) - len(kept)} chars elided]"
+
+
 def sanitize_context_for_error(context: str) -> str:
     """Sanitize context strings for error messages.
 
