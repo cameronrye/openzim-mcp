@@ -13,6 +13,7 @@ from .exceptions import (
     OpenZimMcpArchiveError,
     OpenZimMcpArchiveNameError,
     OpenZimMcpArchivePathError,
+    OpenZimMcpEntryNotFoundError,
     OpenZimMcpError,
     OpenZimMcpFileNotFoundError,
     OpenZimMcpRateLimitError,
@@ -367,6 +368,14 @@ def get_error_config(
         return _archive_path_config(
             ERROR_CONFIGS[OpenZimMcpArchivePathError], operation, count_archives
         )
+
+    # A typed not-found beats the prose check below it. The type-mapping fall
+    # back at the bottom is by EXACT type, so this subclass would otherwise
+    # reach the client only for as long as its message keeps saying "entry not
+    # found" — one rephrase at a raise site and a missing page would start
+    # rendering "verify the ZIM file is not corrupted".
+    if isinstance(error, OpenZimMcpEntryNotFoundError):
+        return NOT_FOUND_ERROR_CONFIG
 
     # Specific failure modes detectable from the message take priority.
     if "entry not found" in message or "does not exist" in message:

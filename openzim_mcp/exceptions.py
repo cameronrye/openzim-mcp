@@ -105,6 +105,23 @@ class OpenZimMcpArchiveError(OpenZimMcpError):
     error_code: str = "OPENZIM_ARCHIVE_ERROR"
 
 
+class OpenZimMcpEntryNotFoundError(OpenZimMcpArchiveError):
+    """Raised when the caller names an entry path the archive does not contain.
+
+    A subclass of :class:`OpenZimMcpArchiveError` so every existing
+    ``except OpenZimMcpArchiveError`` keeps catching it unchanged; the only
+    thing that changes is that callers can now tell "you asked for a page
+    that isn't here" apart from "this archive is corrupt". That is the
+    difference between a caller mistake and a server fault, and therefore
+    between a WARNING and an ERROR — a distinction that must come from the
+    exception TYPE, never from string-matching the message.
+    ``tools/resource_tools.py`` already draws exactly this line at the
+    protocol layer by answering a miss with ``INVALID_PARAMS``.
+    """
+
+    error_code: str = "OPENZIM_ENTRY_NOT_FOUND"
+
+
 class OpenZimMcpConfigurationError(OpenZimMcpError):
     """Raised when configuration is invalid."""
 

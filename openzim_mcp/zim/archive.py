@@ -51,6 +51,7 @@ from openzim_mcp.defaults import CONTENT
 from openzim_mcp.exceptions import (
     ArchiveOpenTimeoutError,
     OpenZimMcpArchiveError,
+    OpenZimMcpEntryNotFoundError,
 )
 from openzim_mcp.meta import attach_meta
 from openzim_mcp.preset_data import ArchivePreset, resolve_preset_from_entries
@@ -1710,7 +1711,7 @@ class ZimOperations(
         if actual_path:
             resolved = _follow(archive.get_entry_by_path(actual_path))
             return resolved, resolved.path
-        raise OpenZimMcpArchiveError(
+        raise OpenZimMcpEntryNotFoundError(
             f"Entry not found: '{entry_path}'. "
             f"Try using zim_search() to find available entries."
         ) from None
