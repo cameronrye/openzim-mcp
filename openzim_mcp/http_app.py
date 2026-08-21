@@ -539,7 +539,10 @@ def _is_initialize_request(body: bytes) -> bool:
     """
     try:
         message = json.loads(body)
-    except ValueError:
+    except (ValueError, RecursionError):
+        # ``RecursionError`` is a ``RuntimeError``, not a ``ValueError``: a
+        # body nested past the interpreter's limit is undecodable the same way
+        # malformed JSON is, and must be answered rather than escape the gate.
         return False
     if not isinstance(message, dict) or message.get("method") != "initialize":
         return False

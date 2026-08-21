@@ -7,10 +7,19 @@ and the directory health probe.
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator, Tuple
 
+import pytest
 from mcp_types import INVALID_REQUEST
+from starlette.testclient import TestClient
 
+from openzim_mcp.server import OpenZimMcpServer
+from tests.test_v3_field_fixes_http import (
+    LEGACY_HEADERS,
+    MISSING_SESSION_BODY,
+    _build_client,
+    _sessions,
+)
 from tests.test_v3_field_fixes_protocol import (
     _LEGACY_OPENING,
     _by_id,
@@ -70,3 +79,31 @@ def test_malformed_frame_still_echoes_a_free_id(tmp_path: Path) -> None:
 
     (rejection,) = _by_id(responses, 9)
     assert rejection["error"]["code"] == INVALID_REQUEST
+
+
+# --------------------------------------------------------------------------
+# HTTP: the sessionless gate must answer, not 500 — and only on the MCP path
+# --------------------------------------------------------------------------
+
+
+@pytest.fixture
+def gated_client(tmp_path: Path) -> Iterator[Tuple[TestClient, OpenZimMcpServer]]:
+    """The production-wired streamable-HTTP app, lifespan running."""
+    client, server = _build_client(tmp_path)
+    with client:
+        yield client, server
+
+
+def test_deeply_nested_body_is_answered_not_500(
+    gated_client: Tuple[TestClient, OpenZimMcpServer],
+) -> None:
+    """``json.loads`` raises ``RecursionError`` — a ``RuntimeError``, not a
+    ``ValueError`` — on a deeply nested body, so it escaped the gate and
+    Starlette turned it into a 500 with a traceback."""
+    client, server = gated_client
+
+    response = client.post("/mcp", headers=LEGACY_HEADERS, content=b"[" * 200_000)
+
+    assert response.status_code == 400
+    assert response.json() == MISSING_SESSION_BODY
+    assert _sessions(server) == {}
