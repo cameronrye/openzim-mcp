@@ -20,8 +20,11 @@ on:
   push:
     branches: ["main"]
 
-# Read-only by default; the one job widens exactly what it needs.
-permissions: read-all
+# Named rather than `read-all` (the upstream template's spelling): the
+# workflow-level default should grant only what a step that declares nothing
+# actually needs, and the one job below widens to exactly its own set.
+permissions:
+  contents: read
 
 jobs:
   analysis:
