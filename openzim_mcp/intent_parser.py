@@ -306,7 +306,10 @@ _TAIL_LEADING_CONTENTS_RE = re.compile(r"^contents\s+", re.IGNORECASE)
 # D48: ``get (the) article about X`` anchors on ``article`` and leaves
 # ``about X`` as the tail; ``about`` is a bridge word, not part of the
 # title, so peel it. Only ``about`` — ``on`` / ``for`` / ``of`` open real
-# titles far too often (``On the Origin of Species``) to be safe.
+# titles far too often (``On the Origin of Species``) to be safe. And only
+# after the object noun: past a preposition the user is spelling the title
+# out (``summary of About a Boy``), where ``about`` is the title's own
+# first word.
 _TAIL_LEADING_ABOUT_RE = re.compile(r"^about\s+", re.IGNORECASE)
 
 
@@ -411,6 +414,9 @@ def _extract_entry_path_keyworded(query: str, params: Dict[str, Any]) -> None:
         re.IGNORECASE,
     )
     matches = list(object_re.finditer(query))
+    # Whether the tail follows the object noun rather than a preposition —
+    # the ``about`` peel below is confined to that shape.
+    anchored_on_object = bool(matches)
     if not matches:
         verb_match = verb_re.search(query)
         scan_from = verb_match.end() if verb_match else 0
@@ -425,10 +431,13 @@ def _extract_entry_path_keyworded(query: str, params: Dict[str, Any]) -> None:
         if cleaned and cleaned != tail:
             tail = cleaned
         # D48: ``get the article about X`` -> tail ``about X``; drop the
-        # bridge word so the title probe sees ``X``.
-        cleaned = _TAIL_LEADING_ABOUT_RE.sub("", tail, count=1).strip()
-        if cleaned and cleaned != tail:
-            tail = cleaned
+        # bridge word so the title probe sees ``X``. Never past a
+        # preposition — ``summary of About a Boy`` resolved to "A Boy",
+        # and where the index holds both spellings it did so at score 1.0.
+        if anchored_on_object:
+            cleaned = _TAIL_LEADING_ABOUT_RE.sub("", tail, count=1).strip()
+            if cleaned and cleaned != tail:
+                tail = cleaned
         # Post-v2.0.0 D-E: peel a surrounding quote pair so an
         # empty-quoted tail (``structure of ""`` / ``get article ""``)
         # doesn't survive to the backend, which would otherwise

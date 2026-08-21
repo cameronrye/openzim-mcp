@@ -182,3 +182,41 @@ def test_typo_sweep_stops_within_its_extra_probe_budget(tmp_path, monkeypatch) -
     assert out["results"][0]["path"] == _DIABETES_PATH
     variant_count = len(_SearchMixin._typo_variants("Diabtes"))
     assert len(calls) < variant_count, "the sweep ran every variant"
+
+
+# ---------------------------------------------------------------------------
+# intent_parser.py — "About X" titles survive a prepositional anchor
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("query", "expected_path"),
+    [
+        ("summary of About a Boy", "about a boy"),
+        ("toc of About Schmidt", "about schmidt"),
+        ("links in About a Boy", "about a boy"),
+        ("structure of About Time", "about time"),
+    ],
+)
+def test_about_is_not_peeled_off_a_prepositional_tail(
+    query: str, expected_path: str
+) -> None:
+    """After ``of`` / ``in`` the user is spelling the title out, so peeling
+    ``about`` pointed the resolver at a different article — and with both
+    ``About Schmidt`` and ``Schmidt`` in the index it did so confidently."""
+    from openzim_mcp.intent_parser import IntentParser
+
+    _intent, params, _ = IntentParser.parse_intent(query)
+    assert params.get("entry_path", "").lower() == expected_path
+
+
+@pytest.mark.parametrize(
+    "query",
+    ["get the article about Immanuel Kant", "show an entry about Immanuel Kant"],
+)
+def test_about_is_still_peeled_after_the_object_noun(query: str) -> None:
+    """D48's shape — ``about`` bridging the object noun to the title."""
+    from openzim_mcp.intent_parser import IntentParser
+
+    _intent, params, _ = IntentParser.parse_intent(query)
+    assert params.get("entry_path", "").lower() == "immanuel kant"
