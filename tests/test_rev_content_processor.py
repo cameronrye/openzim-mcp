@@ -112,3 +112,17 @@ def test_snippet_still_skips_nav_list_the_query_misses() -> None:
 def test_single_item_list_is_not_navigation() -> None:
     assert _is_nav_list_paragraph("  * Related Issues\n") is False
     assert _is_nav_list_paragraph("  * Summary\n  * Start Here\n") is True
+
+
+# ---------------------------------------------------------------------------
+# Leading-title-H1 strip
+# ---------------------------------------------------------------------------
+
+
+def test_leading_h1_strip_handles_length_expanding_lowercase() -> None:
+    """``'İ'.lower()`` is two code points, so slicing the folded title by the
+    unfolded H1 length read the separator probe one character early."""
+    out = ContentProcessor._strip_leading_title_heading(
+        "# İstanbul\n\nBody text.\n", "İstanbul: MedlinePlus"
+    )
+    assert out == "Body text.\n"

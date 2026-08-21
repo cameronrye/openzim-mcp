@@ -1795,9 +1795,13 @@ class ContentProcessor:
             return content
         h1 = leading_h1.group(1).strip()
         folded_title = norm_title.lower()
-        if not folded_title.startswith(h1.lower()):
+        folded_h1 = h1.lower()
+        if not folded_title.startswith(folded_h1):
             return content
-        rest = folded_title[len(h1) :].lstrip()
+        # Index the folded title by the FOLDED length: str.lower() expands
+        # some characters ('İ' -> two code points), so the raw H1 length
+        # would read the separator probe one character early.
+        rest = folded_title[len(folded_h1) :].lstrip()
         if rest and rest[0] not in ":|-–—":
             return content
         return content[leading_h1.end() :]
