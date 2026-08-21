@@ -270,13 +270,21 @@ def _query_title_already_on_page(results: List[Dict[str, Any]], query: str) -> b
 # and got bolded as if they were content.
 _QUERY_OPERATOR_WORDS = frozenset({"and", "or", "not", "xor", "near", "adj"})
 
+# Xapian field prefixes libzim actually indexes. ``title:diabetes`` is one
+# term to the searcher, but the snippet builder saw two words and bolded the
+# FIELD NAME wherever "title" appeared in the article body. An allowlist
+# rather than a generic ``^\w+:`` strip, so a prose query like ``3:1 ratio``
+# survives intact.
+_QUERY_FIELD_PREFIXES = frozenset({"title", "path"})
+
 
 def _snippet_query(query: str) -> Optional[str]:
     """``query`` without Boolean-operator words, for snippet selection.
 
     ``(insulin) AND (NOT glucose)`` -> ``insulin glucose``: operator words
-    go, and grouping/quoting punctuation is peeled off the words that stay
-    (inner hyphens as in ``insulin-like`` survive). Returns ``None`` when
+    go, grouping/quoting punctuation is peeled off the words that stay
+    (inner hyphens as in ``insulin-like`` survive), and a known field prefix
+    is dropped (``title:diabetes`` -> ``diabetes``). Returns ``None`` when
     nothing remains, so the caller falls back to the lead paragraph.
 
     A TRAILING ``*`` is deliberately kept: it tells the highlighter to bold
@@ -290,6 +298,9 @@ def _snippet_query(query: str) -> Optional[str]:
         # marker is still seen in ``(climat*)``.
         if bare and word.rstrip("()\"'").endswith("*"):
             bare += "*"
+        head, sep, tail = bare.partition(":")
+        if sep and tail and head.lower() in _QUERY_FIELD_PREFIXES:
+            bare = tail
         # ``rstrip("*")`` on the operator test, or ``and*`` slips past the
         # filter and gets bolded as content.
         if bare and bare.rstrip("*").lower() not in _QUERY_OPERATOR_WORDS:
@@ -4091,7 +4102,12 @@ class _SearchMixin:
             try:
                 entry = archive.get_entry_by_path(entry_id)
                 snippet = self._get_entry_snippet(
-                    entry, query=query, validated_path=validated_path
+                    entry,
+                    # Same normalisation the interactive search rows get —
+                    # this path fed the raw query, so operator words were
+                    # still anchoring and bolding on the synthesize route.
+                    query=_snippet_query(query),
+                    validated_path=validated_path,
                 )
             except Exception as exc:
                 logger.warning(
@@ -4149,7 +4165,14 @@ class _SearchMixin:
         entry = self._follow_redirect_chain(entry)
         try:
             snippet = self._get_entry_snippet(
-                entry, query=title, validated_path=validated_path
+                # Deliberately NOT ``_snippet_query(title)``: this "query" is
+                # an article TITLE, so its words are content, not syntax.
+                # Normalising would turn "Sense and Sensibility" into the
+                # terms "Sense Sensibility" and drop a word the entry is
+                # literally named after.
+                entry,
+                query=title,
+                validated_path=validated_path,
             )
         except Exception as e:
             logger.debug(f"title_match_hit snippet failed for {title!r}: {e}")

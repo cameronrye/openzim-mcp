@@ -191,3 +191,100 @@ class TestPrefixTermSnippetAnchoring:
         )
         assert out.startswith("**Climate**")
         assert "Climbing" not in out
+
+
+class TestSnippetQueryStripsFieldPrefixes:
+    """``title:diabetes`` used to bold the word "title" in the article body."""
+
+    def test_title_prefix_is_stripped(self) -> None:
+        assert _snippet_query("title:diabetes") == "diabetes"
+
+    def test_path_prefix_is_stripped(self) -> None:
+        assert _snippet_query("path:Aspirin") == "Aspirin"
+
+    def test_field_prefix_and_wildcard_together(self) -> None:
+        assert _snippet_query("title:diabet*") == "diabet*"
+
+    def test_prose_colon_is_not_a_field_prefix(self) -> None:
+        # Allowlist, not a generic ``^\w+:`` strip: a ratio must survive.
+        assert _snippet_query("3:1 ratio") == "3:1 ratio"
+        assert _snippet_query("chapter:2 summary") == "chapter:2 summary"
+
+    def test_bare_field_prefix_is_left_alone(self) -> None:
+        assert _snippet_query("title:") == "title:"
+
+    def test_field_name_is_no_longer_highlighted_as_content(self) -> None:
+        text = "The title of the article on Diabetes mellitus is set."
+        out = _highlight_terms(text, _snippet_query("title:diabetes") or "", max_hits=5)
+        assert "**title**" not in out
+        assert "**Diabetes**" in out
+
+
+class TestSynthesizePathNormalisesTheQuery:
+    """``search_top_k`` fed the RAW query to the snippet builder.
+
+    D30 stripped operator words from the snippet query on the interactive
+    search path only, so the synthesize path kept bolding ``**and**`` and
+    anchoring on nav junk.
+    """
+
+    def test_search_top_k_strips_operator_words(self, tmp_path) -> None:
+        from unittest.mock import MagicMock, patch
+
+        from tests.zim_stubs import make_archive_stub, make_ops, make_search_stub
+
+        ops = make_ops(tmp_path)
+
+        def _entry(eid: str) -> MagicMock:
+            entry = MagicMock()
+            entry.path = eid
+            entry.title = "Hypoglycemia"
+            item = MagicMock()
+            item.mimetype = "text/html"
+            item.content = (
+                b"<p>Diagnosis and Tests</p>"
+                b"<p>Insulin is a hormone that lowers blood glucose.</p>"
+            )
+            entry.get_item.return_value = item
+            return entry
+
+        with patch("openzim_mcp.zim_operations.Searcher") as searcher:
+            searcher.return_value.search.return_value = make_search_stub(["C/Hypo"])
+            hits = ops.search_top_k(
+                make_archive_stub(_entry), "(insulin) AND (NOT glucose)", k=1
+            )
+
+        snippet = hits[0]["snippet"]
+        assert "**Insulin**" in snippet, snippet
+        assert "**and**" not in snippet
+        assert "**AND**" not in snippet
+
+    def test_title_match_hit_keeps_its_raw_title(self, tmp_path) -> None:
+        """A title is not a query — ``and`` in it is a word, not an operator.
+
+        Pinned so a later sweep does not "fix" ``title_match_hit`` by
+        routing it through ``_snippet_query`` too.
+        """
+        from unittest.mock import MagicMock, patch
+
+        from tests.zim_stubs import make_archive_stub, make_ops
+
+        ops = make_ops(tmp_path)
+
+        def _entry(eid: str) -> MagicMock:
+            entry = MagicMock()
+            entry.path = eid
+            entry.title = "Sense and Sensibility"
+            entry.is_redirect = False
+            item = MagicMock()
+            item.mimetype = "text/html"
+            item.content = b"<p>Sense and Sensibility is a novel by Jane Austen.</p>"
+            entry.get_item.return_value = item
+            return entry
+
+        archive = make_archive_stub(_entry)
+        with patch.object(ops, "_find_entry_fast_path", return_value=_entry("A/Sense")):
+            hit = ops.title_match_hit(archive, "Sense and Sensibility")
+
+        assert hit is not None
+        assert "**and**" in hit["snippet"], hit["snippet"]
