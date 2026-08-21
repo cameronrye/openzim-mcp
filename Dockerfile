@@ -68,6 +68,14 @@ RUN chmod 555 /app/.venv /app/openzim_mcp
 
 ENV PATH="/app/.venv/bin:$PATH"
 
+# Register the full 8-tool surface. The code default is `simple` (the single
+# zim_query entry point), which is the right default for a bare `uvx` install
+# but not for a registry-launched container: server.json already pins
+# `advanced` for the MCP Registry, and directories that launch this image with
+# no configuration (Glama) otherwise advertise one tool instead of eight.
+# Override at run time with `-e OPENZIM_MCP_TOOL_MODE=simple`.
+ENV OPENZIM_MCP_TOOL_MODE=advanced
+
 # Default mount point for ZIM files
 VOLUME ["/data"]
 
