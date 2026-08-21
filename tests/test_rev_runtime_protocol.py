@@ -16,6 +16,7 @@ import pytest
 from mcp_types import INVALID_REQUEST
 from starlette.testclient import TestClient
 
+from openzim_mcp.http_app import MCP_PATH
 from openzim_mcp.server import OpenZimMcpServer
 from openzim_mcp.server_state import _check_directory_health
 from openzim_mcp.zim.archive import DENIED_ZIM_WARNING, ZIM_MAGIC
@@ -134,6 +135,18 @@ def test_sessionless_initialize_with_narrow_accept_mints_nothing(
         assert response.status_code == 406, response.text
 
     assert _sessions(server) == {}
+
+
+def test_gate_and_router_agree_on_the_mcp_path(
+    gated_client: Tuple[TestClient, OpenZimMcpServer],
+) -> None:
+    """The gate answers only ``MCP_PATH``; if the SDK ever routes its
+    transport elsewhere, the gate would guard nothing and 404 everything."""
+    client, _server = gated_client
+
+    routed = {getattr(route, "path", None) for route in client.app.routes}
+
+    assert MCP_PATH in routed, routed
 
 
 def test_unknown_path_still_reports_not_found(

@@ -49,10 +49,11 @@ logger = logging.getLogger(__name__)
 HEALTHZ_PATH = "/healthz"
 READYZ_PATH = "/readyz"
 
-# The one route the SDK mints sessions on. Passed to the app builder *and* to
-# the sessionless gate so the two cannot drift: a gate that guessed wrong
-# would answer paths the router owns, turning a typo'd URL into a session
-# complaint instead of a 404.
+# The one route the SDK mints sessions on — its ``streamable_http_path``
+# default, which the app builder below is left to apply. The sessionless gate
+# answers only here, so the two must agree: a gate on the wrong path would
+# answer URLs the router owns, turning a typo into a session complaint instead
+# of a 404. A test asserts the built app really routes this path.
 MCP_PATH = "/mcp"
 
 # Health endpoints exempt from auth.
@@ -814,7 +815,6 @@ def serve_streamable_http(
     # (there is no ``settings`` object to mutate). ``host`` feeds the SDK's
     # DNS-rebinding Host allow-list; we still run uvicorn ourselves below.
     app = server.mcp.streamable_http_app(
-        streamable_http_path=MCP_PATH,
         host=server.config.host,
         transport_security=server._transport_security,
     )
