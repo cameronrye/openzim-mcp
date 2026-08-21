@@ -128,54 +128,54 @@ _CONTENT_CACHE_CASES = [
     (
         "main_page",
         lambda zo, p: zo.get_main_page(p, compact=False),
-        lambda vp: f"main_page:{vp}:compact=False",
-        lambda vp, tok: f"main_page:{vp}:{tok}:compact=False",
+        lambda vp: f"main_page:v2:{vp}:compact=False:cap=None",
+        lambda vp, tok: f"main_page:v2:{vp}:{tok}:compact=False:cap=None",
     ),
     (
         "main_page_data",
         lambda zo, p: zo.get_main_page_data(p, compact=False),
-        lambda vp: f"main_page_data:{vp}:compact=False",
-        lambda vp, tok: f"main_page_data:{vp}:{tok}:compact=False",
+        lambda vp: f"main_page_data:v2:{vp}:compact=False:cap=None",
+        lambda vp, tok: f"main_page_data:v2:{vp}:{tok}:compact=False:cap=None",
     ),
     (
         "browse_ns_data",
         lambda zo, p: zo.browse_namespace_data(p, "A", 50, 0),
-        lambda vp: f"browse_ns_data:v2d:{vp}:A:50:0:assets=False",
-        lambda vp, tok: f"browse_ns_data:v2d:{vp}:{tok}:A:50:0:assets=False",
+        lambda vp: f"browse_ns_data:v2e:{vp}:A:50:0:assets=False",
+        lambda vp, tok: f"browse_ns_data:v2e:{vp}:{tok}:A:50:0:assets=False",
     ),
     (
         # An explicit limit is passed so the key is not affected by the
         # ``limit is None -> default_search_limit`` resolution these methods do.
-        "search_v2b",
+        "search_v2c",
         lambda zo, p: zo.search_zim_file_data(p, "test", 5, 0),
-        lambda vp: f"search_v2b:{vp}:test:5:0",
-        lambda vp, tok: f"search_v2b:{vp}:{tok}:test:5:0",
+        lambda vp: f"search_v2c:{vp}:test:5:0",
+        lambda vp, tok: f"search_v2c:{vp}:{tok}:test:5:0",
     ),
     (
-        "search_filtered",
+        "search_filtered:v1b",
         lambda zo, p: zo.search_with_filters(p, "test", limit=5),
-        lambda vp: f"search_filtered:{vp}:test:None:None:5:0:dq=",
-        lambda vp, tok: f"search_filtered:{vp}:{tok}:test:None:None:5:0:dq=",
+        lambda vp: f"search_filtered:v1b:{vp}:test:None:None:5:0:dq=",
+        lambda vp, tok: f"search_filtered:v1b:{vp}:{tok}:test:None:None:5:0:dq=",
     ),
     (
-        "search_filtered_v2b",
+        "search_filtered_v2c",
         lambda zo, p: zo.search_with_filters_data(p, "test", limit=5),
-        lambda vp: f"search_filtered_v2b:{vp}:test:None:None:5:0",
-        lambda vp, tok: f"search_filtered_v2b:{vp}:{tok}:test:None:None:5:0",
+        lambda vp: f"search_filtered_v2c:{vp}:test:None:None:5:0",
+        lambda vp, tok: f"search_filtered_v2c:{vp}:{tok}:test:None:None:5:0",
     ),
     (
         "suggestions_data",
         lambda zo, p: zo.get_search_suggestions_data(p, "te", 10),
-        lambda vp: f"suggestions_data:v2b:{vp}:te:10",
-        lambda vp, tok: f"suggestions_data:v2b:{vp}:{tok}:te:10",
+        lambda vp: f"suggestions_data:v2d:{vp}:te:10",
+        lambda vp, tok: f"suggestions_data:v2d:{vp}:{tok}:te:10",
     ),
     (
         # Entry content/response caches: an explicit max_content_length keeps
         # the key clear of the ``None -> default`` resolution.
         "entry",
         lambda zo, p: zo.get_zim_entry(p, "A/Test", 1000, 0),
-        lambda vp: f"entry:{vp}:A/Test:1000:0:compact=False",
-        lambda vp, tok: f"entry:{vp}:{tok}:A/Test:1000:0:compact=False",
+        lambda vp: f"entry:v3:{vp}:A/Test:1000:0:compact=False",
+        lambda vp, tok: f"entry:v3:{vp}:{tok}:A/Test:1000:0:compact=False",
     ),
     (
         "entry_data",

@@ -1,6 +1,6 @@
 [project]
 name = "openzim-mcp"
-version = "2.7.0"
+version = "3.0.0"
 description = "OpenZIM MCP - ZIM MCP Server that enables AI models to access and search ZIM format knowledge bases offline"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -51,7 +51,15 @@ dependencies = [
     "beautifulsoup4>=4.14.3,<5.0",
     "html2text>=2025.4.15,<2027.0",
     "libzim>=3.9.0,<4.0",
-    "mcp[cli]>=1.28.1,<2.0",
+    # Held to 2.0.x deliberately: sdk_compat.py patches the dicts under the
+    # SDK's method tables, and server.py/subscriptions.py install handlers
+    # through the private ``_request_handlers`` registry. CI resolves the
+    # lockfile, but fresh installs (pip/uvx, Smithery, Docker) resolve the
+    # newest wheel this range admits — a 2.1 that moves any of those seams
+    # would break them at runtime with the suite still green. Raising the
+    # ceiling is a deliberate bump PR that re-audits the seams (and likely
+    # retires the ping shim; its canary test will say).
+    "mcp[cli]>=2.0.0,<2.1",
     "pydantic>=2.13.3,<3.0",
     "pydantic-settings>=2.14.0,<3.0",
     "tiktoken>=0.7.0,<1.0",
@@ -155,6 +163,11 @@ omit = ["tests/*"]
 [dependency-groups]
 dev = [
     "black>=26.3.1",
+    # Used by tests/live/ only. Previously arrived transitively via mcp 1.x;
+    # the v2 SDK ships httpx2 instead, so the live suite fails to import
+    # without an explicit declaration. Declared here rather than depended on
+    # transitively so a future SDK dependency change can't break collection.
+    "httpx>=0.28",
     "flake8>=7.3.0",
     "isort>=8.0.1",
     # Capped below 2.0: mypy 2.x changes defaults and can red an otherwise

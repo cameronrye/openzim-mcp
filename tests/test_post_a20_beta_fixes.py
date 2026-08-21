@@ -104,6 +104,14 @@ from openzim_mcp.pagination import Cursor, archive_identity
 from openzim_mcp.simple_tools import SimpleToolsHandler
 
 
+def _body(out: object) -> str:
+    """Readable body of a handler result: the ``message`` of a
+    ``ToolErrorPayload`` envelope, or the markdown string itself."""
+    if isinstance(out, dict):
+        return str(out.get("message", ""))
+    return str(out)
+
+
 def _encode_cursor(tool: str, **state_fields: Any) -> str:
     """Encode a v2 cursor for ``tool`` from arbitrary ``s.*`` fields.
 
@@ -153,17 +161,15 @@ class TestP1D1DispatcherQMismatchSkipsNonQEmittingTools:
             options={"compact": True, "cursor": cursor_token},
         )
         # Must NOT route through the misleading q-mismatch shape.
-        assert not (
-            isinstance(out, dict) and out.get("operation") == "cursor_decode"
-        ), (
+        assert "shares no terms" not in _body(out), (
             f"dispatcher fired q-mismatch when handler tool-mismatch was correct: "
             f"{out!r}"
         )
-        # Handler-level tool-mismatch markdown shape.
-        assert isinstance(out, str)
-        assert "Cursor / Tool Mismatch" in out
-        assert "walk_namespace" in out
-        assert "search_zim_file" in out
+        # Handler-level tool-mismatch travels as the cursor_decode envelope.
+        assert isinstance(out, dict), f"expected envelope, got {type(out)!r}: {out!r}"
+        assert "Cursor / Tool Mismatch" in _body(out)
+        assert "walk_namespace" in _body(out)
+        assert "search_zim_file" in _body(out)
         # Backend not called.
         assert not mock.search_zim_file_data.called
         assert not mock.search_zim_file.called
@@ -184,11 +190,12 @@ class TestP1D1DispatcherQMismatchSkipsNonQEmittingTools:
             zim_file_path="/x.zim",
             options={"compact": True, "cursor": cursor_token},
         )
-        assert not (isinstance(out, dict) and out.get("operation") == "cursor_decode")
-        assert isinstance(out, str)
-        assert "Cursor / Tool Mismatch" in out
-        assert "browse_namespace" in out
-        assert "search_zim_file" in out
+        assert "shares no terms" not in _body(out)
+        assert isinstance(out, dict)
+        assert out.get("operation") == "cursor_decode"
+        assert "Cursor / Tool Mismatch" in _body(out)
+        assert "browse_namespace" in _body(out)
+        assert "search_zim_file" in _body(out)
 
     def test_links_cursor_with_stuffed_q_routes_to_tool_mismatch(self) -> None:
         # ``extract_article_links`` also never emits ``s.q`` — any
@@ -205,11 +212,12 @@ class TestP1D1DispatcherQMismatchSkipsNonQEmittingTools:
             zim_file_path="/x.zim",
             options={"compact": True, "cursor": cursor_token},
         )
-        assert not (isinstance(out, dict) and out.get("operation") == "cursor_decode")
-        assert isinstance(out, str)
-        assert "Cursor / Tool Mismatch" in out
-        assert "extract_article_links" in out
-        assert "search_zim_file" in out
+        assert "shares no terms" not in _body(out)
+        assert isinstance(out, dict)
+        assert out.get("operation") == "cursor_decode"
+        assert "Cursor / Tool Mismatch" in _body(out)
+        assert "extract_article_links" in _body(out)
+        assert "search_zim_file" in _body(out)
 
     def test_walk_cursor_stuffed_q_to_filtered_search_routes_to_tool_mismatch(
         self,
@@ -229,11 +237,12 @@ class TestP1D1DispatcherQMismatchSkipsNonQEmittingTools:
             zim_file_path="/x.zim",
             options={"compact": True, "cursor": cursor_token},
         )
-        assert not (isinstance(out, dict) and out.get("operation") == "cursor_decode")
-        assert isinstance(out, str)
-        assert "Cursor / Tool Mismatch" in out
-        assert "walk_namespace" in out
-        assert "search_with_filters" in out
+        assert "shares no terms" not in _body(out)
+        assert isinstance(out, dict)
+        assert out.get("operation") == "cursor_decode"
+        assert "Cursor / Tool Mismatch" in _body(out)
+        assert "walk_namespace" in _body(out)
+        assert "search_with_filters" in _body(out)
 
     def test_real_search_cursor_unrelated_query_still_q_mismatches(self) -> None:
         # Regression guard: the dispatcher's q-mismatch logic MUST
@@ -317,7 +326,7 @@ class TestP1D1DispatcherQMismatchSkipsNonQEmittingTools:
         )
         # No tool-mismatch (same tool), no q-mismatch (skipped).
         assert not (isinstance(out, dict) and out.get("operation") == "cursor_decode")
-        assert "Cursor / Tool Mismatch" not in (out if isinstance(out, str) else "")
+        assert "Cursor / Tool Mismatch" not in _body(out)
         assert mock.walk_namespace_data.called
 
 
@@ -541,8 +550,8 @@ class TestEndToEndA20Gates:
             zim_file_path="/x.zim",
             options={"compact": True, "cursor": cursor_token},
         )
-        assert isinstance(out, str), f"expected markdown, got {type(out)!r}: {out!r}"
-        assert "Cursor / Tool Mismatch" in out
+        assert isinstance(out, dict), f"expected envelope, got {type(out)!r}: {out!r}"
+        assert "Cursor / Tool Mismatch" in _body(out)
 
     def test_walk_cursor_stuffed_q_filtered_search_yields_tool_mismatch(
         self,
@@ -561,8 +570,8 @@ class TestEndToEndA20Gates:
             zim_file_path="/x.zim",
             options={"compact": True, "cursor": cursor_token},
         )
-        assert isinstance(out, str)
-        assert "Cursor / Tool Mismatch" in out
+        assert isinstance(out, dict), f"expected envelope, got {type(out)!r}: {out!r}"
+        assert "Cursor / Tool Mismatch" in _body(out)
 
     def test_walk_cursor_stuffed_q_links_yields_tool_mismatch(self) -> None:
         handler, mock = self._handler()
@@ -579,14 +588,15 @@ class TestEndToEndA20Gates:
             zim_file_path="/x.zim",
             options={"compact": True, "cursor": cursor_token},
         )
-        assert isinstance(out, str)
         # The cursor's ``t`` is extract_article_links, which IS
         # what the routing target is, so this case is same-tool
         # cursor reuse. Tool-mismatch must NOT fire here — the
         # ``q`` is vestigial and the dispatcher skips its q-check
-        # (extract_article_links is non-q-emitting). The handler
-        # then walks normally (offset=0 hardcoded).
-        assert "Cursor / Tool Mismatch" not in out
+        # (extract_article_links is non-q-emitting). The mock's
+        # archive identity does not match the cursor's ``ai``, so the
+        # archive-identity guard may still reject the call — that is a
+        # different diagnosis and not what this test pins.
+        assert "Cursor / Tool Mismatch" not in _body(out)
 
 
 # ---------------------------------------------------------------------------
@@ -1086,14 +1096,18 @@ class TestPD24FileNotFoundRecoveryHint:
             "show main page",
             zim_file_path="/totally/fake.zim",
         )
-        assert isinstance(out, str)
+        # v3 field fix D58: a path-resolution failure is a failure — it now
+        # travels as the structured error envelope (isError at the MCP
+        # layer) with the PD2-4 recovery markdown in ``message``.
+        assert isinstance(out, dict)
+        assert out.get("operation") == "zim_path_not_found"
         # New error shape.
-        assert "**ZIM File Not Found**" in out
+        assert "**ZIM File Not Found**" in _body(out)
         # Real paths surfaced.
-        assert "/var/lib/zim/wikipedia.zim" in out
-        assert "/var/lib/zim/wiktionary.zim" in out
+        assert "/var/lib/zim/wikipedia.zim" in _body(out)
+        assert "/var/lib/zim/wiktionary.zim" in _body(out)
         # Generic troubleshooting block is replaced.
-        assert "Check server logs" not in out
+        assert "Check server logs" not in _body(out)
 
     def test_single_archive_path_error_falls_through_to_pd23_auto_select(
         self,

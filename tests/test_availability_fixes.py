@@ -1,13 +1,16 @@
-"""Regression tests for the availability batch (P3 / P6 / P29).
+"""Regression tests for the availability batch (P3 / P6).
 
 * P3 — quadratic ReDoS in ``IntentParser._PARAM_LEAK_RE`` (the nominal 1s
   ``safe_regex_sub`` guard cannot interrupt a running ``re`` match).
 * P6 — ``/readyz`` probe timeouts leaking default-executor threads, wedging
   every MCP tool call.
-* P29 — ``SubscriberRegistry`` never reclaiming per-URI containers.
+
+The batch's third item, P29 (``SubscriberRegistry`` never reclaiming per-URI
+containers), no longer has a subject: the 2026-07-28 revision dropped
+``resources/subscribe`` and protocol sessions, so the registry and its prune
+sweep were deleted and the SDK's ``SubscriptionBus`` owns listener lifetime.
 """
 
-import gc
 import os
 import tempfile
 import threading
@@ -18,7 +21,6 @@ import pytest
 from starlette.testclient import TestClient
 
 from openzim_mcp.config import OpenZimMcpConfig
-from openzim_mcp.exceptions import OpenZimMcpValidationError
 
 # ---------------------------------------------------------------------------
 # P3 — long whitespace runs must not backtrack quadratically
@@ -178,212 +180,6 @@ def test_readyz_pool_is_registered_with_one_worker():
     from openzim_mcp import timeout_utils
 
     assert timeout_utils._POOL_SIZES["readyz"] == 1
-
-
-# ---------------------------------------------------------------------------
-# P29 — SubscriberRegistry container reclamation, URI validation, caps
-# ---------------------------------------------------------------------------
-
-
-class _Session:  # weak-referenceable ServerSession stand-in
-    pass
-
-
-@pytest.mark.asyncio
-async def test_prune_reclaims_containers_left_by_a_disconnected_session():
-    """The ``WeakSet`` empties itself on GC but the DICT ENTRY survives — and
-    nothing ever revisits a URI that is never broadcast.
-    """
-    from openzim_mcp.subscriptions import SubscriberRegistry
-
-    registry = SubscriberRegistry()
-    sess = _Session()
-    for i in range(50):
-        await registry.subscribe(f"zim://junk{i}", sess)
-    assert len(registry._weak_by_uri) == 50
-
-    del sess
-    gc.collect()
-
-    # The leak: no live sessions, but every container is still keyed.
-    assert await registry.sessions_for("zim://junk0") == []
-    assert len(registry._weak_by_uri) == 50
-
-    assert await registry.prune() == 50
-    assert registry._weak_by_uri == {}
-    assert registry._strong_by_uri == {}
-
-
-@pytest.mark.asyncio
-async def test_prune_keeps_live_subscriptions():
-    from openzim_mcp.subscriptions import SubscriberRegistry
-
-    registry = SubscriberRegistry()
-    sess = _Session()
-    await registry.subscribe("zim://files", sess)
-    await registry.prune()
-    assert await registry.sessions_for("zim://files") == [sess]
-
-
-@pytest.mark.asyncio
-async def test_watcher_tick_drives_the_registry_sweep(tmp_path):
-    """The watcher loop is the only periodic task, so it owns the sweep.
-    ``sessions_for`` / ``clear_session`` cannot: they hold the non-reentrant
-    registry lock and would deadlock.
-    """
-    from openzim_mcp.subscriptions import MtimeWatcher, SubscriberRegistry
-
-    registry = SubscriberRegistry()
-    sess = _Session()
-    await registry.subscribe("zim://junk", sess)
-    del sess
-    gc.collect()
-
-    async def emit(uri: str, change_type: str) -> None:  # pragma: no cover
-        pass
-
-    watcher = MtimeWatcher(
-        [str(tmp_path)], interval=0.05, on_change=emit, registry=registry
-    )
-    await watcher._tick()
-    assert registry._weak_by_uri == {}
-
-
-@pytest.mark.asyncio
-async def test_watcher_tick_survives_a_failing_sweep(tmp_path):
-    from openzim_mcp.subscriptions import MtimeWatcher
-
-    registry = MagicMock()
-
-    async def boom() -> int:
-        raise RuntimeError("nope")
-
-    registry.prune = boom
-    events: list[tuple[str, str]] = []
-
-    async def emit(uri: str, change_type: str) -> None:
-        events.append((uri, change_type))
-
-    (tmp_path / "a.zim").write_bytes(b"")
-    watcher = MtimeWatcher(
-        [str(tmp_path)], interval=0.05, on_change=emit, registry=registry
-    )
-    await watcher._tick()  # must not raise
-    assert events == [("zim://files", "list_changed")]
-
-
-@pytest.mark.parametrize(
-    "uri",
-    [
-        "zim://files",
-        "zim://files/",
-        "zim://wikipedia_en",
-        "zim://wikipedia_en/entry/C%2FClimate_change",
-    ],
-)
-def test_validate_subscription_uri_accepts_served_shapes(uri):
-    from openzim_mcp.subscriptions import validate_subscription_uri
-
-    assert validate_subscription_uri(uri) == uri
-
-
-@pytest.mark.parametrize(
-    "uri",
-    [
-        "",
-        "zim://",
-        "zim://name/other",
-        "zim://name/entry",
-        "http://evil.example/x",
-        "file:///etc/passwd",
-        "zim://name with space",
-    ],
-)
-def test_validate_subscription_uri_rejects_everything_else(uri):
-    from openzim_mcp.subscriptions import validate_subscription_uri
-
-    with pytest.raises(OpenZimMcpValidationError):
-        validate_subscription_uri(uri)
-
-
-def test_validate_subscription_uri_rejects_oversized():
-    from openzim_mcp.subscriptions import MAX_URI_LENGTH, validate_subscription_uri
-
-    with pytest.raises(OpenZimMcpValidationError):
-        validate_subscription_uri("zim://" + "a" * MAX_URI_LENGTH)
-
-
-@pytest.mark.asyncio
-async def test_subscribe_handler_validates_uri():
-    """The handler seam is the gate: the SDK forwards ``req.params.uri``
-    verbatim and ``resources/subscribe`` bypasses the rate limiter.
-    """
-    import mcp.types as t
-    from mcp.server.fastmcp import FastMCP
-    from mcp.server.lowlevel.server import request_ctx
-
-    from openzim_mcp.subscriptions import (
-        SubscriberRegistry,
-        register_subscription_handlers,
-    )
-
-    mcp_server = FastMCP("test")
-    registry = SubscriberRegistry()
-    register_subscription_handlers(mcp_server, registry)
-    handler = mcp_server._mcp_server.request_handlers[t.SubscribeRequest]
-
-    ctx = MagicMock()
-    ctx.session = _Session()
-    token = request_ctx.set(ctx)
-    try:
-        with pytest.raises(OpenZimMcpValidationError):
-            await handler(
-                t.SubscribeRequest(
-                    method="resources/subscribe",
-                    params=t.SubscribeRequestParams(uri="http://evil.example/x"),
-                )
-            )
-        assert registry._weak_by_uri == {}
-
-        await handler(
-            t.SubscribeRequest(
-                method="resources/subscribe",
-                params=t.SubscribeRequestParams(uri="zim://files"),
-            )
-        )
-        assert await registry.sessions_for("zim://files") == [ctx.session]
-    finally:
-        request_ctx.reset(token)
-
-
-@pytest.mark.asyncio
-async def test_total_distinct_uri_cap_enforced(monkeypatch):
-    from openzim_mcp import subscriptions
-
-    monkeypatch.setattr(subscriptions, "MAX_URIS_TOTAL", 3)
-    registry = subscriptions.SubscriberRegistry()
-    sess = _Session()
-    for i in range(3):
-        await registry.subscribe(f"zim://n{i}", sess)
-    with pytest.raises(OpenZimMcpValidationError):
-        await registry.subscribe("zim://n3", sess)
-    # An already-known URI is still accepted (no new key is minted).
-    await registry.subscribe("zim://n0", _Session())
-
-
-@pytest.mark.asyncio
-async def test_per_session_distinct_uri_cap_enforced(monkeypatch):
-    from openzim_mcp import subscriptions
-
-    monkeypatch.setattr(subscriptions, "MAX_URIS_PER_SESSION", 2)
-    registry = subscriptions.SubscriberRegistry()
-    greedy = _Session()
-    for i in range(2):
-        await registry.subscribe(f"zim://n{i}", greedy)
-    with pytest.raises(OpenZimMcpValidationError):
-        await registry.subscribe("zim://n2", greedy)
-    # A different session is unaffected by the greedy one's budget.
-    await registry.subscribe("zim://n2", _Session())
 
 
 def test_readyz_concurrent_probes_on_healthy_server_all_succeed():

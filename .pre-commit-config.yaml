@@ -24,13 +24,15 @@ repos:
         # oneof_parse_benchmark) that are NOT pytest files; exclude every
         # non-``test_`` Python module there so editing one is committable.
         #
-        # tests/ root carries a few support modules too. They are listed one
-        # by one rather than blanket-excluded, so a genuinely misnamed test
-        # module still trips the hook.
+        # tests/ root carries a few support modules too, as does tests/live/
+        # (``_stdio_helpers`` drives the JSON-RPC handshake the live modules
+        # share). They are listed one by one rather than blanket-excluded, so
+        # a genuinely misnamed test module still trips the hook.
         exclude: |
           (?x)^tests/(
             dispatch_eval/(?!test_).*\.py
             |(conftest_v2_fixtures|_promote_fixtures|zim_stubs)\.py
+            |live/_stdio_helpers\.py
           )$
 
   # Python code formatting — keep in lockstep with the dev-deps pin in

@@ -65,10 +65,16 @@ class TestBinaryResourceCap:
 
     @pytest.mark.asyncio
     async def test_oversize_binary_raises_with_actionable_message(self):
-        """Read of an oversize binary entry raises and points at get_binary_entry."""
+        """Read of an oversize binary raises MCPError pointing at the paged tool.
+
+        ``MCPError`` is the one exception type SDK v2's ``read_resource``
+        forwards verbatim to the wire; any other type is replaced by a
+        generic "Error reading resource <uri>" and the guidance is lost.
+        """
         from unittest.mock import MagicMock, patch
 
-        from openzim_mcp.exceptions import OpenZimMcpArchiveError
+        from mcp.shared.exceptions import MCPError
+
         from openzim_mcp.tools.resource_tools import (
             DEFAULT_RESOURCE_MAX_BYTES,
             ZimEntryResource,
@@ -103,8 +109,8 @@ class TestBinaryResourceCap:
         )
         with patch("openzim_mcp.tools.resource_tools.zim_archive") as mock_zim_archive:
             mock_zim_archive.return_value.__enter__.return_value = mock_archive
-            with pytest.raises(OpenZimMcpArchiveError) as exc:
+            with pytest.raises(MCPError) as exc:
                 await resource.read()
-        msg = str(exc.value)
+        msg = exc.value.message
         assert "zim_get(binary=True)" in msg, msg
         assert "max_content_length" in msg, msg

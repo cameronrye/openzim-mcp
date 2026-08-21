@@ -9,11 +9,13 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Literal, Optional
 
+from ..exceptions import OpenZimMcpCursorMismatchError
 from ..linkgraph.reader import LinkGraphUnavailable
 from ..responses import tool_error
 from ._common import (
     cursor_context_mismatch,
     decode_cursor_state,
+    effective_limit,
     enforce_rate_limit,
     load_description,
     tool_error_response,
@@ -79,7 +81,7 @@ def register(server: "OpenZimMcpServer") -> None:
                 )
                 if cursor_error is not None:
                     return cursor_error
-                eff_limit = limit if limit is not None else 100
+                eff_limit = effective_limit(limit, state, 100)
                 eff_kind: str = kind
                 if state is not None:
                     # Guard against replaying entry A's cursor against entry B,
@@ -136,7 +138,7 @@ def register(server: "OpenZimMcpServer") -> None:
                     return await ops.get_inbound_links_data(
                         zim_file_path,
                         entry_path,
-                        limit=limit if limit is not None else 10,
+                        limit=effective_limit(limit, state, 10),
                         offset=eff_offset,
                         cursor_archive_identity=state.get("ai") if state else None,
                     )
@@ -160,6 +162,15 @@ def register(server: "OpenZimMcpServer") -> None:
                 zim_file_path,
                 entry_path,
                 limit=limit if limit is not None else 10,
+            )
+        except OpenZimMcpCursorMismatchError as e:
+            # The archive-identity check needs the validated path, so it runs
+            # in the data layer; render it under the same code the entry/kind
+            # cursor guards above use, not the generic validation envelope.
+            return tool_error(
+                operation="cursor_context_mismatch",
+                message=str(e),
+                context="field=ai",
             )
         except Exception as e:  # noqa: BLE001 — broad catch matches b13 envelope
             return tool_error_response(

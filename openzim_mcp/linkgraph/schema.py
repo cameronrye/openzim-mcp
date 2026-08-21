@@ -14,7 +14,16 @@ import sqlite3
 
 # Bump on any incompatible layout change; the reader rejects mismatches and
 # forces an operator rebuild.
-SCHEMA_VERSION = 2
+#
+# The CONTENTS count as much as the layout. v3: edge targets are now stored in
+# the spelling the archive can actually serve — ``A/El_Niño`` rather than the
+# raw percent-encoded href ``A/El_Ni%C3%B1o`` the builder used to record. The
+# table shapes are unchanged, so a v2 file loads fine and looks healthy, but
+# ``query_inbound`` matches ``nodes.path`` as an exact string and every caller
+# now supplies the decoded form. A v2 sidecar therefore answers every
+# non-ASCII lookup with an empty page (36 inbound links silently becoming zero
+# for one article of the shipped test corpus) instead of being reported stale.
+SCHEMA_VERSION = 3
 
 _DDL = """
 CREATE TABLE meta  (key TEXT PRIMARY KEY, value TEXT) STRICT;

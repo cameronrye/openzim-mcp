@@ -27,6 +27,7 @@ from .constants import CACHE_HIGH_HIT_RATE_THRESHOLD, CACHE_LOW_HIT_RATE_THRESHO
 from .responses import ToolErrorPayload, tool_error
 from .security import redact_paths_in_message, sanitize_path_for_error
 from .tool_schemas import HealthStatus, ServerConfigurationResponse
+from .zim.archive import has_zim_signature, zim_signature_error
 
 if TYPE_CHECKING:
     from .server import OpenZimMcpServer
@@ -43,6 +44,55 @@ def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _downgrade_to_warning(health_info: Dict[str, Any]) -> None:
+    """Move ``status`` from ``healthy`` to ``warning``; never overrides ``error``."""
+    if health_info["status"] == "healthy":
+        health_info["status"] = "warning"
+
+
+def _count_readable_zim_files(
+    dir_path: Path,
+    health_info: Dict[str, Any],
+    health_checks: Dict[str, Any],
+    warnings: List[str],
+    recommendations: List[str],
+) -> int:
+    """Count the ``.zim`` files under an accessible directory that carry the
+    ZIM signature, reporting the ones that do not.
+
+    Probes the directory with ``iterdir`` first so a permission problem
+    surfaces as the exception the caller classifies, not as a silent zero.
+
+    A file the process cannot read is reported as the permission problem it
+    is, not as a bad signature: the advice for the two is opposite, and
+    "remove or replace it" aimed at a merely unreadable archive destroys a
+    good one.
+    """
+    list(dir_path.iterdir())
+    zim_files = [p for p in dir_path.glob("**/*.zim") if p.is_file()]
+    unreadable = [p for p in zim_files if not has_zim_signature(p)]
+    denied = [p for p in unreadable if zim_signature_error(p) is not None]
+    for bad in unreadable:
+        redacted = sanitize_path_for_error(str(bad))
+        if bad in denied:
+            warnings.append(f"Cannot read .zim file: {redacted}")
+        else:
+            warnings.append(f"Unreadable .zim file (missing ZIM signature): {redacted}")
+    if denied:
+        recommendations.append(
+            "Check read permissions for the .zim file(s) this server cannot open"
+        )
+        health_checks["permissions_ok"] = False
+    if len(unreadable) > len(denied):
+        recommendations.append(
+            "Remove or replace the unreadable .zim file(s); "
+            "they cannot be opened as archives"
+        )
+    if unreadable:
+        _downgrade_to_warning(health_info)
+    return len(zim_files) - len(unreadable)
+
+
 def _check_directory_health(
     directory: str,
     health_info: Dict[str, Any],
@@ -51,6 +101,11 @@ def _check_directory_health(
     recommendations: List[str],
 ) -> Tuple[int, int]:
     """Probe one allowed directory and return (accessible, zim_count).
+
+    ``zim_count`` counts only files that carry the ZIM signature. A file
+    merely *named* ``.zim`` that libzim could never open is reported as a
+    warning (and downgrades the status) instead of being counted as a
+    loaded archive — otherwise a directory of garbage reads as "healthy".
 
     Mutates ``health_info``/``health_checks``/``warnings``/``recommendations``
     in place so the caller can accumulate aggregate state across directories.
@@ -62,25 +117,23 @@ def _check_directory_health(
     try:
         dir_path = Path(directory)
         if dir_path.exists() and dir_path.is_dir():
-            list(dir_path.iterdir())
-            zim_files = list(dir_path.glob("**/*.zim"))
-            return 1, len(zim_files)
+            readable = _count_readable_zim_files(
+                dir_path, health_info, health_checks, warnings, recommendations
+            )
+            return 1, readable
         warnings.append(f"Directory not accessible: {redacted}")
         recommendations.append(f"Check directory path and permissions: {redacted}")
-        if health_info["status"] == "healthy":
-            health_info["status"] = "warning"
+        _downgrade_to_warning(health_info)
     except PermissionError:
         warnings.append(f"Permission denied: {redacted}")
         recommendations.append(f"Check file permissions for: {redacted}")
         health_checks["permissions_ok"] = False
-        if health_info["status"] == "healthy":
-            health_info["status"] = "warning"
+        _downgrade_to_warning(health_info)
     except Exception as e:
         warnings.append(
             f"Error accessing {redacted}: {redact_paths_in_message(str(e))}"
         )
-        if health_info["status"] == "healthy":
-            health_info["status"] = "warning"
+        _downgrade_to_warning(health_info)
     return 0, 0
 
 
@@ -127,8 +180,7 @@ def _finalize_health_status(
     if total_zim_files == 0:
         warnings.append("No ZIM files found in any directory")
         recommendations.append("Add ZIM files to configured directories")
-        if health_info["status"] == "healthy":
-            health_info["status"] = "warning"
+        _downgrade_to_warning(health_info)
 
     if accessible_dirs == 0:
         health_info["status"] = "error"
@@ -197,6 +249,14 @@ def _build_health_report(
 ) -> Union[HealthStatus, ToolErrorPayload]:
     try:
         cache_stats = server.cache.stats()
+        if _redact_diagnostics(server) and "persistence_path" in cache_stats:
+            # The cache file is a host path no client can hand back to a tool,
+            # so it follows the PID/directory masking rather than the
+            # ``loaded_archives`` exemption (see _redact_diagnostics).
+            cache_stats = dict(cache_stats)
+            cache_stats["persistence_path"] = sanitize_path_for_error(
+                str(cache_stats["persistence_path"])
+            )
         recommendations: List[str] = []
         warnings: List[str] = []
         health_checks: Dict[str, Any] = {

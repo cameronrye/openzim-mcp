@@ -168,3 +168,25 @@ def test_browse_w_picks_up_auxiliary_paths_when_present():
     )
     paths = [row["path"] for row in result["entries"]]
     assert "W/robots.txt" in paths
+
+
+def test_browse_w_reports_candidate_scan_count_when_rows_drop():
+    """The resume cursor advances by candidate rows scanned, not survivors.
+
+    With ``has_main_entry`` True but ``archive.main_entry`` raising (corrupt
+    or truncated archive), the mainPage row drops during materialisation.
+    Without ``scanned_count`` in the payload, ``browse_namespace_data`` falls
+    back to counting survivors: at ``limit=1`` the cursor re-issues the same
+    offset forever (scanned one candidate, returned zero rows), and at
+    ``limit=2`` the surviving favicon row is re-served on the next page.
+    """
+    mixin = _make_mixin()
+    archive = _wikipedia_like_archive()
+    # The probe says the main entry exists; resolving it raises, so the row
+    # drops inside _materialise_paths.
+    del archive.main_entry
+
+    payload = mixin._browse_new_scheme_w_paginated(archive, "W", limit=1, offset=0)
+
+    assert payload["entries"] == []
+    assert payload["scanned_count"] == 1

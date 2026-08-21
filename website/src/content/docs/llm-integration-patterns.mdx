@@ -430,7 +430,7 @@ For programmatic checks, the underlying exception class hierarchy lives in [open
 
 ### Branching on `isError`
 
-As of v2.6.0 the failure is visible at the protocol level too: `EnvelopeAwareFastMCP.call_tool` ([openzim_mcp/mcp_envelope.py](https://github.com/cameronrye/openzim-mcp/blob/main/openzim_mcp/mcp_envelope.py)) recognises a returned envelope and emits a `CallToolResult` with `isError: true`. Tools still signal failure by *returning* the envelope rather than raising — before v2.6.0 that meant every failure, security denials included, travelled the SDK's ordinary success path and reached the client with `isError: false`.
+As of v2.6.0 the failure is visible at the protocol level too: `EnvelopeAwareMCPServer.call_tool` ([openzim_mcp/mcp_envelope.py](https://github.com/cameronrye/openzim-mcp/blob/main/openzim_mcp/mcp_envelope.py)) recognises a returned envelope and emits a `CallToolResult` with `isError: true`. Tools still signal failure by *returning* the envelope rather than raising — before v2.6.0 that meant every failure, security denials included, travelled the SDK's ordinary success path and reached the client with `isError: false`.
 
 If your MCP client surfaces the flag, branch on it first: it is one boolean and needs no JSON parsing. The body is unchanged — byte-identical to what the plain dict return produced — so parse `content[0].text` only when you need `operation`, `message`, or the extra keys.
 
@@ -559,7 +559,7 @@ Three URI templates, also available in advanced mode:
 
 The per-entry resource is great for clients that render content directly (browsers, image viewers). **Clients MUST URL-encode `/` as `%2F`** in the path segment because the URI template engine treats `/` as a separator. Example: `zim://wikipedia_en/entry/A%2FClimate_change`.
 
-Subscribe to `zim://files` or `zim://{name}` for `notifications/resources/updated` when the directory or file changes — see [Resources, prompts & subscriptions](/openzim-mcp/docs/resources-prompts-subscriptions/).
+Over the HTTP transport, open a `subscriptions/listen` stream to be told when archives change: `resourcesListChanged` gets you `notifications/resources/list_changed` when a `.zim` appears or disappears, and `resourceSubscriptions: ["zim://{name}"]` gets you `notifications/resources/updated` when that archive is replaced — see [Resources, prompts & subscriptions](/openzim-mcp/docs/resources-prompts-subscriptions/).
 
 ### Simple-mode considerations
 
@@ -579,7 +579,7 @@ def create_comprehensive_answer(zim_path, entry_path):
         direction="related",
         limit=10,
     )
-    return body, related.related
+    return body, related.results
 ```
 
 ---
@@ -590,4 +590,4 @@ def create_comprehensive_answer(zim_path, entry_path):
 - **[Performance optimization](/openzim-mcp/docs/performance-optimization/)** — cache tuning, rate limiting, batching.
 - **[Smart retrieval](/openzim-mcp/docs/smart-retrieval/)** — how the search-fallback path resolution works.
 
-*The v1.x maintenance window closed when v2.5.0 shipped (2026-06-18); the 2.x line is the only supported series. See [CHANGELOG](https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md) for the v1 → v2 migration table.*
+*The v1.x maintenance window closed when v2.5.0 shipped (2026-06-18); only the current major line is supported — see [SECURITY.md](https://github.com/cameronrye/openzim-mcp/blob/main/SECURITY.md) for the policy. The [CHANGELOG](https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md) carries the v1 → v2 migration table and the v3.0.0 breaking-changes entry.*

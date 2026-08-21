@@ -62,7 +62,9 @@ Args:
         <name>`, `table of contents <name>`, `section <X>
         of <name>`. Setting it there has no effect; omit
         it on those calls.
-    offset: Pagination offset (default: 0).
+    offset: Pagination offset (default: 0). Not honoured by
+        `suggestions for <prefix>` or `find article titled
+        <name>` (neither backend pages); raise `limit` there.
     max_content_length: Article body cap (default: 4000).
     content_offset: Character offset to start reading the
         article body from (default: 0). The truncation footer
@@ -70,7 +72,7 @@ Args:
         hint — wire that value back here to read the next
         page. Negative values are rejected with an
         `invalid_content_offset` error.
-    compact: When True (default in simple mode), apply
+    compact: When True (the default in both modes), apply
         small-LLM optimizations — strip markdown link-soup,
         drop section previews from structure responses,
         flatten link/title/related listings into compact

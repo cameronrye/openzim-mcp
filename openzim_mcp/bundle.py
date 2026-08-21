@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import logging
 import re
+from itertools import groupby
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, Optional, cast
 
@@ -39,11 +40,49 @@ logger = logging.getLogger(__name__)
 # v2d: SectionMeta grew ``heading_start`` — cached v2c bundles lack the
 # field, so the narrow-slice fix would silently keep serving the child
 # heading until TTL expiry without the key bump.
-_BUNDLE_KEY_PREFIX = "bundle:v2d"
+#
+# v2e: the heading LOCATOR changed, so the same entry now yields sections a
+# v2d bundle does not contain — an H1 whose title html2text italicises
+# (``#  _2040_ (film)``) and a heading split across two lines by a ``<br>``
+# were both dropped before. Nothing else in the key encodes the extractor's
+# behaviour: it is keyed on the archive path, mtime, size, entry and render
+# mode, all unchanged by a code fix. So without this bump an operator running
+# with ``persistence_enabled`` restores a snapshot written by the previous
+# release and keeps getting ``heading_count: 0`` for every affected article
+# until the TTL expires — the fix silently inert on exactly the entries it
+# was written for. Same reasoning as the v2c bump above; the rule is that a
+# change to what a bundle CONTAINS needs a new prefix, not just a change to
+# its shape.
+# v2e -> v2f: the eighth pass fixed two more ways a real heading failed to be
+# located — inline markup abutting the text beside it, and a link to a
+# parenthetically-disambiguated article — so affected articles gain sections
+# they previously lacked. Same rule as the bumps above: a change to what a
+# bundle CONTAINS needs a new prefix.
+# v2f -> v2g: duplicate explicit anchors are now disambiguated
+# (``SH4b``, ``SH4b_2``), and ``section_id`` is the handle ``get_section``
+# fetches by — so a v2f bundle does not just look different, it hands the
+# caller ids that resolve to the wrong occurrence. Same rule as the bumps
+# above.
+_BUNDLE_KEY_PREFIX = "bundle:v2g"
+
+# The stat token below tells a cached value that the ARCHIVE changed. Nothing
+# told it that this SERVER changed what it renders from an unchanged archive,
+# and every release does: 3.0.1 strips ``noscript`` and in-page nav menus and
+# disambiguates duplicate anchors, which moves the rendered markdown, every
+# offset derived from it, and the ``section_id`` fetch handles. The remedy
+# used so far is a per-key prefix bump, which only protects the keys whose
+# author remembered one — this release's bundle, entry and snippet keys were
+# all missed. Folding an epoch into the token instead reaches every
+# content-derived cache at once, because embedding the token is already the
+# contract for all of them.
+#
+# Bump this in any release that changes what the server renders from an
+# unchanged archive; tests/test_v3_cache_render_epoch.py fails until you do.
+_RENDER_EPOCH = "r1"
 
 
 def archive_stat_token(validated_path: Any) -> str:
-    """Return ``<mtime_ns>:<size>`` for ``validated_path`` (``"0:0"`` on OSError).
+    """Return ``<mtime_ns>:<size>:<epoch>`` (``"0:0:<epoch>"`` on OSError).
 
     Cache keys for any data derived from a ZIM file's contents should
     include this token so that an atomic file replacement (the typical
@@ -52,9 +91,14 @@ def archive_stat_token(validated_path: Any) -> str:
     binary metadata, and path-resolution caches all need the same
     guarantee.
 
+    ``_RENDER_EPOCH`` extends that guarantee to the other way a cached
+    value goes stale: the server, not the archive, changing what it
+    renders. See the comment on the constant.
+
     Falls back to ``"0:0"`` when ``stat()`` fails (path removed, race
     with replacement) — the cache continues to function, just without
-    the invalidation guarantee for that key.
+    the invalidation guarantee for that key. The epoch is still appended,
+    so an upgrade invalidates those keys too.
 
     ``validated_path`` is typed loosely so callers don't have to import
     ``pathlib.Path``; a ``Path`` or a plain ``str`` path both work (a bare
@@ -64,9 +108,9 @@ def archive_stat_token(validated_path: Any) -> str:
         if isinstance(validated_path, str):
             validated_path = Path(validated_path)
         st = validated_path.stat()
-        return f"{st.st_mtime_ns}:{st.st_size}"
+        return f"{st.st_mtime_ns}:{st.st_size}:{_RENDER_EPOCH}"
     except OSError:
-        return "0:0"
+        return f"0:0:{_RENDER_EPOCH}"
 
 
 def _bundle_cache_key(validated_path: "Path", entry_path: str, compact: bool) -> str:
@@ -109,8 +153,20 @@ def _loose_escaped_text(text: str) -> str:
     H1). Allowing an optional backslash before each character matches the
     escaped and unescaped forms alike. Used only by the relaxed fallback, so
     the larger pattern is paid only for headings the strict match missed.
+
+    A run of literal backslashes gets one bounded quantifier rather than a
+    per-character optional escape: the surrounding inline-markup class also
+    accepts backslashes, so per-character units let the engine split a run of
+    n backslashes 2**n ways and backtrack for hours before conceding a miss.
     """
-    return "".join(r"\\?" + re.escape(ch) for ch in text)
+    parts: list[str] = []
+    for is_backslash, group in groupby(text, key=lambda ch: ch == "\\"):
+        chars = "".join(group)
+        if is_backslash:
+            parts.append(rf"\\{{{len(chars)},{2 * len(chars)}}}")
+        else:
+            parts.append("".join(r"\\?" + re.escape(ch) for ch in chars))
+    return "".join(parts)
 
 
 def _resolve_entry_html(
@@ -185,7 +241,26 @@ def _build_link_buckets(links_dict: Dict[str, Any]) -> LinkBuckets:
 # (``## [Linked](X) part``). The relaxed character-class pattern in
 # ``_compute_section_offsets`` can't tolerate the brackets/URL, so headings
 # containing an inline link were dropped from the bundle entirely.
-_MD_LINK_RE = re.compile(r"!?\[([^\]]*)\]\([^)]*\)")
+# ``(?:[^()\n\\]|\\.)*`` rather than ``[^)]*``: html2text backslash-escapes
+# parens inside a link target, so a heading linking to a
+# parenthetically-disambiguated article — ``Mercury_\(mythology\)``, which is
+# most disambiguated Wikipedia titles — stopped the old pattern at the first
+# ``)`` and left ``Mercury (mythology) "Mercury (mythology)")`` behind. That
+# never matches the soup-side visible text, so the heading was dropped, its
+# section vanished from the bundle, and the PRECEDING section's slice ran on
+# through it and swallowed its body. Each character belongs to exactly one
+# branch, so the alternation is ReDoS-safe — the same form
+# ``compact_format._MARKDOWN_LINK_RE`` already adopted for the CodeQL
+# ``py/redos`` finding.
+_MD_LINK_RE = re.compile(r"!?\[([^\]]*)\]\((?:[^()\n\\]|\\.)*\)")
+
+
+# Emphasis-shaped underscore runs: those leading or trailing a word, which
+# is the only position html2text emits them in for ``<i>``/``<em>``. An
+# underscore *between* two alphanumerics (``snake_case``) is literal text and
+# must survive — a blanket ``replace("_", "")`` would make the two sides of
+# the comparison disagree for any heading whose text really carries one.
+_MD_EMPHASIS_UNDERSCORE_RE = re.compile(r"(?<![^\W_])_+|_+(?![^\W_])")
 
 
 def _strip_md_inline_decorations(line: str) -> str:
@@ -195,6 +270,16 @@ def _strip_md_inline_decorations(line: str) -> str:
     links), drops emphasis/code markers, unescapes backslash-escaped
     punctuation, and collapses whitespace — the same visible text
     ``_heading_visible_text`` produces from the soup side.
+
+    ``_`` is html2text's marker for ``<i>``/``<em>``, and dropping only
+    ``*``/backtick left it in: Wikipedia italicises the work title in the
+    H1 of every article about a film, book, album, or newspaper
+    (``<h1><i>2040</i> (film)</h1>`` renders as ``#  _2040_ (film)``), so
+    this comparison saw ``'_2040_ (film)'`` against ``'2040 (film)'``, the
+    locator missed, and the article's only heading — with its whole
+    section — was dropped from the bundle. Applied to both sides of the
+    comparison (see :func:`_match_decorated_heading_line`), so the
+    word-boundary rule cannot desynchronise them.
     """
     prev = None
     while prev != line:
@@ -202,6 +287,7 @@ def _strip_md_inline_decorations(line: str) -> str:
         line = _MD_LINK_RE.sub(r"\1", line)
     line = line.replace("*", "").replace("`", "")
     line = re.sub(r"\\(.)", r"\1", line)
+    line = _MD_EMPHASIS_UNDERSCORE_RE.sub("", line)
     return " ".join(line.split())
 
 
@@ -210,12 +296,81 @@ def _match_decorated_heading_line(
 ) -> Optional[re.Match]:
     """Last-resort heading locator: scan ``#`` lines of the right level and
     compare their link-stripped visible text against the heading text."""
-    wanted = " ".join(text.split())
+    # Normalise the soup side through the SAME reduction as the rendered
+    # side. Only then is the emphasis-underscore rule above symmetric: a
+    # heading whose text legitimately ends in ``_`` loses it on both sides
+    # and still matches, instead of matching on neither.
+    wanted = _strip_md_inline_decorations(text)
     line_re = re.compile(rf"^{'#' * level} (.+?)\s*$", re.MULTILINE)
-    for m in line_re.finditer(rendered_markdown, cursor):
+    candidates = list(line_re.finditer(rendered_markdown, cursor))
+    for m in candidates:
         if _strip_md_inline_decorations(m.group(1)) == wanted:
             return m
+    # Last resort within the last resort: compare with the spaces removed.
+    #
+    # html2text emits a space after emphasis it closes even when the source
+    # had none, so ``<h2><b>Foo</b>bar</h2>`` renders as ``## **Foo** bar``
+    # while the soup side reads ``Foobar``. The decoration-stripped forms are
+    # then ``'Foo bar'`` and ``'Foobar'`` and the exact pass above misses, so
+    # the section is dropped from the bundle entirely — ``view="toc"`` never
+    # lists it and ``zim_get_section`` answers ``section_not_found`` for it.
+    # Code spans do not gain the space, which is why a ``<code>`` fixture
+    # matches either way and this went unnoticed.
+    #
+    # Only reached when the section would otherwise be lost, and the two
+    # sides still have to agree on every non-space character, so this cannot
+    # promote a match the exact pass would have rejected on content.
+    squashed = wanted.replace(" ", "")
+    if squashed:
+        for m in candidates:
+            if _strip_md_inline_decorations(m.group(1)).replace(" ", "") == squashed:
+                return m
     return None
+
+
+def _locate_heading_text(
+    rendered_markdown: str, level: int, text: str, cursor: int
+) -> Optional[re.Match]:
+    """Run the strict → relaxed → decorated matcher cascade for one spelling.
+
+    Split out so a heading can be retried under a second spelling (see
+    ``line_text`` in :func:`_compute_section_offsets`) without duplicating
+    the cascade or reordering it.
+    """
+    # Strict pattern first; relaxed fallback covers html2text decorating
+    # the heading text with inline markup (italics, bold, code spans)
+    # that the soup-level get_text() stripped — without the fallback
+    # those sections are silently absent from the bundle and
+    # ``get_section`` returns "not found".
+    strict = re.compile(
+        rf"^{'#' * level} {re.escape(text)}\s*$",
+        re.MULTILINE,
+    )
+    match = strict.search(rendered_markdown, cursor)
+    if match is None:
+        # H17: the relaxed pattern previously read
+        # ``[^\n]*{re.escape(text)}[^\n]*$`` — a substring match that
+        # accidentally picked up a heading like ``## Notes and See also``
+        # when the bundle was probing for ``See also``. Constrain the
+        # prefix/suffix to inline-markup characters html2text actually
+        # emits (``*``, ``_``, ``` ` ```, backslashes, whitespace) so
+        # the relaxed branch only catches decorated-heading cases, not
+        # any heading containing the text anywhere.
+        # Inline markup (``**bold**`` etc.) is tolerated as a prefix/suffix
+        # wrapper; ``_loose_escaped_text`` additionally tolerates html2text's
+        # backslash-escaped interior punctuation (e.g. ``1\.`` for ``1.``).
+        _MD_INLINE = r"[ \t\*_`\\]*"
+        relaxed = re.compile(
+            rf"^{'#' * level} {_MD_INLINE}{_loose_escaped_text(text)}"
+            rf"{_MD_INLINE}\s*$",
+            re.MULTILINE,
+        )
+        match = relaxed.search(rendered_markdown, cursor)
+    if match is None:
+        # Inline links in the heading (``## [Linked](X) part``) carry
+        # brackets and a URL the relaxed character class can't cover.
+        match = _match_decorated_heading_line(rendered_markdown, level, text, cursor)
+    return match
 
 
 def _compute_section_offsets(
@@ -227,6 +382,16 @@ def _compute_section_offsets(
     Headings in _build_headings() carry key 'id' (the resolved anchor slug).
     We search rendered_markdown in document order from the last cursor position
     so repeated identical headings are disambiguated correctly.
+
+    Section ids are made unique here as well. ``_build_headings`` suffixes
+    colliding *slugs* but deliberately passes author-provided anchors
+    through untouched, so an archive that reuses an anchor name (the IEP
+    has ``<a name="SH4b">`` twice on ~1% of articles) produced two TOC
+    nodes with the same ``section_id`` — and ``get_section`` resolved both
+    to the first. ``section_id`` is the tool's fetch handle, so the second
+    and later occurrences get the same ``_2``/``_3`` ordinal the slug path
+    uses. Only the repeats are renamed: the first occurrence keeps the real
+    anchor, so in-archive ``#SH4b`` links still land where they did.
     """
     sections: list[SectionMeta] = []
     cursor = 0
@@ -248,41 +413,19 @@ def _compute_section_offsets(
         id_source = h.get("id_source", "slug")
         if not text or not section_id:
             continue
-        # Strict pattern first; relaxed fallback covers html2text decorating
-        # the heading text with inline markup (italics, bold, code spans)
-        # that the soup-level get_text() stripped — without the fallback
-        # those sections are silently absent from the bundle and
-        # ``get_section`` returns "not found".
-        strict = re.compile(
-            rf"^{'#' * level} {re.escape(text)}\s*$",
-            re.MULTILINE,
-        )
-        match = strict.search(rendered_markdown, cursor)
+        match = _locate_heading_text(rendered_markdown, level, text, cursor)
         if match is None:
-            # H17: the relaxed pattern previously read
-            # ``[^\n]*{re.escape(text)}[^\n]*$`` — a substring match that
-            # accidentally picked up a heading like ``## Notes and See also``
-            # when the bundle was probing for ``See also``. Constrain the
-            # prefix/suffix to inline-markup characters html2text actually
-            # emits (``*``, ``_``, ``` ` ```, backslashes, whitespace) so
-            # the relaxed branch only catches decorated-heading cases, not
-            # any heading containing the text anywhere.
-            # Inline markup (``**bold**`` etc.) is tolerated as a prefix/suffix
-            # wrapper; ``_loose_escaped_text`` additionally tolerates html2text's
-            # backslash-escaped interior punctuation (e.g. ``1\.`` for ``1.``).
-            _MD_INLINE = r"[ \t\*_`\\]*"
-            relaxed = re.compile(
-                rf"^{'#' * level} {_MD_INLINE}{_loose_escaped_text(text)}"
-                rf"{_MD_INLINE}\s*$",
-                re.MULTILINE,
-            )
-            match = relaxed.search(rendered_markdown, cursor)
-        if match is None:
-            # Inline links in the heading (``## [Linked](X) part``) carry
-            # brackets and a URL the relaxed character class can't cover.
-            match = _match_decorated_heading_line(
-                rendered_markdown, level, text, cursor
-            )
+            # A ``<br>`` inside the heading becomes a real newline in the
+            # rendered markdown, so only the text BEFORE it stays on the
+            # heading line while ``text`` carries the whole subtree. Every
+            # matcher above is line-anchored and none can bridge that, so
+            # retry with the pre-break spelling ``_build_headings`` recorded
+            # (absent unless the heading actually contains a ``<br>``).
+            line_text = _normalize_heading_text(h.get("line_text", ""))
+            if line_text and line_text != text:
+                match = _locate_heading_text(
+                    rendered_markdown, level, line_text, cursor
+                )
         if match is None:
             logger.warning(
                 "Bundle: could not locate heading %r (level %d) in rendered markdown",
@@ -305,6 +448,10 @@ def _compute_section_offsets(
         cursor = match.end()
 
     md_len = len(rendered_markdown)
+    # Every id the document declares, so a generated ``X_2`` can never
+    # collide with a heading that genuinely carries that anchor.
+    declared_ids = {m[4] for m in matches}
+    emitted_ids: set[str] = set()
     for i, (
         level,
         text,
@@ -332,6 +479,16 @@ def _compute_section_offsets(
         # ship a degenerate SectionMeta.
         if char_end <= char_start:
             continue
+
+        if section_id in emitted_ids:
+            ordinal = 2
+            while (
+                f"{section_id}_{ordinal}" in emitted_ids
+                or f"{section_id}_{ordinal}" in declared_ids
+            ):
+                ordinal += 1
+            section_id = f"{section_id}_{ordinal}"
+        emitted_ids.add(section_id)
 
         while parent_stack and parent_stack[-1][0] >= level:
             parent_stack.pop()
@@ -411,7 +568,7 @@ def extract_entry_bundle(
     # ``_extract_infobox`` decomposes the infobox, preserving the prior order
     # in which links were extracted ahead of infobox removal.
     content_root = select_main_content(soup)
-    headings = _build_headings(content_root)
+    headings = _build_headings(content_root, include_line_text=True)
     raw_links = content_processor.extract_html_links(str(content_root))
     link_buckets = _build_link_buckets(raw_links)
     infobox = _extract_infobox(content_root, content_processor)

@@ -94,6 +94,17 @@ _SEARCH_VERB = r"(?:^\s*query|search|find|look)"
 # exempt case-sensitive paths from Tier-1 Rule 1's lowercasing.
 _NAMESPACE_PREFIXED_RE = re.compile(r"^[A-Za-z]/")
 
+# D50: the path shape zimit / warc2zim archives store and this tool prints
+# (``Path: medlineplus.gov/measles.html``, ``iep.utm.edu/kantview/``): a
+# dotted host, then ``/``, then the page path. The host must contain a dot
+# so a bare ZIM filename (``wikipedia.zim`` — no slash) and slashed prose
+# (``and/or``, ``km/h``) stay excluded. Shares the suffix class of the
+# namespace-prefixed shape. ``_restore_nonascii_case`` exempts it from
+# Rule 1's lowercasing for the same reason it exempts ``A/...``: libzim's
+# path lookup is case-sensitive.
+_DOMAIN_PATH_BODY = r"[A-Za-z0-9][A-Za-z0-9\-]*(?:\.[A-Za-z0-9\-]+)+/"
+_DOMAIN_PATH_RE = re.compile(rf"^{_DOMAIN_PATH_BODY}")
+
 
 def _strip_quote_pair(value: str) -> str:
     """Peel a single surrounding matched quote-pair from ``value`` and
@@ -292,6 +303,15 @@ _LEADING_INTENT_KEYWORDS_RE = re.compile(
 # (rare but possible) are untouched.
 _TAIL_LEADING_CONTENTS_RE = re.compile(r"^contents\s+", re.IGNORECASE)
 
+# D48: ``get (the) article about X`` anchors on ``article`` and leaves
+# ``about X`` as the tail; ``about`` is a bridge word, not part of the
+# title, so peel it. Only ``about`` — ``on`` / ``for`` / ``of`` open real
+# titles far too often (``On the Origin of Species``) to be safe. And only
+# after the object noun: past a preposition the user is spelling the title
+# out (``summary of About a Boy``), where ``about`` is the title's own
+# first word.
+_TAIL_LEADING_ABOUT_RE = re.compile(r"^about\s+", re.IGNORECASE)
+
 
 def _extract_entry_path_keyworded(query: str, params: Dict[str, Any]) -> None:
     """Shared extractor for get_article / structure / links / toc / summary.
@@ -394,6 +414,9 @@ def _extract_entry_path_keyworded(query: str, params: Dict[str, Any]) -> None:
         re.IGNORECASE,
     )
     matches = list(object_re.finditer(query))
+    # Whether the tail follows the object noun rather than a preposition —
+    # the ``about`` peel below is confined to that shape.
+    anchored_on_object = bool(matches)
     if not matches:
         verb_match = verb_re.search(query)
         scan_from = verb_match.end() if verb_match else 0
@@ -407,6 +430,14 @@ def _extract_entry_path_keyworded(query: str, params: Dict[str, Any]) -> None:
         cleaned = _TAIL_LEADING_CONTENTS_RE.sub("", tail, count=1).strip()
         if cleaned and cleaned != tail:
             tail = cleaned
+        # D48: ``get the article about X`` -> tail ``about X``; drop the
+        # bridge word so the title probe sees ``X``. Never past a
+        # preposition — ``summary of About a Boy`` resolved to "A Boy",
+        # and where the index holds both spellings it did so at score 1.0.
+        if anchored_on_object:
+            cleaned = _TAIL_LEADING_ABOUT_RE.sub("", tail, count=1).strip()
+            if cleaned and cleaned != tail:
+                tail = cleaned
         # Post-v2.0.0 D-E: peel a surrounding quote pair so an
         # empty-quoted tail (``structure of ""`` / ``get article ""``)
         # doesn't survive to the backend, which would otherwise
@@ -554,6 +585,22 @@ def _extract_search(query: str, params: Dict[str, Any]) -> None:
 def _extract_search_all(query: str, params: Dict[str, Any]) -> None:
     """Strip "search all files for" prefix to recover the bare query.
 
+    The prefix accepted here must be at least as wide as the ``search_all``
+    INTENT_PATTERN that gated this extractor: that pattern makes the target
+    noun optional and tolerates bridging words, so ``search across all files
+    for X`` / ``search all archives for X`` classify as ``search_all`` — and
+    a prefix sub that fails to match silently returns the whole command
+    sentence, which is then dispatched as the cross-archive search terms.
+    Hence the determiner/quantifier bridge, ``archives`` alongside
+    ``files``/``zims``, and the optional ``for``.
+
+    ``zim`` is matched as a *qualifier* ahead of the head noun as well as a
+    head noun in its own right. Without that, ``zims?`` claimed the ``zim`` in
+    ``search all zim files for X`` and the alternation stopped there, leaving
+    ``files for X`` as the cross-archive search terms — the head noun and the
+    preposition both polluting the BM25 query for the most natural way there
+    is to say this.
+
     The lazy ``^.*?`` in the substitution is a known ReDoS vector on
     adversarial input, so wrap it in the standard timeout helper and
     fall back to the raw query on timeout — better to search a slightly
@@ -563,7 +610,8 @@ def _extract_search_all(query: str, params: Dict[str, Any]) -> None:
         cleaned = run_with_timeout(
             lambda: re.sub(
                 r"^.*?(search\s+(all|every(thing|where)?|across)"
-                r"\s+(files?|zims?)?\s*for\s*)",
+                r"\s+((the|all|of|my|our|your|loaded|available)\s+)*"
+                r"(\.?zim\s+)?(files?|zims?|archives?)?\s*(for\s+)?)",
                 "",
                 query,
                 flags=re.IGNORECASE,
@@ -573,7 +621,9 @@ def _extract_search_all(query: str, params: Dict[str, Any]) -> None:
             RegexTimeoutError,
             pool="regex",
         ).strip()
-        params["query"] = cleaned
+        # A cue-only query (``search all files``) carries no terms; keep the
+        # raw sentence rather than dispatching an empty cross-archive search.
+        params["query"] = cleaned or query.strip()
     except RegexTimeoutError:
         logger.warning(
             "Regex timeout while extracting search_all query " f"from: {query[:50]}..."
@@ -795,6 +845,35 @@ def _extract_tell_me_about(query: str, params: Dict[str, Any]) -> None:
     params["topic"] = topic
 
 
+def _trim_entry_token(token: str) -> str:
+    """Peel prose punctuation off a captured entry path.
+
+    Trailing sentence punctuation always goes (``A/Bar.`` -> ``A/Bar``). A
+    closing paren goes only when it has no opener inside the token, so a
+    parenthesised aside (``see A/Foo)``) is trimmed while a disambiguated
+    title (``A/Mercury_(planet)``) keeps its own parens.
+
+    A trailing apostrophe follows the same balance rule. Quoting the paths —
+    ``get entries 'A/Foo' and 'A/Bar'`` — is an obvious thing to type, and the
+    opening quote is excluded by the namespace lookbehind while the closing
+    one is inside the suffix class, so every quoted path arrived at
+    ``get_entries`` as ``A/Foo'`` and resolved to nothing. An odd count means
+    the token closes a quote that opened outside it; an even one means the
+    apostrophes are the title's own (``A/Rock_'n'_Roll``), which must survive.
+    """
+    token = token.rstrip(".?,;:!")
+    peeled = True
+    while peeled:
+        peeled = False
+        while token.endswith(")") and token.count("(") < token.count(")"):
+            token = token[:-1].rstrip(".?,;:!")
+            peeled = True
+        if token.endswith("'") and token.count("'") % 2 == 1:
+            token = token[:-1].rstrip(".?,;:!")
+            peeled = True
+    return token
+
+
 def _extract_get_zim_entries(query: str, params: Dict[str, Any]) -> None:
     """Extract namespace/path tokens like ``A/Foo`` or ``M/Image.png``.
 
@@ -810,11 +889,26 @@ def _extract_get_zim_entries(query: str, params: Dict[str, Any]) -> None:
     # a longer word qualified — ``get entries A/Foo and/or B/Bar`` captured the
     # bogus ``d/or`` (from ``an[d/or]``); ``km/h``, ``either/or``, URLs, etc.
     # produced the same false captures.
-    entries = safe_regex_findall(r"(?<![A-Za-z0-9])[A-Za-z]/[\w\-./%]+", query)
+    #
+    # The suffix class carries the same Wikipedia-legal punctuation the
+    # single-entry sibling ``_extract_entry_path_keyworded`` accepts —
+    # disambiguated titles (``A/Mercury_(planet)``), metadata illustration
+    # paths (``M/Illustration_48x48@1``), ``A/C++``, apostrophes. A narrower
+    # class truncated those at the first offending character and shipped the
+    # stump to ``get_entries`` as if the caller had typed it.
+    #
+    # D50: zimit / warc2zim archives store domain-shaped paths
+    # (``medlineplus.gov/measles.html``) and that is what this tool's own
+    # ``Path:`` lines print for them, so the batch intent must accept that
+    # shape alongside the single-letter namespace one. The lookbehind
+    # still anchors the token start; the dotted host keeps ``wikipedia.zim``
+    # (no slash) and ``and/or`` (no dot) excluded.
+    entries = safe_regex_findall(
+        rf"(?<![A-Za-z0-9])(?:[A-Za-z]/|{_DOMAIN_PATH_BODY})[\w\-./%()@+'~*]+",
+        query,
+    )
     if entries:
-        # Strip trailing sentence punctuation that the character class
-        # greedily captures (e.g. "A/Bar." -> "A/Bar").
-        params["entries"] = [e.rstrip(".?,;:!") for e in entries]
+        params["entries"] = [_trim_entry_token(e) for e in entries]
 
 
 def _extract_get_section(query: str, params: Dict[str, Any]) -> None:
@@ -1077,16 +1171,27 @@ class IntentParser:
             0.9,
             8,
         ),
-        # Get article - common words
+        # Get article - common words. D48: tolerate a determiner between
+        # the verb and the noun (``get the article about X``) — the
+        # natural phrasing otherwise fell to the search fallback with the
+        # whole sentence as terms, ``**the**`` highlighted in every
+        # snippet. Same tolerance ``_LEADING_INTENT_KEYWORDS_RE`` and the
+        # section patterns already grant their verbs.
         (
-            r"\b(get|show|read|display|fetch)\s+(article|entry|page)\b",
+            r"\b(get|show|read|display|fetch)\s+"
+            r"(?:(?:the|an?|this|that)\s+)?(article|entry|page)\b",
             "get_article",
             0.75,
             5,
         ),
         # search_all - very specific
         (
-            r"\bsearch\s+(all|every(thing|where)?|across)\s+(files?|zims?)?\b",
+            # ``(\.?zim\s+)?`` lets ``zim``/``.zim`` qualify the head noun
+            # ("search all zim files for X"). Without it the alternation below
+            # claimed the qualifier, and the extractor's matching group has to
+            # stay at least this wide or the head noun leaks into the terms.
+            r"\bsearch\s+(all|every(thing|where)?|across)"
+            r"\s+(\.?zim\s+)?(files?|zims?)?\b",
             "search_all",
             0.95,
             10,
@@ -1222,7 +1327,7 @@ class IntentParser:
     # family.
     #
     # Embedded-token safety: every new token preserves the leading
-    # ``(?:^|\s+|[,;.!?]\s*)`` anchor, so ``tack`` inside ``attack`` /
+    # ``(?:^|\s|[,;.!?]\s*)`` anchor, so ``tack`` inside ``attack`` /
     # ``thumbtack`` and ``domo`` inside ``domoic`` / ``Komodo`` don't
     # match — there's no whitespace / punctuation between the embedding
     # word's prefix and the politeness candidate. Multi-word entries are
@@ -1232,7 +1337,18 @@ class IntentParser:
     # longer match, but explicit ordering keeps the pattern's intent
     # readable).
     _TRAILING_POLITENESS_RE = (
-        r"(?:^|\s+|[,;.!?]\s*)"
+        # A SINGLE leading whitespace atom, deliberately not ``\s+`` — the
+        # same fixed-width shape ``_PARAM_LEAK_RE`` uses, and for the same
+        # reason: a greedy repeat whose tail is a failing alternation
+        # backtracks O(n^2) over a long whitespace run, and ``safe_regex_sub``
+        # cannot bound that cost because CPython's ``re`` holds the GIL for
+        # the whole match. Callers that hand over a raw, un-collapsed query
+        # (``_normalize_and_validate_query_params``, the chain-detection
+        # halves) would otherwise burn seconds of CPU on a 4 KB query.
+        # Behaviour is unchanged: with a run of spaces the match simply
+        # starts at the last one and the caller's ``.strip()`` removes the
+        # remainder.
+        r"(?:^|\s|[,;.!?]\s*)"
         r"(?:please|kindly|"
         # ``thanks (a lot|a million)`` — multi-word extensions of the
         # base ``thanks`` token.
@@ -1297,23 +1413,158 @@ class IntentParser:
         r"\s*[,;.!?]*\s*$"
     )
 
+    # Politeness tokens that are ALSO ordinary topics — ``Cheers`` the TV
+    # series, ``tack`` the sailing manoeuvre / horse equipment, the
+    # multilingual thank-yous that all have their own articles. The
+    # alternation above is deliberately broad and its safety analysis only
+    # covers EMBEDDED tokens (``attack``, ``Komodo``); this set is the
+    # complementary guard for the case where the token IS the operand.
+    _TOPIC_LIKE_POLITENESS = frozenset(
+        {
+            "ta",
+            "tx",
+            "ty",
+            "tack",
+            "cheers",
+            "domo",
+            "merci",
+            "gracias",
+            "danke",
+            "bitte",
+            "kiitos",
+            "mahalo",
+            "shukran",
+            "spasibo",
+            "obrigado",
+            "obrigada",
+            "arigato",
+            "arigatou",
+            "gomawo",
+            "dhanyavad",
+        }
+    )
+
+    # Scaffolding words of the intent phrases — verbs, question words,
+    # determiners, connectors. A query built only from these carries no
+    # operand for the intent to act on.
+    #
+    # It has to cover the scaffolding of EVERY phrase that reaches a
+    # greedy-tail extractor, not just the ``tell me about`` family. It held
+    # ``structure`` / ``section`` / ``toc`` but not ``outline`` / ``table`` /
+    # ``contents``, so ``outline of tack`` left ``outline of`` behind, which
+    # read as topic-bearing; the guard stayed silent, the politeness strip ate
+    # the operand, and the extractor anchored on the last keyword and returned
+    # ``entry_path='of'``. Adding a word here can only make the guard fire
+    # MORE often, and firing means keeping the query the user typed.
+    _NON_TOPIC_TOKENS = frozenset(
+        {
+            "a",
+            "about",
+            "an",
+            "and",
+            "are",
+            "article",
+            "browse",
+            "called",
+            "contents",
+            "define",
+            "describe",
+            "display",
+            "entry",
+            "everything",
+            "explain",
+            "fetch",
+            "find",
+            "for",
+            "from",
+            "get",
+            "give",
+            "heading",
+            "headings",
+            "in",
+            "info",
+            "information",
+            "is",
+            "linking",
+            "links",
+            "list",
+            "lists",
+            "locate",
+            "me",
+            "named",
+            "of",
+            "on",
+            "outline",
+            "outlines",
+            "page",
+            "read",
+            "related",
+            "retrieve",
+            "search",
+            "section",
+            "sections",
+            "show",
+            "structure",
+            "summarize",
+            "summary",
+            "table",
+            "tell",
+            "the",
+            "titled",
+            "to",
+            "toc",
+            "walk",
+            "was",
+            "were",
+            "what",
+            "when",
+            "where",
+            "which",
+            "who",
+            "why",
+        }
+    )
+
     @classmethod
-    def _strip_trailing_politeness(cls, query: str) -> str:
+    def _carries_topic(cls, query: str) -> bool:
+        """True when ``query`` still holds a token that could name an entry."""
+        for token in query.lower().split():
+            core = token.strip(".,;:!?'\"")
+            if core and core not in cls._NON_TOPIC_TOKENS:
+                return True
+        return False
+
+    @classmethod
+    def _strip_trailing_politeness(
+        cls, query: str, *, preserve_topic: bool = False
+    ) -> str:
         """Peel trailing politeness tokens (``please`` / ``thanks`` /
         ``thank you`` / ``kindly``) off ``query``. Idempotent; loops
         until a pass produces no change so combinations like
         ``biology, thanks please`` strip in one call.
+
+        With ``preserve_topic`` the loop refuses a pass that would consume
+        the query's last topic-bearing token when the peeled token is also
+        an ordinary word: ``tell me about tack`` must keep its topic, while
+        ``biology tack`` still peels because ``biology`` survives. Callers
+        that deliberately want the bare verb phrase (the empty-search-tail
+        guards) leave it off.
         """
         for _ in range(4):
             before = query
-            query = safe_regex_sub(
+            stripped = safe_regex_sub(
                 cls._TRAILING_POLITENESS_RE,
                 "",
                 query,
                 flags=re.IGNORECASE,
             ).strip()
-            if query == before:
+            if stripped == before:
                 break
+            if preserve_topic and not cls._carries_topic(stripped):
+                peeled = before.strip()[len(stripped) :].strip(" ,;.!?").lower()
+                if peeled in cls._TOPIC_LIKE_POLITENESS:
+                    break
+            query = stripped
         return query
 
     # Post-a23 P1-D3: small models occasionally leak MCP tool parameters
@@ -1493,7 +1744,11 @@ class IntentParser:
             if (
                 not isinstance(value, str)
                 or not value
-                or (value.isascii() and not _NAMESPACE_PREFIXED_RE.match(value))
+                or (
+                    value.isascii()
+                    and not _NAMESPACE_PREFIXED_RE.match(value)
+                    and not _DOMAIN_PATH_RE.match(value)
+                )
             ):
                 return value
             idx = lowered.find(value)
@@ -1578,7 +1833,7 @@ class IntentParser:
         query = re.sub(r"\s+", " ", query).strip()
         try:
             query = cls._strip_param_leaks(query)
-            query = cls._strip_trailing_politeness(query)
+            query = cls._strip_trailing_politeness(query, preserve_topic=True)
         except RegexTimeoutError:
             # Degrade like every other regex site in this function rather than
             # converting a parse into a top-level error envelope: the query is
@@ -1748,6 +2003,14 @@ class IntentParser:
             "still",
             "keep",
             "going",
+            # D46: the two-word pagination follow-ups small models emit
+            # after a paged response (``next page`` / ``more results``).
+            # Bare ``next`` / ``more`` were already filler, but the noun
+            # half was not, so the all-tokens-filler check failed and the
+            # pair ran a stop-word-collision full-text search instead of
+            # returning the guidance playbook.
+            "page",
+            "results",
             # Determiners / particles
             "the",
             "a",
@@ -2084,9 +2347,31 @@ class IntentParser:
         return query.lower()
 
     # Class-level overridable paths (None = use bundled defaults).
-    # Tests can monkeypatch these to swap in fixture files.
+    # Tests can monkeypatch these to swap in fixture files;
+    # ``SimpleToolsHandler`` binds them from ``QueryRewriteConfig``.
     _misspellings_path: Optional["Path"] = None
     _exclusions_path: Optional["Path"] = None
+
+    @classmethod
+    def bind_data_paths(
+        cls, misspellings_path: object, exclusions_path: object
+    ) -> None:
+        """Point rule 2 at operator-supplied data files.
+
+        Rule 2 is a classmethod reading class-level state, so the binding is
+        process-wide: a process hosting two configs gets the last one. Both
+        paths are always written, ``None`` included, so a caller without
+        overrides restores the bundled defaults instead of inheriting the
+        previous caller's files. Values that aren't filesystem paths are
+        treated as "no override" so a malformed config degrades to the
+        bundled data rather than raising inside the loader.
+        """
+        cls._misspellings_path = cls._as_data_path(misspellings_path)
+        cls._exclusions_path = cls._as_data_path(exclusions_path)
+
+    @staticmethod
+    def _as_data_path(value: object) -> Optional["Path"]:
+        return Path(value) if isinstance(value, (str, Path)) else None
 
     @classmethod
     def _apply_misspelling_map(  # noqa: C901
@@ -2104,7 +2389,10 @@ class IntentParser:
 
         Idempotent: a corrected word is never itself a key in the map.
         Telemetry (``query_rewrite.misspelling``) is emitted by the
-        caller (simple_tools.py wiring) based on the before/after diff."""
+        caller (simple_tools.py wiring) based on the before/after diff.
+
+        The data files come from the class attributes ``SimpleToolsHandler``
+        binds from ``QueryRewriteConfig`` — see :meth:`bind_data_paths`."""
         mapping = load_misspellings(cls._misspellings_path)
         exclusions = load_exclusions(cls._exclusions_path)
         if not mapping:

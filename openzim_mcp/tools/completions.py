@@ -19,6 +19,7 @@ error: a raising handler surfaces in the client as a failed request rather than
 as "no suggestions".
 """
 
+import asyncio
 import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, List, Optional
@@ -53,22 +54,27 @@ def _page(values: List[str]) -> Completion:
     return Completion(
         values=page,
         total=total,
-        hasMore=total > len(page),
+        has_more=total > len(page),
     )
 
 
 def register_completions(server: "OpenZimMcpServer") -> None:
     """Register the ``completion/complete`` handler."""
 
-    def _archives() -> List[dict]:
+    async def _archives() -> List[dict]:
         """The current archive listing, read fresh on every request.
 
         Deliberately not cached at registration time: an operator dropping a
         new archive into an allowed directory is exactly when a user reaches
         for the picker to find it, and a startup snapshot would be missing it.
+
+        The scan is offloaded because ``list_zim_files_data`` walks every
+        allowed directory (glob + stat) before any cache lookup — run inline
+        it would block the event loop, and a hung network mount would wedge
+        every session on one completion request.
         """
         try:
-            return server.zim_operations.list_zim_files_data()
+            return await asyncio.to_thread(server.zim_operations.list_zim_files_data)
         except Exception:  # noqa: BLE001 - a picker must not break the session
             logger.warning("completion: archive listing failed", exc_info=True)
             return []
@@ -103,7 +109,7 @@ def register_completions(server: "OpenZimMcpServer") -> None:
                 return _page([])
             if name != _PATH_ARGUMENT:
                 return _page([])
-            paths = [row["path"] for row in _archives()]
+            paths = [row["path"] for row in await _archives()]
             return _page(_matching(paths, typed))
 
         if ref_type == "ref/resource":
@@ -113,7 +119,7 @@ def register_completions(server: "OpenZimMcpServer") -> None:
                 return _page([])
             # ``{name}`` is the basename without the extension — the same form
             # ``zim_file_overview`` resolves and ``resources/list`` advertises.
-            stems = [Path(row["path"]).stem for row in _archives()]
+            stems = [Path(row["path"]).stem for row in await _archives()]
             return _page(_matching(stems, typed))
 
         return _page([])

@@ -4,8 +4,9 @@ A real sidecar is built via ``build_from_link_stream``; the archive-open and
 path-validation seams are stubbed so no real ZIM is needed. The archive-open
 context manager is monkeypatched to yield a ``MagicMock`` whose ``.uuid``
 matches the sidecar's built-in UUID, so ``LinkGraphReader.open_for``'s
-fingerprint check passes. ``get_entry_by_path`` raises so title resolution
-falls back to the path (keeping ``title == path`` deterministic).
+fingerprint check passes. Every entry it hands back has an empty title, so
+title resolution keeps its path placeholder (``title == path`` stays
+deterministic).
 """
 
 from __future__ import annotations
@@ -27,7 +28,8 @@ class _StubSelf:
 
     ``_validate_zim_path`` echoes the archive path; ``_resolve_outbound_titles``
     is the real (static) implementation, which is harmless because the patched
-    archive's ``get_entry_by_path`` raises (titles stay at their path fallback).
+    archive hands back entries with no title (titles stay at their path
+    fallback).
     """
 
     def __init__(self, archive_path: Path) -> None:
@@ -47,11 +49,21 @@ def _stub_self(archive_path: Path) -> _StructureMixin:
 def _patch_archive_open(monkeypatch: pytest.MonkeyPatch, *, uuid: str) -> None:
     """Patch the module-level archive-open to yield a MagicMock with ``.uuid``.
 
-    ``get_entry_by_path`` raises so title resolution falls back to path.
+    Every path resolves to a plain (non-redirect) entry with an empty title,
+    so the queried target passes the existence check while title resolution
+    still falls back to the path.
     """
     archive = MagicMock()
     archive.uuid = uuid
-    archive.get_entry_by_path.side_effect = RuntimeError("no real archive")
+
+    def _entry(path: str) -> MagicMock:
+        entry = MagicMock()
+        entry.is_redirect = False
+        entry.path = path
+        entry.title = ""
+        return entry
+
+    archive.get_entry_by_path.side_effect = _entry
 
     class _Ctx:
         def __enter__(self) -> MagicMock:
@@ -113,7 +125,7 @@ def test_inbound_returns_ranked_results(
     assert [r["path"] for r in result["results"]] == ["C/A", "C/B"]
     assert result["results"][0]["inbound_degree"] == 2
     assert result["results"][1]["inbound_degree"] == 1
-    # Title falls back to path since the stubbed archive lookup raises.
+    # Title falls back to path since the stubbed entries carry no title.
     assert result["results"][0]["title"] == "C/A"
     assert result["total"] == 2
     assert result["done"] is True
@@ -184,3 +196,34 @@ def test_inbound_paginates_emits_cursor(
     assert len(full["results"]) == 2
     assert full["done"] is True
     assert full["next_cursor"] is None
+
+
+def test_inbound_rejects_cursor_from_another_archive(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An inbound cursor issued for archive A must not paginate archive B.
+
+    Every other paginated surface (outbound links, browse/walk, search)
+    rejects the replay with a cursor archive-identity mismatch; without the
+    guard here, B's inbound list silently resumes at A's offset, skipping
+    B's first page.
+    """
+    from openzim_mcp.exceptions import OpenZimMcpValidationError
+
+    archive = tmp_path / "x.zim"
+    _build_sidecar(
+        archive,
+        uuid="u1",
+        stream=[("A", [("T", "")]), ("B", [("T", "")])],
+    )
+    _patch_archive_open(monkeypatch, uuid="u1")
+
+    with pytest.raises(OpenZimMcpValidationError, match="archive"):
+        _StructureMixin.get_inbound_links_data(
+            _stub_self(archive),
+            str(archive),
+            "T",
+            limit=1,
+            offset=1,
+            cursor_archive_identity="000000000000",
+        )

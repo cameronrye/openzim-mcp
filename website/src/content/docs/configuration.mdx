@@ -73,14 +73,23 @@ For full HTTP deployment guidance see [HTTP and Docker Deployment](/openzim-mcp/
 
 ## Resource subscriptions
 
-Polling-based mtime watcher that emits `notifications/resources/updated` to subscribed clients when allowed directories change or `.zim` files are replaced.
+Polling-based mtime watcher. A `.zim` appearing in or disappearing from an allowed directory publishes `notifications/resources/list_changed`; a `.zim` replaced in place publishes `notifications/resources/updated` for that archive's `zim://{name}`. Both reach clients that opted in via `subscriptions/listen`, and only under the HTTP transport.
 
 ```bash
 export OPENZIM_MCP_SUBSCRIPTIONS_ENABLED=true        # default true
 export OPENZIM_MCP_WATCH_INTERVAL_SECONDS=5          # default 5, range 1-60
+export OPENZIM_MCP_RESOURCE_CACHE_TTL_SECONDS=3600   # default 3600, range 0-86400
 ```
 
-Setting `OPENZIM_MCP_SUBSCRIPTIONS_ENABLED=false` skips the polling task entirely; subscribe calls succeed but never fire updates. Tune `OPENZIM_MCP_WATCH_INTERVAL_SECONDS` upward for low-priority watching, downward for sub-second freshness.
+Setting `OPENZIM_MCP_SUBSCRIPTIONS_ENABLED=false` skips the polling task and withholds the capability: `resources.subscribe` and the `listChanged` flags read `false`, and `subscriptions/listen` fails with method-not-found instead of acknowledging a stream that would never fire. Tune `OPENZIM_MCP_WATCH_INTERVAL_SECONDS` upward for low-priority watching, downward (to a floor of 1s) for faster detection.
+
+### Read caching
+
+Results carry the 2026-07-28 `ttlMs`/`cacheScope` hints, which tell a client how long it may reuse an answer instead of asking again. `OPENZIM_MCP_RESOURCE_CACHE_TTL_SECONDS` sets that window for the `zim://{name}` overview, where it pays off most: a ZIM file is sealed, so the overview changes only when the file itself is replaced, and each read costs three blocking archive opens. Per-entry reads (`zim://{name}/entry/{path}`) stay on the watcher-bounded TTL — no `resources/updated` is ever published for an entry URI, so a longer promise could not be invalidated.
+
+`zim://files` is deliberately excluded. It is a live scan of the allowed directories, so it stays bounded by `OPENZIM_MCP_WATCH_INTERVAL_SECONDS` and a cached copy is never staler than the server's own detection latency.
+
+The trade-off is staleness after a replacement. A client on an open `subscriptions/listen` stream is told immediately and re-reads, so the TTL costs it nothing. A client that is *not* subscribed — anything on stdio, or an HTTP client that never opened a stream — can keep serving the old overview for up to the TTL. If you hot-swap archives in place and cannot rely on subscribers, lower it, or set `0` to turn the override off entirely and put overview reads back on the same watcher-bounded TTL as `zim://files`.
 
 ## Cache
 
@@ -181,7 +190,7 @@ export OPENZIM_MCP_RATE_LIMIT__PER_OPERATION_LIMITS='{"get_binary_entry": {"requ
 export OPENZIM_MCP_SERVER_NAME=openzim-mcp     # default openzim-mcp; reported in serverInfo
 ```
 
-`serverInfo.version` always reports openzim-mcp's installed version (read from `importlib.metadata`), no longer the FastMCP SDK default.
+`serverInfo.version` always reports openzim-mcp's installed version (read from `importlib.metadata`), no longer the MCP SDK default.
 
 ## Allowed directories
 
@@ -212,6 +221,9 @@ Sorted alphabetically by field name within each grouping.
 | `content.default_search_limit` | `OPENZIM_MCP_CONTENT__DEFAULT_SEARCH_LIMIT` | `10` | 1-100 |
 | `content.max_content_length` | `OPENZIM_MCP_CONTENT__MAX_CONTENT_LENGTH` | `100000` | min 100 |
 | `content.snippet_length` | `OPENZIM_MCP_CONTENT__SNIPPET_LENGTH` | `3000` | min 100 |
+| `content.table_row_threshold` | `OPENZIM_MCP_CONTENT__TABLE_ROW_THRESHOLD` | `8` | min 1; tables with more rows collapse in compact mode |
+| `content.table_char_threshold` | `OPENZIM_MCP_CONTENT__TABLE_CHAR_THRESHOLD` | `600` | min 50; char size past which a table collapses |
+| `content.infobox_kv_limit` | `OPENZIM_MCP_CONTENT__INFOBOX_KV_LIMIT` | `30` | 1-200; key/value pairs kept from an infobox |
 | `cors_origins` | `OPENZIM_MCP_CORS_ORIGINS` | `[]` | JSON list; `*` rejected |
 | `host` | `OPENZIM_MCP_HOST` | `127.0.0.1` | non-loopback requires auth (http) or refuses (sse) |
 | `insecure_disable_auth` | `OPENZIM_MCP_INSECURE_DISABLE_AUTH` | `false` | escape hatch: allows token-less non-loopback HTTP with a WARNING (closed networks only) |
@@ -223,6 +235,7 @@ Sorted alphabetically by field name within each grouping.
 | `rate_limit.enabled` | `OPENZIM_MCP_RATE_LIMIT__ENABLED` | `true` | bool |
 | `rate_limit.per_operation_limits` | `OPENZIM_MCP_RATE_LIMIT__PER_OPERATION_LIMITS` | `{}` | nested JSON dict |
 | `rate_limit.requests_per_second` | `OPENZIM_MCP_RATE_LIMIT__REQUESTS_PER_SECOND` | `20.0` | positive float (work units/s) |
+| `resource_cache_ttl_seconds` | `OPENZIM_MCP_RESOURCE_CACHE_TTL_SECONDS` | `3600` | 0-86400; `0` disables |
 | `server_name` | `OPENZIM_MCP_SERVER_NAME` | `openzim-mcp` | reported in serverInfo |
 | `subscriptions_enabled` | `OPENZIM_MCP_SUBSCRIPTIONS_ENABLED` | `true` | watcher master switch |
 | `tool_mode` | `OPENZIM_MCP_TOOL_MODE` | `simple` | `simple` or `advanced` |
@@ -343,4 +356,4 @@ The following env-var namespaces appeared in pre-1.0 / early-v2 documentation an
 
 **Tuning?** See [Performance Optimization](/openzim-mcp/docs/performance-optimization/). **Deploying over HTTP?** See [HTTP and Docker Deployment](/openzim-mcp/docs/http-and-docker-deployment/).
 
-*The v1.x maintenance window closed when v2.5.0 shipped (2026-06-18); the 2.x line is the only supported series. See [CHANGELOG](https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md) for the v1 → v2 migration table.*
+*The v1.x maintenance window closed when v2.5.0 shipped (2026-06-18); only the current major line is supported — see [SECURITY.md](https://github.com/cameronrye/openzim-mcp/blob/main/SECURITY.md) for the policy. The [CHANGELOG](https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md) carries the v1 → v2 migration table and the v3.0.0 breaking-changes entry.*

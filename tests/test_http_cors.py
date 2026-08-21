@@ -157,3 +157,41 @@ def test_cors_preflight_allows_delete_for_session_termination():
     )
     assert resp.status_code == 200
     assert "DELETE" in resp.headers.get("access-control-allow-methods", "")
+
+
+def test_header_bearing_tool_params_are_cors_allowed(tmp_path):
+    """Any tool param that travels as a header must be allowed through preflight.
+
+    The 2026-07-28 revision lets a tool annotate an input property with
+    ``x-mcp-header``; a modern client then sends that argument as an
+    ``Mcp-Param-<token>`` request header rather than in the JSON body. No tool
+    does that today, which is why ``CORS_ALLOW_HEADERS`` lists no such entry.
+
+    The failure mode if one is added is silent and remote from its cause: the
+    browser rejects the request at preflight, so the server never sees it and
+    has nothing to log. This fails the build at the moment the annotation is
+    added instead, naming the header that has to be listed.
+    """
+    import asyncio
+
+    from mcp.shared.inbound import MCP_PARAM_HEADER_PREFIX, x_mcp_header_map
+
+    from openzim_mcp.config import OpenZimMcpConfig
+    from openzim_mcp.http_app import CORS_ALLOW_HEADERS
+    from openzim_mcp.server import OpenZimMcpServer
+
+    server = OpenZimMcpServer(
+        OpenZimMcpConfig(allowed_directories=[str(tmp_path)], tool_mode="advanced")
+    )
+    tools = asyncio.run(server.mcp.list_tools())
+    allowed = {h.lower() for h in CORS_ALLOW_HEADERS}
+
+    for tool in tools:
+        for path, token in x_mcp_header_map(tool.input_schema).items():
+            header = f"{MCP_PARAM_HEADER_PREFIX}{token}"
+            assert header.lower() in allowed, (
+                f"{tool.name}.{'.'.join(path)} is annotated x-mcp-header "
+                f"{token!r}, so a modern client sends it as the {header} "
+                "request header. Add it to CORS_ALLOW_HEADERS or browser "
+                "clients fail preflight with no server-side trace."
+            )

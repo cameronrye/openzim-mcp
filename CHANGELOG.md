@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.0.0](https://github.com/cameronrye/openzim-mcp/compare/v2.7.0...v3.0.0) (2026-08-20)
+
+
+### ⚠ BREAKING CHANGES
+
+* requires MCP Python SDK v2 (`mcp>=2.0.0,<2.1` — held to 2.0.x while `sdk_compat.py` and the handler-registry seams depend on SDK internals; raising the ceiling is a deliberate bump that re-audits them) and adopts the 2026-07-28 protocol revision. The server answers both protocol eras from one endpoint, so 2025-era clients keep working for tools, resources, and prompts with no client change. Two things do break for them. this build no longer serves `resources/subscribe`, so a legacy client gets `-32601` and cannot receive change notifications from it. That is this server's choice, not an SDK limitation: the lowlevel `Server` still accepts a handler for the method and advertises the capability when one is registered. Restoring it would mean restoring the per-session subscriber registry that this change deletes. Subscriptions have always been HTTP-only here, so no stdio client is affected. And `zim://files` is no longer a valid subscription target, because a `.zim` file appearing or disappearing is now published as `resources/list_changed`, which carries no URI. Clients on the 2026-07-28 revision subscribe through `subscriptions/listen`: ask for `resourcesListChanged` to hear about archives appearing or disappearing, and list `zim://{name}` under `resourceSubscriptions` to hear about in-place replacements.
+* link-graph sidecars built by 2.x are invalidated: this release bumps the sidecar schema to v3, and a sidecar whose schema version mismatches is rejected on load, so after upgrading, `zim_links(direction="inbound")` returns `inbound_sidecar_unavailable` until each archive's sidecar is rebuilt with `openzim-mcp build link-graph --force <archive>.zim`. *(Bullet added post-release — the squash body this entry was generated from omitted it.)*
+
+### Added
+
+* port to MCP Python SDK v2 (2026-07-28 protocol revision) ([#362](https://github.com/cameronrye/openzim-mcp/issues/362)) ([7e92b3a](https://github.com/cameronrye/openzim-mcp/commit/7e92b3add9487297fecd424ddfad327a46f650d1))
+
 ## [2.7.0](https://github.com/cameronrye/openzim-mcp/compare/v2.6.5...v2.7.0) (2026-08-12)
 
 

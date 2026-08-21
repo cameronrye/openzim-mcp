@@ -36,7 +36,7 @@
 
 Built for research assistants, knowledge chatbots, and content-analysis systems that need *intelligent* access to vast knowledge repositories — not just a raw text dump. Smart navigation by namespace (articles, metadata, media), structure-aware retrieval (sections, tables of contents, related articles), full-text search with suggestions and multi-archive search, and link-graph extraction to map content relationships. Cached, paginated operations keep things responsive across massive archives; comprehensive input validation and path-traversal protection keep things safe.
 
-Streamable HTTP transport, per-entry MCP resources with subscriptions, and dual Simple / Advanced modes are all built in.
+Streamable HTTP transport, per-entry MCP resources with live change notifications, and dual Simple / Advanced modes are all built in.
 
 ## Install
 
@@ -116,7 +116,7 @@ For HTTP transport (long-running service with bearer auth, CORS, and health endp
 
 - **8-tool advanced surface** — `zim_query`, `zim_search`, `zim_get`, `zim_get_section`, `zim_browse`, `zim_metadata`, `zim_links`, `zim_health`. Down from 22; advanced-mode schema drops from ~36KB to ~24.3KB, clearing the [MCP Tax](https://www.mmntm.net/articles/mcp-context-tax) pain band. [API reference →](https://cameronrye.github.io/openzim-mcp/docs/api-reference/)
 - **Streamable HTTP transport** — bearer-token auth, CORS, health endpoints, multi-arch Docker image. [HTTP & Docker deployment →](https://cameronrye.github.io/openzim-mcp/docs/http-and-docker-deployment/)
-- **Per-entry MCP resources + subscriptions** — `zim://{name}/entry/{path}` with native MIME types; clients subscribe and receive `notifications/resources/updated` when archives change. [Resources, prompts & subscriptions →](https://cameronrye.github.io/openzim-mcp/docs/resources-prompts-subscriptions/)
+- **Per-entry MCP resources + subscriptions** — `zim://{name}/entry/{path}` with native MIME types; clients open a `subscriptions/listen` stream and get `resources/list_changed` when a ZIM appears or disappears, `resources/updated` when one is replaced. [Resources, prompts & subscriptions →](https://cameronrye.github.io/openzim-mcp/docs/resources-prompts-subscriptions/)
 - **Simple-mode `zim_query`** — one natural-language tool that dispatches to the right operation, tuned for small-model deployment targets. [Quick start →](https://cameronrye.github.io/openzim-mcp/docs/quick-start/)
 - **Archive-type presets** — OpenZIM MCP detects the archive type (Wikipedia, Stack Exchange, and more) and auto-tunes retrieval and summarization for it — e.g. Stack Exchange dumps render as clean Q&A instead of vote-score noise. Operators can override the bundled defaults with a TOML file (`OPENZIM_MCP_PRESETS_OVERRIDE_PATH`).
 - **Native libzim introspection** — `zim_health(zim_file_path=...)` validates an archive's integrity (`Archive.check()` + checksum), and `zim_metadata` reports archive identity, full-text / title index capabilities, and an `M/Counter` mimetype breakdown. [API reference →](https://cameronrye.github.io/openzim-mcp/docs/api-reference/)
@@ -145,8 +145,8 @@ Full documentation lives at **<https://cameronrye.github.io/openzim-mcp/docs/>**
 
 ## Project status
 
-**v2.7.0** is the current release (2026-08-12). <!-- x-release-please-version-date -->
-v2.0.0 GA shipped 2026-05-27. Per the published support policy — v1.x fixes accepted "until v2.5.0 ships, whichever comes first" — the v1.x maintenance window closed when v2.5.0 shipped (2026-06-18); all active development is now on the 2.x line. Full release history: [CHANGELOG.md](CHANGELOG.md).
+**v3.0.0** is the current release (2026-08-20). <!-- x-release-please-version-date -->
+v2.0.0 GA shipped 2026-05-27. Per the published support policy — v1.x fixes accepted "until v2.5.0 ships, whichever comes first" — the v1.x maintenance window closed when v2.5.0 shipped (2026-06-18); all active development is on the current major line ([SECURITY.md](SECURITY.md) states the policy). **v3.0.0 is a breaking release for HTTP subscription clients**: `resources/subscribe`/`unsubscribe` are no longer served — live updates ride `subscriptions/listen` on the 2026-07-28 protocol revision — and link-graph sidecars built by 2.x must be rebuilt. Tools, resources, and prompts are unchanged, and legacy-handshake clients keep working. Details in [CHANGELOG.md](CHANGELOG.md).
 
 ## Contributing
 

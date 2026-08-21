@@ -144,9 +144,51 @@ class _ArticleBodyMixin:
     # (Big_Rapids,_Michigan with infobox-stripped lead) has density
     # 0; any real one-sentence lead like "Foo is a bar." (>=10 chars)
     # stays well above this and is preserved by the standard
-    # lead-cut path. Tunable from live-MCP probe data if real
-    # articles produce density 1-4 placeholder-only leads.
+    # lead-cut path.
+    #
+    # v3.0.0 field sweep (MedlinePlus topic pages): density counts PROSE
+    # only. Those pages open with the H1, an ``Also called: Rubeola``
+    # label and — before the in-page nav strip — a link menu, then the
+    # real content under ``## Summary``. Raw character counting read
+    # that as a 300-char lead and ``tell me about`` returned zero
+    # medical content. Headings, list items, table rows and sentence-
+    # less label lines are therefore excluded; see ``_prose_chars``.
     _EMPTY_LEAD_DENSITY_THRESHOLD = 5
+
+    # Lines that are structure, not prose: headings, list items (``* ``
+    # / ``- `` / ``+ `` / ``1. ``), table rows. Anchored, single-pass
+    # alternation — no nested quantifiers (Sonar S5852).
+    _LEAD_NON_PROSE_LINE_RE = re.compile(r"^(?:#|[-*+] |\d+[.)] |\|)")
+    # A sentence boundary: terminal punctuation, optional closing
+    # quote/bracket, then whitespace or end. The two classes are
+    # disjoint so the engine never backtracks between them.
+    _LEAD_SENTENCE_END_RE = re.compile(r"[.!?][\"')\]]*(?:\s|$)")
+    # A long unpunctuated line still counts as prose — some leads are a
+    # single clause with no terminator; what we want to exclude is the
+    # short ``Label: value`` line, not a real sentence missing its stop.
+    _LEAD_PROSE_MIN_WORDS = 12
+
+    @classmethod
+    def _prose_chars(cls, text: str) -> int:
+        """Count non-whitespace chars on the prose lines of ``text``.
+
+        A prose line is neither heading / list / table structure nor a
+        short sentence-less label (``Also called: Rubeola``). Misjudging
+        a lead as empty only costs the caller the next section's tokens
+        (the cut advances, it never removes content), so the test errs
+        towards requiring a sentence.
+        """
+        total = 0
+        for line in text.splitlines():
+            stripped = line.strip()
+            if not stripped or cls._LEAD_NON_PROSE_LINE_RE.match(stripped):
+                continue
+            if (
+                cls._LEAD_SENTENCE_END_RE.search(stripped)
+                or len(stripped.split()) >= cls._LEAD_PROSE_MIN_WORDS
+            ):
+                total += len("".join(stripped.split()))
+        return total
 
     @classmethod
     def _is_disambig_lead(cls, pre_h2: str) -> bool:
@@ -184,8 +226,11 @@ class _ArticleBodyMixin:
         body as substantive and DOES NOT trigger empty-lead detection.
 
         With the preamble present, strip it plus the duplicated H1
-        line and count what remains — that's the substantive lead
-        char count the empty-lead path is designed to threshold.
+        line and count the PROSE that remains (``_prose_chars``) —
+        that's the substantive lead char count the empty-lead path is
+        designed to threshold. A lead made only of labels, headings and
+        link lists (the MedlinePlus topic-page shape) counts as empty so
+        the cut advances to the first real section.
         """
         preamble_match = cls._LEAD_PREAMBLE_RE.match(pre_h2)
         if preamble_match is None:
@@ -202,7 +247,7 @@ class _ArticleBodyMixin:
         h1_match = cls._DUPLICATED_H1_RE.match(stripped)
         if h1_match is not None:
             stripped = stripped[h1_match.end() :]
-        return len("".join(stripped.split()))
+        return cls._prose_chars(stripped)
 
     def _lead_with_toc(self, zim_file_path: str, entry_path: str, body: str) -> str:
         """Truncate ``body`` at the first article H2 (lead-section cut)

@@ -87,5 +87,7 @@ def build_main(argv: Optional[List[str]] = None) -> int:
     try:
         args = parser.parse_args(argv)
     except SystemExit as e:  # unknown artifact / bad args -> nonzero, no traceback
-        return int(e.code or 2)
+        # Keep argparse's own code so ``--help`` still reports success; only a
+        # bare SystemExit() (code None) needs a default.
+        return 2 if e.code is None else int(e.code)
     return int(args.func(args))

@@ -51,6 +51,15 @@ from unittest.mock import MagicMock
 from openzim_mcp.pagination import Cursor
 from openzim_mcp.simple_tools import SimpleToolsHandler
 
+
+def _body(out: object) -> str:
+    """Readable body of a handler result: the ``message`` of a
+    ``ToolErrorPayload`` envelope, or the markdown string itself."""
+    if isinstance(out, dict):
+        return str(out.get("message", ""))
+    return str(out)
+
+
 # ---------------------------------------------------------------------------
 # P3-D1: subject-attribute section dominated by table placeholders falls
 # back to a ``compact=False`` recovery pointer
@@ -389,9 +398,9 @@ class TestP1D4CrossToolCursorRejection:
             zim_file_path="/x.zim",
             options={"compact": True, "cursor": cursor_token},
         )
-        assert "Cursor / Tool Mismatch" in out
-        assert "walk_namespace" in out
-        assert "browse_namespace" in out
+        assert "Cursor / Tool Mismatch" in _body(out)
+        assert "walk_namespace" in _body(out)
+        assert "browse_namespace" in _body(out)
         # The backend call must NOT have happened.
         assert not mock.browse_namespace.called
         assert not mock.browse_namespace_data.called
@@ -411,9 +420,9 @@ class TestP1D4CrossToolCursorRejection:
             zim_file_path="/x.zim",
             options={"compact": True, "cursor": cursor_token},
         )
-        assert "Cursor / Tool Mismatch" in out
-        assert "browse_namespace" in out
-        assert "walk_namespace" in out
+        assert "Cursor / Tool Mismatch" in _body(out)
+        assert "browse_namespace" in _body(out)
+        assert "walk_namespace" in _body(out)
         assert not mock.walk_namespace.called
         assert not mock.walk_namespace_data.called
 
@@ -463,6 +472,6 @@ class TestP1D4CrossToolCursorRejection:
         )
         # No tool-mismatch error; backend was called with the
         # rebuilt cursor_state carrying ai/ns.
-        assert "Cursor / Tool Mismatch" not in out
+        assert "Cursor / Tool Mismatch" not in _body(out)
         assert captured.get("cursor_state") is not None
         assert captured["cursor_state"]["ai"] == "e048666a9e92"

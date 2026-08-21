@@ -5,7 +5,7 @@ import SiteFooter from '../components/SiteFooter.astro';
 const title = "OpenZIM MCP — Knowledge that works offline";
 const description = "OpenZIM MCP gives any AI model structured, secure access to ZIM archives — Wikipedia, MedlinePlus, the Stack Exchange dumps — without an internet connection.";
 const base = import.meta.env.BASE_URL.replace(/\/$/, '');
-const version = "2.7.0"; // x-release-please-version
+const version = "3.0.0"; // x-release-please-version
 const softwareSchema = {
   "@context": "https://schema.org",
   "@type": "SoftwareApplication",
@@ -54,7 +54,7 @@ const softwareSchema = {
     <meta property="og:image:height" content="630">
     <meta property="og:locale" content="en_US">
     <meta property="article:author" content="Cameron Rye">
-    <meta property="article:modified_time" content="2026-08-12T00:00:00Z"> <!-- x-release-please-date -->
+    <meta property="article:modified_time" content="2026-08-20T00:00:00Z"> <!-- x-release-please-date -->
 
     <!-- Twitter -->
     <meta name="twitter:card" content="summary_large_image">
@@ -124,7 +124,7 @@ const softwareSchema = {
       "description": "MCP server for offline ZIM-archive access. Streamable HTTP transport, batch retrieval, per-entry resources, resource subscriptions.",
       "author": { "@type": "Person", "name": "Cameron Rye", "url": "https://rye.dev" },
       "datePublished": "2024-01-01T00:00:00Z",
-      "dateModified": "2026-06-22T00:00:00Z",
+      "dateModified": "2026-08-20T00:00:00Z", "x-release-please-date": "",
       "publisher": {
         "@type": "Organization",
         "name": "OpenZIM MCP",
@@ -360,7 +360,7 @@ tests/test_phase_f_gate_decision_consistency.py</code></pre>
                 <pre><code>uv tool install openzim-mcp</code></pre>
               </div>
               <div class="tabs__panel" id="install-docker" role="tabpanel" aria-labelledby="tab-install-docker" hidden>
-                <pre><code>docker pull ghcr.io/cameronrye/openzim-mcp:2.7.0</code></pre> <!-- x-release-please-version -->
+                <pre><code>docker pull ghcr.io/cameronrye/openzim-mcp:3.0.0</code></pre> <!-- x-release-please-version -->
               </div>
               <div class="tabs__panel" id="install-source" role="tabpanel" aria-labelledby="tab-install-source" hidden>
                 <pre><code>git clone https://github.com/cameronrye/openzim-mcp.git
@@ -492,17 +492,20 @@ Calvin cycle (light-independent reactions).</code></pre>
             <div class="tabs__panel" id="use-subscribe" role="tabpanel" aria-labelledby="tab-use-subscribe" hidden>
               <div class="try__exchange">
                 <div>
-                  <h4>Subscribe</h4>
+                  <h4>Subscribe (HTTP transport — <code>--transport http</code>)</h4>
                   <pre><code>{`{
-  "method": "resources/subscribe",
-  "params": { "uri": "zim://files" }
+  "method": "subscriptions/listen",
+  "params": { "notifications": {
+    "resourcesListChanged": true,
+    "resourceSubscriptions": ["zim://wikipedia_en"]
+  } }
 }`}</code></pre>
                 </div>
                 <div>
-                  <h4>Notification (when archive changes)</h4>
+                  <h4>Notification (when an archive is replaced)</h4>
                   <pre><code>{`{
   "method": "notifications/resources/updated",
-  "params": { "uri": "zim://files" }
+  "params": { "uri": "zim://wikipedia_en" }
 }`}</code></pre>
                 </div>
               </div>

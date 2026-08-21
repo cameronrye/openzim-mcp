@@ -1,6 +1,6 @@
 """HTTP-mode helpers for OpenZIM MCP.
 
-Provides the Starlette app the FastMCP server is mounted on, plus health
+Provides the Starlette app the MCP server is mounted on, plus health
 endpoints, auth middleware, and CORS for streamable-HTTP transport.
 
 This module exists so server.py stays focused on MCP-protocol concerns and
@@ -10,10 +10,12 @@ HTTP-specific behavior is grouped here.
 import asyncio
 import hashlib
 import hmac
+import json
 import logging
 import os
 import socket
 import warnings
+from collections import deque
 from concurrent.futures import Future
 from contextlib import asynccontextmanager
 from typing import (
@@ -27,12 +29,13 @@ from typing import (
 )
 
 from starlette.applications import Starlette
+from starlette.datastructures import Headers
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.cors import CORSMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
-from starlette.types import ASGIApp
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from .exceptions import OpenZimMcpConfigurationError, OpenZimMcpTimeoutError
 from .timeout_utils import _get_executor, run_with_timeout
@@ -46,8 +49,39 @@ logger = logging.getLogger(__name__)
 HEALTHZ_PATH = "/healthz"
 READYZ_PATH = "/readyz"
 
+# The one route the SDK mints sessions on — its ``streamable_http_path``
+# default, which the app builder below is left to apply. The sessionless gate
+# answers only here, so the two must agree: a gate on the wrong path would
+# answer URLs the router owns, turning a typo into a session complaint instead
+# of a 404. A test asserts the built app really routes this path.
+MCP_PATH = "/mcp"
+
 # Health endpoints exempt from auth.
 AUTH_EXEMPT_PATHS = {HEALTHZ_PATH, READYZ_PATH}
+
+# Request headers a browser client may send to the MCP endpoint. A module
+# constant rather than an inline literal so the policy is inspectable — see
+# ``test_header_bearing_tool_params_are_cors_allowed``, which holds the one
+# entry a future change could silently need.
+#
+# No ``Mcp-Param-*`` entry is listed, which is the decision on the 2026-07-28
+# custom-header passthrough rather than an oversight. That revision lets a tool
+# annotate an input property with ``x-mcp-header``, and a modern client then
+# sends that argument as an ``Mcp-Param-<token>`` request header instead of in
+# the JSON body. No tool here annotates one, so no such header is ever sent and
+# allowing them would only widen what a browser may put on the wire. The
+# coupling is the trap: adding the annotation to a tool schema breaks browser
+# clients at preflight with nothing in the request itself to explain why, so
+# the guard test fails until the header is listed here.
+CORS_ALLOW_HEADERS = (
+    "Authorization",
+    "Content-Type",
+    "Mcp-Session-Id",
+    "Last-Event-ID",
+    "MCP-Protocol-Version",
+    "Mcp-Method",
+    "Mcp-Name",
+)
 
 # Upper bound on the /readyz allowed-directory stat probe. A hung network mount
 # returns a fast 503 after this instead of stalling the event loop.
@@ -389,23 +423,24 @@ def apply_cors_middleware(app: Starlette, config: object) -> None:
     app.add_middleware(
         CORSMiddleware,
         allow_origins=list(origins),
-        # DELETE is the MCP streamable-HTTP method for explicit session
-        # termination (per the spec; see also the SDK handler in
-        # streamable_http.py: "Allow: GET, POST, DELETE"). Without it,
-        # browser preflight blocks clean session shutdown.
+        # The SDK serves both protocol eras on this one endpoint, so the
+        # allow-list is the union of what each needs rather than just the
+        # 2026-07-28 set. A 2025-era client still opens a session (GET stream,
+        # DELETE to terminate, Mcp-Session-Id on every subsequent request,
+        # Last-Event-ID to resume a dropped stream); a 2026-era client is
+        # stateless and uses none of them. Dropping the legacy entries here
+        # would break browser-based legacy clients while the deprecation
+        # window is still open.
         allow_methods=["GET", "POST", "OPTIONS", "DELETE"],
-        # Mcp-Session-Id is sent by streamable-HTTP clients on every request
-        # after initialization to resume a session; Last-Event-ID is used to
-        # resume interrupted streams; MCP-Protocol-Version is sent on every
-        # post-init request per the MCP spec. Without allowing these, browser
-        # CORS preflight rejects session-resume requests.
-        allow_headers=[
-            "Authorization",
-            "Content-Type",
-            "Mcp-Session-Id",
-            "Last-Event-ID",
-            "MCP-Protocol-Version",
-        ],
+        # MCP-Protocol-Version is sent by legacy clients post-initialize; the
+        # 2026-07-28 revision also defines it as the header form of the
+        # per-request protocol version. Mcp-Method and Mcp-Name are that
+        # revision's required POST headers, and the SDK enforces them today: a
+        # modern POST whose Mcp-Method disagrees with the body's method is
+        # rejected with -32020, and tools/call additionally requires Mcp-Name.
+        # Both are therefore load-bearing here, not forward-compatibility —
+        # omitting them fails browser preflight for every 2026-era client.
+        allow_headers=list(CORS_ALLOW_HEADERS),
         expose_headers=["Mcp-Session-Id"],
     )
 
@@ -423,12 +458,324 @@ def build_starlette_app(server: "OpenZimMcpServer") -> Starlette:
     )
 
 
+# How long uvicorn waits for open connections to drain on SIGTERM/SIGINT
+# before force-closing them.
+#
+# Load-bearing, not tuning. uvicorn's default is ``None`` — wait forever —
+# and a ``subscriptions/listen`` stream never ends on its own: the SDK's SSE
+# loop emits keepalive pings until the *client* disconnects. So a single
+# subscribed client made this process unkillable by SIGTERM, and shutdown
+# never reached the ASGI lifespan — which is where ``lifespan_with_watcher``
+# stops the MtimeWatcher. ``docker stop`` burned its full grace period and
+# then SIGKILLed, and SIGKILL skips ``atexit``, discarding the cache
+# persistence save registered in ``OpenZimMcpCache.__init__``.
+#
+# Five seconds sits inside Docker's 10s default stop timeout (and any
+# sane Kubernetes ``terminationGracePeriodSeconds``), so termination is
+# clean rather than killed.
+SHUTDOWN_GRACE_SECONDS = 5
+
+
 def _default_uvicorn_runner(app: Starlette, host: str, port: int) -> None:
     """Run the given Starlette app under uvicorn (blocking)."""
     import uvicorn
 
-    config = uvicorn.Config(app, host=host, port=port, log_level="info")
+    config = uvicorn.Config(
+        app,
+        host=host,
+        port=port,
+        log_level="info",
+        timeout_graceful_shutdown=SHUTDOWN_GRACE_SECONDS,
+    )
     uvicorn.Server(config).run()
+
+
+class TransportSecurityGateMiddleware(BaseHTTPMiddleware):
+    """Run the DNS-rebinding Host/Origin check *in front of* the SDK app.
+
+    The SDK does the same validation, but on the legacy branch it does it too
+    late to matter. Era routing sends any request without an
+    ``MCP-Protocol-Version`` header down the legacy path, and that path creates
+    the transport, registers it in the manager's session table and starts its
+    task *before* calling into the handler where Host/Origin is checked. So a
+    request answered ``403 Invalid Origin header`` has already allocated a
+    session and a live task — and nothing reaps them: the app builder exposes
+    no ``session_idle_timeout``, so the manager's idle-expiry branch is dead
+    and the table is only ever emptied by an explicit DELETE or process exit.
+
+    The default HTTP deployment is the exposed one: ``127.0.0.1`` with no token
+    (which ``check_safe_startup`` permits) and no CORS origins, so neither of
+    the other two middlewares stops anything. A page the user happens to visit
+    can ``fetch()`` the endpoint in a loop; every request is rejected and every
+    request leaks a session, until the process is killed for its memory.
+
+    Health endpoints are exempt for the same reason they are exempt from auth.
+    """
+
+    def __init__(self, app: ASGIApp, security: Any) -> None:
+        """Capture the resolved transport-security settings."""
+        super().__init__(app)
+        from mcp.server.transport_security import TransportSecurityMiddleware
+
+        self._validator = TransportSecurityMiddleware(security)
+
+    async def dispatch(
+        self,
+        request: Request,
+        call_next: Callable[[Request], Awaitable[Response]],
+    ) -> Response:
+        """Reject a request the SDK would reject, before it costs a session."""
+        if request.url.path in AUTH_EXEMPT_PATHS:
+            return await call_next(request)
+        error = await self._validator.validate_request(
+            request, is_post=request.method == "POST"
+        )
+        if error is not None:
+            return error
+        return await call_next(request)
+
+
+def _is_initialize_request(body: bytes) -> bool:
+    """True iff ``body`` is a JSON-RPC request the SDK would accept as ``initialize``.
+
+    Mirrors what ``JSONRPCRequest`` validation lets through — ``jsonrpc`` of
+    exactly ``"2.0"``, a string or (strict, so not bool) int ``id``, and
+    ``params`` absent or an object — so the gate never turns away a request
+    the SDK would have opened a session for, and never lets through one it
+    would have rejected *after* opening a session.
+    """
+    try:
+        message = json.loads(body)
+    except (ValueError, RecursionError):
+        # ``RecursionError`` is a ``RuntimeError``, not a ``ValueError``: a
+        # body nested past the interpreter's limit is undecodable the same way
+        # malformed JSON is, and must be answered rather than escape the gate.
+        return False
+    if not isinstance(message, dict) or message.get("method") != "initialize":
+        return False
+    if message.get("jsonrpc") != "2.0":
+        return False
+    request_id = message.get("id")
+    if isinstance(request_id, bool) or not isinstance(request_id, (int, str)):
+        return False
+    return message.get("params", None) is None or isinstance(message["params"], dict)
+
+
+def _accepts_json_and_sse(scope: Scope) -> bool:
+    """Whether ``Accept`` satisfies the SDK's POST precondition.
+
+    Delegated to the SDK's own parser so the gate's answer and the transport's
+    stay in step, wildcards included. The app is built without
+    ``json_response``, so the SSE branch applies: both types are required.
+    """
+    from mcp.server.streamable_http import check_accept_headers
+
+    has_json, has_sse = check_accept_headers(Request(scope))
+    return bool(has_json and has_sse)
+
+
+class _BodyTooLarge(Exception):
+    """A buffered sessionless body crossed the request-size cap mid-stream."""
+
+
+class SessionlessRequestGateMiddleware:
+    """Refuse handshake-era requests that have no session and are not ``initialize``.
+
+    The SDK's stateful request path mints a transport, registers it in the
+    session table and starts its serve loop for *any* request that lacks an
+    ``Mcp-Session-Id`` header — and only then looks at the request. Every
+    sessionless request except ``initialize`` is rejected at that point
+    (``400 Missing session ID``), but the session it minted outlives the 400:
+    the caller never learns it owns one, so no DELETE comes, and the idle-expiry
+    branch is dead because the app builder exposes no ``session_idle_timeout``.
+    A plain curl, a misbehaving client, or a page the user happens to visit can
+    grow the table and the task count without bound on the default deployment.
+
+    This gate answers those requests itself, with the SDK's own ``400`` body,
+    before the SDK can mint anything. Only two kinds of request legitimately
+    arrive without a session and must pass: an ``initialize`` POST (the session
+    does not exist yet) and anything on the 2026-07-28 stateless path, which is
+    routed by the ``MCP-Protocol-Version`` header and never has a session.
+    ``initialize`` is only recognisable from the body, so a sessionless POST is
+    buffered — under the SDK's request-size cap, which it mirrors — and replayed
+    to the app. A body the gate can neither parse nor recognise gets the same
+    ``Missing session ID`` answer: whatever else is wrong with it, the request
+    has no session and can never be served.
+
+    A pure ASGI middleware rather than ``BaseHTTPMiddleware`` so the body
+    replay is explicit and bounded. It answers only on the MCP route: the
+    health endpoints and every unrouted path belong to Starlette, which still
+    404s them.
+    """
+
+    def __init__(
+        self,
+        app: ASGIApp,
+        max_body_size: Optional[int] = None,
+        mcp_path: str = MCP_PATH,
+    ) -> None:
+        """Wrap ``app``; ``max_body_size`` defaults to the SDK's request cap."""
+        from mcp.server.streamable_http_manager import DEFAULT_MAX_REQUEST_BODY_SIZE
+
+        self.app = app
+        self._mcp_path = mcp_path
+        self._max_body_size = (
+            max_body_size
+            if max_body_size is not None
+            else DEFAULT_MAX_REQUEST_BODY_SIZE
+        )
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        """Pass through every request that cannot leak; answer the rest."""
+        if scope["type"] != "http" or self._never_mints(scope):
+            await self.app(scope, receive, send)
+            return
+
+        method = scope["method"]
+        if method in ("GET", "DELETE"):
+            await self._reject_missing_session(scope, receive, send)
+            return
+        if method != "POST":
+            # The SDK answers 405 for these too — after minting a session.
+            await self._send_jsonrpc_error(
+                scope,
+                receive,
+                send,
+                "Method Not Allowed",
+                405,
+                extra_headers={"Allow": "GET, POST, DELETE"},
+            )
+            return
+        if self._declares_oversized_body(Headers(scope=scope)):
+            # The SDK's own body-limit middleware rejects this with 413
+            # before its session code runs; no need to read it.
+            await self.app(scope, receive, send)
+            return
+
+        try:
+            cached, body = await self._buffer_body(receive)
+        except _BodyTooLarge:
+            response = Response("Request body too large", status_code=413)
+            await response(scope, receive, send)
+            return
+        if body is None or not _is_initialize_request(body):
+            # ``None``: disconnected mid-body — nothing to classify and nobody
+            # to answer, but the outer middleware needs *a* response.
+            await self._reject_missing_session(scope, receive, send)
+            return
+        if not _accepts_json_and_sse(scope):
+            # The SDK validates ``Accept`` inside the transport it has already
+            # minted, registered and task-started, so an ``initialize`` it is
+            # about to refuse with 406 leaks a session all the same. Answer it
+            # here, in the SDK's own words, before anything is minted.
+            await self._send_jsonrpc_error(
+                scope,
+                receive,
+                send,
+                "Not Acceptable: Client must accept both application/json and "
+                "text/event-stream",
+                406,
+            )
+            return
+
+        async def replay() -> Message:
+            if cached:
+                return cached.popleft()
+            return await receive()
+
+        await self.app(scope, replay, send)
+
+    def _never_mints(self, scope: Scope) -> bool:
+        """Whether the SDK serves this HTTP request without minting a session.
+
+        Only the MCP route mints, so every other path — the health endpoints
+        and anything the router will 404 — belongs to Starlette, not to this
+        gate. Beyond that: a request that already names a session (live or
+        unknown) takes a path that never mints, and a non-handshake
+        ``MCP-Protocol-Version`` is era-routed to the stateless 2026-07-28
+        handler.
+        """
+        from mcp.server.streamable_http import MCP_SESSION_ID_HEADER
+        from mcp.shared.inbound import MCP_PROTOCOL_VERSION_HEADER
+        from mcp_types.version import HANDSHAKE_PROTOCOL_VERSIONS
+
+        if scope["path"] != self._mcp_path:
+            return True
+        headers = Headers(scope=scope)
+        if headers.get(MCP_SESSION_ID_HEADER) is not None:
+            return True
+        protocol_version = headers.get(MCP_PROTOCOL_VERSION_HEADER)
+        return (
+            protocol_version is not None
+            and protocol_version not in HANDSHAKE_PROTOCOL_VERSIONS
+        )
+
+    def _declares_oversized_body(self, headers: Headers) -> bool:
+        """Whether ``Content-Length`` already promises more than the body cap."""
+        declared = headers.get("content-length")
+        if declared is None:
+            return False
+        try:
+            return int(declared) > self._max_body_size
+        except ValueError:
+            # A non-numeric Content-Length is not this gate's to police:
+            # treat it as undeclared and let the chunked read enforce the cap.
+            return False
+
+    async def _buffer_body(
+        self, receive: Receive
+    ) -> "tuple[deque[Message], Optional[bytes]]":
+        """Drain the request body, keeping the raw messages for replay.
+
+        Returns the buffered messages and the complete body, or ``None`` for
+        the body when the client disconnected before finishing it. Raises
+        ``_BodyTooLarge`` the moment the running total crosses the cap.
+        """
+        cached: "deque[Message]" = deque()
+        body = bytearray()
+        while True:
+            message = await receive()
+            if message["type"] != "http.request":
+                return cached, None
+            chunk = message.get("body", b"")
+            if len(body) + len(chunk) > self._max_body_size:
+                raise _BodyTooLarge()
+            body.extend(chunk)
+            cached.append(message)
+            if not message.get("more_body", False):
+                return cached, bytes(body)
+
+    async def _reject_missing_session(
+        self, scope: Scope, receive: Receive, send: Send
+    ) -> None:
+        await self._send_jsonrpc_error(
+            scope, receive, send, "Bad Request: Missing session ID", 400
+        )
+
+    async def _send_jsonrpc_error(
+        self,
+        scope: Scope,
+        receive: Receive,
+        send: Send,
+        message: str,
+        status_code: int,
+        extra_headers: Optional[Mapping[str, str]] = None,
+    ) -> None:
+        """Answer exactly as the SDK transport would, minus the session header."""
+        from mcp_types import INVALID_REQUEST, ErrorData, JSONRPCError
+
+        error = JSONRPCError(
+            jsonrpc="2.0",
+            id=None,
+            error=ErrorData(code=INVALID_REQUEST, message=message),
+        )
+        response = Response(
+            error.model_dump_json(by_alias=True, exclude_unset=True),
+            status_code=status_code,
+            headers=dict(extra_headers or {}),
+            media_type="application/json",
+        )
+        await response(scope, receive, send)
 
 
 def serve_streamable_http(
@@ -438,7 +785,7 @@ def serve_streamable_http(
     """Serve OpenZIM MCP over streamable-HTTP transport.
 
     Validates the safe-startup matrix, registers /healthz and /readyz on the
-    underlying FastMCP Starlette app, applies bearer-token auth and CORS,
+    underlying MCPServer Starlette app, applies bearer-token auth and CORS,
     then runs uvicorn.
 
     Args:
@@ -448,53 +795,68 @@ def serve_streamable_http(
     """
     check_safe_startup(server.config)
 
-    # Register health routes on the FastMCP-built app via its public-ish
-    # custom-routes list (looked at SDK source — this is the documented hook).
-    server.mcp._custom_starlette_routes.extend(
-        [
-            Route(HEALTHZ_PATH, healthz),
-            Route(READYZ_PATH, _make_readyz(server)),
-        ]
+    # Register health routes through the SDK's public custom-route hook.
+    #
+    # Guarded because ``custom_route`` appends unconditionally: serving the
+    # same server object twice (a retry after a failed bind, or an embedding
+    # harness) would stack duplicate Route objects that Starlette can never
+    # reach — it matches the first — while retaining every dead closure for
+    # the process lifetime. The pre-port ``_custom_starlette_routes.extend``
+    # had the same shape, so this is fixed at the seam rather than carried.
+    _registered = {
+        getattr(route, "path", None) for route in server.mcp._custom_starlette_routes
+    }
+    if HEALTHZ_PATH not in _registered:
+        server.mcp.custom_route(HEALTHZ_PATH, methods=["GET"])(healthz)
+    if READYZ_PATH not in _registered:
+        server.mcp.custom_route(READYZ_PATH, methods=["GET"])(_make_readyz(server))
+
+    # Transport configuration is an argument to the app builder on the v2 SDK
+    # (there is no ``settings`` object to mutate). ``host`` feeds the SDK's
+    # DNS-rebinding Host allow-list; we still run uvicorn ourselves below.
+    app = server.mcp.streamable_http_app(
+        host=server.config.host,
+        transport_security=server._transport_security,
     )
-
-    # Tell FastMCP what host/port to advertise (settings are read by the SDK
-    # in run_streamable_http_async; we still set them for consistency even
-    # though we run uvicorn ourselves below).
-    server.mcp.settings.host = server.config.host
-    server.mcp.settings.port = server.config.port
-
-    app = server.mcp.streamable_http_app()
     # Order matters. Starlette's add_middleware is LIFO: the LAST-added
     # middleware becomes the OUTERMOST layer. We want CORS as the outer
     # layer so 401 responses from the inner auth middleware still carry
     # Access-Control-Allow-Origin headers (otherwise browser JS clients
     # see an opaque CORS error instead of "401 unauthorized").
+    # Added FIRST, so it is the INNERMOST layer: everything else answers
+    # before it, and only a request that cleared auth and Host/Origin has its
+    # body read. It is the last line between a sessionless request and the
+    # SDK's session-minting code. See SessionlessRequestGateMiddleware.
+    app.add_middleware(SessionlessRequestGateMiddleware)
+    # Next-innermost: auth and CORS still get to answer first, but a request
+    # that clears them is Host/Origin checked here rather than after the SDK
+    # has already minted a session for it. See TransportSecurityGateMiddleware.
+    if server._transport_security is not None:
+        app.add_middleware(
+            TransportSecurityGateMiddleware, security=server._transport_security
+        )
     app.add_middleware(BearerTokenAuthMiddleware, config=server.config)
     apply_cors_middleware(app, server.config)
 
-    # Wire the resource-subscription watcher when both the registry exists
-    # (subscriptions enabled) and we have allowed dirs to watch.
+    # Wire the resource-change watcher when subscriptions are enabled (the bus
+    # exists) and there are allowed dirs to watch.
     #
     # Why we wrap lifespan_context instead of using add_event_handler:
-    # FastMCP's streamable_http_app() supplies a custom Starlette lifespan
-    # (session_manager.run()), so Starlette's _DefaultLifespan — the only
-    # path that iterates on_startup/on_shutdown — is never installed and
+    # streamable_http_app() supplies its own Starlette lifespan, so
+    # Starlette's _DefaultLifespan — the only path that iterates
+    # on_startup/on_shutdown — is never installed and
     # add_event_handler('startup', ...) silently does nothing.
-    registry = server.subscriber_registry
-    if registry is not None and server.config.allowed_directories:
+    bus = server.subscription_bus
+    if bus is not None and server.config.allowed_directories:
         from . import subscriptions as _subs
 
         async def _on_change(uri: str, change_type: str) -> None:
-            await _subs.broadcast_resource_updated(registry, uri)
+            await _subs.publish_change(bus, uri, change_type)
 
         watcher = _subs.MtimeWatcher(
             server.config.allowed_directories,
             server.config.watch_interval_seconds,
             on_change=_on_change,
-            # The watcher tick doubles as the registry's sweep: per-URI
-            # containers left behind by disconnected sessions are otherwise
-            # never reclaimed (see SubscriberRegistry.prune).
-            registry=registry,
         )
 
         inner_lifespan = app.router.lifespan_context
