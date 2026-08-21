@@ -49,6 +49,12 @@ logger = logging.getLogger(__name__)
 HEALTHZ_PATH = "/healthz"
 READYZ_PATH = "/readyz"
 
+# The one route the SDK mints sessions on. Passed to the app builder *and* to
+# the sessionless gate so the two cannot drift: a gate that guessed wrong
+# would answer paths the router owns, turning a typo'd URL into a session
+# complaint instead of a 404.
+MCP_PATH = "/mcp"
+
 # Health endpoints exempt from auth.
 AUTH_EXEMPT_PATHS = {HEALTHZ_PATH, READYZ_PATH}
 
@@ -596,15 +602,22 @@ class SessionlessRequestGateMiddleware:
     has no session and can never be served.
 
     A pure ASGI middleware rather than ``BaseHTTPMiddleware`` so the body
-    replay is explicit and bounded. Health endpoints are exempt, as they are
-    from the other gates.
+    replay is explicit and bounded. It answers only on the MCP route: the
+    health endpoints and every unrouted path belong to Starlette, which still
+    404s them.
     """
 
-    def __init__(self, app: ASGIApp, max_body_size: Optional[int] = None) -> None:
+    def __init__(
+        self,
+        app: ASGIApp,
+        max_body_size: Optional[int] = None,
+        mcp_path: str = MCP_PATH,
+    ) -> None:
         """Wrap ``app``; ``max_body_size`` defaults to the SDK's request cap."""
         from mcp.server.streamable_http_manager import DEFAULT_MAX_REQUEST_BODY_SIZE
 
         self.app = app
+        self._mcp_path = mcp_path
         self._max_body_size = (
             max_body_size
             if max_body_size is not None
@@ -671,20 +684,21 @@ class SessionlessRequestGateMiddleware:
 
         await self.app(scope, replay, send)
 
-    @staticmethod
-    def _never_mints(scope: Scope) -> bool:
+    def _never_mints(self, scope: Scope) -> bool:
         """Whether the SDK serves this HTTP request without minting a session.
 
-        Health endpoints are exempt from every gate; a request that already
-        names a session (live or unknown) takes a path that never mints; and
-        a non-handshake ``MCP-Protocol-Version`` is era-routed to the
-        stateless 2026-07-28 handler.
+        Only the MCP route mints, so every other path — the health endpoints
+        and anything the router will 404 — belongs to Starlette, not to this
+        gate. Beyond that: a request that already names a session (live or
+        unknown) takes a path that never mints, and a non-handshake
+        ``MCP-Protocol-Version`` is era-routed to the stateless 2026-07-28
+        handler.
         """
         from mcp.server.streamable_http import MCP_SESSION_ID_HEADER
         from mcp.shared.inbound import MCP_PROTOCOL_VERSION_HEADER
         from mcp_types.version import HANDSHAKE_PROTOCOL_VERSIONS
 
-        if scope["path"] in AUTH_EXEMPT_PATHS:
+        if scope["path"] != self._mcp_path:
             return True
         headers = Headers(scope=scope)
         if headers.get(MCP_SESSION_ID_HEADER) is not None:
@@ -800,6 +814,7 @@ def serve_streamable_http(
     # (there is no ``settings`` object to mutate). ``host`` feeds the SDK's
     # DNS-rebinding Host allow-list; we still run uvicorn ourselves below.
     app = server.mcp.streamable_http_app(
+        streamable_http_path=MCP_PATH,
         host=server.config.host,
         transport_security=server._transport_security,
     )

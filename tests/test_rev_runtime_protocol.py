@@ -18,6 +18,7 @@ from tests.test_v3_field_fixes_http import (
     INITIALIZE_BODY,
     LEGACY_HEADERS,
     MISSING_SESSION_BODY,
+    TOOLS_LIST_BODY,
     _build_client,
     _sessions,
 )
@@ -126,4 +127,30 @@ def test_sessionless_initialize_with_narrow_accept_mints_nothing(
         )
         assert response.status_code == 406, response.text
 
+    assert _sessions(server) == {}
+
+
+def test_unknown_path_still_reports_not_found(
+    gated_client: Tuple[TestClient, OpenZimMcpServer],
+) -> None:
+    """The gate ran ahead of Starlette's router, so a typo'd URL was blamed
+    on a missing session instead of on the path."""
+    client, _server = gated_client
+
+    assert client.get("/").status_code == 404
+    assert client.get("/sse").status_code == 404
+    typo = client.post("/typo", headers=LEGACY_HEADERS, json=TOOLS_LIST_BODY)
+    assert typo.status_code == 404
+
+
+def test_sessionless_tools_list_is_still_gated(
+    gated_client: Tuple[TestClient, OpenZimMcpServer],
+) -> None:
+    """The path narrowing must not reopen the D62 leak on /mcp itself."""
+    client, server = gated_client
+
+    response = client.post("/mcp", headers=LEGACY_HEADERS, json=TOOLS_LIST_BODY)
+
+    assert response.status_code == 400
+    assert response.json() == MISSING_SESSION_BODY
     assert _sessions(server) == {}
