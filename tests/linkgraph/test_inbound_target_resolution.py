@@ -116,6 +116,19 @@ class TestInboundLookupKey:
 
         assert canonical == edges[0][0]
 
+    def test_outbound_row_path_agrees_with_the_builder(
+        self, small_archive: Path
+    ) -> None:
+        """The row rewrite is the third copy of the same walk; it must agree."""
+        from openzim_mcp.zim.archive import zim_archive
+        from openzim_mcp.zim.structure import _resolve_outbound_item
+
+        item: Dict[str, Any] = {"path": "C/main.html", "title": "C/main.html"}
+        with zim_archive(small_archive) as archive:
+            _resolve_outbound_item(archive, item)
+
+        assert item["path"] == "main.html"
+
 
 class TestInboundExistenceGate:
     """Not-found is for targets nothing knows about, not for dangling ones."""
