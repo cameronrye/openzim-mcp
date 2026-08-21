@@ -1202,23 +1202,24 @@ class _SearchMixin:
                 # the window.
                 next_offset = total_results
             else:
-                next_offset = offset + limit
-                if next_cursor is None:
+                # ``source_consumed`` is the number of ranked rows this
+                # page actually consumed, which exceeds the rows shown
+                # whenever the canonical splice prepended a synthetic row
+                # (``_splice_title_match_into_search``) or the dedup
+                # collapsed query-string variants (``_collect_distinct_hits``).
+                # It is the same resume point the cursor encodes, so honour
+                # it whether or not a cursor was minted — the rendered footer
+                # is what a model without cursor support pages by, and
+                # ``offset + limit`` would replay the collapsed rows.
+                consumed = page_info.get("source_consumed")
+                if isinstance(consumed, int) and not isinstance(consumed, bool):
+                    next_offset = offset + consumed
+                elif next_cursor is None:
                     # Limited path that doesn't know the next-page boundary
                     # precisely; advance by what we actually returned.
-                    #
-                    # ``len(results)`` is the wrong count once the canonical
-                    # splice has prepended a synthetic row: that row came from
-                    # the title index, not the ranked stream, so counting it
-                    # here would advance one slot too far and skip a real hit.
-                    # ``source_consumed`` (set by
-                    # ``_splice_title_match_into_search``) is the ranked-row
-                    # count; absent on every unspliced payload, which then
-                    # falls back to the row count as before.
-                    consumed = page_info.get("source_consumed")
-                    if not isinstance(consumed, int) or isinstance(consumed, bool):
-                        consumed = len(results)
-                    next_offset = offset + consumed
+                    next_offset = offset + len(results)
+                else:
+                    next_offset = offset + limit
             result_text += (
                 f"Showing {offset + 1}-{offset + len(results)} "
                 f"of {total_text} — "
