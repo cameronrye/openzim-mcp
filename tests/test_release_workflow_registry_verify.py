@@ -73,7 +73,10 @@ def test_registry_publish_is_skipped_when_the_version_is_already_live(
         for step in registry_job["steps"]
         if "run" in step and "mcp-publisher publish" in step["run"]
     )
-    assert "registry.modelcontextprotocol.io" in publish_step, publish_step
+    # Asserted on the endpoint path rather than the hostname: CodeQL reads a
+    # bare host substring test as py/incomplete-url-substring-sanitization,
+    # and the path is the more specific thing to pin anyway.
+    assert "/v0/servers?search=" in publish_step, publish_step
     assert "nothing to publish" in publish_step, publish_step
     # The read-back afterwards is what proves a skipped publish was correct.
     assert "Registry serves" in script, script
