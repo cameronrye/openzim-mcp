@@ -58,11 +58,31 @@ logger = logging.getLogger(__name__)
 # parenthetically-disambiguated article — so affected articles gain sections
 # they previously lacked. Same rule as the bumps above: a change to what a
 # bundle CONTAINS needs a new prefix.
-_BUNDLE_KEY_PREFIX = "bundle:v2f"
+# v2f -> v2g: duplicate explicit anchors are now disambiguated
+# (``SH4b``, ``SH4b_2``), and ``section_id`` is the handle ``get_section``
+# fetches by — so a v2f bundle does not just look different, it hands the
+# caller ids that resolve to the wrong occurrence. Same rule as the bumps
+# above.
+_BUNDLE_KEY_PREFIX = "bundle:v2g"
+
+# The stat token below tells a cached value that the ARCHIVE changed. Nothing
+# told it that this SERVER changed what it renders from an unchanged archive,
+# and every release does: 3.0.1 strips ``noscript`` and in-page nav menus and
+# disambiguates duplicate anchors, which moves the rendered markdown, every
+# offset derived from it, and the ``section_id`` fetch handles. The remedy
+# used so far is a per-key prefix bump, which only protects the keys whose
+# author remembered one — this release's bundle, entry and snippet keys were
+# all missed. Folding an epoch into the token instead reaches every
+# content-derived cache at once, because embedding the token is already the
+# contract for all of them.
+#
+# Bump this in any release that changes what the server renders from an
+# unchanged archive; tests/test_v3_cache_render_epoch.py fails until you do.
+_RENDER_EPOCH = "r1"
 
 
 def archive_stat_token(validated_path: Any) -> str:
-    """Return ``<mtime_ns>:<size>`` for ``validated_path`` (``"0:0"`` on OSError).
+    """Return ``<mtime_ns>:<size>:<epoch>`` (``"0:0:<epoch>"`` on OSError).
 
     Cache keys for any data derived from a ZIM file's contents should
     include this token so that an atomic file replacement (the typical
@@ -71,9 +91,14 @@ def archive_stat_token(validated_path: Any) -> str:
     binary metadata, and path-resolution caches all need the same
     guarantee.
 
+    ``_RENDER_EPOCH`` extends that guarantee to the other way a cached
+    value goes stale: the server, not the archive, changing what it
+    renders. See the comment on the constant.
+
     Falls back to ``"0:0"`` when ``stat()`` fails (path removed, race
     with replacement) — the cache continues to function, just without
-    the invalidation guarantee for that key.
+    the invalidation guarantee for that key. The epoch is still appended,
+    so an upgrade invalidates those keys too.
 
     ``validated_path`` is typed loosely so callers don't have to import
     ``pathlib.Path``; a ``Path`` or a plain ``str`` path both work (a bare
@@ -83,9 +108,9 @@ def archive_stat_token(validated_path: Any) -> str:
         if isinstance(validated_path, str):
             validated_path = Path(validated_path)
         st = validated_path.stat()
-        return f"{st.st_mtime_ns}:{st.st_size}"
+        return f"{st.st_mtime_ns}:{st.st_size}:{_RENDER_EPOCH}"
     except OSError:
-        return "0:0"
+        return f"0:0:{_RENDER_EPOCH}"
 
 
 def _bundle_cache_key(validated_path: "Path", entry_path: str, compact: bool) -> str:
@@ -357,6 +382,16 @@ def _compute_section_offsets(
     Headings in _build_headings() carry key 'id' (the resolved anchor slug).
     We search rendered_markdown in document order from the last cursor position
     so repeated identical headings are disambiguated correctly.
+
+    Section ids are made unique here as well. ``_build_headings`` suffixes
+    colliding *slugs* but deliberately passes author-provided anchors
+    through untouched, so an archive that reuses an anchor name (the IEP
+    has ``<a name="SH4b">`` twice on ~1% of articles) produced two TOC
+    nodes with the same ``section_id`` — and ``get_section`` resolved both
+    to the first. ``section_id`` is the tool's fetch handle, so the second
+    and later occurrences get the same ``_2``/``_3`` ordinal the slug path
+    uses. Only the repeats are renamed: the first occurrence keeps the real
+    anchor, so in-archive ``#SH4b`` links still land where they did.
     """
     sections: list[SectionMeta] = []
     cursor = 0
@@ -413,6 +448,10 @@ def _compute_section_offsets(
         cursor = match.end()
 
     md_len = len(rendered_markdown)
+    # Every id the document declares, so a generated ``X_2`` can never
+    # collide with a heading that genuinely carries that anchor.
+    declared_ids = {m[4] for m in matches}
+    emitted_ids: set[str] = set()
     for i, (
         level,
         text,
@@ -440,6 +479,16 @@ def _compute_section_offsets(
         # ship a degenerate SectionMeta.
         if char_end <= char_start:
             continue
+
+        if section_id in emitted_ids:
+            ordinal = 2
+            while (
+                f"{section_id}_{ordinal}" in emitted_ids
+                or f"{section_id}_{ordinal}" in declared_ids
+            ):
+                ordinal += 1
+            section_id = f"{section_id}_{ordinal}"
+        emitted_ids.add(section_id)
 
         while parent_stack and parent_stack[-1][0] >= level:
             parent_stack.pop()

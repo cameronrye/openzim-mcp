@@ -81,12 +81,17 @@ def test_missing_archive_is_not_rendered_as_an_invalid_argument(
     handler = SimpleToolsHandler(ops)
     out = handler.handle_zim_query(query, "/archives/ghost.zim")
 
-    assert isinstance(out, str)
-    assert "**Invalid Request**" not in out, out[:500]
-    assert "smaller `limit`" not in out, out[:500]
-    assert "out of range" not in out, out[:500]
+    # v3 field fix D58: the catch-all's archive-level failure is a failure
+    # and travels as the structured error envelope; the recovery markdown
+    # that lists the real archives is its ``message``.
+    assert isinstance(out, dict)
+    assert out.get("operation") == "zim_path_not_found"
+    body = out["message"]
+    assert "**Invalid Request**" not in body, body[:500]
+    assert "smaller `limit`" not in body, body[:500]
+    assert "out of range" not in body, body[:500]
     # The recovery must point at the archive, listing the real ones.
-    assert "wikipedia.zim" in out, out[:500]
+    assert "wikipedia.zim" in body, body[:500]
 
 
 @pytest.mark.parametrize("query,attr,limit_capable", INTENT_SITES)

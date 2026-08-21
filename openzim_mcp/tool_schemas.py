@@ -52,6 +52,11 @@ class MetaEnvelope(TypedDict, total=False):
     total_chars: int
     suggestions: list[dict[str, str]]
     reason: str
+    # Free-text next step attached after ``build_meta``. Rides the unpaged
+    # lookups (``suggest`` / ``find_entry_by_title``) when ``done=False``
+    # — their only continuation is a larger ``limit``, never ``offset`` —
+    # and cross-archive title mode when promotion was skipped.
+    hint: str
     # Archive-type detection annotations (``meta.build_meta`` emits each
     # only when the caller passes a non-None value). ``detected_type`` /
     # ``detection_confidence`` ride metadata responses (values from
@@ -116,6 +121,15 @@ class LinkItem(TypedDict):
     and (for external links) ``domain``. Media entries carry ``url``,
     ``type``, ``alt``, and ``title``. All fields except ``url`` and ``type``
     are ``NotRequired`` because they're absent on at least one category.
+
+    ``url`` is the RAW href as written in the page — document-relative
+    (``../aristotl``, ``bloodglucose.html``) and kept verbatim for fidelity,
+    so it does not round-trip into ``zim_get``. Internal rows therefore also
+    carry ``path``: the href resolved against the served entry's directory
+    and, where the archive can verify the target, canonicalized through its
+    redirect chain — the same spelling ``direction="related"`` /
+    ``"inbound"`` use, and the one to pass to ``zim_get``. Best-effort: a
+    target the archive cannot verify keeps its path-normalized spelling.
     """
 
     url: str
@@ -124,6 +138,7 @@ class LinkItem(TypedDict):
     title: NotRequired[str]
     domain: NotRequired[str]
     alt: NotRequired[str]
+    path: NotRequired[str]
 
 
 class FileSummary(TypedDict):
@@ -133,6 +148,12 @@ class FileSummary(TypedDict):
     size: str
     size_bytes: int
     modified: str
+    # Whether the file carries the ZIM signature (cheap probe, not a full
+    # integrity check). ``warning`` accompanies ``readable: False`` so a
+    # garbage file named ``.zim`` is visibly flagged rather than presented
+    # as a loaded archive.
+    readable: NotRequired[bool]
+    warning: NotRequired[str]
 
 
 class RelatedArticle(TypedDict):
@@ -332,6 +353,11 @@ class RelatedArticlesResponse(TypedDict):
     page_info: PageInfo
     _meta: MetaEnvelope
     entry_path: str
+    # Inbound only, and only when the caller's ``entry_path`` was a
+    # redirect (or percent-encoded) spelling: the canonical path the
+    # sidecar was actually queried with. ``entry_path`` keeps echoing the
+    # caller's spelling because cursor ``ep`` matching compares against it.
+    resolved_path: NotRequired[str]
     # Set on partial-success when archive- or extraction-level failure
     # downgrades the response to an empty list with a textual reason.
     outbound_error: NotRequired[str]

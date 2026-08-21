@@ -27,8 +27,9 @@ CPython exposes no way to cancel a running thread, and a pure-``re`` call
 holds the GIL for the entire match, so a timed-out regex keeps running to
 completion and keeps occupying its worker slot. Callers that must bound the
 actual work (rather than just their own wait) have to constrain the input —
-see ``tools.zim_query.MAX_QUERY_LENGTH`` and the linear-pattern requirement
-documented on ``IntentParser._PARAM_LEAK_RE``.
+see ``constants.MAX_QUERY_LENGTH`` (enforced at the zim_query and zim_search
+front doors) and the linear-pattern requirement documented on
+``IntentParser._PARAM_LEAK_RE``.
 """
 
 import contextlib

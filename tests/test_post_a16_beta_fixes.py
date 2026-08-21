@@ -1607,7 +1607,11 @@ class TestP3D7CursorNamespaceMismatch:
             zim_file_path="/x.zim",
             options={"compact": False, "cursor": cursor_for_c},
         )
-        assert "cursor_decode" in out.lower() or "different namespace" in out.lower()
+        # D51: handler-edge cursor rejections travel as the cursor_decode
+        # envelope, the same shape as the dispatcher's ``ai`` / ``q`` errors.
+        assert isinstance(out, dict)
+        assert out.get("operation") == "cursor_decode"
+        assert "Namespace Mismatch" in out["message"]
 
     def test_walk_namespace_rejects_cursor_for_different_namespace(self) -> None:
         from openzim_mcp.pagination import Cursor
@@ -1628,7 +1632,11 @@ class TestP3D7CursorNamespaceMismatch:
             zim_file_path="/x.zim",
             options={"compact": True, "cursor": cursor_for_c},
         )
-        assert "cursor_decode" in out.lower() or "different namespace" in out.lower()
+        # D51: handler-edge cursor rejections travel as the cursor_decode
+        # envelope, the same shape as the dispatcher's ``ai`` / ``q`` errors.
+        assert isinstance(out, dict)
+        assert out.get("operation") == "cursor_decode"
+        assert "Namespace Mismatch" in out["message"]
 
     def test_matching_namespace_cursor_passes_through(self) -> None:
         """Cursor with matching ``ns`` is honoured (regression guard)."""
@@ -1659,7 +1667,8 @@ class TestP3D7CursorNamespaceMismatch:
             zim_file_path="/x.zim",
             options={"compact": True, "cursor": cursor_for_m},
         )
-        assert "cursor_decode" not in out.lower()
+        assert not (isinstance(out, dict) and out.get("operation") == "cursor_decode")
+        assert "cursor_decode" not in str(out).lower()
         # Backend WAS called with scan_at=3 (the cursor's offset).
         call = mock.walk_namespace_data.call_args
         cursor_state = call.kwargs.get("cursor_state")

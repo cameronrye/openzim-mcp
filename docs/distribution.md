@@ -119,11 +119,24 @@ publish (v2.5.1) is done — so the constraint is now satisfied automatically:
 `server.json` is auto-bumped by release-please, and a registry re-publish just
 needs the matching version to already be live on PyPI.
 
+**Publishing is automated.** `release.yml`'s `publish-registry` job runs after
+the PyPI upload on every release: it logs in with `mcp-publisher login
+github-oidc` (the Actions OIDC token proves ownership of `io.github.cameronrye/*`,
+no stored secret), waits until PyPI serves the new version, then publishes
+`server.json`. It is not a dependency of the GitHub release, so a registry
+outage cannot block or empty a release. Before this job existed the entry was
+advanced by hand and sat at 2.5.1 while PyPI was on 3.0.0.
+
+To backfill a release that shipped before the job (or re-run after a registry
+outage), dispatch the release workflow for the existing tag —
+`gh workflow run release.yml -f tag=v3.0.0` — or publish by hand:
+
 ```bash
 # Install the publisher CLI
 brew install mcp-publisher
 # or download from github.com/modelcontextprotocol/registry/releases/latest
 
+git checkout v3.0.0                # server.json must match the live PyPI version
 mcp-publisher validate            # checks ./server.json against the schema
 mcp-publisher login github        # device-code OAuth as cameronrye;
                                   # authorizes the io.github.cameronrye/* namespace
@@ -151,6 +164,7 @@ and the first registry publish went out with v2.5.1. Ongoing maintenance:
 
 1. Re-publish the Smithery `.mcpb` (§1–§2) when the tool surface or manifest
    metadata changes — it does **not** depend on a release.
-2. Re-run `mcp-publisher publish` (§3) after a release when the registry entry
-   should advance; the release workflow keeps the manifests version-locked and
-   attaches the `.mcpb` (with its `.sha256`) to each GitHub release for you.
+2. Nothing for the official registry: the release workflow keeps the manifests
+   version-locked, publishes `server.json` via OIDC (§3), and attaches the
+   `.mcpb` (with its `.sha256`) to each GitHub release for you. Check the
+   `publish-registry` job if the registry search API lags a release.

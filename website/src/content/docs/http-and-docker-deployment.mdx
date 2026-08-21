@@ -68,7 +68,7 @@ Bearer-token auth via `BearerTokenAuthMiddleware`:
 - Comparison is timing-safe (`hmac.compare_digest`).
 - The attempted token is **never logged**.
 - `/healthz` and `/readyz` are exempt.
-- `OPTIONS /mcp` is **not** exempt — the deliberately-closed preflight bypass means OPTIONS requests must also carry a valid `Authorization: Bearer ...`.
+- `OPTIONS /mcp` is **not** exempt from auth — there is no blanket OPTIONS bypass, so a bare `OPTIONS` (no preflight headers) gets the same `401` as any other tokenless request and non-browser callers cannot probe the endpoint without a token. The one carve-out is by design: when `OPENZIM_MCP_CORS_ORIGINS` is set, a CORS **preflight** — an `OPTIONS` carrying `Origin` and `Access-Control-Request-Method` from a listed origin — is answered `200` by the outermost CORS layer before auth runs, so it is served without a token. Browsers never attach `Authorization` to a preflight; the real request that follows is still authenticated.
 
 Client request format:
 

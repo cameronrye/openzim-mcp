@@ -18,7 +18,9 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Any, Callable, Dict, Iterator, Optional
+from typing import Any, Callable, Dict, Iterator, Optional, Tuple
+
+from openzim_mcp.text_utils import strip_site_suffix
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +33,116 @@ logger = logging.getLogger(__name__)
 # into ``amp``/``re`` could never intersect its own canonical path (M25). Used
 # where those comparisons must be Unicode-correct.
 _UNICODE_TOKEN_RE = re.compile(r"[^\W_]+", re.UNICODE)
+
+# D49: zimit / warc2zim archives title every page ``<Page> | <Site>`` and
+# catalogue-style corpora (the IEP, biographical dictionaries) title people
+# ``Last, First``. Neither convention is how anyone asks — ``tell me about
+# Immanuel Kant`` — so the order-sensitive comparison below never
+# strong-matched on such a corpus and the auto-fetch / disambiguation path
+# was unreachable. The suffix is peeled off the end; the inversion swaps
+# the two halves around the FIRST comma and keeps whatever follows a
+# ``:`` / ``(`` (``Kant, Immanuel: Aesthetics`` → ``Immanuel Kant:
+# Aesthetics``) so the candidate-extends-topic rule still sees the name
+# as its prefix.
+#
+# Both splits were regexes (``\s*\|[^|]*$`` and
+# ``^\s*([^,:(|]+?)\s*,\s*([^,:(|]+?)\s*(?=$|[:(])``) whose adjacent
+# quantifiers all accept whitespace, so a long run of spaces in a title made
+# them backtrack polynomially (SonarCloud S8786 — tens of seconds on a 20k-
+# space title). The same splits as plain string code are linear.
+
+# Characters that end the first-name half of a ``Last, First`` title; what
+# follows is kept verbatim as the inverted form's tail.
+_INVERSION_TAIL_STARTERS = frozenset(":(")
+# Characters a ``Last`` / ``First`` half can never contain.
+_FORBIDDEN_IN_LAST_NAME = frozenset(":(|")
+_FORBIDDEN_IN_FIRST_NAME = frozenset(",|")
+
+
+def _strip_site_suffix(candidate: str) -> str:
+    """``candidate`` with a trailing ``| <Site>`` removed (split on the LAST
+    pipe) and surrounding whitespace trimmed."""
+    head, sep, _site = candidate.rpartition("|")
+    return (head if sep else candidate).strip()
+
+
+def _invert_name(stripped: str) -> Optional[Tuple[str, int]]:
+    """``Last, First[: rest]`` → ``(First Last[: rest], name_token_count)``,
+    or ``None`` when ``stripped`` is not that shape.
+
+    The halves sit around the FIRST comma. The first-name half runs to the
+    first ``:`` / ``(`` (kept verbatim as the tail) or to the end. A second
+    comma or a pipe inside the name, or a ``:`` / ``(`` in the last-name
+    half, means this is a list or a plain ``Title: Subtitle`` rather than
+    a ``Last, First`` title, and nothing is inverted.
+
+    ``name_token_count`` is how many tokens the swapped name itself spans
+    (the tail excluded) — the floor a topic must reach before the inverted
+    spelling may match; see ``_candidate_matchers``.
+    """
+    last, comma, rest = stripped.partition(",")
+    last = last.strip()
+    if not comma or not last or _FORBIDDEN_IN_LAST_NAME & set(last):
+        return None
+    cut = next(
+        (i for i, ch in enumerate(rest) if ch in _INVERSION_TAIL_STARTERS),
+        len(rest),
+    )
+    first, tail = rest[:cut].strip(), rest[cut:]
+    if not first or _FORBIDDEN_IN_FIRST_NAME & set(first):
+        return None
+    name = f"{first} {last}"
+    return f"{name}{tail}", len(_UNICODE_TOKEN_RE.findall(name.lower()))
+
+
+def _candidate_matchers(candidate: str) -> Iterator[Tuple[str, int]]:
+    """Yield each candidate spelling with the minimum topic-token count
+    allowed to match it (deduplicated, original first).
+
+    Only the inversion carries a floor. ``Paris, Texas`` is the same shape
+    as ``Kant, Immanuel`` and inverts just as willingly to ``Texas
+    Paris``, whereupon the unconditional candidate-extends-topic rule read
+    a bare ``Texas`` as strong-matching the town — and Wikipedia-class
+    archives are full of ``City, State`` titles. D49 only ever needed the
+    inversion for a topic naming the whole person, so the inverted
+    spelling is offered only to a topic that spans both halves of the
+    swap.
+    """
+    seen = {candidate}
+    yield candidate, 0
+    stripped = _strip_site_suffix(candidate)
+    if stripped and stripped not in seen:
+        seen.add(stripped)
+        yield stripped, 0
+    inversion = _invert_name(stripped)
+    if inversion is not None and inversion[0] not in seen:
+        yield inversion
+
+
+def _candidate_forms(candidate: str) -> Iterator[str]:
+    """Yield ``candidate`` plus its site-suffix-stripped and comma-inverted
+    spellings (deduplicated, original first)."""
+    for form, _min_topic_tokens in _candidate_matchers(candidate):
+        yield form
+
+
+def _tokens_strong_match(topic_tokens: tuple, cand_tokens: tuple) -> bool:
+    """The ordered-token rules of :func:`is_strong_title_match` for one
+    candidate spelling."""
+    if topic_tokens == cand_tokens:
+        return True
+    if sum(len(t) for t in topic_tokens) < 3:
+        return False
+    if sum(len(t) for t in cand_tokens) < 3:
+        return False
+    # Candidate-extends-topic — unconditional (canonical promotion).
+    if cand_tokens[: len(topic_tokens)] == topic_tokens:
+        return True
+    # Topic-extends-candidate — bounded to a 1-token diff so
+    # ``Apollo 11 (mission)`` → ``Apollo_11`` works but
+    # ``Martin Luther King`` → ``Martin`` doesn't.
+    diff = len(topic_tokens) - len(cand_tokens)
+    return 0 < diff <= 1 and topic_tokens[: len(cand_tokens)] == cand_tokens
 
 
 def is_strong_title_match(topic: str, path: str, title: str) -> bool:
@@ -53,6 +165,12 @@ def is_strong_title_match(topic: str, path: str, title: str) -> bool:
       are NOT accepted — a bare-first-name stub shouldn't outrank the
       canonical full-name article (H20 regression).
 
+    Each candidate is tried in three spellings (D49): as given, with a
+    trailing ``| Site`` suffix removed, and with a leading ``Last, First``
+    inverted to ``First Last`` — so ``Immanuel Kant`` strong-matches
+    ``Kant, Immanuel | Internet Encyclopedia of Philosophy``. The rules
+    themselves stay order-sensitive.
+
     The 3-char-minimum guard on each side prevents trivially-short
     tokens (``Pi``) from driving prefix matches.
     """
@@ -65,24 +183,12 @@ def is_strong_title_match(topic: str, path: str, title: str) -> bool:
     for candidate in (path, title):
         if not candidate:
             continue
-        cand_tokens = tuple(_UNICODE_TOKEN_RE.findall(candidate.lower()))
-        if not cand_tokens:
-            continue
-        if topic_tokens == cand_tokens:
-            return True
-        if sum(len(t) for t in topic_tokens) < 3:
-            continue
-        if sum(len(t) for t in cand_tokens) < 3:
-            continue
-        # Candidate-extends-topic — unconditional (canonical promotion).
-        if cand_tokens[: len(topic_tokens)] == topic_tokens:
-            return True
-        # Topic-extends-candidate — bounded to a 1-token diff so
-        # ``Apollo 11 (mission)`` → ``Apollo_11`` works but
-        # ``Martin Luther King`` → ``Martin`` doesn't.
-        diff = len(topic_tokens) - len(cand_tokens)
-        if 0 < diff <= 1 and topic_tokens[: len(cand_tokens)] == cand_tokens:
-            return True
+        for form, min_topic_tokens in _candidate_matchers(candidate):
+            if len(topic_tokens) < min_topic_tokens:
+                continue
+            cand_tokens = tuple(_UNICODE_TOKEN_RE.findall(form.lower()))
+            if cand_tokens and _tokens_strong_match(topic_tokens, cand_tokens):
+                return True
     return False
 
 
@@ -141,6 +247,32 @@ def _strip_namespace(path: str) -> str:
     (``len(cand_tokens) == 1``) can never fire on an old-scheme archive.
     """
     return path.split("/", 1)[1] if _NAMESPACE_PREFIX_RE.match(path) else path
+
+
+# A path whose first segment is a dotted hostname: the shape zimit /
+# warc2zim archives store (``medlineplus.gov/diabetes.html``,
+# ``iep.utm.edu/virtue/``).
+_URL_PATH_RE = re.compile(r"^[a-z0-9-]+(?:\.[a-z0-9-]+)+/", re.IGNORECASE)
+
+
+def _candidate_name(promoted: Dict[str, Any]) -> str:
+    """The candidate's *name* as the shape predicates below expect it.
+
+    On Wikipedia-class archives the path IS the title (``Virtue_ethics``),
+    so every predicate tokenizes ``_strip_namespace(path)``. On site-scraped
+    archives the path is a URL — ``iep.utm.edu/virtue/`` tokenizes as
+    ``iep utm edu virtue`` — so a perfectly on-topic candidate read as a
+    multi-token tangential one and promotion never fired on that whole
+    archive class. For URL-shaped paths use the site-suffix-stripped
+    title instead (``Virtue Ethics | Internet Encyclopedia of
+    Philosophy`` -> ``Virtue_Ethics``); everything else is unchanged.
+    """
+    path = str(promoted.get("path", ""))
+    if _URL_PATH_RE.match(path):
+        name = strip_site_suffix(str(promoted.get("title", "") or ""))
+        if name:
+            return name.replace(" ", "_")
+    return _strip_namespace(path)
 
 
 def _punctuation_smear_detected(topic: str, candidate_path: str) -> bool:
@@ -531,7 +663,7 @@ def _accept_non_possessive(
     topic_tokens_seq = _TAIL_TOKEN_RE.findall(topic.lower())
     if len(topic_tokens_seq) < 3:
         return True
-    cand_path = _strip_namespace(str(promoted.get("path", "")))
+    cand_path = _candidate_name(promoted)
     cand_tokens_seq = _TAIL_TOKEN_RE.findall(cand_path.lower())
     if len(cand_tokens_seq) == 1 and cand_tokens_seq == topic_tokens_seq[-1:]:
         return False
@@ -565,7 +697,7 @@ def is_tail_hijack_shape(promoted: Dict[str, Any], topic: str) -> bool:
     topic_tokens_seq = _TAIL_TOKEN_RE.findall(topic.lower())
     if len(topic_tokens_seq) < 3:
         return False
-    cand_path = _strip_namespace(str(promoted.get("path", "")))
+    cand_path = _candidate_name(promoted)
     cand_tokens_seq = _TAIL_TOKEN_RE.findall(cand_path.lower())
     return len(cand_tokens_seq) == 1 and cand_tokens_seq == topic_tokens_seq[-1:]
 
@@ -587,7 +719,7 @@ def is_single_token_tail_match(promoted: Dict[str, Any], topic: str) -> bool:
     topic_tokens_seq = _TAIL_TOKEN_RE.findall(topic.lower())
     if not topic_tokens_seq:
         return False
-    cand_path = _strip_namespace(str(promoted.get("path", "")))
+    cand_path = _candidate_name(promoted)
     cand_tokens_seq = _TAIL_TOKEN_RE.findall(cand_path.lower())
     return len(cand_tokens_seq) == 1 and cand_tokens_seq == topic_tokens_seq[-1:]
 
@@ -825,7 +957,7 @@ def is_tangential_multi_token_shape(promoted: Dict[str, Any], topic: str) -> boo
     topic_tokens_seq = _TAIL_TOKEN_RE.findall(topic.lower())
     if len(topic_tokens_seq) < 2:
         return False
-    cand_path = _strip_namespace(str(promoted.get("path", "")))
+    cand_path = _candidate_name(promoted)
     cand_tokens_seq = _TAIL_TOKEN_RE.findall(cand_path.lower())
     if len(cand_tokens_seq) < 2:
         return False
@@ -1011,7 +1143,7 @@ def has_topic_prefix_canonical_extension(promoted: Dict[str, Any], topic: str) -
         canonical prefix [``symphony``, ``no``] not contiguous in
         topic.
     """
-    cand_path = _strip_namespace(str(promoted.get("path", "")))
+    cand_path = _candidate_name(promoted)
     cand_tokens = _TAIL_TOKEN_RE.findall(cand_path.lower())
     if len(cand_tokens) < 2:
         return False
@@ -1055,7 +1187,7 @@ def _accept_possessive_fuzzy_suggest(promoted: Dict[str, Any], topic: str) -> bo
     the possessor list — the same tokenizer the redirect-branch subset
     rule uses, keeping both branches symmetric.
     """
-    cand_path = _strip_namespace(str(promoted.get("path", "")))
+    cand_path = _candidate_name(promoted)
     cand_tokens = set(_UNICODE_TOKEN_RE.findall(cand_path.lower()))
     possessors = set(extract_possessor_tokens(topic))
     return bool(possessors & cand_tokens)
@@ -1104,7 +1236,7 @@ def _accept_possessive_redirect(promoted: Dict[str, Any], topic: str) -> bool:
     topic_tokens = set(_UNICODE_TOKEN_RE.findall(topic.lower()))
     if pre_tokens.issubset(topic_tokens):
         return True
-    cand_path = _strip_namespace(str(promoted.get("path", "")))
+    cand_path = _candidate_name(promoted)
     cand_tokens = set(_UNICODE_TOKEN_RE.findall(cand_path.lower()))
     possessors = set(extract_possessor_tokens(topic))
     return bool(possessors & cand_tokens)
