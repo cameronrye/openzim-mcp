@@ -49,6 +49,13 @@ logger = logging.getLogger(__name__)
 HEALTHZ_PATH = "/healthz"
 READYZ_PATH = "/readyz"
 
+# The one route the SDK mints sessions on — its ``streamable_http_path``
+# default, which the app builder below is left to apply. The sessionless gate
+# answers only here, so the two must agree: a gate on the wrong path would
+# answer URLs the router owns, turning a typo into a session complaint instead
+# of a 404. A test asserts the built app really routes this path.
+MCP_PATH = "/mcp"
+
 # Health endpoints exempt from auth.
 AUTH_EXEMPT_PATHS = {HEALTHZ_PATH, READYZ_PATH}
 
@@ -539,7 +546,10 @@ def _is_initialize_request(body: bytes) -> bool:
     """
     try:
         message = json.loads(body)
-    except ValueError:
+    except (ValueError, RecursionError):
+        # ``RecursionError`` is a ``RuntimeError``, not a ``ValueError``: a
+        # body nested past the interpreter's limit is undecodable the same way
+        # malformed JSON is, and must be answered rather than escape the gate.
         return False
     if not isinstance(message, dict) or message.get("method") != "initialize":
         return False
@@ -549,6 +559,19 @@ def _is_initialize_request(body: bytes) -> bool:
     if isinstance(request_id, bool) or not isinstance(request_id, (int, str)):
         return False
     return message.get("params", None) is None or isinstance(message["params"], dict)
+
+
+def _accepts_json_and_sse(scope: Scope) -> bool:
+    """Whether ``Accept`` satisfies the SDK's POST precondition.
+
+    Delegated to the SDK's own parser so the gate's answer and the transport's
+    stay in step, wildcards included. The app is built without
+    ``json_response``, so the SSE branch applies: both types are required.
+    """
+    from mcp.server.streamable_http import check_accept_headers
+
+    has_json, has_sse = check_accept_headers(Request(scope))
+    return bool(has_json and has_sse)
 
 
 class _BodyTooLarge(Exception):
@@ -580,15 +603,22 @@ class SessionlessRequestGateMiddleware:
     has no session and can never be served.
 
     A pure ASGI middleware rather than ``BaseHTTPMiddleware`` so the body
-    replay is explicit and bounded. Health endpoints are exempt, as they are
-    from the other gates.
+    replay is explicit and bounded. It answers only on the MCP route: the
+    health endpoints and every unrouted path belong to Starlette, which still
+    404s them.
     """
 
-    def __init__(self, app: ASGIApp, max_body_size: Optional[int] = None) -> None:
+    def __init__(
+        self,
+        app: ASGIApp,
+        max_body_size: Optional[int] = None,
+        mcp_path: str = MCP_PATH,
+    ) -> None:
         """Wrap ``app``; ``max_body_size`` defaults to the SDK's request cap."""
         from mcp.server.streamable_http_manager import DEFAULT_MAX_REQUEST_BODY_SIZE
 
         self.app = app
+        self._mcp_path = mcp_path
         self._max_body_size = (
             max_body_size
             if max_body_size is not None
@@ -633,6 +663,20 @@ class SessionlessRequestGateMiddleware:
             # to answer, but the outer middleware needs *a* response.
             await self._reject_missing_session(scope, receive, send)
             return
+        if not _accepts_json_and_sse(scope):
+            # The SDK validates ``Accept`` inside the transport it has already
+            # minted, registered and task-started, so an ``initialize`` it is
+            # about to refuse with 406 leaks a session all the same. Answer it
+            # here, in the SDK's own words, before anything is minted.
+            await self._send_jsonrpc_error(
+                scope,
+                receive,
+                send,
+                "Not Acceptable: Client must accept both application/json and "
+                "text/event-stream",
+                406,
+            )
+            return
 
         async def replay() -> Message:
             if cached:
@@ -641,20 +685,21 @@ class SessionlessRequestGateMiddleware:
 
         await self.app(scope, replay, send)
 
-    @staticmethod
-    def _never_mints(scope: Scope) -> bool:
+    def _never_mints(self, scope: Scope) -> bool:
         """Whether the SDK serves this HTTP request without minting a session.
 
-        Health endpoints are exempt from every gate; a request that already
-        names a session (live or unknown) takes a path that never mints; and
-        a non-handshake ``MCP-Protocol-Version`` is era-routed to the
-        stateless 2026-07-28 handler.
+        Only the MCP route mints, so every other path — the health endpoints
+        and anything the router will 404 — belongs to Starlette, not to this
+        gate. Beyond that: a request that already names a session (live or
+        unknown) takes a path that never mints, and a non-handshake
+        ``MCP-Protocol-Version`` is era-routed to the stateless 2026-07-28
+        handler.
         """
         from mcp.server.streamable_http import MCP_SESSION_ID_HEADER
         from mcp.shared.inbound import MCP_PROTOCOL_VERSION_HEADER
         from mcp_types.version import HANDSHAKE_PROTOCOL_VERSIONS
 
-        if scope["path"] in AUTH_EXEMPT_PATHS:
+        if scope["path"] != self._mcp_path:
             return True
         headers = Headers(scope=scope)
         if headers.get(MCP_SESSION_ID_HEADER) is not None:

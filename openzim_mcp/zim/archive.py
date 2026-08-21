@@ -84,6 +84,7 @@ __all__ = [
     "configure_libzim_caches",
     "has_zim_signature",
     "zim_archive",
+    "zim_signature_error",
 ]
 
 
@@ -101,6 +102,31 @@ UNREADABLE_ZIM_WARNING = (
     "and cannot be opened"
 )
 
+# Message for a listing entry this process is not allowed to read at all.
+# Kept distinct from UNREADABLE_ZIM_WARNING: the file may be a perfectly good
+# archive, and the fix is a permission change, not a deletion.
+DENIED_ZIM_WARNING = (
+    "Cannot read this file: the server lacks permission to open it, so "
+    "whether it is a ZIM archive is unknown"
+)
+
+
+def zim_signature_error(path: Path) -> Optional[OSError]:
+    """The error that stopped ``path`` from being read, or None if it was read.
+
+    ``has_zim_signature`` collapses "could not open the file" into the same
+    ``False`` as "opened it, wrong magic bytes", which is right for "can
+    libzim use this?" and wrong for telling an operator what to do about it:
+    a permission problem answered with "not a ZIM archive, delete it"
+    destroys a good archive. Callers that give advice ask this first.
+    """
+    try:
+        with open(path, "rb") as fh:
+            fh.read(len(ZIM_MAGIC))
+        return None
+    except OSError as e:
+        return e
+
 
 def has_zim_signature(path: Path) -> bool:
     """Return whether ``path`` begins with the ZIM magic bytes.
@@ -109,7 +135,8 @@ def has_zim_signature(path: Path) -> bool:
     text, a truncated download, a stray file renamed ``.zim``). A ``True``
     result is only a cheap plausibility check — it does not verify the
     archive's integrity; that is what ``Archive.check()`` is for. Read
-    errors (permissions, vanished file) count as unreadable.
+    errors (permissions, vanished file) count as unreadable; use
+    ``zim_signature_error`` to tell those two apart.
     """
     try:
         with open(path, "rb") as fh:
@@ -139,15 +166,40 @@ def has_zim_signature(path: Path) -> bool:
 _VALIDATION_POOL: Optional[ProcessPoolExecutor] = None
 _VALIDATION_POOL_LOCK = threading.Lock()
 
+# None until a worker has been asked to start: True once one has, False once
+# one has failed to. See ``_validation_pool``.
+_WORKERS_START: Optional[bool] = None
+
+
+def _worker_started() -> bool:
+    """Worker-process body for the bootstrap probe. Module-level to be picklable."""
+    return True
+
 
 def _validation_pool() -> ProcessPoolExecutor:
-    """Return the shared single-worker validation pool, spawning it on first use."""
-    global _VALIDATION_POOL
+    """Return the shared single-worker validation pool, spawning it on first use.
+
+    The pool is probed with a no-op before it is kept, because ``spawn``
+    re-executes the host's ``__main__`` in the child: an embedding script
+    without an ``if __name__ == "__main__":`` guard kills every worker in
+    bootstrap, forever. Probing separates that from a worker a particular
+    archive crashes — the first has to be worked around, the second must stay
+    a failed validation rather than take this process down with it.
+    """
+    global _VALIDATION_POOL, _WORKERS_START
     with _VALIDATION_POOL_LOCK:
         if _VALIDATION_POOL is None:
-            _VALIDATION_POOL = ProcessPoolExecutor(
+            pool = ProcessPoolExecutor(
                 max_workers=1, mp_context=multiprocessing.get_context("spawn")
             )
+            try:
+                pool.submit(_worker_started).result()
+            except BrokenProcessPool:
+                pool.shutdown(wait=False, cancel_futures=True)
+                _WORKERS_START = False
+                raise
+            _WORKERS_START = True
+            _VALIDATION_POOL = pool
         return _VALIDATION_POOL
 
 
@@ -179,19 +231,43 @@ def _check_archive_integrity(path: str) -> bool:
         raise RuntimeError(f"{type(e).__name__}: {e}") from None
 
 
+def _check_here(path: Path) -> bool:
+    """``Archive.check()`` in this process, for hosts where no worker starts.
+
+    Stalls this interpreter for the whole pass — the very thing the worker
+    exists to avoid — but a host that cannot spawn one is better served by a
+    slow answer than by a validation that can never succeed.
+    """
+    logger.warning(
+        "Integrity-check workers cannot start in this process (spawn "
+        "re-executes the host's __main__; an embedding script needs an "
+        'if __name__ == "__main__": guard). Checking %s in-process, which '
+        "blocks this interpreter until it finishes.",
+        path,
+    )
+    return bool(Archive(str(path)).check())
+
+
 def check_archive_integrity(path: Path) -> bool:
     """Run ``Archive.check()`` for ``path`` in the validation worker process.
+
+    Falls back to this process when no worker can start at all; see
+    ``_validation_pool``.
 
     Raises:
         OpenZimMcpArchiveError: if the worker died mid-check. The broken pool
             is discarded so the next call gets a fresh worker — a child crash
             must surface as a failed validation, never take the server down.
     """
+    if _WORKERS_START is False:
+        return _check_here(path)
     try:
         future = _validation_pool().submit(_check_archive_integrity, str(path))
         return bool(future.result())
     except BrokenProcessPool as e:
         _discard_validation_pool()
+        if _WORKERS_START is False:
+            return _check_here(path)
         raise OpenZimMcpArchiveError(
             f"Integrity check worker crashed while checking {path}"
         ) from e
@@ -595,11 +671,16 @@ class ZimOperations(
                         # in the listing so the operator can see and fix it.
                         entry["readable"] = has_zim_signature(file_path)
                         if not entry["readable"]:
-                            entry["warning"] = UNREADABLE_ZIM_WARNING
-                            logger.warning(
-                                f"{file_path} is named .zim but lacks the ZIM "
-                                "signature; listed as unreadable"
-                            )
+                            denied = zim_signature_error(file_path)
+                            if denied is not None:
+                                entry["warning"] = DENIED_ZIM_WARNING
+                                logger.warning(f"{file_path} cannot be read: {denied}")
+                            else:
+                                entry["warning"] = UNREADABLE_ZIM_WARNING
+                                logger.warning(
+                                    f"{file_path} is named .zim but lacks the ZIM "
+                                    "signature; listed as unreadable"
+                                )
                         all_zim_files.append(entry)
                     except OSError as e:
                         logger.warning(f"Error reading file stats for {file_path}: {e}")
