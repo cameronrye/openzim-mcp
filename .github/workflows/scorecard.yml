@@ -1,0 +1,70 @@
+# OpenSSF Scorecard: an external, evidence-only read of this repo's
+# supply-chain posture (branch protection, pinned dependencies, token
+# permissions, signed releases, …). We add it because the score is *missing*
+# rather than bad — trust registries that aggregate public signals score an
+# absent Scorecard the same as a poor one, and the only way to fix that
+# honestly is to publish the real number.
+#
+# `publish_results: true` sends the result to the public OpenSSF dataset
+# (api.securityscorecards.dev). That is deliberate: an unpublished score is
+# invisible to exactly the aggregators this exists to inform. Nothing beyond
+# the analysis of this already-public repo is published.
+name: Scorecard
+
+on:
+  # Re-score when the thing Scorecard measures actually changes.
+  branch_protection_rule:
+  schedule:
+    # Weekly. The score moves slowly and the workflow costs a runner minute.
+    - cron: "27 5 * * 1"
+  push:
+    branches: ["main"]
+
+# Named rather than `read-all` (the upstream template's spelling): the
+# workflow-level default should grant only what a step that declares nothing
+# actually needs, and the one job below widens to exactly its own set.
+permissions:
+  contents: read
+
+jobs:
+  analysis:
+    name: Scorecard analysis
+    runs-on: ubuntu-latest
+    permissions:
+      # Uploads the SARIF to the Security tab.
+      security-events: write
+      # Required by publish_results: the OIDC token is how the OpenSSF
+      # dataset verifies the result came from this repo's own workflow.
+      id-token: write
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # Scorecard reads the repo through the API, not the checkout, and a
+          # persisted credential in the working tree is one of the things it
+          # marks against.
+          persist-credentials: false
+
+      # SHA-pinned rather than tagged: Scorecard's own Pinned-Dependencies
+      # check is one of the things being measured, and an action that grades
+      # pinning should not arrive unpinned.
+      - name: Run analysis
+        uses: ossf/scorecard-action@2d1146689b8cda280b9bc96326124645441f03bc # v2.4.4
+        with:
+          results_file: results.sarif
+          results_format: sarif
+          publish_results: true
+
+      - name: Upload results as an artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: scorecard-results
+          path: results.sarif
+          retention-days: 5
+
+      - name: Upload results to the Security tab
+        uses: github/codeql-action/upload-sarif@v4.37.6
+        with:
+          sarif_file: results.sarif
+          category: scorecard

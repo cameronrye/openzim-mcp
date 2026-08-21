@@ -35,11 +35,11 @@ jobs:
 
       - name: Install deps
         working-directory: website
-        run: npm ci
+        run: npm ci --ignore-scripts
 
       - name: Type-check
         working-directory: website
-        run: npx astro check
+        run: npm exec --no-install -- astro check
 
       - name: Build Astro site
         working-directory: website
