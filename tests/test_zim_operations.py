@@ -11,6 +11,7 @@ from openzim_mcp.config import OpenZimMcpConfig
 from openzim_mcp.content_processor import ContentProcessor
 from openzim_mcp.exceptions import (
     OpenZimMcpArchiveError,
+    OpenZimMcpArchiveNameError,
     OpenZimMcpSecurityError,
     OpenZimMcpValidationError,
 )
@@ -819,7 +820,7 @@ class TestZimOperations:
         targeted error message to callers.
         """
         with pytest.raises(
-            OpenZimMcpValidationError, match="Limit must be between 1 and 200"
+            OpenZimMcpValidationError, match="limit must be between 1 and 200"
         ):
             zim_operations.browse_namespace("test.zim", "C", limit=0)
 
@@ -831,12 +832,18 @@ class TestZimOperations:
         # Path validation must fire when the namespace is recognized
         # (so the canonicalisation can't pre-empt with a fast-reject).
         # ``C`` is the most common new-scheme content namespace and
-        # always passes the D11 known-namespace check.
+        # always passes the D11 known-namespace check. A bare name that
+        # matches no loaded archive is a not-found, not a security block
+        # (v3 field fix D03); ``/etc/passwd``-style escapes still are.
+        with pytest.raises(
+            OpenZimMcpArchiveNameError, match="did not match any loaded archive"
+        ):
+            zim_operations.browse_namespace("test.zim", "C", limit=10)
         with pytest.raises(
             OpenZimMcpSecurityError,
             match="Access denied - Path is outside allowed directories",
         ):
-            zim_operations.browse_namespace("test.zim", "C", limit=10)
+            zim_operations.browse_namespace("/etc/test.zim", "C", limit=10)
 
     def test_browse_namespace_raises_validation_error_for_bad_limit(
         self, zim_operations: ZimOperations
@@ -1631,7 +1638,9 @@ class TestZimOperations:
         stat_token = archive_stat_token(validated_path)
 
         # Test get_zim_entry cache hit (lines 283-284)
-        cache_key = f"entry:{validated_path}:{stat_token}:A/Test:1000:0:compact=False"
+        cache_key = (
+            f"entry:v3:{validated_path}:{stat_token}:A/Test:1000:0:compact=False"
+        )
         zim_operations.cache.set(cache_key, "cached entry content")
 
         result = zim_operations.get_zim_entry(str(zim_file), "A/Test", 1000)
@@ -1653,7 +1662,7 @@ class TestZimOperations:
         # stores the post-attach payload. Key bumped v2b -> v2c when
         # new-scheme C browse began filtering _zim_static infra assets.
         cache_key = (
-            f"browse_ns_data:v2d:{validated_path}:{stat_token}:A:50:0:assets=False"
+            f"browse_ns_data:v2e:{validated_path}:{stat_token}:A:50:0:assets=False"
         )
         cached_browse = {"cached": "browse", "_meta": {"chars": 1}}
         zim_operations.cache.set(cache_key, cached_browse)
@@ -2209,8 +2218,8 @@ class TestZimOperations:
 
             error_msg = str(exc_info.value)
             assert "Entry not found: 'A/Nonexistent'" in error_msg
-            assert "Try using search_zim_file()" in error_msg
-            assert "browse_namespace()" in error_msg
+            assert "Try using zim_search()" in error_msg
+            assert "zim_browse()" in error_msg
 
     def test_smart_retrieval_search_failure(
         self, zim_operations: ZimOperations, temp_dir: Path
@@ -2243,7 +2252,7 @@ class TestZimOperations:
                 assert "Failed to retrieve entry 'A/Test'" in error_msg
                 assert "Direct access failed" in error_msg
                 assert "Search-based fallback failed" in error_msg
-                assert "Try using search_zim_file()" in error_msg
+                assert "Try using zim_search()" in error_msg
 
     def test_extract_search_terms_from_path(self, zim_operations: ZimOperations):
         """Test search term extraction from various path formats."""
@@ -2520,12 +2529,12 @@ class TestZimOperations:
         # failures raise OpenZimMcpValidationError, which is distinct from
         # OpenZimMcpArchiveError raised by archive-access failures.
         with pytest.raises(
-            OpenZimMcpValidationError, match="Limit must be between 1 and 200"
+            OpenZimMcpValidationError, match="limit must be between 1 and 200"
         ):
             zim_operations.browse_namespace(str(zim_file), "A", limit=0)
 
         with pytest.raises(
-            OpenZimMcpValidationError, match="Limit must be between 1 and 200"
+            OpenZimMcpValidationError, match="limit must be between 1 and 200"
         ):
             zim_operations.browse_namespace(str(zim_file), "A", limit=201)
 
@@ -3012,7 +3021,7 @@ class TestGetBinaryEntry:
         assert result_data["size"] == 1000
         assert result_data["truncated"] is True
         assert result_data["data"] is None
-        assert "exceeds max_size_bytes" in result_data.get("message", "")
+        assert "exceeds the 100 B byte cap" in result_data.get("message", "")
 
     @patch("openzim_mcp.zim_operations.zim_archive")
     def test_get_binary_entry_not_found(

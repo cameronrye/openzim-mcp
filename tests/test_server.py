@@ -585,12 +585,14 @@ class TestOpenZimMcpServerRun:
         server.run()
         server.mcp.run.assert_called_with(transport="stdio")
 
-        # Test sse transport
+        # Test sse transport. The SSE path also forwards bind settings as
+        # run() kwargs (asserted in detail by the dedicated test below), so
+        # only the transport selection is checked here.
         test_config.transport = "sse"
         server = OpenZimMcpServer(test_config)
         server.mcp.run = MagicMock()
         server.run()
-        server.mcp.run.assert_called_with(transport="sse")
+        assert server.mcp.run.call_args.kwargs["transport"] == "sse"
 
         # Test streamable-http: bypasses mcp.run, goes through http_app helper.
         # Our short config name is 'http'; run() translates to 'streamable-http'.
@@ -619,10 +621,22 @@ class TestOpenZimMcpServerRun:
         with pytest.raises(OpenZimMcpConfigurationError, match="Transport mismatch"):
             server.run(transport="stdio")
 
-    def test_run_sse_mirrors_host_port_to_fastmcp_settings(
+    def test_run_sse_forwards_host_port_as_run_kwargs(
         self, test_config: OpenZimMcpConfig
     ):
-        """SSE path copies config.host/port into FastMCP settings."""
+        """SSE path forwards config.host/port to ``mcp.run`` as kwargs.
+
+        The v2 SDK has no mutable settings object to stage bind configuration
+        on: ``run()`` takes host/port (and transport security) and forwards
+        them to ``run_sse_async``. Passing them is what makes --host/--port
+        take effect, so the assertion moved from the old settings object to
+        the call itself rather than being dropped.
+
+        ``transport_security`` rides along as ``None`` because the server only
+        resolves an allow-list for ``transport="http"``; SSE is refused unless
+        bound to loopback (see the test below), where the SDK's loopback-only
+        default is already the correct policy.
+        """
         test_config.transport = "sse"
         test_config.host = "127.0.0.1"
         test_config.port = 9123
@@ -631,9 +645,12 @@ class TestOpenZimMcpServerRun:
 
         server.run(transport="sse")
 
-        assert server.mcp.settings.host == "127.0.0.1"
-        assert server.mcp.settings.port == 9123
-        server.mcp.run.assert_called_once_with(transport="sse")
+        server.mcp.run.assert_called_once_with(
+            transport="sse",
+            host="127.0.0.1",
+            port=9123,
+            transport_security=None,
+        )
 
     def test_run_sse_refuses_non_localhost_host(self, test_config: OpenZimMcpConfig):
         """SSE bound to a non-localhost host is refused at startup."""
@@ -1113,8 +1130,8 @@ class TestOpenZimMcpServerParameterValidation:
 def _registered_tool_names(server: OpenZimMcpServer) -> set[str]:
     """Return the set of MCP tools registered on ``server``.
 
-    FastMCP exposes the live registry via ``_tool_manager._tools`` (also used
-    by ``test_batch_get_entries``).
+    MCPServer exposes the live registry via ``_tool_manager._tools`` (also
+    used by ``test_batch_get_entries``).
     """
     tools = (
         server.mcp._tool_manager._tools if hasattr(server.mcp, "_tool_manager") else {}

@@ -10,7 +10,7 @@ cacheable (``ttlMs`` / ``cacheScope``), so a list whose order wobbles turns
 every cache entry into a miss.
 
 openzim-mcp satisfies this today by construction: ``register_phase_f_tools``
-registers into FastMCP's insertion-ordered manager dicts in a fixed literal
+registers into MCPServer's insertion-ordered manager dicts in a fixed literal
 order, and the surface varies only with the server-side ``tool_mode`` config —
 never per connection or per request. Nothing enforces it, though. Swapping the
 registration tuple for a set literal, sorting the managers, or registering
@@ -232,7 +232,7 @@ class TestResourceAndPromptListOrder:
     async def test_resource_templates_exact_order(self, temp_dir: Path) -> None:
         templates = await _server("advanced", temp_dir).mcp.list_resource_templates()
 
-        assert [t.uriTemplate for t in templates] == EXPECTED_RESOURCE_TEMPLATES
+        assert [t.uri_template for t in templates] == EXPECTED_RESOURCE_TEMPLATES
 
     @pytest.mark.asyncio
     async def test_prompts_exact_order(self, temp_dir: Path) -> None:

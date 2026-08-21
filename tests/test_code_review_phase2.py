@@ -28,6 +28,22 @@ def test_blank_auth_token_rejected_at_config_load(tmp_path, blank):
         )
 
 
+def test_non_ascii_auth_token_rejected_at_config_load(tmp_path):
+    """A non-ASCII token can never authenticate a UTF-8-encoding client.
+
+    Starlette decodes header bytes as latin-1, so a client sending the
+    token as UTF-8 bytes is mojibake-decoded and always 401s while a
+    latin-1 client authenticates — a confusing, client-dependent lockout.
+    Catch it at config load like the blank-token footgun.
+    """
+    with pytest.raises(OpenZimMcpConfigurationError, match="ASCII"):
+        OpenZimMcpConfig(
+            allowed_directories=[str(tmp_path)],
+            transport="http",
+            auth_token="café-secret",
+        )
+
+
 def test_valid_and_absent_auth_token_accepted(tmp_path):
     # A real secret is fine.
     cfg = OpenZimMcpConfig(
@@ -137,8 +153,14 @@ def test_bind_all_with_allowed_hosts_keeps_validation(tmp_path):
     assert warning is None
 
 
-def test_fastmcp_bind_all_server_constructs(tmp_path):
-    """A 0.0.0.0-bound http server builds without raising and disables protection."""
+def test_bind_all_server_constructs(tmp_path):
+    """A 0.0.0.0-bound http server builds without raising and disables protection.
+
+    The settings land on the server itself now (``_transport_security``) rather
+    than on an MCP settings object, because the SDK takes them at serve time —
+    but resolving them during ``__init__`` is what keeps this a construction-time
+    check.
+    """
     from openzim_mcp.server import OpenZimMcpServer
 
     cfg = OpenZimMcpConfig(
@@ -148,7 +170,7 @@ def test_fastmcp_bind_all_server_constructs(tmp_path):
         auth_token="s3cret",
     )
     server = OpenZimMcpServer(cfg)
-    sec = server.mcp.settings.transport_security  # type: ignore[union-attr]
+    sec = server._transport_security
     assert sec is not None
     assert sec.enable_dns_rebinding_protection is False
 

@@ -20,7 +20,7 @@ from __future__ import annotations
 import asyncio
 from typing import TYPE_CHECKING, Any, Dict, Optional, Union
 
-from ..constants import MAX_SEARCH_RESULT_LIMIT
+from ..constants import MAX_QUERY_LENGTH, MAX_SEARCH_RESULT_LIMIT
 from ..responses import tool_error
 from ._common import enforce_rate_limit, load_description, tool_error_response
 
@@ -32,13 +32,9 @@ if TYPE_CHECKING:
 # verifies the wheel ships this file.
 _DESCRIPTION = load_description("zim_query")
 
-# Upper bound on the caller-supplied natural-language ``query`` string. The
-# intent parser runs dozens of regexes over it, and CPython's ``re`` holds the
-# GIL for the whole match — so ``safe_regex_*``'s nominal per-pattern timeout
-# cannot interrupt a pathological input, and a length cap at the front door is
-# the only real bound on that work. No legitimate natural-language query comes
-# close (the longest in the test corpus is ~200 characters).
-MAX_QUERY_LENGTH = 4096
+# ``MAX_QUERY_LENGTH`` is re-exported from ``constants`` (imported above) so
+# existing ``tools.zim_query.MAX_QUERY_LENGTH`` references keep working; the
+# bound itself is shared with zim_search, which echoes the same argument.
 
 
 def register(server: "OpenZimMcpServer") -> None:
@@ -63,11 +59,11 @@ def register(server: "OpenZimMcpServer") -> None:
         compact_budget: Optional[Union[str, int]] = None,
         synthesize: bool = False,
     ) -> Any:
-        # Annotated ``Any`` — matching the other 7 tools — so FastMCP derives
+        # Annotated ``Any`` — matching the other 7 tools — so the SDK derives
         # no ``outputSchema``. The previous ``Union[str, SynthesizeResponse,
         # ToolErrorPayload]`` annotation generated a 4.7KB schema (16% of the
         # whole advanced surface) that described a ``{"result": "<markdown>"}``
-        # wrapper: FastMCP wraps non-dict returns, and this tool's ordinary
+        # wrapper: the SDK wraps non-dict returns, and this tool's ordinary
         # return is a markdown string. Clients got a schema promising nothing
         # they couldn't already read from the text block, and the surface paid
         # for it in every request. The runtime return shapes are unchanged.

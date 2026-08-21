@@ -6,9 +6,10 @@ with the rest of the family (``zim_query`` / ``zim_get``).
 
 ``compact`` is wired at the data layer (v2.5 #18): ``compact=True``
 (default) ships the bundle's compact rendering — oversized tables
-collapsed to ``[Table N: ...]`` placeholders, matching the
-``get_zim_entry`` slice shape — while ``compact=False`` returns the
-unrendered section body with full pipe-delimited tables. The lead
+collapsed to ``[Table N: ...]`` placeholders and markdown link soup
+stripped, matching the ``get_zim_entry`` slice shape — while
+``compact=False`` returns the unrendered section body with full
+pipe-delimited tables and links. The lead
 section's infobox is not inlined in either mode (the bundle decomposes
 it for all consumers); callers wanting the infobox-bearing lead should
 use ``zim_get(view="full", compact=False)``. ``compact_budget`` remains
@@ -43,6 +44,7 @@ def register(server: "OpenZimMcpServer") -> None:
         entry_path: str,
         section_id: str,
         max_chars: Optional[int] = None,
+        include_subsections: bool = True,
         compact: bool = True,
         compact_budget: Optional[Union[str, int]] = None,
     ) -> Any:
@@ -57,14 +59,19 @@ def register(server: "OpenZimMcpServer") -> None:
                 )
             # `compact` selects render fidelity: True (default) ships the
             # bundle's compact rendering (oversized tables collapsed to
-            # `[Table N: ...]` placeholders), matching get_zim_entry;
-            # False returns the unrendered section body with full tables
-            # (v2.5 #18). `compact_budget` is still a surface-only no-op.
+            # `[Table N: ...]` placeholders, link markup stripped), matching
+            # get_zim_entry; False returns the unrendered section body with
+            # full tables and links (v2.5 #18). `compact_budget` is still a
+            # surface-only no-op. `include_subsections` is the data layer's
+            # Op3 flag: the description advertised it from day one, but the
+            # wrapper never exposed it, so a caller passing it was silently
+            # served the full sub-tree while believing it had been excluded.
             return await ops.get_section_data(
                 zim_file_path,
                 entry_path,
                 section_id,
                 max_chars=max_chars,
+                include_subsections=include_subsections,
                 compact=compact,
             )
         except Exception as e:  # noqa: BLE001 — broad catch matches b13 envelope

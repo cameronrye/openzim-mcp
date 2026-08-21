@@ -209,7 +209,9 @@ async def test_main_page(server: MagicMock, monkeypatch: pytest.MonkeyPatch) -> 
     register_zim_get(server)
     fn, _ = server._tools_store["zim_get"]
     await fn(zim_file_path="/x.zim", main_page=True)
-    ops.get_main_page_data.assert_awaited_once_with("/x.zim", compact=False)
+    ops.get_main_page_data.assert_awaited_once_with(
+        "/x.zim", compact=False, max_content_length=None
+    )
 
 
 @pytest.mark.asyncio
@@ -223,7 +225,9 @@ async def test_main_page_forwards_compact(
     register_zim_get(server)
     fn, _ = server._tools_store["zim_get"]
     await fn(zim_file_path="/x.zim", main_page=True, compact=True)
-    ops.get_main_page_data.assert_awaited_once_with("/x.zim", compact=True)
+    ops.get_main_page_data.assert_awaited_once_with(
+        "/x.zim", compact=True, max_content_length=None
+    )
 
 
 @pytest.mark.asyncio

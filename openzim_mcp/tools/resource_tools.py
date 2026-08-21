@@ -10,10 +10,10 @@ URI scheme:
   main page preview). ``{name}`` is the bare basename without ``.zim``.
 - ``zim://{name}/entry/{path}`` — single entry served with native MIME type.
   Clients MUST URL-encode ``/`` as ``%2F`` in the ``{path}`` segment because
-  FastMCP's URI template engine treats ``/`` as a segment separator.
+  the SDK's URI template engine treats ``/`` as a segment separator.
 
 The per-entry resource detects each entry's MIME type from the libzim Item
-at read time and reports it back in the response. FastMCP's standard
+at read time and reports it back in the response. The SDK's standard
 ``@mcp.resource`` decorator can't express that — it freezes ``mime_type`` at
 registration time — so we register a custom ``ResourceTemplate`` /
 ``Resource`` pair directly on the resource manager.
@@ -23,15 +23,16 @@ import asyncio
 import json
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Optional, Union
-from urllib.parse import unquote
+from typing import TYPE_CHECKING, Any, Optional, Union, cast
 
-from mcp.server.fastmcp.resources.base import Resource
-from mcp.server.fastmcp.resources.templates import ResourceTemplate
-from pydantic import AnyUrl, ConfigDict, Field
+from mcp.server.mcpserver.exceptions import ResourceNotFoundError
+from mcp.server.mcpserver.resources import Resource, ResourceTemplate
+from mcp.shared.exceptions import MCPError
+from mcp_types import INTERNAL_ERROR, INVALID_PARAMS
+from pydantic import ConfigDict, Field
 
 from ..constants import INPUT_LIMIT_ENTRY_PATH
-from ..exceptions import OpenZimMcpArchiveError
+from ..exceptions import OpenZimMcpArchiveError, OpenZimMcpValidationError
 from ..security import sanitize_input
 from ..zim.redirects import resolve_redirect_chain
 from ..zim_operations import zim_archive
@@ -120,7 +121,7 @@ class ZimEntryResource(Resource):
     """Resource that reads one ZIM entry and reports its native MIME type.
 
     The MIME type is detected from the libzim ``Item.mimetype`` and assigned
-    to ``self.mime_type`` during ``read()`` so that FastMCP's ``read_resource``
+    to ``self.mime_type`` during ``read()`` so that the SDK's ``read_resource``
     handler — which fetches ``resource.mime_type`` *after* ``read()`` — sees
     the detected value, not the placeholder set at construction time.
     """
@@ -151,9 +152,34 @@ class ZimEntryResource(Resource):
 
         # libzim and PathValidator do filesystem I/O; offload so concurrent
         # HTTP/SSE clients don't stall on each other.
-        mime, raw = await asyncio.to_thread(_sync_read)
+        try:
+            mime, raw = await asyncio.to_thread(_sync_read)
+        except KeyError as exc:
+            # libzim signals a missing entry with a bare ``KeyError('Cannot
+            # find entry')``. Being neither ``MCPError`` nor an
+            # ``OpenZimMcpArchiveError``, it fell through to the SDK, which
+            # replaced it with "Error reading resource <uri>" under
+            # ``-32603`` — an internal-error code that invites a retry, for a
+            # request that will never succeed, with no mention of which entry
+            # was missing. The sibling archive-not-found case a few lines
+            # below already answers ``-32602`` naming the archive; a missing
+            # entry is the same class of caller mistake.
+            raise MCPError(
+                code=INVALID_PARAMS,
+                message=(
+                    f"Entry not found: {self.entry_path!r} is not in "
+                    f"{Path(self.archive_path).stem!r}."
+                ),
+            ) from exc
+        except OpenZimMcpArchiveError as exc:
+            # SDK v2's ``read_resource`` forwards only ``MCPError`` verbatim;
+            # every other exception type is replaced by a generic "Error
+            # reading resource <uri>". Redirect-cycle/depth diagnostics tell
+            # the caller what actually went wrong, so convert them at the
+            # boundary instead of letting the SDK discard them.
+            raise MCPError(code=INTERNAL_ERROR, message=str(exc)) from exc
 
-        # Mutate so FastMCP's read_resource picks up the detected MIME.
+        # Mutate so the SDK's read_resource picks up the detected MIME.
         # Resource has no validate_assignment, so this is a plain attribute set.
         self.mime_type = mime
 
@@ -179,11 +205,13 @@ class ZimEntryResource(Resource):
                 )
             decoded = raw.decode("utf-8", errors="replace")
             return _truncate_text_body(decoded, DEFAULT_RESOURCE_MAX_BYTES)
-        # Binary — FastMCP base64-wraps when content is bytes. Truncating a
+        # Binary — the SDK base64-wraps when content is bytes. Truncating a
         # binary body silently corrupts it (a clipped PDF / PNG won't open),
         # so refuse oversize binaries with an actionable error pointing at
         # ``get_binary_entry``, which exposes ``max_size_bytes`` so callers
         # can opt in to large fetches and get a ``truncated`` flag back.
+        # Raised as ``MCPError`` — the one type the SDK forwards verbatim —
+        # so the guidance actually reaches the client.
         if len(raw) > DEFAULT_RESOURCE_MAX_BYTES:
             logger.info(
                 "Resource %s rejected: binary %d bytes exceeds %d byte cap",
@@ -191,12 +219,16 @@ class ZimEntryResource(Resource):
                 len(raw),
                 DEFAULT_RESOURCE_MAX_BYTES,
             )
-            raise OpenZimMcpArchiveError(
-                f"Binary resource {self.entry_path!r} is "
-                f"{len(raw):,} bytes — over the {DEFAULT_RESOURCE_MAX_BYTES:,} "
-                f"byte resource cap. Use `zim_get(binary=True)` with "
-                f"`max_content_length` to fetch large media (PDFs, video, etc.) "
-                f"safely; the tool returns a truncated flag and pages by size."
+            raise MCPError(
+                code=INTERNAL_ERROR,
+                message=(
+                    f"Binary resource {self.entry_path!r} is "
+                    f"{len(raw):,} bytes — over the "
+                    f"{DEFAULT_RESOURCE_MAX_BYTES:,} byte resource cap. Use "
+                    f"`zim_get(binary=True)` with `max_content_length` to "
+                    f"fetch large media (PDFs, video, etc.) safely; the tool "
+                    f"returns a truncated flag and pages by size."
+                ),
             )
         return raw
 
@@ -226,20 +258,35 @@ class ZimEntryTemplate(ResourceTemplate):
         # directory scan runs.
         target_path = await asyncio.to_thread(_resolve_zim_name, self.server_ref, name)
         if not target_path:
-            raise ValueError(f"ZIM file '{name}' not found")
+            # ResourceNotFoundError reaches the client as ``-32602`` invalid
+            # params with this message; a bare ValueError would escape the
+            # SDK's error mapping as a generic "Internal server error".
+            raise ResourceNotFoundError(f"ZIM file '{name}' not found")
 
-        # FastMCP captures `%2F` literally; restore to `/` for libzim.
-        decoded_path = unquote(params["path"])
+        # ``UriTemplate.match`` has already percent-decoded the captured
+        # parameter (``%2F`` arrives as ``/``), so the value is used as-is —
+        # decoding again would corrupt entry paths containing a literal ``%``.
         # Strip control characters (e.g. NUL bytes from %00) before they
         # reach libzim, which has no defense against embedded NULs.
-        decoded_path = sanitize_input(decoded_path, INPUT_LIMIT_ENTRY_PATH)
+        try:
+            decoded_path = sanitize_input(params["path"], INPUT_LIMIT_ENTRY_PATH)
+        except OpenZimMcpValidationError as e:
+            # Converted for the same reason as the ``ResourceNotFoundError``
+            # above, and it has to happen HERE rather than in a caller:
+            # ``ResourceManager.get_resource`` invokes ``create_resource``
+            # outside the ``try`` that wraps ``resource.read()``, so nothing
+            # downstream maps this. An unmapped exception is replaced wholesale
+            # by a generic "Internal server error", discarding the one thing
+            # the caller can act on ("Input is empty…" / "Input too long: …").
+            raise MCPError(code=INVALID_PARAMS, message=str(e)) from e
         return ZimEntryResource(
-            uri=AnyUrl(uri),
+            # v2's Resource.uri is a plain ``str`` (it was ``AnyUrl`` in 1.x).
+            uri=uri,
             name=self.name,
             title=self.title,
             description=self.description,
             # Placeholder; ZimEntryResource.read() mutates this to the
-            # detected MIME before FastMCP reads it back.
+            # detected MIME before the SDK reads it back.
             mime_type=DEFAULT_BINARY_MIME,
             archive_path=target_path,
             entry_path=decoded_path,
@@ -346,34 +393,37 @@ def register_resources(server: "OpenZimMcpServer") -> None:
 
     # Register the per-entry template directly on the resource manager so
     # ZimEntryResource controls its own MIME type at read time.
-    template = ZimEntryTemplate(
-        uri_template=_ZIM_ENTRY_URI_TEMPLATE,
-        name="zim_entry",
-        title="ZIM entry (raw, native MIME)",
-        description=(
-            "Raw content of a single ZIM entry, served with its native MIME "
-            "type. HTML/text entries return text/html (or text/plain) with "
-            "the unprocessed body; binary entries (images, PDFs, etc.) "
-            "return the appropriate MIME with base64-encoded body. "
-            "IMPORTANT: clients MUST URL-encode '/' as '%2F' in {path} "
-            "(other RFC 3986 reserved characters too). Example: "
-            "zim://wikipedia_en/entry/C%2FClimate_change. "
-            "Use the zim_get tool for processed/truncated text output."
+    # Built through ``from_function`` rather than by direct construction: the
+    # v2 SDK's ResourceTemplate carries a pre-parsed RFC 6570 template and a
+    # ResourceSecurity policy, both required and neither trivially
+    # hand-buildable. ``from_function`` is a classmethod that instantiates
+    # ``cls``, so it returns this subclass with those fields populated
+    # correctly. The ``fn`` is still a never-called sentinel — ``parameters``
+    # is derived from its signature, and ``create_resource`` is overridden — but
+    # it now also feeds the template's security parameter checks.
+    # ``from_function`` instantiates ``cls`` but is annotated as returning the
+    # base ``ResourceTemplate``, so the subclass identity needs asserting.
+    template = cast(
+        ZimEntryTemplate,
+        ZimEntryTemplate.from_function(
+            fn=lambda name, path: None,  # noqa: ARG005 — sentinel
+            uri_template=_ZIM_ENTRY_URI_TEMPLATE,
+            name="zim_entry",
+            title="ZIM entry (raw, native MIME)",
+            description=(
+                "Raw content of a single ZIM entry, served with its native MIME "
+                "type. HTML/text entries return text/html (or text/plain) with "
+                "the unprocessed body; binary entries (images, PDFs, etc.) "
+                "return the appropriate MIME with base64-encoded body. "
+                "IMPORTANT: clients MUST URL-encode '/' as '%2F' in {path} "
+                "(other RFC 3986 reserved characters too). Example: "
+                "zim://wikipedia_en/entry/C%2FClimate_change. "
+                "Use the zim_get tool for processed/truncated text output."
+            ),
+            # Placeholder; the per-call MIME is set on each ZimEntryResource.
+            mime_type=DEFAULT_BINARY_MIME,
+            context_kwarg=None,
         ),
-        # Placeholder; the per-call MIME is set on each ZimEntryResource.
-        mime_type=DEFAULT_BINARY_MIME,
-        # ResourceTemplate requires `fn` and `parameters`; we never call fn
-        # because we override create_resource(), but the fields are required.
-        fn=lambda name, path: None,  # noqa: ARG005 — sentinel
-        parameters={
-            "type": "object",
-            "properties": {
-                "name": {"type": "string"},
-                "path": {"type": "string"},
-            },
-            "required": ["name", "path"],
-        },
-        context_kwarg=None,
-        server_ref=server,
     )
+    template.server_ref = server
     server.mcp._resource_manager._templates[_ZIM_ENTRY_URI_TEMPLATE] = template

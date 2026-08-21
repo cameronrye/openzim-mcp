@@ -317,6 +317,23 @@ def test_config_hash_includes_allowed_hosts():
     assert base.get_config_hash() != extended.get_config_hash()
 
 
+def test_config_hash_includes_resource_cache_ttl():
+    """The archive-read TTL is a behavior difference worth flagging as a conflict.
+
+    Two instances over the same directories that disagree about how long a
+    client may reuse a read hand out contradictory freshness promises, which is
+    exactly what the hash exists to surface.
+    """
+    from openzim_mcp.config import OpenZimMcpConfig
+
+    base = OpenZimMcpConfig(allowed_directories=[TMP_DIR])
+    retuned = OpenZimMcpConfig(
+        allowed_directories=[TMP_DIR],
+        resource_cache_ttl_seconds=60,
+    )
+    assert base.get_config_hash() != retuned.get_config_hash()
+
+
 def test_config_default_watch_interval():
     """Default watch_interval_seconds is 5."""
     from openzim_mcp.config import OpenZimMcpConfig

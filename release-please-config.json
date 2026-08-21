@@ -78,6 +78,11 @@
         },
         {
           "type": "generic",
+          "path": "SECURITY.md",
+          "glob": false
+        },
+        {
+          "type": "generic",
           "path": "website/src/content/docs/index.mdx",
           "glob": false
         },

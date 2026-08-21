@@ -9,7 +9,7 @@ OpenZIM MCP exposes three MCP "resources" (URI-addressable data), three slash-co
 
 > **Source of truth:** [openzim_mcp/tools/resource_tools.py](https://github.com/cameronrye/openzim-mcp/blob/main/openzim_mcp/tools/resource_tools.py), [openzim_mcp/tools/prompts.py](https://github.com/cameronrye/openzim-mcp/blob/main/openzim_mcp/tools/prompts.py), [openzim_mcp/subscriptions.py](https://github.com/cameronrye/openzim-mcp/blob/main/openzim_mcp/subscriptions.py).
 
-Resources and prompts are registered only in **Advanced mode** (`--mode advanced` / `OPENZIM_MCP_TOOL_MODE=advanced`) — Simple mode exposes just the `zim_query` tool. Subscriptions additionally require the **HTTP transport** (`--transport http`); on stdio and SSE the subscribe handlers are not registered.
+Resources and prompts are registered only in **Advanced mode** (`--mode advanced` / `OPENZIM_MCP_TOOL_MODE=advanced`) — Simple mode exposes just the `zim_query` tool. Change notifications additionally require the **HTTP transport** (`--transport http`), the only transport that runs the file watcher; on stdio and SSE the capability is not advertised and a `subscriptions/listen` request fails with method-not-found rather than acknowledging a stream nothing would ever publish to.
 
 > **Notation:** code samples on this page use MCP JSON-RPC tool-call framing (`{"name": "...", "arguments": {...}}`). Your MCP client handles the wire framing; you supply the tool name and argument shape.
 
@@ -61,11 +61,11 @@ If a section fails to load (rare — corrupt archive, missing metadata), it's re
 
 ### `zim://{name}/entry/{path}`
 
-Single entry served with native MIME type. The MIME type is detected from libzim's `Item.mimetype` and reported back per request — text entries return text bodies; binary entries (images, PDFs, audio) return raw bytes (FastMCP base64-wraps).
+Single entry served with native MIME type. The MIME type is detected from libzim's `Item.mimetype` and reported back per request — text entries return text bodies; binary entries (images, PDFs, audio) return raw bytes (the SDK base64-wraps them).
 
 #### URL encoding requirement
 
-**Clients MUST URL-encode `/` as `%2F`** in the `{path}` segment. FastMCP's URI template engine treats `/` as a segment separator, so a literal slash won't route. Other RFC 3986 reserved characters in the path also need encoding (e.g. `?` as `%3F`).
+**Clients MUST URL-encode `/` as `%2F`** in the `{path}` segment. The SDK's URI template engine treats `/` as a segment separator, so a literal slash won't route. Other RFC 3986 reserved characters in the path also need encoding (e.g. `?` as `%3F`).
 
 ```
 zim://wikipedia_en/entry/A%2FClimate_change
@@ -77,7 +77,7 @@ Without the encoding, the resource fetch returns a "not found" error even when t
 #### MIME type behavior
 
 - HTML / text → `text/html`, `text/plain`, `application/json`, `application/xml`, `application/javascript` returned as decoded text.
-- Binary (anything else) → returned as raw bytes; FastMCP base64-wraps them on the wire.
+- Binary (anything else) → returned as raw bytes; the SDK base64-wraps them on the wire.
 - Unknown / missing MIME → `application/octet-stream`.
 
 Charset parameters (`text/html; charset=utf-8`) are stripped before reporting; only the bare MIME type ends up in the response.
@@ -261,63 +261,133 @@ Anything with an unbounded answer returns nothing rather than guessing: a `/rese
 
 ## Subscriptions
 
-Under the HTTP transport (`--transport http`), OpenZIM MCP supports the MCP `resources/subscribe` and `resources/unsubscribe` requests on `zim://files` and `zim://{name}` — on stdio and SSE the handlers are not registered and the `resources.subscribe` capability is not advertised. The server emits `notifications/resources/updated` whenever:
+The 2026-07-28 protocol revision removed `resources/subscribe`. A client now opts in with one long-lived `subscriptions/listen` request naming the notification kinds it wants, and the response *is* the stream. The SDK owns the listener registry, per-stream filtering, backpressure, and teardown; OpenZIM MCP only decides *when* a ZIM file changed and publishes it.
 
-- A `.zim` file is added to or removed from an allowed directory (subscription target: `zim://files`)
-- A specific `.zim` file's mtime changes (subscription target: `zim://{name}`)
+The watcher runs under the HTTP transport (`--transport http`) only, so that is the only transport on which anything is published — and the advertisement follows the same gate. At 2026-07-28 there is no `initialize` handshake: `server/discover` reports capabilities instead, and `resources.subscribe` plus the `listChanged` flags derive from `subscriptions/listen` being served. The SDK registers that handler unconditionally, so the server deregisters it outside HTTP-with-subscriptions-enabled: on stdio and SSE (and with `OPENZIM_MCP_SUBSCRIPTIONS_ENABLED=false`) the flags read `false` and a listen request fails with method-not-found, rather than being acknowledged and staying silent forever. The capability is only ever advertised where events can actually fire.
 
-Detection compares both **mtime and size** — same-size archive replacement (common when re-downloading from Kiwix) is caught by the mtime change, and same-mtime rewrites by the size change.
+### What the server publishes
+
+| Change on disk | Notification | Opt in with |
+|----------------|--------------|-------------|
+| A `.zim` file appears in or disappears from an allowed directory | `notifications/resources/list_changed` | `resourcesListChanged: true` |
+| A `.zim` file is replaced in place | `notifications/resources/updated` for `zim://{name}` | `resourceSubscriptions: ["zim://{name}"]` |
+
+`{name}` is the basename without `.zim`; the template expansion percent-encodes it (e.g. `zim://wikipedia_es_ni%C3%B1os`), and that canonical form is the recommended subscription target. Delivery matches URI strings exactly, but every spelling that reads also notifies: a replacement is published under the raw stem, the percent-encoded stem, and both `.zim`-suffixed name forms (the spelling the `zim://files` listing advertises), so whichever string a client successfully read from is also the string that fires. Detection compares both **mtime and size**: same-size archive replacement (common when re-downloading from Kiwix) is caught by the mtime change, and same-mtime rewrites by the size change. Allowed directories are scanned recursively, so ZIMs in subdirectories are watched too.
+
+> **`zim://files` is not a `resourceSubscriptions` target.** Membership changes arrive as `notifications/resources/list_changed`, which carries no URI; a stream that lists `zim://files` under `resourceSubscriptions` is acknowledged and then never hears anything. Re-read `zim://files` on each `list_changed`. (Before 2026-07-28 both kinds of change were flattened into an `updated` for `zim://files`, because `resources/subscribe` gave clients no way to ask about list membership.)
+
+`toolsListChanged` and `promptsListChanged` are accepted and acknowledged, but OpenZIM MCP never fires them — the tool and prompt surfaces are fixed at startup by `--mode`.
 
 ### Configuration
 
 | Env var | Default | Range | Notes |
 |---------|---------|-------|-------|
-| `OPENZIM_MCP_SUBSCRIPTIONS_ENABLED` | `true` | bool | master switch — `false` skips the watcher and the subscribe/unsubscribe handler registration entirely; `resources/subscribe` then fails with method-not-found and the capability is not advertised |
+| `OPENZIM_MCP_SUBSCRIPTIONS_ENABLED` | `true` | bool | master switch — `false` skips the watcher, withholds the `subscribe`/`listChanged` capability flags, and makes `subscriptions/listen` fail with method-not-found |
 | `OPENZIM_MCP_WATCH_INTERVAL_SECONDS` | `5` | 1-60 | polling interval; the watcher rescans allowed directories on this cadence |
+| `OPENZIM_MCP_RESOURCE_CACHE_TTL_SECONDS` | `3600` | 0-86400 | how long a client may reuse a cached read of a `zim://{name}` overview; `0` disables the override and puts it back on the watcher-bounded TTL (entry reads always stay there) |
 
 For production HTTP services with low-priority watching, increase to `15-30s` to reduce I/O churn. For interactive desktop use, the default is fine.
 
+### Read caching and freshness
+
+Every result carries the 2026-07-28 `ttlMs`/`cacheScope` fields, so a client knows how long it may reuse an answer rather than re-asking. Reads split in two:
+
+| URI | TTL | Why |
+|-----|-----|-----|
+| `zim://{name}` | `OPENZIM_MCP_RESOURCE_CACHE_TTL_SECONDS` (default 1h) | a ZIM file is sealed — a replacement publishes `resources/updated` for exactly this URI, so subscribed clients never go stale |
+| `zim://{name}/entry/{path}` | `OPENZIM_MCP_WATCH_INTERVAL_SECONDS` (default 5s) | no `resources/updated` is ever published for an entry URI, so a longer promise could not be invalidated |
+| `zim://files` | `OPENZIM_MCP_WATCH_INTERVAL_SECONDS` (default 5s) | a live directory scan; never staler than the server's own detection latency |
+
+`cacheScope` is `private` throughout: these payloads embed server-local absolute paths and configuration, so a shared intermediary must not serve one caller's response to another.
+
+The long TTL and subscriptions are designed to work together. A client on an open `subscriptions/listen` stream hears about a replacement immediately and re-reads, so the TTL never costs it freshness. A client that is not subscribed — anything on stdio, or an HTTP client that never opened a stream — can serve a stale overview for up to the TTL after a replacement. Lower it, or set `0`, if you swap archives in place and cannot rely on subscribers.
+
+Legacy clients see none of these fields: the SDK stamps them only for sessions opened on the 2026-07-28 revision, since `ttlMs` has no meaning in the era that preceded it.
+
 ### Lifespan integration
 
-Under the streamable-HTTP transport the watcher is started/stopped via a lifespan-context wrapper around FastMCP's own lifespan handler. (FastMCP supplies a custom lifespan, so `add_event_handler('startup', …)` is silently a no-op — the wrapper is the only path that works.)
+Under the streamable-HTTP transport the watcher is started/stopped via a lifespan-context wrapper around the app the SDK's `streamable_http_app()` returns. (That app supplies its own Starlette lifespan, so `add_event_handler('startup', …)` is silently a no-op — the wrapper is the only path that works.)
 
-### Subscriber behavior
+### Delivery and limits
 
-- The fan-out is concurrent (`asyncio.gather`); one slow subscriber doesn't delay the others.
-- Per-subscriber send timeout is 5 seconds (`TIMEOUTS.SUBSCRIPTION_SEND_SECONDS`); a subscriber that doesn't respond is treated as dead and evicted from the registry.
-- `asyncio.CancelledError` from a subscriber is re-raised, not swallowed — clean shutdown propagates correctly.
+Delivery belongs to the SDK's `ListenHandler`. OpenZIM MCP hands each detected change to a `SubscriptionBus` and never touches a client connection itself.
 
-### Client example (pseudocode)
+- Each listen stream has its own buffer, so one stalled consumer neither delays another stream nor blocks the watcher.
+- Concurrent listen streams are capped (`max_subscriptions`, 1024 by default). Past the cap a further `subscriptions/listen` is rejected with an error *before* it is acknowledged.
+- Each stream buffers at most `max_buffered_events` undelivered events (1024 by default). A stream whose client stopped reading and overran that backlog is ended rather than allowed to grow.
+- There is no replay and no resumption. Every event is a level trigger ("this changed, re-read if you care"), so a client whose stream dropped re-listens and re-reads; nothing is lost that the backlog wasn't already losing.
+- A stream's requested URI set is bounded by the server before it is acknowledged: at most 256 `resourceSubscriptions` URIs per stream, each at most 2048 characters. An oversized set is rejected with `INVALID_PARAMS` — fix the request, unlike the concurrency cap above, whose rejection means try again later. Carried over from the pre-2026 registry's admission control, and far above any real client: 256 distinct URIs is a client watching 255 archives at once.
+- The two stream caps are the SDK's defaults — OpenZIM MCP does not override them — and none of these limits are exposed as environment variables.
 
-After the initial MCP handshake, subscribe via your client SDK's resource-subscription API. The wire-level interaction is:
+### Client example
+
+Open the stream, naming both kinds:
 
 ```json
 {
   "jsonrpc": "2.0",
   "id": 1,
-  "method": "resources/subscribe",
-  "params": { "uri": "zim://files" }
+  "method": "subscriptions/listen",
+  "params": {
+    "notifications": {
+      "resourcesListChanged": true,
+      "resourceSubscriptions": ["zim://wikipedia_en_100_2026-02"]
+    }
+  }
 }
 ```
 
-The server then pushes notifications when changes are detected:
+The first frame is the acknowledgement, echoing the filter the server agreed to honor. Every frame on the stream — this one included — carries the listen request's JSON-RPC id under `_meta["io.modelcontextprotocol/subscriptionId"]`:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "notifications/subscriptions/acknowledged",
+  "params": {
+    "_meta": { "io.modelcontextprotocol/subscriptionId": 1 },
+    "notifications": {
+      "resourcesListChanged": true,
+      "resourceSubscriptions": ["zim://wikipedia_en_100_2026-02"]
+    }
+  }
+}
+```
+
+A `.zim` file added to or removed from a watched directory:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "notifications/resources/list_changed",
+  "params": { "_meta": { "io.modelcontextprotocol/subscriptionId": 1 } }
+}
+```
+
+That archive replaced in place:
 
 ```json
 {
   "jsonrpc": "2.0",
   "method": "notifications/resources/updated",
-  "params": { "uri": "zim://files" }
+  "params": {
+    "_meta": { "io.modelcontextprotocol/subscriptionId": 1 },
+    "uri": "zim://wikipedia_en_100_2026-02"
+  }
 }
 ```
 
-On each notification, re-read the resource (`resources/read` with the same URI) to refresh your local view. Specifics depend on your MCP client SDK — check its subscription API for the idiomatic wrapper.
+Re-read on each notification to refresh your local view: `resources/list` after a `list_changed`, `resources/read` on the named URI after an `updated`. Specifics depend on your MCP client SDK — check its listen API for the idiomatic wrapper.
+
+### Legacy clients
+
+The SDK serves the pre-2026-07-28 handshake era on the same endpoint, so a 2025-era client still initializes, carries an `Mcp-Session-Id`, and calls tools, resources, and prompts exactly as before. It cannot receive change notifications, though: `resources/subscribe` and `resources/unsubscribe` are not registered on this build, so they answer `-32601 Method not found`, and `resources.subscribe` is advertised as `false` to a handshake-era client. Live updates require negotiating 2026-07-28 and calling `subscriptions/listen`.
 
 ### Implementation note
 
-Resource handler registration uses a private FastMCP attribute (`_mcp_server`); the SDK doesn't yet expose a stable public hook for handler-level interception. This is fragile if FastMCP changes its internals; the project tracks the risk and will migrate once a stable public API lands upstream.
+Subscription delivery is the SDK's — the registry, the fan-out, and the capability advertisement this project used to hand-roll are first-class in v2 — but three private-API dependencies remain, each with its own retirement condition. Delivery runs through a project subclass of the SDK's `ListenHandler` that enforces the per-stream URI bounds above; it is installed (and, when subscriptions are disabled, the stock handler withheld) by writing into the lowlevel server's private handler registry, until a public hook for either exists. On the resource side, the MIME-aware per-entry template is installed straight into the resource manager's `_templates` map, because the public decorator freezes `mime_type` at registration time and this resource has to choose it per read. And `sdk_compat.py` patches the dicts under the SDK's per-version method tables so 2026-07-28 clients can `ping` ([python-sdk#3273](https://github.com/modelcontextprotocol/python-sdk/issues/3273)); a canary test retires that one the day the SDK ships its own fix. All three are why the dependency pin holds `mcp` to 2.0.x — raising the ceiling is a deliberate bump that re-audits each seam.
 
 ---
 
 **API reference for tools:** [API reference](/openzim-mcp/docs/api-reference/). **HTTP transport details:** [HTTP and Docker Deployment](/openzim-mcp/docs/http-and-docker-deployment/). **Configuration knobs:** [Configuration](/openzim-mcp/docs/configuration/).
 
-*The v1.x maintenance window closed when v2.5.0 shipped (2026-06-18); the 2.x line is the only supported series. See [CHANGELOG](https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md) for the v1 → v2 migration table.*
+*The v1.x maintenance window closed when v2.5.0 shipped (2026-06-18); only the current major line is supported — see [SECURITY.md](https://github.com/cameronrye/openzim-mcp/blob/main/SECURITY.md) for the policy. The [CHANGELOG](https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md) carries the v1 → v2 migration table and the v3.0.0 breaking-changes entry.*

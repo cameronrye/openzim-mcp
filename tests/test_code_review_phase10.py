@@ -49,7 +49,7 @@ def _cache_keys(ops: ZimOperations, prefix: str) -> list:
 def test_h15_find_entry_by_title_is_cached(ops, v2_phase_a_zim):
     path = str(v2_phase_a_zim)
     first = ops.find_entry_by_title_data(path, "Einstein", cross_file=False, limit=5)
-    assert _cache_keys(ops, "find_title:v1:"), "expected a find_title cache entry"
+    assert _cache_keys(ops, "find_title:v2:"), "expected a find_title cache entry"
     second = ops.find_entry_by_title_data(path, "Einstein", cross_file=False, limit=5)
     # The cache hit returns an equivalent payload.
     assert second == first
@@ -64,7 +64,7 @@ def test_h15_zero_hit_find_is_not_cached(ops, v2_phase_a_zim):
     out = ops.find_entry_by_title_data(path, "Zzqqxxyyzz", cross_file=False, limit=5)
     assert out["results"] == []
     assert not _cache_keys(
-        ops, "find_title:v1:"
+        ops, "find_title:v2:"
     ), "zero-hit find_entry_by_title_data response must not be cached"
 
 

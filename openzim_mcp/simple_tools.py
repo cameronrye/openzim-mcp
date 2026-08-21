@@ -11,6 +11,7 @@ module directly for the timeout-guarded ``safe_regex_*`` helpers.
 
 import logging
 import re
+import threading
 from collections import Counter
 from contextlib import ExitStack
 from dataclasses import dataclass, field
@@ -23,6 +24,7 @@ from . import compact_renderers
 from .article_body import _ArticleBodyMixin
 from .chain_detection import _ChainMixin
 from .compact_format import _CompactFormatMixin
+from .constants import CANONICAL_TITLE_MATCH_SNIPPET
 from .cursor_decode import decode_offset_cursor
 from .disambiguation import _DisambiguationMixin
 from .exceptions import (
@@ -43,7 +45,7 @@ from .rerank import (
     _RerankMixin,
 )
 from .responses import ToolErrorPayload, tool_error
-from .security import sanitize_context_for_error
+from .security import sanitize_context_for_error, sanitize_control_chars
 from .subject_section import _SubjectSectionMixin
 from .text_utils import _TOKEN_RE
 from .title_promotion import (
@@ -147,6 +149,13 @@ class SimpleToolsHandler(
         """
         self.zim_operations = zim_operations
         self.intent_parser = IntentParser()
+        # Bind the Sub-D-2 rule-2 data files from config so an operator's
+        # curated misspelling map / exclusions list is actually loaded —
+        # pydantic accepted and stored both paths but nothing ever read them.
+        IntentParser.bind_data_paths(
+            zim_operations.config.query_rewrite.misspelling_map_path,
+            zim_operations.config.query_rewrite.misspelling_exclusion_path,
+        )
         # In-memory telemetry counters surface via ``get_server_health``.
         # Each branch in ``handle_zim_query`` that is interesting for
         # tuning the heuristics (meta-guidance, hallucinated paths, regex
@@ -154,6 +163,11 @@ class SimpleToolsHandler(
         # named counter here. No PII; the dict is small enough to ship in
         # a health-check response. Process-local — restarts reset.
         self._telemetry: Counter[str] = Counter()
+        # ``handle_zim_query`` runs on ``asyncio.to_thread`` workers, and a
+        # key's FIRST increment routes through ``Counter.__missing__`` — a
+        # pure-Python preemption point where two threads can both read 0
+        # and both store 1.
+        self._telemetry_lock = threading.Lock()
 
     def _track(self, event: str) -> None:
         """Increment the named telemetry counter.
@@ -162,7 +176,8 @@ class SimpleToolsHandler(
         INFO log line per call so simple-mode operators (who don't have
         ``get_server_health``) can observe them in the server log.
         """
-        self._telemetry[event] += 1
+        with self._telemetry_lock:
+            self._telemetry[event] += 1
         if event in _INFO_LEVEL_TELEMETRY_EVENTS:
             logger.info("telemetry: %s", event)
 
@@ -366,7 +381,13 @@ class SimpleToolsHandler(
             ):
                 _v = params.get(_key)
                 if isinstance(_v, str) and _v:
-                    _v_clean = IntentParser._strip_trailing_politeness(_v).strip()
+                    # ``preserve_topic``: these fields ARE the operand, so a
+                    # value that is entirely a topic-shaped politeness word
+                    # (``tack``, ``cheers``) must survive — emptying it hands
+                    # the guards below a topic they then reject.
+                    _v_clean = IntentParser._strip_trailing_politeness(
+                        _v, preserve_topic=True
+                    ).strip()
                     if _v_clean != _v:
                         params[_key] = _v_clean
             # ``entries`` is a list of entry-path strings (from
@@ -572,6 +593,14 @@ class SimpleToolsHandler(
                 options["_cursor_ep"] = cursor_result.ep
             if cursor_result.k:
                 options["_cursor_k"] = cursor_result.k
+            # Honour the page size the cursor was issued under, but only when
+            # the caller did not state one — the same precedence the advanced
+            # arm applies in ``tools/_common.effective_limit`` (explicit limit
+            # > cursor's ``l`` > handler default). Without this, replaying the
+            # ``next_cursor`` the footer advertises silently resized the page
+            # to whatever default the intent handler happens to carry.
+            if cursor_result.limit is not None and options.get("limit") is None:
+                options["limit"] = cursor_result.limit
         # Normalize hallucinated ``zim_file_path`` BEFORE branching to the
         # synthesize pipeline. Small models pass bare filenames
         # (``"wikipedia.zim"``) or article titles (``"Big Rapids,
@@ -710,6 +739,21 @@ class SimpleToolsHandler(
             if low_confidence_note:
                 self._track("low_confidence_note")
 
+            # D44: the cursor's offset / limit were projected into
+            # ``options`` above for EVERY intent, but only the
+            # cursor-consuming handlers (browse / walk / links / search /
+            # filtered search) reject a cursor minted by another tool.
+            # Every other intent silently applied the foreign state — a
+            # ``browse_namespace`` cursor resized ``find article titled``
+            # from 10 hits to the cursor's 5. No other intent ever mints
+            # a cursor, so a tool-tagged cursor reaching one is foreign
+            # by definition: reject it here with the same diagnosis the
+            # guarded handlers emit.
+            if intent not in self._CURSOR_CONSUMING_INTENTS:
+                foreign_cursor = self._cursor_tool_mismatch(options, intent)
+                if foreign_cursor is not None:
+                    return foreign_cursor
+
             # ``list_files`` is the only intent that doesn't need a ZIM file.
             # It still goes through the finalize pipeline so the response
             # carries the intent telemetry marker and respects the compact
@@ -738,6 +782,18 @@ class SimpleToolsHandler(
             # path through unchanged (the handler ignores it but
             # downstream low-confidence rendering / telemetry expect a
             # non-empty string).
+            # D45: ``search <archive> for <terms>`` names its target in
+            # plain text. Resolve the name against the loaded archives
+            # BEFORE the gate (same precedent as the metadata hint
+            # below). An explicit ``zim_file_path`` still wins for
+            # routing, and the name is only stripped when it agrees with
+            # where the search actually goes.
+            if intent == "search" and isinstance(params, dict):
+                hinted_archive = self._apply_search_archive_hint(
+                    params, explicit_path=zim_file_path
+                )
+                if hinted_archive and not zim_file_path:
+                    zim_file_path = hinted_archive
             if intent == "search_all":
                 zim_file_path = zim_file_path or ""
             elif not zim_file_path:
@@ -813,6 +869,13 @@ class SimpleToolsHandler(
                 intent, SimpleToolsHandler._handle_search
             )
             raw = handler(self, query, zim_file_path, params, options)
+            # D51: a handler-edge rejection (cursor mismatch) is a
+            # ToolErrorPayload. Hand it back as-is: the envelope's
+            # ``operation`` is its telemetry class, so it must not pick
+            # up the parsed-intent marker the finalize step appends —
+            # that produced two contradictory markers on one response.
+            if isinstance(raw, dict):
+                return raw
             # Unpack structured handler results; plain string handlers are
             # unaffected — they return a ``str`` as before.
             if isinstance(raw, _HandlerResult):
@@ -836,7 +899,13 @@ class SimpleToolsHandler(
             return result
 
         except Exception as e:
-            logger.error(f"Error handling zim_query: {e}")
+            # Single-line message: a ``zim_file_path`` with an embedded LF is
+            # echoed verbatim by the validator (R2-3). ``exception`` keeps the
+            # traceback — this is the catch-all, so the frame that raised is
+            # the only thing that tells a generic failure apart from a bug.
+            logger.exception(
+                "Error handling zim_query: %s", sanitize_control_chars(str(e))
+            )
             # Sanitize both the query and error text to avoid leaking
             # absolute filesystem paths back to the MCP client.
             safe_query = sanitize_context_for_error(query)
@@ -889,26 +958,44 @@ class SimpleToolsHandler(
                     reason_text = self._path_failure_reason(
                         zim_file_path, error_lower, safe_error
                     )
-                    return (
-                        f"**ZIM File Not Found**\n\n"
-                        f"**Query**: {safe_query}\n"
-                        f"**Issue**: the `zim_file_path` value passed "
-                        f"doesn't match any loaded archive.\n"
-                        f"**Reason**: {reason_text}\n\n"
-                        f"{hint}\n\n"
-                        f"<!-- intent=zim_path_not_found cert=1.00 -->"
+                    # D58: a path-resolution / security failure is a
+                    # failure. Pre-fix this guidance was returned as a
+                    # plain string and travelled the SDK success path,
+                    # so zim_query reported a security denial as
+                    # isError=false while the other seven tools flagged
+                    # the identical path — in simple mode, the only
+                    # tool a client has gave it no error signal at all.
+                    # The prose is unchanged; it rides in the envelope's
+                    # ``message`` and ``operation`` replaces the inline
+                    # telemetry marker.
+                    return tool_error(
+                        operation="zim_path_not_found",
+                        message=(
+                            f"**ZIM File Not Found**\n\n"
+                            f"**Query**: {safe_query}\n"
+                            f"**Issue**: the `zim_file_path` value passed "
+                            f"doesn't match any loaded archive.\n"
+                            f"**Reason**: {reason_text}\n\n"
+                            f"{hint}"
+                        ),
                     )
-            return (
-                f"**Error Processing Query**\n\n"
-                f"**Query**: {safe_query}\n"
-                f"**Error**: {safe_error}\n\n"
-                f"**Troubleshooting**:\n"
-                f"1. Omit `zim_file_path` to auto-select the loaded "
-                f"archive (single-archive setups), or call "
-                f"`list available ZIM files` to see real paths\n"
-                f"2. Verify the query format\n"
-                f"3. Try a simpler query\n"
-                f"4. Check server logs for details"
+            # D58: same envelope for every other failure the catch-all
+            # absorbs (``..`` traversal rejections, unexpected backend
+            # errors) — the sibling tools' broad excepts all return one.
+            return tool_error(
+                operation="zim_query",
+                message=(
+                    f"**Error Processing Query**\n\n"
+                    f"**Query**: {safe_query}\n"
+                    f"**Error**: {safe_error}\n\n"
+                    f"**Troubleshooting**:\n"
+                    f"1. Omit `zim_file_path` to auto-select the loaded "
+                    f"archive (single-archive setups), or call "
+                    f"`list available ZIM files` to see real paths\n"
+                    f"2. Verify the query format\n"
+                    f"3. Try a simpler query\n"
+                    f"4. Check server logs for details"
+                ),
             )
 
     def _finalize_compact_response(  # NOSONAR(python:S3776)
@@ -1219,6 +1306,8 @@ class SimpleToolsHandler(
             "- `tell me about <topic>` — fetch an article "
             "(e.g. `tell me about Photosynthesis`)\n"
             "- `search for <terms>` — full-text search\n"
+            "- Want the next page of an earlier result? Repeat that "
+            "same query with `offset=N` (the footer names N)\n"
         )
 
     # Intents whose responses are dense markdown-rendered prose (article
@@ -1347,10 +1436,33 @@ class SimpleToolsHandler(
     # ``_cursor_tool_mismatch`` can fire with the correct diagnosis.
     _Q_EMITTING_CURSOR_TOOLS = frozenset({"search_zim_file", "search_with_filters"})
 
+    # Intents whose handlers page with a cursor and therefore carry their
+    # own handler-edge ``_cursor_tool_mismatch`` check (after their
+    # argument validation, so the diagnosis order those handlers pin is
+    # preserved). Every other intent is guarded once, in the dispatcher,
+    # because no tool ever mints a cursor for it (D44).
+    _CURSOR_CONSUMING_INTENTS = frozenset(
+        {"browse", "walk_namespace", "links", "search", "filtered_search"}
+    )
+
+    # D51: every handler-edge cursor rejection below travels as the same
+    # ``cursor_decode`` ToolErrorPayload the dispatcher already emits for
+    # an undecodable cursor. Pre-fix these were markdown strings carrying
+    # their own ``<!-- intent=cursor_decode -->`` marker, which then flowed
+    # through ``_finalize_compact_response`` and picked up a SECOND,
+    # contradictory ``<!-- intent=<parsed intent> -->`` marker — and were
+    # delivered ``isError=false`` although the server instructions promise
+    # a rejected argument is flagged. The envelope's ``operation`` field is
+    # the branch key now; the markdown body is unchanged apart from the
+    # dropped marker.
     @staticmethod
+    def _cursor_mismatch_error(message: str) -> ToolErrorPayload:
+        return tool_error(operation="cursor_decode", message=message)
+
+    @classmethod
     def _cursor_tool_mismatch(
-        options: Dict[str, Any], request_tool: str
-    ) -> Optional[str]:
+        cls, options: Dict[str, Any], request_tool: str
+    ) -> Optional[ToolErrorPayload]:
         """Post-a18 P1-D4: return a structured error when the decoded
         cursor's ``s.t`` (issuing tool) differs from the handler's
         own tool name. The simple-tools dispatcher decodes cursors
@@ -1369,22 +1481,21 @@ class SimpleToolsHandler(
             return None
         if cursor_t == request_tool:
             return None
-        return (
+        return cls._cursor_mismatch_error(
             "**Cursor / Tool Mismatch**\n\n"
             "**Issue**: the cursor was issued by "
             f"`{cursor_t}` but this call routes to "
             f"`{request_tool}`. Drop the cursor and call again "
             "without it (or restart the paginated call with the "
-            "tool that issued the cursor).\n\n"
-            "<!-- intent=cursor_decode cert=1.00 -->"
+            "tool that issued the cursor)."
         )
 
-    @staticmethod
+    @classmethod
     def _cursor_ns_mismatch(
-        options: Dict[str, Any], request_namespace: str
-    ) -> Optional[str]:
-        """P3-D7 helper: return a structured error string when the
-        decoded cursor's ``s.ns`` differs from the request's namespace.
+        cls, options: Dict[str, Any], request_namespace: str
+    ) -> Optional[ToolErrorPayload]:
+        """P3-D7 helper: return a structured error when the decoded
+        cursor's ``s.ns`` differs from the request's namespace.
 
         Returns ``None`` when no cursor was passed, when the cursor had
         no ``ns`` field, or when both match (case-insensitive). The
@@ -1399,19 +1510,18 @@ class SimpleToolsHandler(
         # case-insensitive across the dispatcher surface.
         if cursor_ns.strip().upper() == request_namespace.strip().upper():
             return None
-        return (
+        return cls._cursor_mismatch_error(
             "**Cursor / Namespace Mismatch**\n\n"
             "**Issue**: the cursor was issued for namespace "
             f"`{cursor_ns}` but this call asked for namespace "
             f"`{request_namespace}`. Drop the cursor and call again "
             "without it (or start a fresh page-1 request for the new "
-            "namespace).\n\n"
-            "<!-- intent=cursor_decode cert=1.00 -->"
+            "namespace)."
         )
 
     def _cursor_archive_mismatch(
         self, options: Dict[str, Any], zim_file_path: str
-    ) -> Optional[str]:
+    ) -> Optional[ToolErrorPayload]:
         """Return a structured error when the decoded cursor's ``s.ai``
         was minted against a different archive than this call's.
 
@@ -1438,13 +1548,12 @@ class SimpleToolsHandler(
             return None
         if cursor_ai == expected:
             return None
-        return (
+        return self._cursor_mismatch_error(
             "**Cursor / Archive Mismatch**\n\n"
             "**Issue**: the cursor was issued against a different "
             f"archive than `{Path(zim_file_path).name}`. Drop the cursor "
             "and call again without it (or resume the paginated call "
-            "against the archive that issued it).\n\n"
-            "<!-- intent=cursor_decode cert=1.00 -->"
+            "against the archive that issued it)."
         )
 
     @staticmethod
@@ -1463,7 +1572,7 @@ class SimpleToolsHandler(
     @classmethod
     def _cursor_entry_mismatch(
         cls, options: Dict[str, Any], request_entry_path: str
-    ) -> Optional[str]:
+    ) -> Optional[ToolErrorPayload]:
         """P26: return a structured error when the decoded cursor's ``s.ep``
         names a different article than this call's.
 
@@ -1483,14 +1592,13 @@ class SimpleToolsHandler(
             request_entry_path or ""
         ):
             return None
-        return (
+        return cls._cursor_mismatch_error(
             "**Cursor / Article Mismatch**\n\n"
             "**Issue**: the cursor was issued for article "
             f"`{cursor_ep}` but this call asked for "
             f"`{request_entry_path}`. Drop the cursor and call again "
             "without it (or resume the paginated call against the article "
-            "that issued it).\n\n"
-            "<!-- intent=cursor_decode cert=1.00 -->"
+            "that issued it)."
         )
 
     # ---------------------------------------------------------------- handlers
@@ -1533,7 +1641,7 @@ class SimpleToolsHandler(
         zim_file_path: str,
         params: Dict[str, Any],
         options: Dict[str, Any],
-    ) -> str:
+    ) -> Union[str, ToolErrorPayload]:
         # A15 post-a15 P6-D1: missing / malformed namespace argument
         # used to fall through to ``params.get("namespace", "C")`` and
         # silently browse C — exact analogue of the walk_namespace
@@ -2107,7 +2215,7 @@ class SimpleToolsHandler(
         zim_file_path: str,
         params: Dict[str, Any],
         options: Dict[str, Any],
-    ) -> str:
+    ) -> Union[str, ToolErrorPayload]:
         entry_path = params.get("entry_path")
         if not entry_path:
             return (
@@ -2243,15 +2351,30 @@ class SimpleToolsHandler(
                 "- 'get binary content from \"I/image.png\"'\n"
                 "- 'extract pdf \"I/document.pdf\"'\n"
                 "- 'retrieve image I/logo.png'\n\n"
-                "**Tip**: Use `extract_article_links` to discover "
-                "embedded media paths."
+                "**Tip**: `links in <article>` lists the media paths an "
+                "article embeds."
             )
-        return self.zim_operations.get_binary_entry(
-            zim_file_path,
-            entry_path,
-            options.get("max_size_bytes"),
-            params.get("include_data", True),
-        )
+        # D52: the sibling entry-taking handlers (structure / summary /
+        # links / get article) route a backend miss through
+        # ``_render_not_found_recovery``; this one let the exception
+        # escape to the catch-all, which surfaced the backend's
+        # ``Try using search_zim_file()`` hint — function names that are
+        # not tools in simple mode — and pointed at server logs.
+        try:
+            return self.zim_operations.get_binary_entry(
+                zim_file_path,
+                entry_path,
+                options.get("max_size_bytes"),
+                params.get("include_data", True),
+            )
+        except OpenZimMcpArchivePathError:
+            # Archive-level failure: the catch-all owns that envelope (it
+            # lists the archives that really are loaded).
+            raise
+        except OpenZimMcpValidationError as e:
+            return self._render_invalid_request(entry_path, e, "get binary content")
+        except Exception as e:
+            return self._render_not_found_recovery(entry_path, e, "get binary content")
 
     def _handle_suggestions(
         self,
@@ -2278,7 +2401,7 @@ class SimpleToolsHandler(
         zim_file_path: str,
         params: Dict[str, Any],
         options: Dict[str, Any],
-    ) -> str:
+    ) -> Union[str, ToolErrorPayload]:
         # A16 post-a16 D6: if the user wrote ``in namespace X`` but the
         # extractor (now strict) couldn't parse a valid single-letter
         # namespace, surface the same "Missing or Invalid Namespace"
@@ -2503,7 +2626,7 @@ class SimpleToolsHandler(
         zim_file_path: str,
         params: Dict[str, Any],
         options: Dict[str, Any],
-    ) -> Union[str, "_HandlerResult"]:
+    ) -> Union[str, "_HandlerResult", ToolErrorPayload]:
         """Route a search-intent query to the appropriate backend call.
 
         In ``compact=True`` mode, uses the structured ``search_zim_file_data``
@@ -2767,27 +2890,42 @@ class SimpleToolsHandler(
         synthetic = {
             "path": promoted_path,
             "title": promoted["title"],
-            "snippet": "(canonical title match)",
+            "snippet": CANONICAL_TITLE_MATCH_SNIPPET,
         }
-        # DD4 (beta, second pass): trim back to the requested limit so
-        # the splice doesn't push the result count off by one. The
-        # previous prepend produced 4 results for ``limit=3``; the
-        # rendered header then read "showing 1-4" with limit=3, a
-        # contract inconsistency. Drop the last BM25 result to make
-        # room for the canonical splice; the dropped result is the
-        # lowest-ranked of the BM25 set, so the displacement carries
-        # the least information loss.
-        # H12: copy page_info before mutating returned_count — the nested dict
-        # is shared with the cached payload (shallow copy above only duplicated
-        # the top level).
+        # The canonical row is an EXTRA, not a replacement for a ranked hit.
+        #
+        # DD4 (beta, second pass) trimmed ``[synthetic, *results]`` back to
+        # ``limit`` to keep the rendered "showing 1-N" line consistent with
+        # the requested page size. That traded a cosmetic inconsistency for
+        # silent data loss: the trim dropped the last BM25 hit, but neither
+        # resume mechanism was told. The renderer still advertises
+        # ``offset + limit`` and ``next_cursor`` still encodes
+        # ``offset + <pre-splice returned_count>``, so the displaced hit fell
+        # between the end of page 1 and the start of page 2 — reachable by no
+        # advertised offset at all. (Observed on the shipped corpus: ``search
+        # for biomass fuel``, ``limit=3`` lost ``A/Aviation_biofuel``.)
+        #
+        # Prepending without trimming is also what the filtered sibling
+        # ``search_with_filters_with_canonical_splice`` already does — it
+        # renders "showing 1-4 ... pass offset=3" for the same query — so this
+        # brings the two splice paths onto one contract rather than inventing
+        # a third.
+        #
+        # H12: copy page_info before mutating it — the nested dict is shared
+        # with the cached payload (the shallow copy above only duplicated the
+        # top level).
         page_info = dict(payload.get("page_info") or {})
-        requested_limit = page_info.get("limit") or len(results)
-        spliced = [synthetic, *results][:requested_limit]
+        spliced = [synthetic, *results]
         payload["results"] = spliced
-        # Keep ``page_info.returned_count`` consistent with the spliced
-        # length so renderers don't claim to show more rows than they
-        # actually do.
+        # ``returned_count`` counts rendered rows, so it now includes the
+        # synthetic one. That makes it unusable as "how far through the ranked
+        # stream this page went", which is what a resume point needs — so
+        # record that separately. ``limit`` is deliberately left alone: the
+        # page consumed exactly ``len(results)`` ranked rows, so the
+        # renderer's ``offset + limit`` still lands on the first row this page
+        # did not show.
         page_info["returned_count"] = len(spliced)
+        page_info["source_consumed"] = len(results)
         payload["page_info"] = page_info
         return payload
 
@@ -3138,23 +3276,43 @@ class SimpleToolsHandler(
         # *fewer* than 3 hits.
         search_limit = min(options.get("limit") or 3, 3)
         max_content_length = options.get("max_content_length") or 8000
+        # D42: the rendered weak-match page ends with ``pass offset=N for
+        # the next page``, but every call below used to pass a literal 0 —
+        # so the advertised continuation returned page 1 forever and hits
+        # 4+ were unreachable through this intent. Thread the caller's
+        # explicit offset into every search call — a cursor cannot reach
+        # here, since D44 rejects one on any intent outside
+        # ``_CURSOR_CONSUMING_INTENTS``, which tell_me_about is not in.
+        offset = int(options.get("offset", 0) or 0)
 
         try:
             payload = self.zim_operations.search_zim_file_data(
-                zim_file_path, topic, search_limit, 0
+                zim_file_path, topic, search_limit, offset
             )
         except Exception:
             # If the structured search fails, fall through to the legacy
             # rendered search so the caller still gets useful output.
             return self.zim_operations.search_zim_file(
-                zim_file_path, topic, search_limit, 0
+                zim_file_path, topic, search_limit, offset
             )
 
         results = payload.get("results", []) if isinstance(payload, dict) else []
         if not results:
             return self._swap_tell_me_about_recovery_hint(
                 self.zim_operations.search_zim_file(
-                    zim_file_path, topic, search_limit, 0
+                    zim_file_path, topic, search_limit, offset
+                ),
+                topic,
+            )
+        if offset > 0:
+            # A continuation request is walking the weak-match list the
+            # page-1 footer advertised. Auto-fetch / disambiguation are
+            # page-1 decisions: promoting page N's top hit to an article
+            # body here would turn "show me hits 4-6" into a surprise
+            # article dump, so render the requested page and stop.
+            return self._swap_tell_me_about_recovery_hint(
+                self.zim_operations.search_zim_file(
+                    zim_file_path, topic, search_limit, offset
                 ),
                 topic,
             )
@@ -3167,7 +3325,7 @@ class SimpleToolsHandler(
             if promoted is None:
                 return self._swap_tell_me_about_recovery_hint(
                     self.zim_operations.search_zim_file(
-                        zim_file_path, topic, search_limit, 0
+                        zim_file_path, topic, search_limit, offset
                     ),
                     topic,
                 )
@@ -3289,7 +3447,7 @@ class SimpleToolsHandler(
                     canonical_row: Dict[str, Any] = {
                         "path": canonical_path,
                         "title": canonical.get("title") or top_title,
-                        "snippet": "(canonical title match)",
+                        "snippet": CANONICAL_TITLE_MATCH_SNIPPET,
                     }
                     # ``SearchHit`` is a TypedDict; cast satisfies
                     # the type-checker since the synthetic row carries
@@ -3643,7 +3801,7 @@ class SimpleToolsHandler(
         zim_file_path: str,
         params: Dict[str, Any],
         options: Dict[str, Any],
-    ) -> str:
+    ) -> Union[str, ToolErrorPayload]:
         # A15 post-a15 P4-D3: ``walk namespace`` with a malformed
         # argument (multi-char ``AB``, digit ``1``, special ``_``, or
         # missing entirely) previously fell through to
@@ -3931,11 +4089,18 @@ class SimpleToolsHandler(
     ) -> str:
         entry_paths = params.get("entries") or []
         if not entry_paths:
+            # D50: teach both path shapes. zimit / warc2zim archives
+            # store domain-shaped paths, and that is what every other
+            # response's ``Path:`` line prints for them — pasting those
+            # back must work, and the example must show the shape the
+            # loaded archive actually uses.
             return (
                 "**Missing Entry Paths**\n\n"
                 "I couldn't extract entry paths from your query. "
-                "Use namespace/path syntax, e.g., "
-                "'fetch entries C/Photosynthesis C/Cell_biology'."
+                "Paste the `Path:` values other responses print, e.g., "
+                "'fetch entries C/Photosynthesis C/Cell_biology' or "
+                "'get articles medlineplus.gov/measles.html, "
+                "medlineplus.gov/rubella.html'."
             )
         entries = [
             {"zim_file_path": zim_file_path, "entry_path": p} for p in entry_paths
@@ -4424,6 +4589,85 @@ class SimpleToolsHandler(
             return basename_match or ci_basename_match
         except Exception:
             return None
+
+    # D45: ``search <archive> for <terms>``. ``_extract_search`` strips an
+    # optional ``for`` only when it sits right after the verb, so the
+    # archive name rode into the search terms (``Found ~2239 matches for
+    # "medlineplus for diabetes"``) and, with 2+ archives loaded and no
+    # path, the no-zim-file gate fired although the query named its
+    # target. The leading token must be at least three characters so a
+    # stray short word cannot prefix-match an archive; an optional
+    # ``archive`` / ``file`` / ``zim`` noun and a ``.zim`` suffix are
+    # tolerated because that is how people write archive names.
+    _SEARCH_ARCHIVE_HINT_RE = re.compile(
+        r"^(?:the\s+)?(?P<hint>[A-Za-z0-9][A-Za-z0-9_.\-]{2,})"
+        r"(?:\s+(?:archive|file|zim))?\s+for\s+(?P<terms>\S.*)$",
+        re.IGNORECASE | re.DOTALL,
+    )
+
+    def _apply_search_archive_hint(
+        self, params: Dict[str, Any], *, explicit_path: Optional[str] = None
+    ) -> Optional[str]:
+        """Resolve a leading ``<archive> for`` in the extracted search terms.
+
+        When the leading token names exactly one loaded archive (exact
+        basename, or an unambiguous case-insensitive basename prefix),
+        strip it from ``params["query"]`` and return the archive's real
+        path. Returns ``None`` — and leaves the terms untouched — when
+        the token matches no archive (it is a search term) or more than
+        one (the caller must disambiguate, so the gate still fires).
+
+        ``explicit_path`` wins for routing, so a hint naming a DIFFERENT
+        archive routes nothing: stripping it there searched the explicit
+        archive for truncated terms and echoed the truncation back as if
+        the caller had typed it. The token only leaves the terms when it
+        names the archive the search will actually run against.
+        """
+        terms = params.get("query")
+        if not isinstance(terms, str):
+            return None
+        match = self._SEARCH_ARCHIVE_HINT_RE.match(terms.strip())
+        if not match:
+            return None
+        resolved = self._match_archive_by_name(match.group("hint"))
+        if resolved is None:
+            return None
+        if explicit_path:
+            routed = self._resolve_zim_path(explicit_path) or explicit_path
+            if routed != resolved:
+                return None
+        params["query"] = match.group("terms").strip()
+        self._track("search_archive_hint_resolved")
+        return resolved
+
+    def _match_archive_by_name(self, hint: str) -> Optional[str]:
+        """Map a bare archive name to exactly one loaded archive path.
+
+        Tries the exact / case-insensitive basename resolver first (so a
+        full ``medlineplus.gov_en_all_2025-01.zim`` works), then a
+        case-insensitive basename-prefix match on the name without its
+        ``.zim`` suffix (``medlineplus`` → ``medlineplus.gov_en_all_…``).
+        Two or more prefix hits mean the name is ambiguous: return
+        ``None`` rather than guess.
+        """
+        exact = self._resolve_zim_path(hint)
+        if exact is not None:
+            return exact
+        stem = re.sub(r"\.zim$", "", hint.strip(), flags=re.IGNORECASE).lower()
+        if len(stem) < 3:
+            return None
+        try:
+            files = self.zim_operations.list_zim_files_data()
+        except Exception:
+            return None
+        hits: List[str] = []
+        for entry in files:
+            if not isinstance(entry, dict):
+                continue
+            real_path = str(entry.get("path", ""))
+            if real_path and Path(real_path).name.lower().startswith(stem):
+                hits.append(real_path)
+        return hits[0] if len(hits) == 1 else None
 
     def _auto_select_zim_file(self) -> Optional[str]:
         """Phase F: thin wrapper delegating to ``topic_preprocessing``.

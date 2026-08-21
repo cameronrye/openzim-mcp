@@ -184,7 +184,7 @@ class _NamespaceMixin:
         """Structured variant of ``list_namespaces``.
 
         Returns the same payload as ``list_namespaces`` but as a Python
-        dict, so MCP tool functions can hand it straight to FastMCP's
+        dict, so MCP tool functions can hand it straight to the SDK's
         structured-output path without the json.dumps + re-parse round
         trip the legacy string variant required.
 
@@ -660,7 +660,7 @@ class _NamespaceMixin:
         """Structured variant of ``browse_namespace``.
 
         Returns the result dict directly (not a JSON string) so MCP tools
-        can hand it straight to FastMCP's structured-content path.
+        can hand it straight to the SDK's structured-content path.
 
         Phase B contract: top-level ``results`` / ``next_cursor`` /
         ``total`` / ``done`` / ``page_info`` plus the ``namespace`` /
@@ -689,8 +689,12 @@ class _NamespaceMixin:
         # archive-access failures, so they surface as
         # OpenZimMcpValidationError to let the tool layer render a targeted
         # validation message.
+        # Same shape as the walk validator's message so the two modes of
+        # zim_browse reject an out-of-range limit in one style (D06).
         if limit < 1 or limit > 200:
-            raise OpenZimMcpValidationError("Limit must be between 1 and 200")
+            raise OpenZimMcpValidationError(
+                f"limit must be between 1 and 200 (provided: {limit})"
+            )
         if offset < 0:
             raise OpenZimMcpValidationError("Offset must be non-negative")
         if not namespace or len(namespace.strip()) == 0:
@@ -755,7 +759,7 @@ class _NamespaceMixin:
         from openzim_mcp.bundle import archive_stat_token
 
         cache_key = (
-            f"browse_ns_data:v2d:{validated_path}:"
+            f"browse_ns_data:v2e:{validated_path}:"
             f"{archive_stat_token(validated_path)}:{namespace}:"
             f"{limit}:{offset}:assets={include_assets}"
         )
@@ -1235,7 +1239,7 @@ class _NamespaceMixin:
                     present.append(path)
             except Exception as e:
                 logger.debug(f"has_entry_by_path probe failed for {path}: {e}")
-        return self._new_scheme_browse_payload(
+        payload = self._new_scheme_browse_payload(
             namespace=namespace,
             total=len(present),
             offset=offset,
@@ -1245,6 +1249,12 @@ class _NamespaceMixin:
             ),
             discovery_method="known_path_probe",
         )
+        # Resume by CANDIDATE rows consumed, not survivors: a row that drops
+        # during materialisation must still advance the cursor, or a dropped
+        # row is re-scanned every page (duplicates when a survivor shares the
+        # window; a never-advancing cursor when the whole window drops).
+        payload["scanned_count"] = len(present[offset : offset + limit])
+        return payload
 
     def _materialise_browse_entry(
         self, archive: Archive, entry_path: str, has_new_scheme: bool
@@ -1617,7 +1627,7 @@ class _NamespaceMixin:
         """Structured variant of ``walk_namespace``.
 
         Returns the result dict directly (not a JSON string) so MCP tools
-        can hand it straight to FastMCP's structured-content path.
+        can hand it straight to the SDK's structured-content path.
 
         Phase B contract: top-level ``results`` / ``next_cursor`` (opaque
         str) / ``total`` (always None — walk doesn't know the per-namespace

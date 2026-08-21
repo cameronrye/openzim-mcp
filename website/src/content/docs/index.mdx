@@ -9,7 +9,7 @@ sidebar_order: 1
 
 > **8-tool advanced surface.** A lean advanced surface of 8 composable tools — `zim_query`, `zim_search`, `zim_get`, `zim_get_section`, `zim_browse`, `zim_metadata`, `zim_links`, `zim_health` — keeps the advanced-mode wire footprint near ~24.3KB (down from ~36KB across 22 tools), clearing the [MCP Tax](https://www.mmntm.net/articles/mcp-context-tax) pain band (25–50KB schema) for small-model dispatch. Simple mode (`zim_query` only) gives natural-language clients a single tool. **Also built in:** archive-type presets that auto-tune retrieval per source (Wikipedia, Stack Exchange, …), inbound link discovery ("what links here"), and native libzim health/introspection via `zim_health(zim_file_path=...)` + `zim_metadata`. [Changelog →](https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md)
 >
-> Still running v1.x? Highlights for [v1.2.0](https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md#120-2026-05-06) and [v1.0.0](https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md#100-2026-05-03) remain documented in the changelog. The v1.x maintenance window closed when v2.5.0 shipped (2026-06-18); the 2.x line is now the only supported series. The `ghcr.io/cameronrye/openzim-mcp:1.3.0` image (the final v1.x release) stays available, but receives no further fixes.
+> Still running v1.x? Highlights for [v1.2.0](https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md#120-2026-05-06) and [v1.0.0](https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md#100-2026-05-03) remain documented in the changelog. The v1.x maintenance window closed when v2.5.0 shipped (2026-06-18); only the current major line is supported. The `ghcr.io/cameronrye/openzim-mcp:1.3.0` image (the final v1.x release) stays available, but receives no further fixes.
 
 ## What Makes OpenZIM MCP Different
 
@@ -23,7 +23,7 @@ OpenZIM MCP provides **intelligent, structured access** that LLMs need:
 - **Smart retrieval** — automatic fallback from direct path access to search-derived term resolution, with archive-scoped path-mapping cache and bounded redirect-chain following.
 - **Batch retrieval** — `zim_get(entry_paths=[...])` fetches up to 50 entries in one call with per-entry success/error reporting.
 - **MCP prompts** — pre-built workflows (`/research`, `/summarize`, `/explore`) orchestrate multi-step ZIM operations.
-- **MCP resources** — `zim://files`, `zim://{name}`, `zim://{name}/entry/{path}` integrate with MCP-aware client browsers and `@`-mention pickers; subscribe for live update notifications.
+- **MCP resources** — `zim://files`, `zim://{name}`, `zim://{name}/entry/{path}` integrate with MCP-aware client browsers and `@`-mention pickers; open a `subscriptions/listen` stream for live change notifications.
 - **Binary content** — `zim_get(binary=True)` extracts PDFs, images, and other embedded media for multi-agent workflows.
 
 ### Operations & Security
@@ -43,17 +43,18 @@ OpenZIM MCP provides **intelligent, structured access** that LLMs need:
 
 ## Project Status
 
-- **Version:** 2.7.0 {/* x-release-please-version */}
+- **Version:** 3.0.0 {/* x-release-please-version */}
 - **License:** MIT
 - **Python:** 3.12+
 - **Test Coverage:** 80%+
-- **Container:** `ghcr.io/cameronrye/openzim-mcp:2.7.0` + `:latest` (linux/amd64, linux/arm64) {/* x-release-please-version */}
+- **Container:** `ghcr.io/cameronrye/openzim-mcp:3.0.0` + `:latest` (linux/amd64, linux/arm64) {/* x-release-please-version */}
 
 ## Quick Links
 
 - **[GitHub Repository](https://github.com/cameronrye/openzim-mcp)**
 - **[CHANGELOG](https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md)** — version history
 - **[v1 → v2 migration table](https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md#migrating-from-v1x--v2-beta)** — the mechanical 22→8 mapping
+- **[What changed in v3.0.0?](/openzim-mcp/docs/faq/#what-changed-in-v300)** — the breaking changes for HTTP subscription clients and link-graph sidecars
 - **[Issues & Bug Reports](https://github.com/cameronrye/openzim-mcp/issues)**
 - **[Discussions](https://github.com/cameronrye/openzim-mcp/discussions)**
 - **[Releases](https://github.com/cameronrye/openzim-mcp/releases)**

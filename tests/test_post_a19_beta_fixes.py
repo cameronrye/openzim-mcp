@@ -51,6 +51,14 @@ from openzim_mcp.pagination import Cursor, archive_identity
 from openzim_mcp.simple_tools import SimpleToolsHandler
 
 
+def _body(out: object) -> str:
+    """Readable body of a handler result: the ``message`` of a
+    ``ToolErrorPayload`` envelope, or the markdown string itself."""
+    if isinstance(out, dict):
+        return str(out.get("message", ""))
+    return str(out)
+
+
 def _encode_cursor(tool: str, **state_fields: Any) -> str:
     """Encode a v2 cursor for ``tool`` from arbitrary ``s.*`` fields.
 
@@ -89,9 +97,9 @@ class TestP1D1SearchCrossToolCursorRejection:
             zim_file_path="/x.zim",
             options={"compact": True, "cursor": cursor_token},
         )
-        assert "Cursor / Tool Mismatch" in out
-        assert "walk_namespace" in out
-        assert "search_zim_file" in out
+        assert "Cursor / Tool Mismatch" in _body(out)
+        assert "walk_namespace" in _body(out)
+        assert "search_zim_file" in _body(out)
         # The backend call MUST NOT have happened — the guard fires
         # before any search routing.
         assert not mock.search_zim_file_data.called
@@ -110,9 +118,9 @@ class TestP1D1SearchCrossToolCursorRejection:
             zim_file_path="/x.zim",
             options={"compact": True, "cursor": cursor_token},
         )
-        assert "Cursor / Tool Mismatch" in out
-        assert "browse_namespace" in out
-        assert "search_zim_file" in out
+        assert "Cursor / Tool Mismatch" in _body(out)
+        assert "browse_namespace" in _body(out)
+        assert "search_zim_file" in _body(out)
         assert not mock.search_zim_file_data.called
 
     def test_same_tool_search_cursor_round_trips(self) -> None:
@@ -157,7 +165,7 @@ class TestP1D1SearchCrossToolCursorRejection:
             zim_file_path="/x.zim",
             options={"compact": True, "cursor": cursor_token},
         )
-        assert "Cursor / Tool Mismatch" not in out
+        assert "Cursor / Tool Mismatch" not in _body(out)
         # Backend WAS called.
         assert mock.search_zim_file_data.called
 
@@ -178,7 +186,7 @@ class TestP1D1SearchCrossToolCursorRejection:
             zim_file_path="/x.zim",
             options={"compact": True},
         )
-        assert "Cursor / Tool Mismatch" not in out
+        assert "Cursor / Tool Mismatch" not in _body(out)
         assert mock.search_zim_file_data.called
 
 
@@ -214,9 +222,9 @@ class TestP1D2FilteredSearchAndLinksCrossToolCursorRejection:
             zim_file_path="/x.zim",
             options={"compact": True, "cursor": cursor_token},
         )
-        assert "Cursor / Tool Mismatch" in out
-        assert "walk_namespace" in out
-        assert "search_with_filters" in out
+        assert "Cursor / Tool Mismatch" in _body(out)
+        assert "walk_namespace" in _body(out)
+        assert "search_with_filters" in _body(out)
         # No backend call.
         assert not mock.search_with_filters_with_canonical_splice.called
 
@@ -235,9 +243,9 @@ class TestP1D2FilteredSearchAndLinksCrossToolCursorRejection:
             zim_file_path="/x.zim",
             options={"compact": True, "cursor": cursor_token},
         )
-        assert "Cursor / Tool Mismatch" in out
-        assert "walk_namespace" in out
-        assert "extract_article_links" in out
+        assert "Cursor / Tool Mismatch" in _body(out)
+        assert "walk_namespace" in _body(out)
+        assert "extract_article_links" in _body(out)
         # No backend call.
         assert not mock.extract_article_links_data.called
         assert not mock.extract_article_links.called
@@ -268,7 +276,7 @@ class TestP1D2FilteredSearchAndLinksCrossToolCursorRejection:
             zim_file_path="/x.zim",
             options={"compact": True},
         )
-        assert "Cursor / Tool Mismatch" not in out
+        assert "Cursor / Tool Mismatch" not in _body(out)
         # In compact mode, search_with_filters_data is called (structured path);
         # search_with_filters_with_canonical_splice is the non-compact path.
         called_either = (

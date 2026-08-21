@@ -38,6 +38,15 @@ DEFAULT_SEARCH_LIMIT = CONTENT.SEARCH_LIMIT
 # ``SearchDefaults.MAX_RESULT_LIMIT``).
 MAX_SEARCH_RESULT_LIMIT = SEARCH.MAX_RESULT_LIMIT
 
+# Front-door cap on a caller-supplied free-text ``query`` (zim_query and
+# zim_search). The intent parser and the misspelling map run regexes over it,
+# and CPython's ``re`` holds the GIL for the whole match, so ``safe_regex_*``'s
+# nominal per-pattern timeout cannot interrupt a pathological input — a length
+# cap at the front door is the only real bound on that work. It also bounds
+# response amplification: the query is echoed back in the result. No
+# legitimate query comes close (the longest in the test corpus is ~200 chars).
+MAX_QUERY_LENGTH = 4096
+
 # Cache configuration
 DEFAULT_CACHE_SIZE = CACHE.MAX_SIZE
 DEFAULT_CACHE_TTL = CACHE.TTL_SECONDS
@@ -61,6 +70,19 @@ REGEX_TIMEOUT_SECONDS = TIMEOUTS.REGEX_SECONDS
 
 # Main page display
 DEFAULT_MAIN_PAGE_TRUNCATION = CONTENT.MAIN_PAGE_TRUNCATION
+
+# Sentinel ``snippet`` on the synthetic row that the canonical-title splice
+# prepends to a search page. The title index computes no snippet, so this
+# placeholder stands in — and the renderers key on it to emit a "Match type:
+# canonical title match" badge instead of a snippet line.
+#
+# It is a shared constant rather than a repeated literal because it is
+# load-bearing in three unrelated modules: the two splice sites that mint it
+# (simple_tools, zim.search), the two renderers that badge it, and the
+# reranker, which must NOT feed it to the cross-encoder as a passage — it
+# scores ``snippet or path``, and a placeholder scores far below every real
+# hit, sorting the row the splice exists to surface first into last place.
+CANONICAL_TITLE_MATCH_SNIPPET = "(canonical title match)"
 
 # Cache performance thresholds
 CACHE_LOW_HIT_RATE_THRESHOLD = CACHE_PERFORMANCE.LOW_HIT_RATE
@@ -103,6 +125,7 @@ __all__ = [
     "DEFAULT_MAX_CONTENT_LENGTH",
     "DEFAULT_SEARCH_LIMIT",
     "MAX_SEARCH_RESULT_LIMIT",
+    "MAX_QUERY_LENGTH",
     "DEFAULT_CACHE_SIZE",
     "DEFAULT_CACHE_TTL",
     "DEFAULT_MAX_BINARY_SIZE",
@@ -115,6 +138,7 @@ __all__ = [
     "INPUT_LIMIT_PARTIAL_QUERY",
     "REGEX_TIMEOUT_SECONDS",
     "DEFAULT_MAIN_PAGE_TRUNCATION",
+    "CANONICAL_TITLE_MATCH_SNIPPET",
     "CACHE_LOW_HIT_RATE_THRESHOLD",
     "CACHE_HIGH_HIT_RATE_THRESHOLD",
     "NAMESPACE_MAX_SAMPLE_SIZE",

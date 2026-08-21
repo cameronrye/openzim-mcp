@@ -155,6 +155,21 @@ def register(server: "OpenZimMcpServer") -> None:
             if err is not None:
                 return err
 
+            # Oversize batches are rejected by the data layer before any
+            # entry is read — reject them here instead, before the remainder
+            # debit, so the zero-work failure costs the flat price and comes
+            # back as a structured envelope rather than a generic one after
+            # draining the bucket.
+            if entry_paths is not None and len(entry_paths) > MAX_BATCH_SIZE:
+                return tool_error(
+                    operation="invalid_batch_size",
+                    message=(
+                        f"`entry_paths` accepts at most {MAX_BATCH_SIZE} "
+                        f"paths per call (provided: {len(entry_paths)}); "
+                        f"split into multiple batches."
+                    ),
+                )
+
             # Dispatchable batch: charge the rest of the per-entry cost. The
             # flat table cost was already debited above, so the two together
             # come to the clamped batch price computed there.
@@ -166,7 +181,14 @@ def register(server: "OpenZimMcpServer") -> None:
                         return rl
 
             if main_page:
-                return await ops.get_main_page_data(zim_file_path, compact=compact)
+                # ``max_content_length`` is documented as the body cap and is
+                # not on this branch's forbidden list, so it must apply here
+                # too rather than being dropped on the floor.
+                return await ops.get_main_page_data(
+                    zim_file_path,
+                    compact=compact,
+                    max_content_length=max_content_length,
+                )
             if binary:
                 assert entry_path is not None  # validator guarantees this
                 # ``max_content_length`` caps the fetched BYTES here — it maps

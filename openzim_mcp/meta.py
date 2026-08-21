@@ -49,16 +49,26 @@ def _get_encoder() -> Any:
 
 def _raw_tokens_est(rendered: str) -> Optional[int]:
     """Tokenize ``rendered``. Returns ``None`` when the tokenizer is
-    unavailable so callers can distinguish "couldn't estimate" from
-    "zero tokens" — spec §5 requires omitting ``tokens_est`` on
-    tiktoken init failure rather than emitting a misleading 0.
+    unavailable or the encode fails, so callers can distinguish
+    "couldn't estimate" from "zero tokens" — spec §5 requires omitting
+    ``tokens_est`` on tiktoken init failure rather than emitting a
+    misleading 0.
     """
     if not rendered:
         return 0
     encoder = _get_encoder()
     if encoder is None:
         return None
-    return len(encoder.encode(rendered))
+    try:
+        # ``disallowed_special=()`` treats cl100k_base's special-token
+        # literals (``<|endoftext|>`` and friends) as ordinary text.
+        # tiktoken's default would raise on them, and they occur naturally
+        # in article bodies and user queries about tokenizers — a
+        # best-effort budget estimate must never fail the tool call.
+        return len(encoder.encode(rendered, disallowed_special=()))
+    except Exception as e:
+        logger.warning("token estimation failed; omitting tokens_est: %s", e)
+        return None
 
 
 def tokens_est(rendered: str) -> int:

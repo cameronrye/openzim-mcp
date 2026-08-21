@@ -293,6 +293,22 @@ class QueryRewriteConfig(BaseModel):
         ),
     )
 
+    @field_validator("misspelling_map_path", "misspelling_exclusion_path")
+    @classmethod
+    def normalize_data_path(cls, v: Path | None) -> Path | None:
+        """Resolve a data-file override and reject one that isn't readable.
+
+        The rewrite loader reads these lazily on the first query, so a
+        typo'd path would otherwise surface as a mid-request failure (or,
+        before the override was honored at all, as silence).
+        """
+        if v is None:
+            return None
+        resolved = Path(v).expanduser().resolve()
+        if not resolved.is_file():
+            raise ValueError(f"query_rewrite data file not found: {resolved}")
+        return resolved
+
 
 class LoggingConfig(BaseModel):
     """Logging configuration."""
@@ -401,14 +417,36 @@ class OpenZimMcpConfig(BaseSettings):
         le=60,
         description="Polling interval for resource subscriptions (seconds).",
     )
+    resource_cache_ttl_seconds: int = Field(
+        default=3600,
+        ge=0,
+        le=86400,
+        description=(
+            "How long (seconds) a client may reuse a cached read of a "
+            "`zim://{name}` overview before asking again. A ZIM file is "
+            "sealed, so the overview changes only when the file itself is "
+            "replaced, which subscribed clients hear about immediately as a "
+            "`resources/updated` notification for that URI. A client that "
+            "is not subscribed (stdio, or HTTP without an open "
+            "`subscriptions/listen` stream) can serve a stale overview for "
+            "up to this long after a replacement. Per-entry reads "
+            "(`zim://{name}/entry/{path}`) stay on the watcher-bounded TTL: "
+            "no notification is ever published for an entry URI, so a "
+            "longer promise could not be invalidated. Set to 0 to turn the "
+            "override off, which puts overview reads back on the same "
+            "watcher-bounded TTL as `zim://files`."
+        ),
+    )
     subscriptions_enabled: bool = Field(
         default=True,
         description=(
             "Master switch for resource subscriptions. When False, the "
-            "polling task is not started and the subscribe/unsubscribe "
-            "handlers are not registered, so `resources/subscribe` "
-            "requests fail with method-not-found and the capability is "
-            "not advertised."
+            "polling watcher is not started and the `subscriptions/listen` "
+            "handler is not registered, so listen requests fail with "
+            "method-not-found and the capability is not advertised. Only "
+            "meaningful on the HTTP transport: the watcher runs under the "
+            "HTTP lifespan, so a stdio server withholds the capability "
+            "regardless of this setting."
         ),
     )
     presets_override_path: Path | None = Field(
@@ -506,6 +544,16 @@ class OpenZimMcpConfig(BaseSettings):
                 "variable to run without auth (localhost only), or set a real "
                 "secret value."
             )
+        if v is not None and not v.get_secret_value().isascii():
+            # Starlette decodes header bytes as latin-1, so a client that
+            # sends a non-ASCII token as UTF-8 bytes is mojibake-decoded and
+            # always 401s while a latin-1-encoding client authenticates — a
+            # confusing client-dependent lockout, never a working setup.
+            raise OpenZimMcpConfigurationError(
+                "OPENZIM_MCP_AUTH_TOKEN contains non-ASCII characters. HTTP "
+                "header encoding makes such a token match or fail depending "
+                "on the client's byte encoding — choose an ASCII secret."
+            )
         return v
 
     def setup_logging(self) -> None:
@@ -550,6 +598,7 @@ class OpenZimMcpConfig(BaseSettings):
             "cors_origins": sorted(self.cors_origins),
             "allowed_hosts": sorted(self.allowed_hosts),
             "watch_interval_seconds": self.watch_interval_seconds,
+            "resource_cache_ttl_seconds": self.resource_cache_ttl_seconds,
             "subscriptions_enabled": self.subscriptions_enabled,
             "rate_limit_enabled": self.rate_limit.enabled,
             "rate_limit_rps": self.rate_limit.requests_per_second,

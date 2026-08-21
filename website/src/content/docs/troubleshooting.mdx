@@ -21,7 +21,7 @@ Before diving into specific failure modes — v2 changed how errors come back fr
 }
 ```
 
-Check for it with `isinstance(result, dict) and result.get("error") is True`. Since v2.6 the server also sets the MCP `isError` flag on these — `EnvelopeAwareFastMCP.call_tool` recognises the envelope on the way out and returns a `CallToolResult` with `isError=True` — so a client that branches on `isError` works too. No tool advertises an `outputSchema`, so nothing arrives in `structuredContent`; the envelope is JSON in the response's text `content` block. Common error `operation` values you'll see in this guide:
+Check for it with `isinstance(result, dict) and result.get("error") is True`. Since v2.6 the server also sets the MCP `isError` flag on these — `EnvelopeAwareMCPServer.call_tool` recognises the envelope on the way out and returns a `CallToolResult` with `isError=True` — so a client that branches on `isError` works too. No tool advertises an `outputSchema`, so nothing arrives in `structuredContent`; the envelope is JSON in the response's text `content` block. Common error `operation` values you'll see in this guide:
 
 - `invalid_path_combination` — `zim_get` got an impossible branch: `entry_path` + `entry_paths`, `entry_paths` + a non-`full` `view`, `entry_paths` + `content_offset`, `binary` + `entry_paths`/`main_page`/a non-`full` `view`, `binary` without `entry_path`, `main_page` + a path or a non-`full` `view`, or no selector at all
 - `invalid_view` — `zim_get` got a `view` outside `{full, summary, toc, structure}`
@@ -29,7 +29,7 @@ Check for it with `isinstance(result, dict) and result.get("error") is True`. Si
 - `invalid_direction` / `invalid_kind` — `zim_links` got a `direction` outside `{outbound, inbound, related}`, or (on `direction="outbound"`) a `kind` outside `{internal, external, media}`. `zim_links` never emits `invalid_mode`.
 - `invalid_section` — `zim_get_section` got an empty/missing `section_id`
 - `invalid_content_offset` — `zim_get` / `zim_query` got a negative `content_offset`
-- `invalid_limit` — `zim_search` / `zim_query` got a `limit` below 1, or above the cap (50 for `mode="title"` / `mode="suggest"`, 1000 otherwise)
+- `invalid_limit` — `zim_search` / `zim_query` got a `limit` below 1, or above the cap (50 for `mode="title"` / `mode="suggest"` and for `cross_file=True`; 100 for `fulltext` with `namespace`/`content_type` filters; 1000 for plain single-archive `fulltext`)
 - `invalid_offset` — `zim_search` / `zim_query` got a negative `offset` (`offset=0` is the valid default)
 - `invalid_max_content_length` — `zim_get` / `zim_query` got a `max_content_length` below 1 (`zim_search` has no such parameter)
 - `invalid_combination` — `zim_search` got mutually exclusive arguments (any `cursor`, a non-zero `offset` outside single-archive fulltext, `cross_file` + `zim_file_path`, `mode="suggest"` + `cross_file`, or `namespace`/`content_type` filters + `cross_file`)
@@ -345,7 +345,7 @@ Bearer token missing or wrong. Note `OPTIONS /mcp` is **not** exempt from auth (
 
 ### Browser CORS errors when resuming sessions
 
-`Mcp-Session-Id` is in the server's `allow_headers` and `expose_headers` since v1.0. If you have a reverse proxy in front that strips this header, sessions can't resume.
+`Mcp-Session-Id` is in the server's `allow_headers` and `expose_headers` since v1.0, and stays there for clients on the `initialize` handshake. If you have a reverse proxy in front that strips this header, their sessions can't resume. A 2026-07-28 client has no session to resume — it needs `MCP-Protocol-Version`, `Mcp-Method`, and (for `tools/call`) `Mcp-Name` to survive the proxy instead; all three are in `allow_headers`.
 
 ### `OPENZIM_MCP_CORS_ORIGINS` rejected at startup
 
@@ -368,7 +368,7 @@ Your `/etc/hosts` maps `localhost` away from `127.0.0.1`. The server emits a war
 
 ### `zim://wikipedia/entry/A/Climate_change` not found
 
-Clients MUST URL-encode `/` as `%2F` in the path segment because FastMCP's URI template engine treats `/` as a segment separator. Correct form:
+Clients MUST URL-encode `/` as `%2F` in the path segment because the SDK's URI template engine treats `/` as a segment separator. Correct form:
 
 ```
 zim://wikipedia/entry/A%2FClimate_change
@@ -380,10 +380,13 @@ A literal slash will fail to route. Other RFC 3986 reserved characters in the pa
 
 ### Subscriptions never fire
 
-- Check `OPENZIM_MCP_SUBSCRIPTIONS_ENABLED` — set to `false` disables the watcher entirely.
+- Check `OPENZIM_MCP_SUBSCRIPTIONS_ENABLED` — set to `false` disables the watcher and withholds the capability: `subscriptions/listen` fails with method-not-found, so an *acknowledged* listen actually proves the subscription gate is open.
+- Notifications are published only under the HTTP transport (`--transport http`). On stdio and SSE the capability is not advertised and a listen request fails with method-not-found.
+- Check what your client asked for. A `.zim` appearing or disappearing publishes `notifications/resources/list_changed` (opt in with `resourcesListChanged: true`); only an in-place replacement publishes `notifications/resources/updated`, and only for that archive's own `zim://{name}` URI. Listing `zim://files` under `resourceSubscriptions` never fires.
 - Tune `OPENZIM_MCP_WATCH_INTERVAL_SECONDS` (default 5, range 1-60). Slower poll = longer detection latency.
-- Detection is mtime-based — same-size archive replacement is detected via mtime change.
-- A subscriber that doesn't respond within 5 seconds is treated as dead and evicted from the registry; if your client is slow, increase its response timeout or process notifications asynchronously.
+- Detection compares mtime **and** size — same-size archive replacement is caught via the mtime change, same-mtime rewrites via the size change.
+- A client that stops reading its stream overruns the SDK's per-stream event backlog and has the stream ended; process notifications asynchronously and re-listen if the stream closes. There is no replay, so re-read the resource after re-listening.
+- `resources/subscribe` was removed by the 2026-07-28 revision and is not served on this build — it answers `-32601 Method not found`. A client that only speaks the `initialize` handshake cannot receive change notifications at all.
 
 ## Configuration errors
 
@@ -440,7 +443,7 @@ When reporting issues, include:
 
 - **Operating system** and version
 - **Python version**: `python --version`
-- **OpenZIM MCP version**: `python -c "import openzim_mcp; print(openzim_mcp.__version__)"` or check `zim_health` → `.configuration.configuration.config_hash` (the outer key is the block, the inner one the report) and the MCP `serverInfo.version` (reads from `importlib.metadata`; reports openzim-mcp's actual version, not the FastMCP SDK default)
+- **OpenZIM MCP version**: `python -c "import openzim_mcp; print(openzim_mcp.__version__)"` or check `zim_health` → `.configuration.configuration.config_hash` (the outer key is the block, the inner one the report) and the MCP `serverInfo.version` (reads from `importlib.metadata`; reports openzim-mcp's actual version, not the MCP SDK default)
 - **ZIM file details**: Size, source, name
 - **Error messages**: Full error text
 - **Configuration**: MCP client config (remove sensitive paths)
@@ -450,4 +453,4 @@ When reporting issues, include:
 
 **Still having issues?** [Open an issue](https://github.com/cameronrye/openzim-mcp/issues) with detailed information about your problem.
 
-*The v1.x maintenance window closed when v2.5.0 shipped (2026-06-18); the 2.x line is the only supported series. See [CHANGELOG](https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md) for the v1 → v2 migration table.*
+*The v1.x maintenance window closed when v2.5.0 shipped (2026-06-18); only the current major line is supported — see [SECURITY.md](https://github.com/cameronrye/openzim-mcp/blob/main/SECURITY.md) for the policy. The [CHANGELOG](https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md) carries the v1 → v2 migration table and the v3.0.0 breaking-changes entry.*

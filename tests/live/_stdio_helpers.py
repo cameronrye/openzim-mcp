@@ -14,7 +14,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 
 def send_msg(proc: subprocess.Popen, msg: Dict[str, Any]) -> None:
@@ -98,10 +98,68 @@ def shutdown(proc: subprocess.Popen) -> None:
                     stream.close()
 
 
+def structured(result: Dict[str, Any]) -> Dict[str, Any]:
+    """Unwrap a tool payload from either envelope slot.
+
+    No tool advertises an ``outputSchema``, so nothing arrives in
+    ``structuredContent`` and every payload is JSON in a text block (see
+    ``openzim_mcp.tool_schemas``). Reading only ``structuredContent``
+    silently yields ``{}``, which turns every downstream assertion into a
+    comparison against an empty dict rather than a failure anyone can read.
+    """
+    inner = result.get("structuredContent")
+    if isinstance(inner, dict) and inner:
+        unwrapped = inner.get("result", inner)
+        return unwrapped if isinstance(unwrapped, dict) else {}
+    for block in result.get("content") or []:
+        text = block.get("text") if isinstance(block, dict) else None
+        if not isinstance(text, str):
+            continue
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict):
+            unwrapped = parsed.get("result", parsed)
+            return unwrapped if isinstance(unwrapped, dict) else parsed
+    return {}
+
+
+def dispatch_failure(result: Dict[str, Any]) -> Optional[str]:
+    """Return the message when ``result`` is a dispatch-level failure.
+
+    Two different things arrive as ``isError``. A *domain* error — no such
+    entry, unknown section id — carries a JSON ``ToolErrorPayload`` body
+    that callers are meant to inspect and sometimes tolerate. A *dispatch*
+    failure — a tool name the server does not serve, an argument its schema
+    rejects — carries a bare string instead.
+
+    The distinction matters because these tests funnel an unparseable
+    payload into ``pytest.skip``. Without it a renamed tool reads as "this
+    archive lacks the data", so the module keeps reporting green while
+    testing nothing: exactly how ``get_section``/``walk_namespace`` went on
+    being called for a whole release after the surface became ``zim_*``.
+    """
+    if not result.get("isError"):
+        return None
+    if structured(result):
+        return None
+    for block in result.get("content") or []:
+        text = block.get("text") if isinstance(block, dict) else None
+        if isinstance(text, str) and text.strip():
+            return text
+    return "tool call failed with an empty error body"
+
+
 def call_tool(
     proc: subprocess.Popen, msg_id: int, tool: str, **args: Any
 ) -> Dict[str, Any]:
-    """Issue a generic ``tools/call`` and return the structured ``result`` block."""
+    """Issue a generic ``tools/call`` and return the structured ``result`` block.
+
+    Raises ``AssertionError`` on a dispatch failure so a stale tool name
+    fails loudly here instead of being mistaken for missing archive data
+    further down. Domain errors pass through untouched.
+    """
     send_msg(
         proc,
         {
@@ -112,4 +170,12 @@ def call_tool(
         },
     )
     resp = recv_until(proc, msg_id)
-    return resp.get("result", {})
+    if "error" in resp and "result" not in resp:
+        raise AssertionError(
+            f"tools/call {tool!r} failed at the protocol level: {resp['error']}"
+        )
+    result = resp.get("result", {})
+    failure = dispatch_failure(result)
+    if failure is not None:
+        raise AssertionError(f"tools/call {tool!r} was not dispatched: {failure}")
+    return result

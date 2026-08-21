@@ -27,7 +27,8 @@ ALIASES: callers may say "search", "find", "lookup", or "autocomplete".
 All route through THIS tool — pick the matching `mode`.
 
 PARAMETERS:
-  query        REQUIRED. The user's search query.
+  query        REQUIRED. Plain terms; AND/OR/NOT, quotes and
+               wildcards are not parsed (matched as literal words).
   mode         One of {"fulltext", "title", "suggest"}. Default
                "fulltext".
   zim_file_path Optional. Omit to auto-select the single loaded
@@ -40,17 +41,16 @@ PARAMETERS:
                Silently ignored in other modes.
   content_type Only valid in mode="fulltext". Restricts search to
                one MIME bucket (e.g. "text/html").
-  limit        Maximum results (cap 1000; 50 for title/suggest).
+  limit        Max results; cap 50 title/suggest/cross_file, 100 filtered, else 1000.
   offset       Pagination offset (default 0); single-archive
-               fulltext only.
+               fulltext only. Next page: offset +
+               page_info.source_consumed (else returned_count).
   cursor       Unsupported; page fulltext via `offset`.
 
 RESPONSE:
-  Mode-dependent dict with a `results` array. fulltext rows carry
-  `path`, `title`, `snippet`; title rows carry `path`, `title`,
-  `score` (1.0 exact, <=0.95 fuzzy) — pass `path` as `entry_path`
-  to `zim_get`/`zim_links`. cross_file=True returns SearchAllResponse
-  whose `results[]` are per-archive wrappers; hits nest under
+  fulltext rows carry `path`, `title`, `snippet`; title rows carry
+  `path`, `title`, `score` — pass `path` as `entry_path` to
+  `zim_get`. cross_file=True nests hits under
   `results[].result.results`. suggest items are `{text, path, type}`.
   Title-mode `_meta.promotion_applied` is True when a candidate was
   hoisted; False with a `hint` when cross-archive blocked it.

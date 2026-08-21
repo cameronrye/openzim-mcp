@@ -35,7 +35,12 @@ _ALLOWED_DIR = tempfile.mkdtemp(prefix="openzim_mcp_schema_budget_")
 # params for the bucket-reachability and binary-discovery fixes. That nudges
 # the advanced surface just past 25KB, so the total cap and those two
 # allocations are raised to match the re-snapshotted footprint.
-TOTAL_CAP = 25_500
+#
+# 3.0.0: the cap is the pain band itself, 25KiB, now that ``_measure_tools``
+# counts the bytes that actually ship rather than ``json.dumps`` padding. The
+# allocations below are unchanged and still measured against the same tools,
+# so every per-tool ceiling simply gained the padding back as real headroom.
+TOTAL_CAP = 25 * 1024
 ALLOCATION = {
     "zim_query": 6_500,
     "zim_search": 4_200,
@@ -57,6 +62,15 @@ def _measure_tools(mode: str) -> dict[str, int]:
     inside the pain band this cap exists to keep it out of — while this
     function measured 24.8KB and the budget stayed green. Anything the client
     receives has to be counted, or the cap is measuring a number nobody pays.
+
+    The same rule cuts the other way, which is why the separators are pinned.
+    ``json.dumps`` defaults to ``", "`` and ``": "``, and the wire uses neither
+    — pydantic emits compact JSON. Counting a space after every comma and colon
+    inflated the measurement by ~620 bytes across the eight advanced tools, so
+    the budget read 25,499 of 25,500 and stood one byte from tripping on a
+    surface that actually costs 24,881 bytes on the wire, envelope included.
+    A cap that fails on padding nobody transmits is measuring a number nobody
+    pays just as surely as one that skips a field they do.
     """
     cfg = OpenZimMcpConfig(allowed_directories=[_ALLOWED_DIR], tool_mode=mode)
     srv = OpenZimMcpServer(cfg)
@@ -69,7 +83,7 @@ def _measure_tools(mode: str) -> dict[str, int]:
         }
         if tool.output_schema is not None:
             payload["outputSchema"] = tool.output_schema
-        measured[name] = len(json.dumps(payload).encode())
+        measured[name] = len(json.dumps(payload, separators=(",", ":")).encode())
     return measured
 
 
@@ -81,6 +95,32 @@ def test_advanced_total_under_cap():
         "Either trim a tool's description or redistribute ALLOCATION; "
         "the total is the hard cap (below 25KB MCP Tax pain band)."
     )
+
+
+def test_measurement_counts_wire_bytes_not_serializer_padding():
+    """The budget must count what ships, not ``json.dumps`` whitespace.
+
+    ``json.dumps`` defaults to ``", "``/``": "`` separators; the wire is
+    compact. Counting the padding put the total one byte from its cap on a
+    surface with ~600 bytes of real headroom, which would have failed the
+    next description edit for a cost no client ever pays.
+    """
+    cfg = OpenZimMcpConfig(allowed_directories=[_ALLOWED_DIR], tool_mode="advanced")
+    srv = OpenZimMcpServer(cfg)
+    measured = _measure_tools("advanced")
+    for name, tool in srv.mcp._tool_manager._tools.items():
+        payload = {
+            "name": name,
+            "description": tool.description,
+            "inputSchema": tool.parameters,
+        }
+        if tool.output_schema is not None:
+            payload["outputSchema"] = tool.output_schema
+        padded = len(json.dumps(payload).encode())
+        assert measured[name] < padded, (
+            f"{name} is being measured with the padded serializer "
+            f"({measured[name]} == {padded}); the wire emits compact JSON."
+        )
 
 
 def test_per_tool_allocations():

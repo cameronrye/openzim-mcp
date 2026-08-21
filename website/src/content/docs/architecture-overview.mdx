@@ -111,7 +111,7 @@ openzim_mcp/
 ├── main.py                  # CLI entry — reads --mode/--transport/--host/--port
 ├── server.py                # OpenZimMcpServer + DI wiring + tool registration
 ├── http_app.py              # Streamable-HTTP / SSE Starlette app, auth, CORS, /healthz, /readyz
-├── subscriptions.py         # MtimeWatcher + SubscriberRegistry (resource subscriptions)
+├── subscriptions.py         # MtimeWatcher + publish_change onto the SDK's SubscriptionBus
 ├── simple_tools.py          # zim_query NL handler (Simple mode)
 ├── intent_parser.py         # NL intent → underlying-tool routing
 ├── config.py                # OpenZimMcpConfig (pydantic-settings)
@@ -127,7 +127,7 @@ openzim_mcp/
 ├── constants.py             # cross-module constants (input limits, thresholds)
 ├── tool_schemas.py          # per-tool response TypedDicts (tools annotate -> Any, no outputSchema)
 ├── responses.py             # tool_error() + ToolErrorPayload: {error, operation, message, context?} + extras
-├── mcp_envelope.py          # EnvelopeAwareFastMCP — returned error envelope -> isError=True
+├── mcp_envelope.py          # EnvelopeAwareMCPServer — returned error envelope -> isError=True
 ├── zim_operations.py        # back-compat shim — re-exports from zim/
 ├── zim/                     # ZIM operations package
 │   ├── __init__.py
@@ -169,7 +169,7 @@ content_processor → ContentProcessor(config.content)
 zim_operations    → ZimOperations(config, path_validator, cache, content_processor)
 async_zim_ops     → AsyncZimOperations(zim_operations)
 rate_limiter      → RateLimiter(config.rate_limit)
-subscriber_reg    → SubscriberRegistry()  (only when subscriptions_enabled)
+subscription_bus  → InMemorySubscriptionBus()  (only when subscriptions_enabled and transport='http')
 simple_tools_h    → SimpleToolsHandler(zim_operations, async_zim_operations)
 ```
 
@@ -181,21 +181,21 @@ Owns streamable-HTTP and legacy-SSE concerns so `server.py` stays focused on MCP
 
 - **Starlette app** with `/healthz` (liveness — always 200) and `/readyz` (returns 503 if no allowed directory is readable).
 - **`BearerTokenAuthMiddleware`** — timing-safe `hmac.compare_digest`; never logs the attempted token; `OPTIONS` is *not* exempt; `/healthz`/`/readyz` are.
-- **CORS** — explicit allow-list via `apply_cors_middleware`; wildcard `*` rejected at config-load time. `Mcp-Session-Id` is in `allow_headers` and `expose_headers` so browser clients can resume sessions.
+- **CORS** — explicit allow-list via `apply_cors_middleware`; wildcard `*` rejected at config-load time. The header allow-list is the union of both protocol eras the endpoint serves: `Mcp-Session-Id` and `Last-Event-ID` are kept for browser-based handshake-era clients (2026-07-28 removed sessions and stream resumption), while `Mcp-Method` and `Mcp-Name` are what a 2026-07-28 client must send on every POST.
 - **`check_safe_startup`** — refuses to bind a non-loopback host without an auth token (HTTP) or any non-loopback host (SSE has no auth middleware).
-- **Lifespan wrapping** — the subscription watcher is started/stopped via a wrapper around FastMCP's own lifespan context (FastMCP's `streamable_http_app()` supplies its own custom lifespan, which means `add_event_handler('startup', …)` is silently a no-op).
+- **Lifespan wrapping** — the subscription watcher is started/stopped via a wrapper around the SDK's own lifespan context (`streamable_http_app()` supplies its own custom lifespan, which means `add_event_handler('startup', …)` is silently a no-op).
 
 See [HTTP and Docker deployment](/openzim-mcp/docs/http-and-docker-deployment/) for operator-level guidance.
 
 ### Subscriptions (`subscriptions.py`)
 
-Polling-based mtime watcher:
+Polling-based mtime watcher, plus the mapping from its change kinds onto MCP notifications. Delivery belongs to the SDK: clients opt in with `subscriptions/listen`, and the SDK's `ListenHandler` owns the listener registry, per-stream filtering, backpressure, and teardown.
 
-- **`MtimeWatcher`** — periodically scans every allowed directory; emits change events on file add/remove and on `.zim` mtime **or size** change (catches same-size replacement via mtime, and same-mtime rewrites via size).
-- **`SubscriberRegistry`** — maps subscribed URI → set of subscriber callbacks. Fan-out is concurrent (`asyncio.gather`); per-subscriber send is bounded by `TIMEOUTS.SUBSCRIPTION_SEND_SECONDS` so one hung subscriber doesn't block others.
+- **`MtimeWatcher`** — periodically scans every allowed directory (recursively); emits change events on file add/remove and on `.zim` mtime **or size** change (catches same-size replacement via mtime, and same-mtime rewrites via size).
+- **`publish_change`** — maps the two change kinds onto *different* notifications: an add/remove changes the membership of `zim://files`, so it publishes `ResourcesListChanged` (`notifications/resources/list_changed`); an in-place replacement invalidates one resource, so it publishes `ResourceUpdated` for `zim://{name}` (`notifications/resources/updated`).
 - Tunable via `OPENZIM_MCP_WATCH_INTERVAL_SECONDS` (default 5, range 1-60); disable with `OPENZIM_MCP_SUBSCRIPTIONS_ENABLED=false`.
-- Subscription support is HTTP-only: the watcher runs under the HTTP lifespan, and the subscribe/unsubscribe handlers are registered only for that transport.
-- Implementation note: handler registration uses a private FastMCP attribute (`_mcp_server`) — FastMCP exposes no public subscribe-handler API.
+- Publishing is HTTP-only: `server.py` builds an `InMemorySubscriptionBus` only for `transport='http'`, and the watcher runs under the HTTP lifespan. The SDK registers `subscriptions/listen` unconditionally (falling back to a bus of its own), so `server.py` deregisters it whenever the bus is withheld — on stdio and SSE the capability is not advertised and a listen request fails with method-not-found instead of acking a stream that would never receive anything.
+- Admission control lives in the SDK too: `ListenHandler` caps concurrent listen streams and per-stream buffered events, ending a stream that outruns its consumer.
 
 ### Security layer (`security.py`)
 
@@ -240,7 +240,7 @@ Each mixin uses the same shared services injected into the parent: `config`, `pa
 
 ### Tools package (`tools/`)
 
-One module per tool. Every `zim_*.py` exports a `register(server)` function called from `tools/__init__.py:register_phase_f_tools`. Tools are decorated with `@server.mcp.tool()` (FastMCP) and forward to either `server.async_zim_operations` (for blocking ZIM I/O dispatched via `asyncio.to_thread`) or `server.zim_operations` (for cheap synchronous helpers).
+One module per tool. Every `zim_*.py` exports a `register(server)` function called from `tools/__init__.py:register_phase_f_tools`. Tools are decorated with `@server.mcp.tool()` (MCPServer) and forward to either `server.async_zim_operations` (for blocking ZIM I/O dispatched via `asyncio.to_thread`) or `server.zim_operations` (for cheap synchronous helpers).
 
 ### Smart retrieval fallback
 
@@ -289,7 +289,7 @@ There is no `SecurityConfig` and no `InstanceConfig` — security policy is hard
 ## Data flow — typical tool call (stdio)
 
 ```
-MCP client         FastMCP                Server core         async_zim_operations         ZimOperations         libzim
+MCP client         MCPServer              Server core         async_zim_operations         ZimOperations         libzim
     │                  │                        │                          │                       │                  │
     │── tools/call ───▶│                        │                          │                       │                  │
     │                  │── @mcp.tool wrapper ──▶│                          │                       │                  │
@@ -302,21 +302,21 @@ MCP client         FastMCP                Server core         async_zim_operatio
     │◀── result ───────│                        │                          │                       │                  │
 ```
 
-Errors anywhere in the chain are returned rather than raised, as a structured `ToolErrorPayload` — `{error: true, operation, message}`, plus `context` when the call site supplies one, plus any self-correction extras merged in (e.g. `zim_get_section` attaches `available_section_ids` and `closest_match` on `operation="section_not_found"`). There is no `status` key and no `hint` key. Both failure paths go through `responses.tool_error`: the tool wrapper's catch-all (`tools/_common.py`) wraps unexpected exceptions, and validation failures build the same envelope in-band at the call site. Because the envelope is *returned*, `EnvelopeAwareFastMCP` (`mcp_envelope.py`) recognises it at `call_tool` and sets `isError` on the `CallToolResult`, with the serialized body byte-identical to the plain dict return. No tool advertises an `outputSchema` — all eight are annotated `-> Any` — so nothing arrives in `structuredContent`; clients parse the JSON text block. Absolute paths inside error messages are redacted to `...filename.zim` form before the payload is returned.
+Errors anywhere in the chain are returned rather than raised, as a structured `ToolErrorPayload` — `{error: true, operation, message}`, plus `context` when the call site supplies one, plus any self-correction extras merged in (e.g. `zim_get_section` attaches `available_section_ids` and `closest_match` on `operation="section_not_found"`). There is no `status` key and no `hint` key. Both failure paths go through `responses.tool_error`: the tool wrapper's catch-all (`tools/_common.py`) wraps unexpected exceptions, and validation failures build the same envelope in-band at the call site. Because the envelope is *returned*, `EnvelopeAwareMCPServer` (`mcp_envelope.py`) recognises it at `call_tool` and sets `isError` on the `CallToolResult`, with the serialized body byte-identical to the plain dict return. No tool advertises an `outputSchema` — all eight are annotated `-> Any` — so nothing arrives in `structuredContent`; clients parse the JSON text block. Absolute paths inside error messages are redacted to `...filename.zim` form before the payload is returned.
 
 ## Data flow — HTTP transport
 
-`serve_streamable_http(server)` mounts FastMCP on a Starlette app, then attaches middleware in **LIFO** order so CORS is the *outer* layer and bearer-auth is *inner*:
+`serve_streamable_http(server)` mounts MCPServer on a Starlette app, then attaches middleware in **LIFO** order so CORS is the *outer* layer and bearer-auth is *inner*:
 
 ```
-client → CORS middleware → BearerTokenAuthMiddleware → FastMCP MCP routes
+client → CORS middleware → BearerTokenAuthMiddleware → MCPServer MCP routes
                               │
                               └── /healthz, /readyz exempt (auth bypass)
 ```
 
 Why CORS-outer-than-auth: a 401 from auth must still carry `Access-Control-Allow-Origin` headers, otherwise browsers see an opaque CORS error instead of "401 unauthorized".
 
-The subscription watcher is started on app startup via a `lifespan_context` wrapper (FastMCP supplies its own lifespan, so `add_event_handler('startup', …)` is silently a no-op).
+The subscription watcher is started on app startup via a `lifespan_context` wrapper (the SDK's `streamable_http_app()` supplies its own lifespan, so `add_event_handler('startup', …)` is silently a no-op).
 
 ## What was removed before v2.0.0
 
@@ -341,4 +341,4 @@ For deployment specifics see [HTTP and Docker deployment](/openzim-mcp/docs/http
 
 **Tuning?** [Performance optimization](/openzim-mcp/docs/performance-optimization/). **Security model?** [Security best practices](/openzim-mcp/docs/security-best-practices/).
 
-*The v1.x maintenance window closed when v2.5.0 shipped (2026-06-18); the 2.x line is the only supported series. See [CHANGELOG](https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md) for the v1 → v2 migration table.*
+*The v1.x maintenance window closed when v2.5.0 shipped (2026-06-18); only the current major line is supported — see [SECURITY.md](https://github.com/cameronrye/openzim-mcp/blob/main/SECURITY.md) for the policy. The [CHANGELOG](https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md) carries the v1 → v2 migration table and the v3.0.0 breaking-changes entry.*

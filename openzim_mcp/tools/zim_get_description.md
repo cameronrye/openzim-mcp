@@ -10,9 +10,9 @@ mutually-exclusive branches:
 - Single entry, binary: pass `entry_path` + `binary=True`. Returns
     raw bytes (image, video, PDF, etc.). `view` is locked to "full"
     in this branch.
-- Batch: pass `entry_paths` (list of strings). Returns full bodies
-    per entry; `view`="full" and `content_offset` unsupported
-    (either returns `invalid_path_combination`).
+- Batch: pass `entry_paths` (list of strings). Returns each entry's
+    clean body, first page only; non-full `view` / `content_offset`
+    return `invalid_path_combination`.
 - Main page: pass `main_page=True` (no entry_path). Returns the
     archive's main page. `view`, `entry_path`, `entry_paths`,
     `binary` are all forbidden in this branch.

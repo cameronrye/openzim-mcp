@@ -21,7 +21,12 @@ Layout:
 
 import hashlib
 import logging
+import multiprocessing
+import os
 import re
+import threading
+from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures.process import BrokenProcessPool
 from contextlib import contextmanager, suppress
 from datetime import datetime
 from pathlib import Path
@@ -73,14 +78,200 @@ __all__ = [
     "Query",
     "Searcher",
     "SuggestionSearcher",
+    "ZIM_MAGIC",
     "ZimOperations",
+    "check_archive_integrity",
     "configure_libzim_caches",
+    "has_zim_signature",
     "zim_archive",
+    "zim_signature_error",
 ]
 
 
 # Timeout for opening ZIM archives (seconds)
 ARCHIVE_OPEN_TIMEOUT = 30.0
+
+# Every ZIM file starts with the little-endian magic number 72173914
+# (0x044D495A). Checking these four bytes is the cheapest possible
+# readability probe: it needs no libzim call and no header parse.
+ZIM_MAGIC = b"ZIM\x04"
+
+# Message attached to listing entries whose file fails the signature probe.
+UNREADABLE_ZIM_WARNING = (
+    "Not a ZIM archive: the file does not start with the ZIM signature "
+    "and cannot be opened"
+)
+
+# Message for a listing entry this process is not allowed to read at all.
+# Kept distinct from UNREADABLE_ZIM_WARNING: the file may be a perfectly good
+# archive, and the fix is a permission change, not a deletion.
+DENIED_ZIM_WARNING = (
+    "Cannot read this file: the server lacks permission to open it, so "
+    "whether it is a ZIM archive is unknown"
+)
+
+
+def zim_signature_error(path: Path) -> Optional[OSError]:
+    """The error that stopped ``path`` from being read, or None if it was read.
+
+    ``has_zim_signature`` collapses "could not open the file" into the same
+    ``False`` as "opened it, wrong magic bytes", which is right for "can
+    libzim use this?" and wrong for telling an operator what to do about it:
+    a permission problem answered with "not a ZIM archive, delete it"
+    destroys a good archive. Callers that give advice ask this first.
+    """
+    try:
+        with open(path, "rb") as fh:
+            fh.read(len(ZIM_MAGIC))
+        return None
+    except OSError as e:
+        return e
+
+
+def has_zim_signature(path: Path) -> bool:
+    """Return whether ``path`` begins with the ZIM magic bytes.
+
+    A ``False`` result means the file is not an openable archive (plain
+    text, a truncated download, a stray file renamed ``.zim``). A ``True``
+    result is only a cheap plausibility check — it does not verify the
+    archive's integrity; that is what ``Archive.check()`` is for. Read
+    errors (permissions, vanished file) count as unreadable; use
+    ``zim_signature_error`` to tell those two apart.
+    """
+    try:
+        with open(path, "rb") as fh:
+            return fh.read(len(ZIM_MAGIC)) == ZIM_MAGIC
+    except OSError:
+        return False
+
+
+# ---------------------------------------------------------------------------
+# Integrity-check worker process
+#
+# python-libzim's ``Archive.check()`` binding does not release the GIL
+# (unlike the entry/cluster readers in the same module), so running the
+# whole-file checksum on a worker thread still stalls every coroutine in this
+# process for the duration — seconds on a 2 GB archive, minutes on a 90 GB
+# one — including MCP keepalive pings from every connected client. The only
+# way to keep the event loop responsive is to run the check in a separate
+# process; the parent thread then blocks in a future wait, which does release
+# the GIL.
+#
+# One lazily spawned worker is enough: validation is a rare, explicit
+# diagnostic, and serialising checks bounds the cost to one extra
+# interpreter. ``spawn`` (never ``fork``): the parent holds libzim handles,
+# thread pools, and a running asyncio loop that must not be duplicated.
+# ---------------------------------------------------------------------------
+
+_VALIDATION_POOL: Optional[ProcessPoolExecutor] = None
+_VALIDATION_POOL_LOCK = threading.Lock()
+
+# None until a worker has been asked to start: True once one has, False once
+# one has failed to. See ``_validation_pool``.
+_WORKERS_START: Optional[bool] = None
+
+
+def _worker_started() -> bool:
+    """Worker-process body for the bootstrap probe. Module-level to be picklable."""
+    return True
+
+
+def _validation_pool() -> ProcessPoolExecutor:
+    """Return the shared single-worker validation pool, spawning it on first use.
+
+    The pool is probed with a no-op before it is kept, because ``spawn``
+    re-executes the host's ``__main__`` in the child: an embedding script
+    without an ``if __name__ == "__main__":`` guard kills every worker in
+    bootstrap, forever. Probing separates that from a worker a particular
+    archive crashes — the first has to be worked around, the second must stay
+    a failed validation rather than take this process down with it.
+    """
+    global _VALIDATION_POOL, _WORKERS_START
+    with _VALIDATION_POOL_LOCK:
+        if _VALIDATION_POOL is None:
+            pool = ProcessPoolExecutor(
+                max_workers=1, mp_context=multiprocessing.get_context("spawn")
+            )
+            try:
+                pool.submit(_worker_started).result()
+            except BrokenProcessPool:
+                pool.shutdown(wait=False, cancel_futures=True)
+                _WORKERS_START = False
+                raise
+            _WORKERS_START = True
+            _VALIDATION_POOL = pool
+        return _VALIDATION_POOL
+
+
+def _discard_validation_pool() -> None:
+    """Drop a broken pool so the next validation spawns a fresh worker."""
+    global _VALIDATION_POOL
+    with _VALIDATION_POOL_LOCK:
+        pool, _VALIDATION_POOL = _VALIDATION_POOL, None
+    if pool is not None:
+        pool.shutdown(wait=False, cancel_futures=True)
+
+
+def _check_archive_integrity(path: str) -> bool:
+    """Worker-process body: ``Archive.check()`` over ``path``.
+
+    Module-level (not nested) so the spawn context can import it by name.
+    """
+    # The worker inherits the parent's descriptors, and on the stdio
+    # transport fd 1 *is* the MCP wire. libzim chats on stdout when it opens
+    # an index ("No stemming for language ..."), so point the child's stdout
+    # at stderr before touching the archive.
+    with suppress(OSError):
+        os.dup2(2, 1)
+    try:
+        return bool(Archive(path).check())
+    except Exception as e:
+        # libzim's exceptions may not pickle across the process boundary;
+        # re-raise as a plain RuntimeError that does.
+        raise RuntimeError(f"{type(e).__name__}: {e}") from None
+
+
+def _check_here(path: Path) -> bool:
+    """``Archive.check()`` in this process, for hosts where no worker starts.
+
+    Stalls this interpreter for the whole pass — the very thing the worker
+    exists to avoid — but a host that cannot spawn one is better served by a
+    slow answer than by a validation that can never succeed.
+    """
+    logger.warning(
+        "Integrity-check workers cannot start in this process (spawn "
+        "re-executes the host's __main__; an embedding script needs an "
+        'if __name__ == "__main__": guard). Checking %s in-process, which '
+        "blocks this interpreter until it finishes.",
+        path,
+    )
+    return bool(Archive(str(path)).check())
+
+
+def check_archive_integrity(path: Path) -> bool:
+    """Run ``Archive.check()`` for ``path`` in the validation worker process.
+
+    Falls back to this process when no worker can start at all; see
+    ``_validation_pool``.
+
+    Raises:
+        OpenZimMcpArchiveError: if the worker died mid-check. The broken pool
+            is discarded so the next call gets a fresh worker — a child crash
+            must surface as a failed validation, never take the server down.
+    """
+    if _WORKERS_START is False:
+        return _check_here(path)
+    try:
+        future = _validation_pool().submit(_check_archive_integrity, str(path))
+        return bool(future.result())
+    except BrokenProcessPool as e:
+        _discard_validation_pool()
+        if _WORKERS_START is False:
+            return _check_here(path)
+        raise OpenZimMcpArchiveError(
+            f"Integrity check worker crashed while checking {path}"
+        ) from e
+
 
 # Maximum redirect chain length before bailing out. See
 # ``ContentDefaults.MAX_REDIRECT_DEPTH`` in ``defaults.py``.
@@ -464,18 +655,33 @@ class ZimOperations(
                     seen_resolved.add(str(resolved))
                     try:
                         stats = file_path.stat()
-                        all_zim_files.append(
-                            {
-                                "name": file_path.name,
-                                "path": str(file_path),
-                                "directory": str(directory),
-                                "size": f"{stats.st_size / (1024 * 1024):.2f} MB",
-                                "size_bytes": stats.st_size,
-                                "modified": datetime.fromtimestamp(
-                                    stats.st_mtime
-                                ).isoformat(),
-                            }
-                        )
+                        entry: Dict[str, Any] = {
+                            "name": file_path.name,
+                            "path": str(file_path),
+                            "directory": str(directory),
+                            "size": f"{stats.st_size / (1024 * 1024):.2f} MB",
+                            "size_bytes": stats.st_size,
+                            "modified": datetime.fromtimestamp(
+                                stats.st_mtime
+                            ).isoformat(),
+                        }
+                        # The extension glob accepts anything named ``*.zim``.
+                        # Probe the signature so a garbage file is marked
+                        # rather than presented as a loaded archive; it stays
+                        # in the listing so the operator can see and fix it.
+                        entry["readable"] = has_zim_signature(file_path)
+                        if not entry["readable"]:
+                            denied = zim_signature_error(file_path)
+                            if denied is not None:
+                                entry["warning"] = DENIED_ZIM_WARNING
+                                logger.warning(f"{file_path} cannot be read: {denied}")
+                            else:
+                                entry["warning"] = UNREADABLE_ZIM_WARNING
+                                logger.warning(
+                                    f"{file_path} is named .zim but lacks the ZIM "
+                                    "signature; listed as unreadable"
+                                )
+                        all_zim_files.append(entry)
                     except OSError as e:
                         logger.warning(f"Error reading file stats for {file_path}: {e}")
             except Exception as e:
@@ -498,13 +704,14 @@ class ZimOperations(
 
         Returns:
             List of dictionaries containing ZIM file information.
-            Each dict has: name, path, directory, size, size_bytes, modified
+            Each dict has: name, path, directory, size, size_bytes, modified,
+            readable — plus ``warning`` when ``readable`` is False.
         """
-        # Cache key bumped to v2b (Phase B) so v1.x cached per-file list
-        # entries don't leak through if the inner shape ever drifts. Today
-        # the per-file dict shape (name/path/directory/size/size_bytes/
-        # modified) is unchanged; the v2b rename happens one layer up in
-        # ``list_zim_files_summary_data`` (files→results, count→total).
+        # Cache key bumped to v2c when the per-file dict gained the
+        # ``readable`` / ``warning`` signature-probe fields, so a persisted
+        # v2b listing (no marker) can't be served as if it had been probed.
+        # The files→results / count→total rename happens one layer up in
+        # ``list_zim_files_summary_data``.
         #
         # The directory signature is folded into the key so that adding,
         # removing, or renaming a ``.zim`` file at runtime invalidates the
@@ -514,7 +721,7 @@ class ZimOperations(
         # the cache rather than rescanning. The tree is globbed once here
         # and reused for both the signature and (on a miss) the scan.
         grouped = self._glob_zim_paths()
-        cache_key = f"zim_files_list_data_v2b:{self._zim_dir_signature(grouped)}"
+        cache_key = f"zim_files_list_data_v2c:{self._zim_dir_signature(grouped)}"
         cached_result = self.cache.get(cache_key)
         if cached_result is not None:
             logger.debug("Returning cached ZIM files list data")
@@ -604,7 +811,7 @@ class ZimOperations(
         """Structured variant of ``get_zim_metadata``.
 
         Returns the metadata dict directly (not a JSON string) so MCP
-        tools can hand it straight to FastMCP's structured-content path.
+        tools can hand it straight to the SDK's structured-content path.
 
         Raises:
             OpenZimMcpFileNotFoundError: If ZIM file not found
@@ -719,7 +926,10 @@ class ZimOperations(
                     "name": validated_path.name,
                     # ``check()`` verifies the archive's internal checksum
                     # over the whole file — the authoritative integrity test.
-                    "is_valid": bool(archive.check()),
+                    # It runs in the validation worker process because the
+                    # binding holds the GIL for the whole pass; in-process it
+                    # froze the event loop for every client (D64).
+                    "is_valid": check_archive_integrity(validated_path),
                     "has_checksum": has_checksum,
                     "checksum": archive.checksum if has_checksum else None,
                     "has_fulltext_index": bool(archive.has_fulltext_index),
@@ -1056,7 +1266,12 @@ class ZimOperations(
             return content
 
     def _main_page_cache_lookup(
-        self, zim_file_path: str, prefix: str, *, compact: bool
+        self,
+        zim_file_path: str,
+        prefix: str,
+        *,
+        compact: bool,
+        max_content_length: Optional[int] = None,
     ) -> Tuple[Path, str, Any]:
         """Validate the path and probe the response cache for a main-page call.
 
@@ -1067,6 +1282,11 @@ class ZimOperations(
         distinct ``prefix`` values so old persisted text entries don't
         collide with the dict shape.
 
+        The key carries a ``v2`` marker (the rendering became chrome-scoped,
+        so a persisted v1 body must not be served) and the caller's cap,
+        which is part of the response identity: an uncapped read must never
+        be answered with a capped rendering or vice versa.
+
         Returns:
             ``(validated_path, cache_key, cached_value)`` —
             ``cached_value`` is ``None`` on a cache miss.
@@ -1075,8 +1295,9 @@ class ZimOperations(
         from openzim_mcp.bundle import archive_stat_token
 
         cache_key = (
-            f"{prefix}:{validated_path}:"
-            f"{archive_stat_token(validated_path)}:compact={compact}"
+            f"{prefix}:v2:{validated_path}:"
+            f"{archive_stat_token(validated_path)}:compact={compact}:"
+            f"cap={max_content_length}"
         )
         return validated_path, cache_key, self.cache.get(cache_key)
 
@@ -1170,19 +1391,29 @@ class ZimOperations(
         return result, content_ok
 
     def get_main_page_data(
-        self, zim_file_path: str, *, compact: bool = False
+        self,
+        zim_file_path: str,
+        *,
+        compact: bool = False,
+        max_content_length: Optional[int] = None,
     ) -> "EntryResponse":
         """Structured variant of ``get_main_page``.
 
         Returns the entry dict directly (path/title/content/content_type)
-        so MCP tools can hand it to FastMCP's structured-content path.
+        so MCP tools can hand it to the SDK's structured-content path.
+
+        ``max_content_length`` caps the body like a path fetch does; when
+        ``None`` the branch keeps its ``DEFAULT_MAIN_PAGE_TRUNCATION`` cap.
 
         Raises:
             OpenZimMcpFileNotFoundError: If ZIM file not found
             OpenZimMcpArchiveError: If main page retrieval fails
         """
         validated_path, cache_key, cached_result = self._main_page_cache_lookup(
-            zim_file_path, "main_page_data", compact=compact
+            zim_file_path,
+            "main_page_data",
+            compact=compact,
+            max_content_length=max_content_length,
         )
         if cached_result is not None:
             logger.debug(f"Returning cached main page dict for: {validated_path}")
@@ -1195,7 +1426,7 @@ class ZimOperations(
         try:
             with _zim_ops_shim.zim_archive(validated_path) as archive:
                 payload, content_ok = self._get_main_page_data_content(
-                    archive, compact=compact
+                    archive, compact=compact, max_content_length=max_content_length
                 )
         except Exception as e:
             logger.error(f"Main page retrieval failed for {validated_path}: {e}")
@@ -1217,7 +1448,11 @@ class ZimOperations(
         return cast("EntryResponse", with_meta)
 
     def _get_main_page_data_content(
-        self, archive: Archive, *, compact: bool = False
+        self,
+        archive: Archive,
+        *,
+        compact: bool = False,
+        max_content_length: Optional[int] = None,
     ) -> Tuple[Dict[str, Any], bool]:
         """Build the main-page dict payload from an open archive.
 
@@ -1229,12 +1464,16 @@ class ZimOperations(
             processing raised; the caller must skip caching it.
         """
         _kind, payload, content_ok, _found_at = self._get_main_page_result(
-            archive, compact=compact
+            archive, compact=compact, max_content_length=max_content_length
         )
         return payload, content_ok
 
     def _get_main_page_result(  # NOSONAR(python:S3776)
-        self, archive: Archive, *, compact: bool = False
+        self,
+        archive: Archive,
+        *,
+        compact: bool = False,
+        max_content_length: Optional[int] = None,
     ) -> Tuple[str, Dict[str, Any], bool, Optional[str]]:
         """Resolve the main page and build its structured payload.
 
@@ -1243,6 +1482,9 @@ class ZimOperations(
         (``_get_main_page_data_content``) presenters: redirect-following,
         the ``main_entry``/fallback-path probing ladder, truncation, and
         the error-sentinel / don't-cache rule.
+
+        ``max_content_length`` overrides the ``DEFAULT_MAIN_PAGE_TRUNCATION``
+        body cap; the default is read at call time so tests can patch it.
 
         Returns:
             ``(kind, payload, content_ok, found_at)``:
@@ -1277,21 +1519,34 @@ class ZimOperations(
             try:
                 item = entry_obj.get_item()
                 mime_type = item.mimetype or ""
+                # ``scope_main_content`` matches the path-fetch branch
+                # (``_build_entry_payload``): the main page of a warc2zim
+                # archive is an ordinary entry wrapped in the same site
+                # chrome, and it used to be the one entry-rendering path
+                # that served the banner / skip-nav / menus.
                 content = self.content_processor.process_mime_content(
-                    bytes(item.content), mime_type, compact=compact
+                    bytes(item.content),
+                    mime_type,
+                    compact=compact,
+                    scope_main_content=True,
                 )
                 total_length = len(content)
+                cap = (
+                    max_content_length
+                    if max_content_length is not None
+                    else DEFAULT_MAIN_PAGE_TRUNCATION
+                )
                 # Truncate content for main page display. ``paginatable
                 # = False`` because ``_handle_main_page`` doesn't
                 # thread ``content_offset`` — point the caller at
                 # ``get article`` for the rest (A11 third pass).
                 truncated_content = self.content_processor.truncate_content(
-                    content, DEFAULT_MAIN_PAGE_TRUNCATION, paginatable=False
+                    content, cap, paginatable=False
                 )
                 # Key on the cap, not the rendered lengths: ``truncate_content``
                 # appends a ~150-char note, so a length comparison reports
                 # "not truncated" whenever the overflow is smaller than the note.
-                was_truncated = total_length > DEFAULT_MAIN_PAGE_TRUNCATION
+                was_truncated = total_length > cap
                 payload: Dict[str, Any] = {
                     "path": path,
                     "title": title,
@@ -1457,5 +1712,5 @@ class ZimOperations(
             return resolved, resolved.path
         raise OpenZimMcpArchiveError(
             f"Entry not found: '{entry_path}'. "
-            f"Try using search_zim_file() to find available entries."
+            f"Try using zim_search() to find available entries."
         ) from None

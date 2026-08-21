@@ -178,7 +178,7 @@ def _explore_body(zim_file_path: str) -> List[Dict[str, Any]]:
 
 
 def register_prompts(server: "OpenZimMcpServer") -> None:
-    """Register MCP prompts on the FastMCP server."""
+    """Register MCP prompts on the MCPServer instance."""
 
     @server.mcp.prompt("research")
     def research(topic: str) -> List[Dict[str, Any]]:
