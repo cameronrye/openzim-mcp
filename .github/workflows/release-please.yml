@@ -161,6 +161,21 @@ jobs:
           git commit -m "chore: sync uv.lock to release version"
           git push origin HEAD:release-please--branches--main
 
+      # The release-please PR is opened by GITHUB_TOKEN, and GitHub does not
+      # fire workflows on events that token creates — so `test.yml` never runs
+      # on it and the release PR carries no test signal at all. The version
+      # guards in this file only fail once the tag exists, which is far too
+      # late: taking 3.0.0 to 3.1.0, three doc lines describing what v3.0.0
+      # broke were no longer the current version, and the release job's test
+      # gate went red on the tag with the tag and the GitHub release already
+      # created. This job is already on the PR branch with the bumped version
+      # in place, so run the version-lockstep guards here, where a failure is
+      # still just a red release PR.
+      - name: Guard the version lockstep before the tag exists
+        run: |
+          uv sync --locked
+          uv run --locked pytest tests/test_mcpb_distribution.py -q --no-cov
+
   # Validate version synchronization after release creation
   validate-release:
     runs-on: ubuntu-latest

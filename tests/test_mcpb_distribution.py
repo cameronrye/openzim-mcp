@@ -130,7 +130,16 @@ def test_doc_version_annotations_are_current() -> None:
 # which is exactly the drift these annotations exist to prevent. The hero
 # "Latest release" stat on the landing page sat at v2.5.1 through four
 # releases because nothing checked this.
-_HISTORICAL_VERSIONS = {"1.0.0", "1.2.0", "2.0.0", "2.5.0", "2.6.0"}
+#
+# THIS SET IS PART OF CUTTING A RELEASE. The moment the version bumps, every
+# doc line that describes the *previous* release in the past tense stops being
+# a current-version claim and starts being history — so it lands here, or the
+# release job's test gate fails on the tag, after release-please has already
+# created the tag and the GitHub release. That is what happened taking 3.0.0
+# to 3.1.0: three lines describing what v3.0.0 broke ("**v3.0.0 is a breaking
+# release for HTTP subscription clients**", the FAQ link, the changelog
+# pointer) reddened the release with the tag already pushed.
+_HISTORICAL_VERSIONS = {"1.0.0", "1.2.0", "2.0.0", "2.5.0", "2.6.0", "3.0.0"}
 
 # ``v`` immediately followed by a semver, not preceded by a word char or dot
 # (so SVG path data like ``a4 4 0 0 0-2.526 5.77`` can't match).
