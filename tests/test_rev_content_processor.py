@@ -10,7 +10,12 @@ tests/test_v3_field_fixes_content.py and test_v3_field_fixes_search.py.
 
 from bs4 import BeautifulSoup
 
-from openzim_mcp.content_processor import HTML_PARSER, select_main_content
+from openzim_mcp.content_processor import (
+    HTML_PARSER,
+    ContentProcessor,
+    _is_nav_list_paragraph,
+    select_main_content,
+)
 
 # ---------------------------------------------------------------------------
 # In-page fragment nav strip must not eat article content
@@ -75,3 +80,35 @@ def test_strip_that_empties_the_landmark_restores_it() -> None:
         BeautifulSoup(_NAV_ONLY_ARTICLE_HTML, HTML_PARSER)
     ).get_text(" ", strip=True)
     assert "Summary" in text
+
+
+# ---------------------------------------------------------------------------
+# Nav-list snippet drop must not cost the snippet its query anchor
+# ---------------------------------------------------------------------------
+
+_TWIN_TOWNS = (
+    "Berlin is the capital of Germany.\n\n"
+    "## Twin towns\n\n"
+    "  * Los Angeles, United States\n  * Paris, France\n  * Madrid, Spain\n"
+)
+
+
+def test_snippet_anchors_on_a_title_case_list_the_query_matches() -> None:
+    """A list of proper nouns is indistinguishable from a site menu by shape;
+    a query hit inside it settles the question."""
+    cp = ContentProcessor(snippet_length=300)
+    snippet = cp.create_snippet(_TWIN_TOWNS, query="Los Angeles", max_paragraphs=1)
+    assert "**Los** **Angeles**" in snippet
+
+
+def test_snippet_still_skips_nav_list_the_query_misses() -> None:
+    """The D29 floor: without a hit inside it, the list is still furniture."""
+    cp = ContentProcessor(snippet_length=300)
+    snippet = cp.create_snippet(_TWIN_TOWNS, query="capital", max_paragraphs=1)
+    assert "Los Angeles" not in snippet
+    assert "**capital**" in snippet
+
+
+def test_single_item_list_is_not_navigation() -> None:
+    assert _is_nav_list_paragraph("  * Related Issues\n") is False
+    assert _is_nav_list_paragraph("  * Summary\n  * Start Here\n") is True
