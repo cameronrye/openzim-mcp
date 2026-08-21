@@ -255,11 +255,18 @@ class AsyncZimOperations:
         return await asyncio.to_thread(self._ops.get_main_page, zim_file_path)
 
     async def get_main_page_data(
-        self, zim_file_path: str, *, compact: bool = False
+        self,
+        zim_file_path: str,
+        *,
+        compact: bool = False,
+        max_content_length: Optional[int] = None,
     ) -> "EntryResponse":
         """Structured variant of ``get_main_page`` (async)."""
         return await asyncio.to_thread(
-            self._ops.get_main_page_data, zim_file_path, compact=compact
+            self._ops.get_main_page_data,
+            zim_file_path,
+            compact=compact,
+            max_content_length=max_content_length,
         )
 
     async def list_namespaces(self, zim_file_path: str) -> str:
@@ -816,8 +823,11 @@ class AsyncZimOperations:
     ) -> "ArchiveValidationResponse":
         """Per-archive validation (``zim_health(zim_file_path=...)``).
 
-        Runs ``Archive.check()`` plus checksum / index / identity reads in a
-        worker thread so the event loop isn't blocked by the integrity scan.
+        The checksum / index / identity reads run in a worker thread; the
+        ``Archive.check()`` integrity scan itself is delegated to a separate
+        process (``zim.archive.check_archive_integrity``) because the libzim
+        binding holds the GIL for the whole pass, so a thread alone could not
+        keep the event loop responsive.
         """
         return await asyncio.to_thread(
             self._ops.get_archive_validation_data, zim_file_path

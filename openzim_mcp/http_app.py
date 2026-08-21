@@ -10,10 +10,12 @@ HTTP-specific behavior is grouped here.
 import asyncio
 import hashlib
 import hmac
+import json
 import logging
 import os
 import socket
 import warnings
+from collections import deque
 from concurrent.futures import Future
 from contextlib import asynccontextmanager
 from typing import (
@@ -27,12 +29,13 @@ from typing import (
 )
 
 from starlette.applications import Starlette
+from starlette.datastructures import Headers
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.cors import CORSMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
-from starlette.types import ASGIApp
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from .exceptions import OpenZimMcpConfigurationError, OpenZimMcpTimeoutError
 from .timeout_utils import _get_executor, run_with_timeout
@@ -45,6 +48,13 @@ logger = logging.getLogger(__name__)
 
 HEALTHZ_PATH = "/healthz"
 READYZ_PATH = "/readyz"
+
+# The one route the SDK mints sessions on — its ``streamable_http_path``
+# default, which the app builder below is left to apply. The sessionless gate
+# answers only here, so the two must agree: a gate on the wrong path would
+# answer URLs the router owns, turning a typo into a session complaint instead
+# of a 404. A test asserts the built app really routes this path.
+MCP_PATH = "/mcp"
 
 # Health endpoints exempt from auth.
 AUTH_EXEMPT_PATHS = {HEALTHZ_PATH, READYZ_PATH}
@@ -525,6 +535,249 @@ class TransportSecurityGateMiddleware(BaseHTTPMiddleware):
         return await call_next(request)
 
 
+def _is_initialize_request(body: bytes) -> bool:
+    """True iff ``body`` is a JSON-RPC request the SDK would accept as ``initialize``.
+
+    Mirrors what ``JSONRPCRequest`` validation lets through — ``jsonrpc`` of
+    exactly ``"2.0"``, a string or (strict, so not bool) int ``id``, and
+    ``params`` absent or an object — so the gate never turns away a request
+    the SDK would have opened a session for, and never lets through one it
+    would have rejected *after* opening a session.
+    """
+    try:
+        message = json.loads(body)
+    except (ValueError, RecursionError):
+        # ``RecursionError`` is a ``RuntimeError``, not a ``ValueError``: a
+        # body nested past the interpreter's limit is undecodable the same way
+        # malformed JSON is, and must be answered rather than escape the gate.
+        return False
+    if not isinstance(message, dict) or message.get("method") != "initialize":
+        return False
+    if message.get("jsonrpc") != "2.0":
+        return False
+    request_id = message.get("id")
+    if isinstance(request_id, bool) or not isinstance(request_id, (int, str)):
+        return False
+    return message.get("params", None) is None or isinstance(message["params"], dict)
+
+
+def _accepts_json_and_sse(scope: Scope) -> bool:
+    """Whether ``Accept`` satisfies the SDK's POST precondition.
+
+    Delegated to the SDK's own parser so the gate's answer and the transport's
+    stay in step, wildcards included. The app is built without
+    ``json_response``, so the SSE branch applies: both types are required.
+    """
+    from mcp.server.streamable_http import check_accept_headers
+
+    has_json, has_sse = check_accept_headers(Request(scope))
+    return bool(has_json and has_sse)
+
+
+class _BodyTooLarge(Exception):
+    """A buffered sessionless body crossed the request-size cap mid-stream."""
+
+
+class SessionlessRequestGateMiddleware:
+    """Refuse handshake-era requests that have no session and are not ``initialize``.
+
+    The SDK's stateful request path mints a transport, registers it in the
+    session table and starts its serve loop for *any* request that lacks an
+    ``Mcp-Session-Id`` header — and only then looks at the request. Every
+    sessionless request except ``initialize`` is rejected at that point
+    (``400 Missing session ID``), but the session it minted outlives the 400:
+    the caller never learns it owns one, so no DELETE comes, and the idle-expiry
+    branch is dead because the app builder exposes no ``session_idle_timeout``.
+    A plain curl, a misbehaving client, or a page the user happens to visit can
+    grow the table and the task count without bound on the default deployment.
+
+    This gate answers those requests itself, with the SDK's own ``400`` body,
+    before the SDK can mint anything. Only two kinds of request legitimately
+    arrive without a session and must pass: an ``initialize`` POST (the session
+    does not exist yet) and anything on the 2026-07-28 stateless path, which is
+    routed by the ``MCP-Protocol-Version`` header and never has a session.
+    ``initialize`` is only recognisable from the body, so a sessionless POST is
+    buffered — under the SDK's request-size cap, which it mirrors — and replayed
+    to the app. A body the gate can neither parse nor recognise gets the same
+    ``Missing session ID`` answer: whatever else is wrong with it, the request
+    has no session and can never be served.
+
+    A pure ASGI middleware rather than ``BaseHTTPMiddleware`` so the body
+    replay is explicit and bounded. It answers only on the MCP route: the
+    health endpoints and every unrouted path belong to Starlette, which still
+    404s them.
+    """
+
+    def __init__(
+        self,
+        app: ASGIApp,
+        max_body_size: Optional[int] = None,
+        mcp_path: str = MCP_PATH,
+    ) -> None:
+        """Wrap ``app``; ``max_body_size`` defaults to the SDK's request cap."""
+        from mcp.server.streamable_http_manager import DEFAULT_MAX_REQUEST_BODY_SIZE
+
+        self.app = app
+        self._mcp_path = mcp_path
+        self._max_body_size = (
+            max_body_size
+            if max_body_size is not None
+            else DEFAULT_MAX_REQUEST_BODY_SIZE
+        )
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        """Pass through every request that cannot leak; answer the rest."""
+        if scope["type"] != "http" or self._never_mints(scope):
+            await self.app(scope, receive, send)
+            return
+
+        method = scope["method"]
+        if method in ("GET", "DELETE"):
+            await self._reject_missing_session(scope, receive, send)
+            return
+        if method != "POST":
+            # The SDK answers 405 for these too — after minting a session.
+            await self._send_jsonrpc_error(
+                scope,
+                receive,
+                send,
+                "Method Not Allowed",
+                405,
+                extra_headers={"Allow": "GET, POST, DELETE"},
+            )
+            return
+        if self._declares_oversized_body(Headers(scope=scope)):
+            # The SDK's own body-limit middleware rejects this with 413
+            # before its session code runs; no need to read it.
+            await self.app(scope, receive, send)
+            return
+
+        try:
+            cached, body = await self._buffer_body(receive)
+        except _BodyTooLarge:
+            response = Response("Request body too large", status_code=413)
+            await response(scope, receive, send)
+            return
+        if body is None or not _is_initialize_request(body):
+            # ``None``: disconnected mid-body — nothing to classify and nobody
+            # to answer, but the outer middleware needs *a* response.
+            await self._reject_missing_session(scope, receive, send)
+            return
+        if not _accepts_json_and_sse(scope):
+            # The SDK validates ``Accept`` inside the transport it has already
+            # minted, registered and task-started, so an ``initialize`` it is
+            # about to refuse with 406 leaks a session all the same. Answer it
+            # here, in the SDK's own words, before anything is minted.
+            await self._send_jsonrpc_error(
+                scope,
+                receive,
+                send,
+                "Not Acceptable: Client must accept both application/json and "
+                "text/event-stream",
+                406,
+            )
+            return
+
+        async def replay() -> Message:
+            if cached:
+                return cached.popleft()
+            return await receive()
+
+        await self.app(scope, replay, send)
+
+    def _never_mints(self, scope: Scope) -> bool:
+        """Whether the SDK serves this HTTP request without minting a session.
+
+        Only the MCP route mints, so every other path — the health endpoints
+        and anything the router will 404 — belongs to Starlette, not to this
+        gate. Beyond that: a request that already names a session (live or
+        unknown) takes a path that never mints, and a non-handshake
+        ``MCP-Protocol-Version`` is era-routed to the stateless 2026-07-28
+        handler.
+        """
+        from mcp.server.streamable_http import MCP_SESSION_ID_HEADER
+        from mcp.shared.inbound import MCP_PROTOCOL_VERSION_HEADER
+        from mcp_types.version import HANDSHAKE_PROTOCOL_VERSIONS
+
+        if scope["path"] != self._mcp_path:
+            return True
+        headers = Headers(scope=scope)
+        if headers.get(MCP_SESSION_ID_HEADER) is not None:
+            return True
+        protocol_version = headers.get(MCP_PROTOCOL_VERSION_HEADER)
+        return (
+            protocol_version is not None
+            and protocol_version not in HANDSHAKE_PROTOCOL_VERSIONS
+        )
+
+    def _declares_oversized_body(self, headers: Headers) -> bool:
+        """Whether ``Content-Length`` already promises more than the body cap."""
+        declared = headers.get("content-length")
+        if declared is None:
+            return False
+        try:
+            return int(declared) > self._max_body_size
+        except ValueError:
+            # A non-numeric Content-Length is not this gate's to police:
+            # treat it as undeclared and let the chunked read enforce the cap.
+            return False
+
+    async def _buffer_body(
+        self, receive: Receive
+    ) -> "tuple[deque[Message], Optional[bytes]]":
+        """Drain the request body, keeping the raw messages for replay.
+
+        Returns the buffered messages and the complete body, or ``None`` for
+        the body when the client disconnected before finishing it. Raises
+        ``_BodyTooLarge`` the moment the running total crosses the cap.
+        """
+        cached: "deque[Message]" = deque()
+        body = bytearray()
+        while True:
+            message = await receive()
+            if message["type"] != "http.request":
+                return cached, None
+            chunk = message.get("body", b"")
+            if len(body) + len(chunk) > self._max_body_size:
+                raise _BodyTooLarge()
+            body.extend(chunk)
+            cached.append(message)
+            if not message.get("more_body", False):
+                return cached, bytes(body)
+
+    async def _reject_missing_session(
+        self, scope: Scope, receive: Receive, send: Send
+    ) -> None:
+        await self._send_jsonrpc_error(
+            scope, receive, send, "Bad Request: Missing session ID", 400
+        )
+
+    async def _send_jsonrpc_error(
+        self,
+        scope: Scope,
+        receive: Receive,
+        send: Send,
+        message: str,
+        status_code: int,
+        extra_headers: Optional[Mapping[str, str]] = None,
+    ) -> None:
+        """Answer exactly as the SDK transport would, minus the session header."""
+        from mcp_types import INVALID_REQUEST, ErrorData, JSONRPCError
+
+        error = JSONRPCError(
+            jsonrpc="2.0",
+            id=None,
+            error=ErrorData(code=INVALID_REQUEST, message=message),
+        )
+        response = Response(
+            error.model_dump_json(by_alias=True, exclude_unset=True),
+            status_code=status_code,
+            headers=dict(extra_headers or {}),
+            media_type="application/json",
+        )
+        await response(scope, receive, send)
+
+
 def serve_streamable_http(
     server: "OpenZimMcpServer",
     runner: Callable[[Starlette, str, int], None] = _default_uvicorn_runner,
@@ -570,10 +823,14 @@ def serve_streamable_http(
     # layer so 401 responses from the inner auth middleware still carry
     # Access-Control-Allow-Origin headers (otherwise browser JS clients
     # see an opaque CORS error instead of "401 unauthorized").
-    # Added FIRST, so it is the INNERMOST of the three: auth and CORS still
-    # get to answer first, but a request that clears them is Host/Origin
-    # checked here rather than after the SDK has already minted a session for
-    # it. See TransportSecurityGateMiddleware.
+    # Added FIRST, so it is the INNERMOST layer: everything else answers
+    # before it, and only a request that cleared auth and Host/Origin has its
+    # body read. It is the last line between a sessionless request and the
+    # SDK's session-minting code. See SessionlessRequestGateMiddleware.
+    app.add_middleware(SessionlessRequestGateMiddleware)
+    # Next-innermost: auth and CORS still get to answer first, but a request
+    # that clears them is Host/Origin checked here rather than after the SDK
+    # has already minted a session for it. See TransportSecurityGateMiddleware.
     if server._transport_security is not None:
         app.add_middleware(
             TransportSecurityGateMiddleware, security=server._transport_security

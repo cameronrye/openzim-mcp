@@ -25,6 +25,15 @@ every ``resources/read`` — and because that method serves both sealed archives
 and a live directory scan, the honest method-wide value is the short one. Only
 a handler can tell the two apart, which is what :meth:`_handle_read_resource`
 does here.
+
+It is also where ``prompts/get`` failures get their JSON-RPC codes. The SDK's
+prompt layer raises bare ``ValueError`` for an unknown name, a missing required
+argument and an argument the prompt does not declare; the legacy dispatcher
+answers those with the meaningless ``code=0`` and the modern one collapses
+them to ``-32603 Internal server error`` with no detail, and both put either
+nothing or pydantic's rendered report on the wire. :meth:`get_prompt` makes
+the caller's mistakes ``-32602`` with a message naming the prompt and the
+arguments, and a fault inside a prompt body ``-32603`` naming only the prompt.
 """
 
 from __future__ import annotations
@@ -34,13 +43,18 @@ from typing import Any
 
 import pydantic_core
 from mcp.server.mcpserver import Context, MCPServer
+from mcp.shared.exceptions import MCPError
 from mcp_types import (
+    INTERNAL_ERROR,
+    INVALID_PARAMS,
     CallToolResult,
+    GetPromptResult,
     InputRequiredResult,
     ReadResourceResult,
     TextContent,
     TextResourceContents,
 )
+from pydantic import ValidationError
 
 __all__ = ["EnvelopeAwareMCPServer", "is_tool_error_envelope"]
 
@@ -121,6 +135,29 @@ def _serialize_envelope(payload: dict) -> str:
     return pydantic_core.to_json(payload, fallback=str, indent=2).decode()
 
 
+def _validation_error_in_chain(exc: BaseException) -> ValidationError | None:
+    """The pydantic ``ValidationError`` an SDK prompt failure wraps, if any.
+
+    ``Prompt.render`` stringifies the ``validate_call`` failure into a
+    ``ValueError`` and ``MCPServer.get_prompt`` wraps that once more, so the
+    wire would carry pydantic's report verbatim; the original stays reachable
+    through ``__cause__`` / ``__context__`` and is what the classifier needs.
+    """
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        if isinstance(current, ValidationError):
+            return current
+        seen.add(id(current))
+        current = current.__cause__ or current.__context__
+    return None
+
+
+def _invalid_params(message: str, **data: Any) -> MCPError:
+    """An ``-32602`` naming what the caller got wrong, with the same facts in ``data``."""
+    return MCPError(code=INVALID_PARAMS, message=message, data=data)
+
+
 def error_result(payload: dict) -> CallToolResult:
     """Wrap an error envelope as a failed ``CallToolResult``.
 
@@ -194,6 +231,112 @@ class EnvelopeAwareMCPServer(MCPServer):
         ):
             return result
         return result.model_copy(update={"ttl_ms": self._archive_read_ttl_ms})
+
+    async def run_stdio_async(self) -> None:
+        """Serve stdio through the frame-answering wrapper in ``sdk_compat``.
+
+        Body-identical to the SDK's ``run_stdio_async`` except for the
+        transport context manager: the SDK's stdio server hands undecodable
+        and null-id lines to a dispatcher that drops them silently, and
+        cancels requests already read the moment stdin closes; the wrapper
+        answers the former with the JSON-RPC error the spec requires and
+        holds EOF until the latter are answered. Retire with the wrapper
+        (see ``sdk_compat`` for the canary).
+        """
+        from .sdk_compat import stdio_server_answering_malformed_frames
+
+        async with stdio_server_answering_malformed_frames() as (
+            read_stream,
+            write_stream,
+        ):
+            await self._lowlevel_server.run(
+                read_stream,
+                write_stream,
+                self._lowlevel_server.create_initialization_options(),
+            )
+
+    async def get_prompt(
+        self,
+        name: str,
+        arguments: dict[str, Any] | None = None,
+        context: Context[Any, Any] | None = None,
+    ) -> GetPromptResult | InputRequiredResult:
+        """Render a prompt, answering client mistakes as ``-32602``.
+
+        The checks run *before* the SDK's own because its prompt manager
+        raises plain ``ValueError`` for an unknown name and a missing required
+        argument, and ``Prompt.render`` turns the ``validate_call`` rejection
+        of an undeclared argument into a ``ValueError`` carrying pydantic's
+        full report — none of which the dispatchers classify (legacy pins
+        ``code=0``, modern discards the text as ``-32603``). ``MCPError`` is
+        the one exception type both eras pass through with its code intact.
+
+        Every message names the prompt and lists arguments sorted, so the
+        text is stable (the SDK interpolated an unordered ``set``) and free of
+        ``register_prompts.<locals>`` paths and pydantic doc URLs. A fault
+        raised inside a prompt body is a server-side problem: it stays logged
+        with its traceback by the SDK and reaches the client as ``-32603``
+        naming only the prompt.
+        """
+        prompt = self._prompt_manager.get_prompt(name)
+        if prompt is None:
+            available = sorted(p.name for p in self._prompt_manager.list_prompts())
+            raise _invalid_params(
+                f"Unknown prompt {name!r}; available prompts: "
+                f"{', '.join(available) or 'none'}",
+                prompt=name,
+                available=available,
+            )
+
+        declared = {arg.name: arg.required for arg in prompt.arguments or []}
+        provided = set(arguments or {})
+        missing = sorted(
+            arg
+            for arg, required in declared.items()
+            if required and arg not in provided
+        )
+        if missing:
+            raise _invalid_params(
+                f"Prompt {name!r} is missing required argument(s): "
+                f"{', '.join(missing)}",
+                prompt=name,
+                missing=missing,
+            )
+        unexpected = sorted(provided - declared.keys())
+        if unexpected:
+            raise _invalid_params(
+                f"Prompt {name!r} does not accept argument(s): "
+                f"{', '.join(unexpected)}; it declares: "
+                f"{', '.join(sorted(declared)) or 'no arguments'}",
+                prompt=name,
+                unexpected=unexpected,
+                declared=sorted(declared),
+            )
+
+        try:
+            return await super().get_prompt(name, arguments, context)
+        except MCPError:
+            raise
+        except Exception as exc:
+            validation = _validation_error_in_chain(exc)
+            if validation is not None:
+                # Errors located at a declared argument are the caller's
+                # (a value the annotation rejects); anything else — say a
+                # prompt body returning a malformed message — is ours.
+                invalid = sorted(
+                    {str(err["loc"][0]) for err in validation.errors() if err["loc"]}
+                    & declared.keys()
+                )
+                if invalid:
+                    raise _invalid_params(
+                        f"Prompt {name!r} received invalid value(s) for "
+                        f"argument(s): {', '.join(invalid)}",
+                        prompt=name,
+                        invalid=invalid,
+                    ) from exc
+            raise MCPError(
+                code=INTERNAL_ERROR, message=f"Error rendering prompt {name!r}"
+            ) from exc
 
     async def call_tool(
         self,

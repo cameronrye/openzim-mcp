@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple
 
 from ..constants import MAX_SEARCH_RESULT_LIMIT
 from ..responses import ToolErrorPayload, tool_error
-from ..security import sanitize_context_for_error
+from ..security import sanitize_context_for_error, sanitize_control_chars
 
 if TYPE_CHECKING:
     from ..server import OpenZimMcpServer
@@ -48,8 +48,12 @@ def tool_error_response(
     """
     import logging
 
+    # Control characters in the exception text (a ``zim_file_path`` with an
+    # embedded LF is echoed verbatim by the validator) would otherwise forge
+    # extra physical lines in the ERROR log (R2-3). Paths are deliberately
+    # NOT redacted here: the operator-facing log needs the real one.
     logging.getLogger(f"openzim_mcp.tools.{operation}").error(
-        "Error in %s: %s", operation, error
+        "Error in %s: %s", operation, sanitize_control_chars(str(error))
     )
     enhanced = server._create_enhanced_error_message(
         operation=operation, error=error, context=context or ""

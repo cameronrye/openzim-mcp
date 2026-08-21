@@ -94,6 +94,17 @@ _SEARCH_VERB = r"(?:^\s*query|search|find|look)"
 # exempt case-sensitive paths from Tier-1 Rule 1's lowercasing.
 _NAMESPACE_PREFIXED_RE = re.compile(r"^[A-Za-z]/")
 
+# D50: the path shape zimit / warc2zim archives store and this tool prints
+# (``Path: medlineplus.gov/measles.html``, ``iep.utm.edu/kantview/``): a
+# dotted host, then ``/``, then the page path. The host must contain a dot
+# so a bare ZIM filename (``wikipedia.zim`` — no slash) and slashed prose
+# (``and/or``, ``km/h``) stay excluded. Shares the suffix class of the
+# namespace-prefixed shape. ``_restore_nonascii_case`` exempts it from
+# Rule 1's lowercasing for the same reason it exempts ``A/...``: libzim's
+# path lookup is case-sensitive.
+_DOMAIN_PATH_BODY = r"[A-Za-z0-9][A-Za-z0-9\-]*(?:\.[A-Za-z0-9\-]+)+/"
+_DOMAIN_PATH_RE = re.compile(rf"^{_DOMAIN_PATH_BODY}")
+
 
 def _strip_quote_pair(value: str) -> str:
     """Peel a single surrounding matched quote-pair from ``value`` and
@@ -292,6 +303,15 @@ _LEADING_INTENT_KEYWORDS_RE = re.compile(
 # (rare but possible) are untouched.
 _TAIL_LEADING_CONTENTS_RE = re.compile(r"^contents\s+", re.IGNORECASE)
 
+# D48: ``get (the) article about X`` anchors on ``article`` and leaves
+# ``about X`` as the tail; ``about`` is a bridge word, not part of the
+# title, so peel it. Only ``about`` — ``on`` / ``for`` / ``of`` open real
+# titles far too often (``On the Origin of Species``) to be safe. And only
+# after the object noun: past a preposition the user is spelling the title
+# out (``summary of About a Boy``), where ``about`` is the title's own
+# first word.
+_TAIL_LEADING_ABOUT_RE = re.compile(r"^about\s+", re.IGNORECASE)
+
 
 def _extract_entry_path_keyworded(query: str, params: Dict[str, Any]) -> None:
     """Shared extractor for get_article / structure / links / toc / summary.
@@ -394,6 +414,9 @@ def _extract_entry_path_keyworded(query: str, params: Dict[str, Any]) -> None:
         re.IGNORECASE,
     )
     matches = list(object_re.finditer(query))
+    # Whether the tail follows the object noun rather than a preposition —
+    # the ``about`` peel below is confined to that shape.
+    anchored_on_object = bool(matches)
     if not matches:
         verb_match = verb_re.search(query)
         scan_from = verb_match.end() if verb_match else 0
@@ -407,6 +430,14 @@ def _extract_entry_path_keyworded(query: str, params: Dict[str, Any]) -> None:
         cleaned = _TAIL_LEADING_CONTENTS_RE.sub("", tail, count=1).strip()
         if cleaned and cleaned != tail:
             tail = cleaned
+        # D48: ``get the article about X`` -> tail ``about X``; drop the
+        # bridge word so the title probe sees ``X``. Never past a
+        # preposition — ``summary of About a Boy`` resolved to "A Boy",
+        # and where the index holds both spellings it did so at score 1.0.
+        if anchored_on_object:
+            cleaned = _TAIL_LEADING_ABOUT_RE.sub("", tail, count=1).strip()
+            if cleaned and cleaned != tail:
+                tail = cleaned
         # Post-v2.0.0 D-E: peel a surrounding quote pair so an
         # empty-quoted tail (``structure of ""`` / ``get article ""``)
         # doesn't survive to the backend, which would otherwise
@@ -865,7 +896,17 @@ def _extract_get_zim_entries(query: str, params: Dict[str, Any]) -> None:
     # paths (``M/Illustration_48x48@1``), ``A/C++``, apostrophes. A narrower
     # class truncated those at the first offending character and shipped the
     # stump to ``get_entries`` as if the caller had typed it.
-    entries = safe_regex_findall(r"(?<![A-Za-z0-9])[A-Za-z]/[\w\-./%()@+'~*]+", query)
+    #
+    # D50: zimit / warc2zim archives store domain-shaped paths
+    # (``medlineplus.gov/measles.html``) and that is what this tool's own
+    # ``Path:`` lines print for them, so the batch intent must accept that
+    # shape alongside the single-letter namespace one. The lookbehind
+    # still anchors the token start; the dotted host keeps ``wikipedia.zim``
+    # (no slash) and ``and/or`` (no dot) excluded.
+    entries = safe_regex_findall(
+        rf"(?<![A-Za-z0-9])(?:[A-Za-z]/|{_DOMAIN_PATH_BODY})[\w\-./%()@+'~*]+",
+        query,
+    )
     if entries:
         params["entries"] = [_trim_entry_token(e) for e in entries]
 
@@ -1130,9 +1171,15 @@ class IntentParser:
             0.9,
             8,
         ),
-        # Get article - common words
+        # Get article - common words. D48: tolerate a determiner between
+        # the verb and the noun (``get the article about X``) — the
+        # natural phrasing otherwise fell to the search fallback with the
+        # whole sentence as terms, ``**the**`` highlighted in every
+        # snippet. Same tolerance ``_LEADING_INTENT_KEYWORDS_RE`` and the
+        # section patterns already grant their verbs.
         (
-            r"\b(get|show|read|display|fetch)\s+(article|entry|page)\b",
+            r"\b(get|show|read|display|fetch)\s+"
+            r"(?:(?:the|an?|this|that)\s+)?(article|entry|page)\b",
             "get_article",
             0.75,
             5,
@@ -1697,7 +1744,11 @@ class IntentParser:
             if (
                 not isinstance(value, str)
                 or not value
-                or (value.isascii() and not _NAMESPACE_PREFIXED_RE.match(value))
+                or (
+                    value.isascii()
+                    and not _NAMESPACE_PREFIXED_RE.match(value)
+                    and not _DOMAIN_PATH_RE.match(value)
+                )
             ):
                 return value
             idx = lowered.find(value)
@@ -1952,6 +2003,14 @@ class IntentParser:
             "still",
             "keep",
             "going",
+            # D46: the two-word pagination follow-ups small models emit
+            # after a paged response (``next page`` / ``more results``).
+            # Bare ``next`` / ``more`` were already filler, but the noun
+            # half was not, so the all-tokens-filler check failed and the
+            # pair ran a stop-word-collision full-text search instead of
+            # returning the guidance playbook.
+            "page",
+            "results",
             # Determiners / particles
             "the",
             "a",

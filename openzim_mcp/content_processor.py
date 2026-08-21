@@ -3,7 +3,7 @@
 import logging
 import re
 import unicodedata
-from typing import Any, Dict, List, Optional, Tuple, Union, cast
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union, cast
 from urllib.parse import urlparse
 
 import html2text
@@ -278,6 +278,261 @@ _COMPLETE_LINK_RE = re.compile(_LINK_RE_SRC)
 _DANGLING_LINK_RE = re.compile(r"\[[^\]\n]*$|\[[^\]\n]*\]\((?:\\.|[^\n)\\])*\\?$")
 
 
+# Paragraphs that are site furniture rather than article text, as they
+# appear in the compact markdown a snippet is cut from. Each pattern is
+# matched against the whole paragraph (anchored), so prose that merely
+# mentions the phrase is untouched.
+#
+# - The MedlinePlus ``<noscript>`` share-widget sentence, which sits
+#   directly under every H1 on that corpus (13 of 30 ``insulin`` snippets
+#   were that sentence and nothing else).
+# - ``On this page`` / ``Skip navigation`` nav headers.
+_BOILERPLATE_PARAGRAPH_RE = re.compile(
+    r"^\s*(?:"
+    r"to use the sharing features on this page, please enable javascript\.?"
+    r"|on this page:?"
+    r"|skip (?:to main content|navigation)"
+    r")\s*$",
+    re.IGNORECASE,
+)
+
+# One markdown list item: the marker and its text (outer whitespace
+# excluded). The text must open with a non-space so the marker gap
+# ``\s+`` has exactly one way to end; ``\s+(.*\S)`` let the two share a
+# trailing space run and went quadratic on ``* `` + spaces.
+_LIST_ITEM_RE = re.compile(r"^\s*(?:[*+-]|\d+[.)])\s+(\S(?:.*\S)?)\s*$")
+# ``[text](url)`` -> ``text`` (empty-text image-wrapper links fold to "").
+_LINK_TO_TEXT_RE = re.compile(r"\[([^\]\n]*)\]\((?:\\.|[^\n)\\])*\)")
+_MARKDOWN_HEADING_RE = re.compile(r"^\s*#{1,6}\s")
+# A leading H1 line and the line break(s) that close it: the heading text
+# in group 1 (outer whitespace excluded), the match ending after the last
+# newline of the blank run that follows. The text opens and closes on a
+# non-space and the tail is ``(non-newline whitespace, newline)+`` so no
+# two quantifiers compete for the same characters — the reluctant
+# ``(.+?)\s*\n+`` it replaces re-scanned the gap for every candidate end
+# and took minutes on ``# `` followed by a few thousand spaces.
+_LEADING_H1_RE = re.compile(r"^\s*#\s+(\S(?:.*\S)?)(?:[^\S\n]*\n)+")
+# Longest item still read as a navigation label rather than a sentence.
+_NAV_ITEM_MAX_WORDS = 6
+# A one-item "list" is a bullet, not a menu: too little shape to convict on.
+_NAV_LIST_MIN_ITEMS = 2
+
+
+def _is_nav_list_paragraph(paragraph: str) -> bool:
+    """Whether ``paragraph`` is a list of navigation labels, not content.
+
+    Site-scraped pages carry in-page menus (``* Summary`` / ``* Start
+    Here`` / ``* Diagnosis and Tests``) and tables of contents as plain
+    lists. Those read as short Title-Case labels with no sentence
+    punctuation; a content list (``* Being very thirsty``, ``* Deep,
+    rapid breathing``) does not, and is left alone.
+    """
+    lines = [line for line in paragraph.splitlines() if line.strip()]
+    if len(lines) < _NAV_LIST_MIN_ITEMS:
+        return False
+    for line in lines:
+        item = _LIST_ITEM_RE.match(line)
+        if item is None:
+            return False
+        text = _LINK_TO_TEXT_RE.sub(r"\1", item.group(1)).strip()
+        if not text or text[-1] in ".!?;:":
+            return False
+        words = re.findall(r"[^\W\d_]+", text)
+        if not words or len(text.split()) > _NAV_ITEM_MAX_WORDS:
+            return False
+        if any(len(word) > 3 and not word[0].isupper() for word in words):
+            return False
+    return True
+
+
+def _drop_boilerplate_paragraphs(
+    paragraphs: List[str],
+    is_query_hit: Optional[Callable[[str], bool]] = None,
+) -> List[str]:
+    """Remove site furniture from the paragraphs a snippet may be cut from.
+
+    Dropped: known boilerplate sentences, navigation lists, headings that
+    merely introduce a navigation list, and paragraphs with no visible
+    text (an image-wrapper ``[](…)`` link and nothing else). When that
+    would leave nothing, the original list is returned so a snippet is
+    still produced.
+
+    ``is_query_hit`` exempts a paragraph from the navigation-list rule
+    alone. By shape a menu is indistinguishable from a Title-Case content
+    list (sister cities, cast lists, official languages), and dropping the
+    one paragraph that carries the search term before the anchor is chosen
+    cost the snippet all its relevance — it silently fell back to the lead.
+    The named boilerplate sentences stay unconditional; they are furniture
+    whichever term matches them.
+    """
+
+    def _is_droppable_nav(index: int) -> bool:
+        paragraph = paragraphs[index]
+        if is_query_hit is not None and is_query_hit(paragraph):
+            return False
+        return _is_nav_list_paragraph(paragraph)
+
+    keep: List[str] = []
+    for index, paragraph in enumerate(paragraphs):
+        visible = _LINK_TO_TEXT_RE.sub(r"\1", paragraph).strip()
+        if not visible and index > 0:
+            # Blank/image-only paragraph. Index 0 is left to the caller's
+            # H1 handling so an empty leading slot never shifts it.
+            continue
+        if _BOILERPLATE_PARAGRAPH_RE.match(paragraph):
+            continue
+        if _is_droppable_nav(index):
+            continue
+        if (
+            _MARKDOWN_HEADING_RE.match(paragraph)
+            and index + 1 < len(paragraphs)
+            and _is_droppable_nav(index + 1)
+        ):
+            continue
+        keep.append(paragraph)
+    return keep or list(paragraphs)
+
+
+# An empty-text markdown link: what html2text leaves of a zimit
+# anchor-wrapped image once ``ignore_images`` drops the <img>.
+_EMPTY_LINK_RE = re.compile(r"\[\s*\]\((?:\\.|[^\n)\\])*\)")
+# MathJax spans as html2text escapes them: ``\\( … \\)``, ``\\[ … \\]``
+# and display ``$$ … $$``.
+_MATHJAX_RE = re.compile(
+    r"\\\\\((.+?)\\\\\)|\\\\\[(.+?)\\\\\]|\$\$(.+?)\$\$", re.DOTALL
+)
+# ``\text{…}``-style wrappers whose argument is the readable part.
+_TEX_WRAPPER_RE = re.compile(
+    r"\\(?:text|textit|textbf|textrm|textsf|texttt|mathrm|mathbf|mathit"
+    r"|mathsf|mathtt|mathcal|mathbb|mathfrak|operatorname)\{([^{}]*)\}"
+)
+_TEX_COMMAND_RE = re.compile(r"\\([A-Za-z]+)")
+_TEX_SYMBOLS = {
+    "alpha": "α",
+    "beta": "β",
+    "gamma": "γ",
+    "Gamma": "Γ",
+    "delta": "δ",
+    "Delta": "Δ",
+    "epsilon": "ε",
+    "varepsilon": "ε",
+    "theta": "θ",
+    "kappa": "κ",
+    "lambda": "λ",
+    "Lambda": "Λ",
+    "mu": "μ",
+    "nu": "ν",
+    "pi": "π",
+    "Pi": "Π",
+    "rho": "ρ",
+    "sigma": "σ",
+    "Sigma": "Σ",
+    "tau": "τ",
+    "phi": "φ",
+    "varphi": "φ",
+    "Phi": "Φ",
+    "chi": "χ",
+    "psi": "ψ",
+    "Psi": "Ψ",
+    "omega": "ω",
+    "Omega": "Ω",
+    "aleph": "ℵ",
+    "infty": "∞",
+    "vDash": "⊨",
+    "models": "⊨",
+    "vdash": "⊢",
+    "neg": "¬",
+    "lnot": "¬",
+    "land": "∧",
+    "wedge": "∧",
+    "lor": "∨",
+    "vee": "∨",
+    "to": "→",
+    "rightarrow": "→",
+    "Rightarrow": "⇒",
+    "leftrightarrow": "↔",
+    "Leftrightarrow": "⇔",
+    "forall": "∀",
+    "exists": "∃",
+    "in": "∈",
+    "notin": "∉",
+    "subseteq": "⊆",
+    "subset": "⊂",
+    "cup": "∪",
+    "cap": "∩",
+    "emptyset": "∅",
+    "leq": "≤",
+    "le": "≤",
+    "geq": "≥",
+    "ge": "≥",
+    "neq": "≠",
+    "ne": "≠",
+    "times": "×",
+    "cdot": "·",
+    "ldots": "…",
+    "dots": "…",
+}
+
+
+def _tex_to_text(tex: str) -> str:
+    """Render a TeX fragment as plain text: ``\\phi(\\kappa)`` -> ``φ(κ)``.
+
+    Best effort for snippets, not a typesetter: wrapper macros keep their
+    argument, known symbols become their Unicode glyph, unknown commands
+    keep their name, grouping braces go, and escaped set braces stay.
+    """
+    tex = _TEX_WRAPPER_RE.sub(r"\1", tex)
+    tex = tex.replace("\\\\{", "\x00").replace("\\\\}", "\x01")
+    tex = _TEX_COMMAND_RE.sub(lambda m: _TEX_SYMBOLS.get(m.group(1), m.group(1)), tex)
+    tex = tex.replace("{", "").replace("}", "")
+    tex = tex.replace("\x00", "{").replace("\x01", "}")
+    return re.sub(r"\s+", " ", tex).strip()
+
+
+def _strip_snippet_render_junk(text: str) -> str:
+    """Drop rendering leftovers that read as junk in a snippet.
+
+    zimit archives wrap lead images in anchors; with images ignored the
+    anchor survives as a zero-text ``[](../media/kant2.jpg)`` link. Pages
+    using MathJax carry ``\\\\(\\phi(\\kappa)\\\\)`` — backslash soup once
+    html2text has escaped it. Both go before the length cap so they stop
+    consuming snippet budget.
+    """
+    text = _EMPTY_LINK_RE.sub("", text)
+    return _MATHJAX_RE.sub(
+        lambda m: _tex_to_text(next(g for g in m.groups() if g is not None)),
+        text,
+    )
+
+
+def _select_snippet_paragraphs(
+    paragraphs: List[str], start_idx: int, max_paragraphs: int
+) -> List[str]:
+    """Take ``max_paragraphs`` content paragraphs from ``start_idx``.
+
+    Headings are context, not content: they do not fill a slot (a page
+    whose lead is ``## Summary`` / ``### What is diabetes?`` used to yield
+    those two lines and no prose), consecutive headings collapse to the
+    one nearest the prose, and a heading with nothing under it is dropped.
+    """
+    selected: List[str] = []
+    content_count = 0
+    for paragraph in paragraphs[start_idx:]:
+        if content_count >= max_paragraphs:
+            break
+        if _MARKDOWN_HEADING_RE.match(paragraph):
+            if selected and _MARKDOWN_HEADING_RE.match(selected[-1]):
+                selected[-1] = paragraph
+            else:
+                selected.append(paragraph)
+            continue
+        selected.append(paragraph)
+        content_count += 1
+    while len(selected) > 1 and _MARKDOWN_HEADING_RE.match(selected[-1]):
+        selected.pop()
+    return selected
+
+
 def _truncate_before_dangling_link(text: str) -> str:
     """Back ``text`` up to before an unterminated trailing markdown link.
 
@@ -548,6 +803,69 @@ def _strip_furniture_sections(soup: BeautifulSoup) -> None:
                 node.extract()  # NavigableString has no decompose()
 
 
+# In-page navigation blocks on ZIMIT/warc2zim pages. MedlinePlus renders its
+# "On this page" menu as ``<section id="toc-section">`` INSIDE the <article>
+# landmark — not a <nav>, no ``.toc`` class, group labels as <h3>, label as a
+# <span> — so it survived landmark scoping, ``UNWANTED_HTML_SELECTORS`` and
+# the heading-keyed furniture strip, and opened every topic page's body,
+# summary slice, and lead. Detected by SHAPE rather than by site id so the
+# next archive with the same pattern is covered: a nav/section/div whose
+# anchors ALL point at same-page fragments, with at least a few of them and
+# no prose of its own. Only containers are candidates — a bare <ol> of
+# fragment links (IEP's "Table of Contents") is left alone.
+_IN_PAGE_NAV_CONTAINERS = ["nav", "section", "div"]
+_IN_PAGE_NAV_MIN_LINKS = 3
+_IN_PAGE_NAV_MAX_PARAGRAPH_CHARS = 80
+_IN_PAGE_NAV_MAX_NON_LINK_CHARS = 200
+
+
+def _is_in_page_nav(node: Tag) -> bool:
+    """True if ``node`` is a link menu that only points into the same page."""
+    anchors = [a for a in node.find_all("a") if isinstance(a, Tag) and a.get("href")]
+    if len(anchors) < _IN_PAGE_NAV_MIN_LINKS:
+        return False
+    if not all(str(a.get("href")).startswith("#") for a in anchors):
+        return False
+    for paragraph in node.find_all("p"):
+        if (
+            isinstance(paragraph, Tag)
+            and len(paragraph.get_text(strip=True)) > _IN_PAGE_NAV_MAX_PARAGRAPH_CHARS
+        ):
+            return False
+    link_chars = sum(len(a.get_text(strip=True)) for a in anchors)
+    non_link_chars = len(node.get_text(strip=True)) - link_chars
+    if non_link_chars > _IN_PAGE_NAV_MAX_NON_LINK_CHARS:
+        return False
+    # A menu is its links; whatever else it carries are group labels, so the
+    # links must outweigh them. Without this a Wikipedia ``div.reflist`` --
+    # ``^`` backlinks to ``#cite_ref-N`` wrapping short citations -- and any
+    # short article whose wrapper holds a lead paragraph plus a fragment TOC
+    # both read as pure nav, and the whole References list / article body was
+    # decomposed.
+    return non_link_chars <= link_chars
+
+
+def _strip_in_page_nav(soup: BeautifulSoup) -> None:
+    """Remove same-page link menus in place (see ``_is_in_page_nav``).
+
+    Outermost match wins: the MedlinePlus block nests ``#toc-section`` >
+    ``#table-of-contents`` > ``.toccolumn``, all of which match on their
+    own, so descendants of a doomed container are skipped rather than
+    decomposed twice. Call sites must gate this to landmark-scoped content
+    (``select_main_content``) so chrome-free pages stay byte-identical.
+    """
+    doomed = [
+        node
+        for node in soup.find_all(_IN_PAGE_NAV_CONTAINERS)
+        if isinstance(node, Tag) and _is_in_page_nav(node)
+    ]
+    doomed_ids = {id(node) for node in doomed}
+    for node in doomed:
+        if any(id(parent) in doomed_ids for parent in node.parents):
+            continue
+        node.decompose()
+
+
 def select_main_content(soup: BeautifulSoup) -> BeautifulSoup:
     """Return the page's main-content subtree, or ``soup`` if none is clear.
 
@@ -568,10 +886,18 @@ def select_main_content(soup: BeautifulSoup) -> BeautifulSoup:
         nodes = soup.select(selector)
         if len(nodes) == 1 and nodes[0].get_text(strip=True):
             scoped = BeautifulSoup(str(nodes[0]), HTML_PARSER)
-            # Only landmark-scoped content gets the furniture strip; the
-            # whole-document fallback below stays byte-identical.
+            # Only landmark-scoped content gets the furniture and in-page
+            # nav strips; the whole-document fallback below stays
+            # byte-identical.
             _strip_furniture_sections(scoped)
-            return scoped
+            _strip_in_page_nav(scoped)
+            if scoped.get_text(strip=True):
+                return scoped
+            # Restore-if-empty, as _drop_boilerplate_paragraphs does: both
+            # strips match on shape, so a short article that is all furniture
+            # heading or all fragment links by shape would otherwise be served
+            # as nothing at all. Better a page of menu than a blank entry.
+            return BeautifulSoup(str(nodes[0]), HTML_PARSER)
     return soup
 
 
@@ -1338,11 +1664,23 @@ class ContentProcessor:
             snippet_length if snippet_length is not None else self.snippet_length
         )
 
-        paragraphs = content.split("\n\n")
+        terms = [t for t in _split_query_terms(query) if len(t) >= 3] if query else []
+
+        # Site furniture (share-widget boilerplate, in-page navigation
+        # lists) is neither a useful anchor nor useful fill: on MedlinePlus
+        # the paragraph under every H1 was the no-JavaScript sentence, so
+        # an H1 match produced a snippet with no article text at all. A
+        # paragraph the query actually hits is kept regardless — see
+        # ``_drop_boilerplate_paragraphs``.
+        paragraphs = _drop_boilerplate_paragraphs(
+            content.split("\n\n"),
+            is_query_hit=(
+                (lambda p: any(_word_in(_fold(p), t) for t in terms)) if terms else None
+            ),
+        )
         start_idx = 0
 
         if query:
-            terms = [t for t in _split_query_terms(query) if len(t) >= 3]
             if terms:
                 folded_paragraphs = [_fold(p) for p in paragraphs]
                 # Pass 1: whole-word match (most precise — preserves the
@@ -1371,7 +1709,7 @@ class ContentProcessor:
                             start_idx = i
                             break
 
-        selected = paragraphs[start_idx : start_idx + max_paragraphs]
+        selected = _select_snippet_paragraphs(paragraphs, start_idx, max_paragraphs)
         # H11: join with blank line (``\n\n``), not a single space, so a
         # second paragraph that opens with a markdown heading (``## Foo``)
         # remains a heading instead of becoming inline mid-line text.
@@ -1382,6 +1720,7 @@ class ContentProcessor:
             if len(selected) > 1
             else (selected[0] if selected else "")
         )
+        snippet_text = _strip_snippet_render_junk(snippet_text)
 
         # Truncate if too long. Reserve 3 chars for the trailing "..." so the
         # final string respects snippet_length rather than overshooting it.
@@ -1428,6 +1767,13 @@ class ContentProcessor:
         Match is case-insensitive on the title and tolerant of one
         trailing whitespace run (collapsed by html2text). Leaves
         non-matching headings (real article subheadings) alone.
+
+        Site-scraped archives suffix the title with the site name
+        (``Type 1 diabetes: MedlinePlus Medical Encyclopedia``,
+        ``Diabetes | … | MedlinePlus``) while the H1 carries the bare
+        article name, so an H1 that the title *starts with*, up to a
+        ``:``/``|``/dash separator, is the same duplicate and is stripped
+        too. ``# Geography`` under title ``Berlin`` still stays.
         """
         if not content or not title:
             return content
@@ -1441,7 +1787,24 @@ class ContentProcessor:
             rf"^\s*#\s+{re.escape(norm_title)}\s*\n+",
             flags=re.IGNORECASE,
         )
-        return pattern.sub("", content, count=1)
+        stripped = pattern.sub("", content, count=1)
+        if stripped != content:
+            return stripped
+        leading_h1 = _LEADING_H1_RE.match(content)
+        if leading_h1 is None:
+            return content
+        h1 = leading_h1.group(1).strip()
+        folded_title = norm_title.lower()
+        folded_h1 = h1.lower()
+        if not folded_title.startswith(folded_h1):
+            return content
+        # Index the folded title by the FOLDED length: str.lower() expands
+        # some characters ('İ' -> two code points), so the raw H1 length
+        # would read the separator probe one character early.
+        rest = folded_title[len(folded_h1) :].lstrip()
+        if rest and rest[0] not in ":|-–—":
+            return content
+        return content[leading_h1.end() :]
 
     def truncate_content(
         self,
@@ -1451,6 +1814,7 @@ class ContentProcessor:
         current_offset: int = 0,
         paginatable: bool = True,
         original_total: Optional[int] = None,
+        batch_item: bool = False,
     ) -> str:
         """
         Truncate content to maximum length with informative message.
@@ -1486,6 +1850,12 @@ class ContentProcessor:
                 read "total of N characters of body content" using the
                 post-slice length, so paginated reads under-reported
                 the article's length by ``current_offset`` chars.
+            batch_item: When True, the continuation hint points at a
+                single-entry ``entry_path`` call. Batch mode rejects
+                ``content_offset`` (``zim_get`` returns
+                ``invalid_path_combination``), so the default ``Pass
+                content_offset=N`` tail was advice the emitting mode
+                could not act on.
 
         Returns:
             Truncated content with metadata
@@ -1534,7 +1904,15 @@ class ContentProcessor:
         # this slice STARTED in the original article.
         next_offset = current_offset + consumed
 
-        if paginatable:
+        if batch_item:
+            # Batch entries are first-page only and the batch branch rejects
+            # ``content_offset``; the working recovery is a single-entry call.
+            tail = (
+                " Batch entries return their first page only; for the rest, "
+                "re-fetch this path with a single-entry `entry_path` call and "
+                f"`content_offset={next_offset}`."
+            )
+        elif paginatable:
             # NO thousands separator here: unlike the human-readable counts
             # below, this value is copied back verbatim into the typed
             # ``content_offset`` parameter, and "100,000" is not a valid int
@@ -1554,17 +1932,21 @@ class ContentProcessor:
         # whether we're paginating mid-article: at offset 0 the
         # "showing first N" wording is honest; mid-article the user
         # wants to see "chars X–Y of Z" so they can reason about
-        # where they are in the document.
+        # where they are in the document. Both counts come from
+        # ``consumed`` (what this page actually advanced by), not
+        # ``max_length``: boundary whitespace is deferred to the next
+        # page, so a 600-char cap that lands on a space emits 599 chars
+        # and the hint says ``content_offset=599`` — the prose must not
+        # contradict it by claiming 600.
         if current_offset > 0:
-            slice_end = current_offset + max_length
             body_desc = (
-                f"showing chars {current_offset:,}–{slice_end:,} of "
+                f"showing chars {current_offset:,}–{next_offset:,} of "
                 f"{full_length:,}-char body"
             )
         else:
             body_desc = (
                 f"total of {full_length:,} characters of body content, "
-                f"only showing first {max_length:,}"
+                f"only showing first {consumed:,}"
             )
 
         return f"{truncated}\n\n... [Content truncated, {body_desc}.{tail}] ..."

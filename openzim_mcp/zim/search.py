@@ -13,6 +13,7 @@ reference at import time.
 """
 
 import logging
+import unicodedata
 import urllib.parse
 from dataclasses import dataclass
 from pathlib import Path
@@ -27,7 +28,7 @@ from openzim_mcp.exceptions import (
     OpenZimMcpValidationError,
 )
 from openzim_mcp.meta import attach_meta
-from openzim_mcp.text_utils import tokenize_for_relevance
+from openzim_mcp.text_utils import strip_site_suffix, tokenize_for_relevance
 from openzim_mcp.title_promotion import find_title_match
 from openzim_mcp.zim._ops_base import _json
 from openzim_mcp.zim.redirects import best_effort_redirect_chain
@@ -147,6 +148,32 @@ _PSEUDO_NAMESPACE_TITLE_PREFIXES_EXTENDED = (
 )
 
 
+# ``suggest`` / ``find_entry_by_title`` take no offset or cursor; ``limit``
+# is their only knob, and both validators cap it at 50.
+_UNPAGED_LIMIT_CAP = 50
+
+
+def _unpaged_overflow_hint(*, subject: str, limit: int, narrow: str) -> str:
+    """The continuation for an unpaged lookup whose pool exceeded ``limit``.
+
+    R2-4: ``done=False`` with ``next_cursor=None`` used to be the whole
+    signal, which reads as "page with offset" — the one thing these
+    lookups do not honour. Spell out the only step that works instead:
+    a larger ``limit``, or a narrower query once the cap is reached.
+    """
+    if limit < _UNPAGED_LIMIT_CAP:
+        return (
+            f"More {subject} exist than limit={limit} returned. This lookup "
+            "cannot be paged (offset and cursor are not honoured); re-run "
+            f"with a larger limit (max {_UNPAGED_LIMIT_CAP})."
+        )
+    return (
+        f"More {subject} exist than the limit={_UNPAGED_LIMIT_CAP} cap can "
+        "return. This lookup cannot be paged (offset and cursor are not "
+        f"honoured); {narrow} to narrow the set."
+    )
+
+
 def _is_pseudo_namespace_entry(
     path: str, title: str, *, extended: bool = False
 ) -> bool:
@@ -197,6 +224,18 @@ def _suggestion_display_title(archive: Archive, path: str) -> str:
     return segment
 
 
+def _starts_with_whole_word(text: str, prefix: str) -> bool:
+    """Whether ``text`` starts with ``prefix`` ending on a word boundary.
+
+    ``Diabetes | MedlinePlus`` starts with the whole word ``diabetes``
+    but not with ``diabete``; ``Kant, Immanuel`` starts with ``kant``.
+    Both arguments are expected pre-folded (lowercased, stripped).
+    """
+    if not prefix or not text.startswith(prefix):
+        return False
+    return len(text) == len(prefix) or not text[len(prefix)].isalnum()
+
+
 def _query_title_already_on_page(results: List[Dict[str, Any]], query: str) -> bool:
     """Whether a filtered hit already carries the queried title verbatim.
 
@@ -219,9 +258,63 @@ def _query_title_already_on_page(results: List[Dict[str, Any]], query: str) -> b
         if not isinstance(result, dict):
             continue
         title = str(result.get("title", ""))
-        head, sep, _tail = title.partition(" | ")
-        if (head if sep else title).strip().lower() == wanted:
+        if strip_site_suffix(title).lower() == wanted:
             return True
+    return False
+
+
+# Xapian query-syntax operator words. The query itself is handed to libzim
+# verbatim (operators are not parsed, and the tool description says so);
+# these only have to stay out of the *snippet* terms, where ``and``/``not``
+# otherwise anchored the extract on nav junk (``* Diagnosis **and** Tests``)
+# and got bolded as if they were content.
+_QUERY_OPERATOR_WORDS = frozenset({"and", "or", "not", "xor", "near", "adj"})
+
+
+def _snippet_query(query: str) -> Optional[str]:
+    """``query`` without Boolean-operator words, for snippet selection.
+
+    ``(insulin) AND (NOT glucose)`` -> ``insulin glucose``: operator words
+    go, and grouping/quoting/wildcard punctuation is peeled off the words
+    that stay (inner hyphens as in ``insulin-like`` survive). Returns
+    ``None`` when nothing remains, so the caller falls back to the lead
+    paragraph.
+    """
+    kept = []
+    for word in query.split():
+        bare = word.strip("()\"'+-*")
+        if bare and bare.lower() not in _QUERY_OPERATOR_WORDS:
+            kept.append(bare)
+    return " ".join(kept) or None
+
+
+# Shortest shared prefix that counts as a common stem in the relevance
+# proxy: ``diabet``/``diabetes`` and ``symptom``/``symptoms`` share one,
+# ``cat``/``catalogue`` do not.
+_RELEVANCE_STEM_MIN_LEN = 4
+
+
+def _fold_for_relevance(text: str) -> str:
+    """NFKD-fold ``text`` so ``Gödel`` tokenises as ``godel``, not ``del``."""
+    decomposed = unicodedata.normalize("NFKD", text)
+    return "".join(ch for ch in decomposed if not unicodedata.combining(ch))
+
+
+def _tokens_share_a_stem(query_tokens: set, result_tokens: set) -> bool:
+    """Whether any query token matches a result token modulo inflection.
+
+    Xapian's English stemmer and ``*`` wildcards both match on a stem,
+    so ``diabet*`` and ``symptoms`` legitimately retrieve ``Diabetes`` and
+    ``Symptom``. Accept an exact token or a shared prefix at least
+    ``_RELEVANCE_STEM_MIN_LEN`` long where one token extends the other.
+    """
+    if query_tokens & result_tokens:
+        return True
+    for q in query_tokens:
+        for r in result_tokens:
+            short, long_ = (q, r) if len(q) <= len(r) else (r, q)
+            if len(short) >= _RELEVANCE_STEM_MIN_LEN and long_.startswith(short):
+                return True
     return False
 
 
@@ -235,18 +328,23 @@ def _all_results_weakly_match(results: List[Dict[str, Any]], query: str) -> bool
     on the response so the model can pivot (try alt spellings, broaden
     the query) rather than treat noisy results as authoritative.
 
+    Both sides are diacritic-folded and compared modulo a shared stem,
+    matching what Xapian itself did to produce the hits: ``diabet*`` and
+    ``Godel`` used to flag the very Diabetes / Gödel articles they asked
+    for, telling the model to distrust the best possible results.
+
     Returns False when ``results`` is empty (callers gate on
     ``total_results > 0`` so empty lists never reach this path; defensive).
     """
     if not results:
         return False
-    query_tokens = tokenize_for_relevance(query)
+    query_tokens = tokenize_for_relevance(_fold_for_relevance(query))
     if not query_tokens:
         return False
     for r in results:
         haystack = f"{r.get('path', '')} {r.get('title', '')}"
-        r_tokens = tokenize_for_relevance(haystack)
-        if query_tokens & r_tokens:
+        r_tokens = tokenize_for_relevance(_fold_for_relevance(haystack))
+        if _tokens_share_a_stem(query_tokens, r_tokens):
             return False
     return True
 
@@ -553,13 +651,16 @@ class _SearchMixin:
             )
 
         # Cache key bumped to v2b (Phase B) so v1.x cached responses (old shape)
-        # don't leak through after the upgrade. The stat token (mtime_ns:size)
-        # invalidates results when the archive is replaced in place
-        # (archive_stat_token contract).
+        # don't leak through after the upgrade, then to v2c when the page
+        # gained canonical-path dedup, ``page_info.source_consumed`` and
+        # ``_snippet_query`` anchoring — a persisted v2b payload would keep
+        # re-serving the duplicate-laden page for its TTL. The stat token
+        # (mtime_ns:size) invalidates results when the archive is replaced in
+        # place (archive_stat_token contract).
         from openzim_mcp.bundle import archive_stat_token
 
         cache_key = (
-            f"search_v2b:{validated_path}:"
+            f"search_v2c:{validated_path}:"
             f"{archive_stat_token(validated_path)}:{query}:{limit}:{offset}"
         )
         cached_result = self.cache.get(cache_key)
@@ -742,103 +843,43 @@ class _SearchMixin:
             to decide whether the response is safe to cache. The payload
             shape is documented on ``search_zim_file_data``.
         """
-        from openzim_mcp.pagination import Cursor, archive_identity
-
         query_obj = _zim_ops_mod.Query().set_query(query)
         searcher = _zim_ops_mod.Searcher(archive)
         search = searcher.search(query_obj)
 
         total_results = search.getEstimatedMatches()
 
-        if total_results == 0:
-            return (
-                {
-                    "query": query,
-                    "results": [],
-                    "next_cursor": None,
-                    "total": 0,
-                    "done": True,
-                    "page_info": {
-                        "offset": offset,
-                        "limit": limit,
-                        "returned_count": 0,
-                    },
-                },
-                0,
+        if total_results == 0 or offset >= total_results:
+            return self._empty_search_page(
+                query, limit=limit, offset=offset, total_results=total_results
             )
 
-        if offset >= total_results:
-            return (
-                {
-                    "query": query,
-                    "results": [],
-                    "next_cursor": None,
-                    "total": total_results,
-                    "done": True,
-                    "page_info": {
-                        "offset": offset,
-                        "limit": limit,
-                        "returned_count": 0,
-                    },
-                },
-                total_results,
-            )
-
-        result_count = min(limit, total_results - offset)
-        result_entries = list(search.getResults(offset, result_count))
-
-        results: List[Dict[str, Any]] = []
-        for i, entry_id in enumerate(result_entries):
-            try:
-                entry = archive.get_entry_by_path(entry_id)
-                title = entry.title or "Untitled"
-                snippet = self._get_entry_snippet(
-                    entry,
-                    query=query,
-                    snippet_length=snippet_length,
-                    max_paragraphs=max_paragraphs,
-                    validated_path=str(validated_path) if validated_path else None,
-                )
-                results.append({"path": entry_id, "title": title, "snippet": snippet})
-            except Exception as e:
-                logger.warning(f"Error processing search result {entry_id}: {e}")
-                results.append(
-                    {
-                        "path": entry_id,
-                        "title": f"Entry {offset + i + 1}",
-                        "snippet": f"(Error getting entry details: {e})",
-                    }
-                )
+        results, consumed, exhausted = self._collect_distinct_hits(
+            search,
+            archive,
+            query,
+            limit=limit,
+            offset=offset,
+            total_results=total_results,
+            snippet_length=snippet_length,
+            max_paragraphs=max_paragraphs,
+            validated_path=validated_path,
+        )
 
         returned_count = len(results)
-        last_index = offset + returned_count
-        # ``total_results`` is Xapian's ESTIMATE and can exceed the real hit
-        # count. When ``getResults`` hands back fewer entries than requested,
-        # the real stream is exhausted — treating the estimate as authoritative
-        # here re-minted the same cursor forever (empty page, done=False,
-        # offset unchanged: a livelock for contract-following clients).
-        done = last_index >= total_results or returned_count < result_count
+        last_index = offset + consumed
+        done = last_index >= total_results or exhausted
+        page_info: Dict[str, Any] = {
+            "offset": offset,
+            "limit": limit,
+            "returned_count": returned_count,
+        }
+        if consumed != returned_count:
+            page_info["source_consumed"] = consumed
         next_cursor: Optional[str] = None
         if not done:
-            # Post-a20 P1-D1 / post-a21 P1-D5 contract: any tool whose
-            # cursor state carries ``"q"`` must also appear in
-            # ``simple_tools.SimpleToolsHandler._Q_EMITTING_CURSOR_TOOLS``
-            # so the dispatcher's q-overlap guard knows to run for
-            # legitimate pagination AND to skip when a cursor's ``t``
-            # claims a non-q-emitting tool. Add a new ``Cursor.encode``
-            # callsite here? Update that set in lockstep — the post-a21
-            # ``TestP1D5QEmittingCursorToolsDrift`` regression pins the
-            # contract via a parametric scan of these encode sites.
-            cursor_state: Dict[str, Any] = {
-                "o": last_index,
-                "l": limit,
-                "q": query,
-            }
-            if validated_path is not None:
-                cursor_state["ai"] = archive_identity(validated_path)
-            next_cursor = Cursor.encode(
-                tool="search_zim_file",
-                state=cast("Any", cursor_state),
+            next_cursor = self._search_page_cursor(
+                query, limit=limit, last_index=last_index, validated_path=validated_path
             )
 
         return (
@@ -848,14 +889,160 @@ class _SearchMixin:
                 "next_cursor": next_cursor,
                 "total": total_results,
                 "done": done,
+                "page_info": page_info,
+            },
+            total_results,
+        )
+
+    @staticmethod
+    def _empty_search_page(
+        query: str, *, limit: int, offset: int, total_results: int
+    ) -> Tuple[Dict[str, Any], int]:
+        """The ``_perform_search`` page when there is nothing to return —
+        no matches at all, or an ``offset`` past the last one: empty
+        results, no cursor, ``done``."""
+        return (
+            {
+                "query": query,
+                "results": [],
+                "next_cursor": None,
+                "total": total_results,
+                "done": True,
                 "page_info": {
                     "offset": offset,
                     "limit": limit,
-                    "returned_count": returned_count,
+                    "returned_count": 0,
                 },
             },
             total_results,
         )
+
+    def _collect_distinct_hits(
+        self,
+        search: Any,
+        archive: Archive,
+        query: str,
+        *,
+        limit: int,
+        offset: int,
+        total_results: int,
+        snippet_length: Optional[int],
+        max_paragraphs: Optional[int],
+        validated_path: Optional[Path],
+    ) -> Tuple[List[Dict[str, Any]], int, bool]:
+        """Pull ranked rows from ``search`` until the page holds ``limit``
+        distinct pages or the stream ends.
+
+        warc2zim stores query-string variants of a page as separate entries
+        (``quiz.htm`` and ``quiz.htm?quiz=1``), and Xapian ranks them side
+        by side — a MedlinePlus page of 40 carried 19 duplicates. Collapse
+        on the canonical path, as the filtered scanner does. Page-scoped
+        (not scan-scoped) so ``offset`` stays a plain ranked-row offset and
+        a high offset never triggers a scan from zero; the rows actually
+        consumed are reported in ``page_info.source_consumed`` so a client
+        resumes at ``offset + source_consumed``.
+
+        Returns ``(rows, consumed, exhausted)``. ``total_results`` is
+        Xapian's ESTIMATE and can exceed the real hit count; when
+        ``getResults`` hands back fewer entries than requested the real
+        stream is exhausted, and the caller must treat the page as done —
+        trusting the estimate here re-minted the same cursor forever
+        (empty page, done=False, offset unchanged: a livelock for
+        contract-following clients).
+        """
+        results: List[Dict[str, Any]] = []
+        seen_canonical: set[str] = set()
+        consumed = 0
+        exhausted = False
+        while len(results) < limit and not exhausted:
+            want = min(limit - len(results), total_results - offset - consumed)
+            if want <= 0:
+                break
+            batch = list(search.getResults(offset + consumed, want))
+            if len(batch) < want:
+                exhausted = True
+            for entry_id in batch:
+                consumed += 1
+                canonical = canonical_result_path(entry_id)
+                if canonical in seen_canonical:
+                    continue
+                seen_canonical.add(canonical)
+                results.append(
+                    self._search_result_row(
+                        archive,
+                        entry_id,
+                        rank=offset + consumed,
+                        query=query,
+                        snippet_length=snippet_length,
+                        max_paragraphs=max_paragraphs,
+                        validated_path=validated_path,
+                    )
+                )
+        return results, consumed, exhausted
+
+    @staticmethod
+    def _search_page_cursor(
+        query: str, *, limit: int, last_index: int, validated_path: Optional[Path]
+    ) -> str:
+        """Mint the continuation cursor for a not-yet-done search page.
+
+        Post-a20 P1-D1 / post-a21 P1-D5 contract: any tool whose cursor
+        state carries ``"q"`` must also appear in
+        ``simple_tools.SimpleToolsHandler._Q_EMITTING_CURSOR_TOOLS`` so the
+        dispatcher's q-overlap guard knows to run for legitimate pagination
+        AND to skip when a cursor's ``t`` claims a non-q-emitting tool. Add
+        a new ``Cursor.encode`` callsite here? Update that set in lockstep —
+        the post-a21 ``TestP1D5QEmittingCursorToolsDrift`` regression pins
+        the contract via a parametric scan of these encode sites.
+        """
+        from openzim_mcp.pagination import Cursor, archive_identity
+
+        cursor_state: Dict[str, Any] = {
+            "o": last_index,
+            "l": limit,
+            "q": query,
+        }
+        if validated_path is not None:
+            cursor_state["ai"] = archive_identity(validated_path)
+        return Cursor.encode(
+            tool="search_zim_file",
+            state=cast("Any", cursor_state),
+        )
+
+    def _search_result_row(
+        self,
+        archive: Archive,
+        entry_id: str,
+        *,
+        rank: int,
+        query: str,
+        snippet_length: Optional[int],
+        max_paragraphs: Optional[int],
+        validated_path: Optional[Path],
+    ) -> Dict[str, Any]:
+        """Project one ranked hit onto a SearchHit row; never raises.
+
+        ``rank`` is the 1-based position in the ranked stream, used only to
+        label a row whose entry could not be read.
+        """
+        try:
+            entry = archive.get_entry_by_path(entry_id)
+            title = entry.title or "Untitled"
+            snippet = self._get_entry_snippet(
+                entry,
+                query=_snippet_query(query),
+                snippet_length=snippet_length,
+                max_paragraphs=max_paragraphs,
+                validated_path=str(validated_path) if validated_path else None,
+            )
+            return {"path": entry_id, "title": title, "snippet": snippet}
+        except Exception as e:
+            logger.warning(f"Error processing search result {entry_id}: {e}")
+            return {
+                "path": entry_id,
+                "title": f"Entry {rank}",
+                "snippet": f"(Error getting entry details: {e})",
+            }
 
     def _format_search_text(
         self,
@@ -1018,23 +1205,24 @@ class _SearchMixin:
                 # the window.
                 next_offset = total_results
             else:
-                next_offset = offset + limit
-                if next_cursor is None:
+                # ``source_consumed`` is the number of ranked rows this
+                # page actually consumed, which exceeds the rows shown
+                # whenever the canonical splice prepended a synthetic row
+                # (``_splice_title_match_into_search``) or the dedup
+                # collapsed query-string variants (``_collect_distinct_hits``).
+                # It is the same resume point the cursor encodes, so honour
+                # it whether or not a cursor was minted — the rendered footer
+                # is what a model without cursor support pages by, and
+                # ``offset + limit`` would replay the collapsed rows.
+                consumed = page_info.get("source_consumed")
+                if isinstance(consumed, int) and not isinstance(consumed, bool):
+                    next_offset = offset + consumed
+                elif next_cursor is None:
                     # Limited path that doesn't know the next-page boundary
                     # precisely; advance by what we actually returned.
-                    #
-                    # ``len(results)`` is the wrong count once the canonical
-                    # splice has prepended a synthetic row: that row came from
-                    # the title index, not the ranked stream, so counting it
-                    # here would advance one slot too far and skip a real hit.
-                    # ``source_consumed`` (set by
-                    # ``_splice_title_match_into_search``) is the ranked-row
-                    # count; absent on every unspliced payload, which then
-                    # falls back to the row count as before.
-                    consumed = page_info.get("source_consumed")
-                    if not isinstance(consumed, int) or isinstance(consumed, bool):
-                        consumed = len(results)
-                    next_offset = offset + consumed
+                    next_offset = offset + len(results)
+                else:
+                    next_offset = offset + limit
             result_text += (
                 f"Showing {offset + 1}-{offset + len(results)} "
                 f"of {total_text} — "
@@ -1389,13 +1577,15 @@ class _SearchMixin:
         # Post-b1 P3-D1: include display_query in the cache key. Two calls
         # with the same matched query but different display forms must
         # render different text; a stale cache would echo the wrong
-        # casing back to the second caller.
+        # casing back to the second caller. Versioned to v1b when snippets
+        # moved to ``_snippet_query`` anchoring — a persisted unversioned
+        # payload would keep re-serving Boolean-operator snippets for its TTL.
         # The stat token (mtime_ns:size) invalidates results when the archive
         # is replaced in place (archive_stat_token contract).
         from openzim_mcp.bundle import archive_stat_token
 
         cache_key = (
-            f"search_filtered:{validated_path}:"
+            f"search_filtered:v1b:{validated_path}:"
             f"{archive_stat_token(validated_path)}:{query}:{namespace}:"
             f"{content_type}:{limit}:{offset}:dq={display_query or ''}"
         )
@@ -1529,12 +1719,13 @@ class _SearchMixin:
         # Cache key bumped to v2b (Phase B) so v1.x cached responses (markdown
         # strings under the legacy ``search_filtered:`` prefix) don't leak
         # through after the upgrade — different prefix, different cache slot.
-        # The stat token (mtime_ns:size) invalidates results when the archive
+        # Bumped again to v2c for the ``_snippet_query`` anchoring and
+        # ``page_info.total_is_lower_bound``. The stat token (mtime_ns:size) invalidates results when the archive
         # is replaced in place (archive_stat_token contract).
         from openzim_mcp.bundle import archive_stat_token
 
         cache_key = (
-            f"search_filtered_v2b:{validated_path}:"
+            f"search_filtered_v2c:{validated_path}:"
             f"{archive_stat_token(validated_path)}:{query}:{namespace}:"
             f"{content_type}:{limit}:{offset}"
         )
@@ -2043,10 +2234,11 @@ class _SearchMixin:
         when the scan produced an empty value.
         """
         results: List[Dict[str, Any]] = []
+        snippet_query = _snippet_query(query) if query else None
         for i, (entry_id, entry, entry_namespace, content_mime) in enumerate(page):
             try:
                 title = entry.title or "Untitled"
-                snippet = self._get_entry_snippet(entry, query=query)
+                snippet = self._get_entry_snippet(entry, query=snippet_query)
                 if not content_type:
                     # No content_type filter means the scan never fetched
                     # the mimetype (tuple carries ""), so backfill it here.
@@ -2090,8 +2282,12 @@ class _SearchMixin:
 
         ``get_search_suggestions`` is non-paginated (no cursor input,
         no offset), but the v2 Phase B contract still applies for
-        uniformity: ``next_cursor=None``, ``done=True``,
-        ``total=len(results)``, ``page_info.offset=0``.
+        uniformity: ``next_cursor=None``, ``total=len(results)``,
+        ``page_info.offset=0``. ``done`` is False only when the backend
+        saw a match beyond the page; that payload also carries
+        ``page_info.total_is_lower_bound`` and a ``_meta.hint`` naming
+        the continuation (a larger ``limit``), since ``offset`` is not
+        honoured here.
 
         Raises:
             OpenZimMcpFileNotFoundError: If ZIM file not found
@@ -2110,19 +2306,27 @@ class _SearchMixin:
                 "done": True,
                 "page_info": {"offset": 0, "limit": limit, "returned_count": 0},
             }
-            return cast("SearchSuggestionsResponse", attach_meta(empty_payload))
+            # Same structured reason as the fulltext / title modes, so an
+            # empty prefix is distinguishable from a prefix with no matches.
+            return cast(
+                "SearchSuggestionsResponse",
+                attach_meta(empty_payload, reason="bad_query"),
+            )
 
         # Validate and resolve file path
         validated_path = self._validate_zim_path(zim_file_path)
 
         # Cache key bumped to v2b (Phase B) so v1.x cached responses (old
-        # shape: suggestions/count keys) don't leak through after the upgrade.
-        # The stat token (mtime_ns:size) invalidates suggestions when the
-        # archive is replaced in place (archive_stat_token contract).
+        # shape: suggestions/count keys) don't leak through after the upgrade;
+        # v2d when a full page stopped implying ``done=False`` (R2-4) — a
+        # persisted v2c payload would keep re-serving the bare continuation
+        # signal for its TTL. The stat token (mtime_ns:size) invalidates
+        # suggestions when the archive is replaced in place
+        # (archive_stat_token contract).
         from openzim_mcp.bundle import archive_stat_token
 
         cache_key = (
-            f"suggestions_data:v2c:{validated_path}:"
+            f"suggestions_data:v2d:{validated_path}:"
             f"{archive_stat_token(validated_path)}:{partial_query}:{limit}"
         )
         cached_result = self.cache.get(cache_key)
@@ -2143,32 +2347,42 @@ class _SearchMixin:
             actual_count = len(suggestions)
 
             # The suggestion pool is capped at ``limit``; we don't enumerate
-            # the full match set. A full page therefore can't claim the set
-            # is exhausted — reporting ``done=True`` with ``returned==limit``
-            # falsely signals completeness for prefixes with many matches.
-            # ``done`` is only True when we returned fewer than we asked for
-            # (the candidate pool was genuinely exhausted). ``total`` is the
-            # number actually returned, which is exact when ``done`` and a
-            # lower bound otherwise (flagged in ``_meta`` via ``reason``).
-            done = actual_count < limit
+            # the full match set. The generator over-fetches by one, so
+            # ``has_more`` says whether a match exists beyond the page.
+            # ``done`` used to be ``actual_count < limit`` — a full page
+            # *assumed* more and signalled ``done=False`` with nothing to
+            # continue on (R2-4). ``total`` is the number actually
+            # returned: exact when ``done``, a lower bound otherwise
+            # (flagged in ``page_info`` and via ``reason``).
+            has_more = bool(raw.get("has_more", False))
+            done = not has_more
 
+            page_info: Dict[str, Any] = {
+                "offset": 0,
+                "limit": limit,
+                "returned_count": actual_count,
+            }
+            if has_more:
+                page_info["total_is_lower_bound"] = True
             payload: Dict[str, Any] = {
                 "partial_query": partial_query,
                 "results": suggestions,
                 "next_cursor": None,
                 "total": actual_count,
                 "done": done,
-                "page_info": {
-                    "offset": 0,
-                    "limit": limit,
-                    "returned_count": actual_count,
-                },
+                "page_info": page_info,
             }
 
             with_meta = attach_meta(
                 payload,
                 reason=None if done else "suggestion_total_is_lower_bound",
             )
+            if has_more:
+                # ``next_cursor`` is None and ``offset`` is not honoured,
+                # so the continuation has to be spelled out.
+                with_meta["_meta"]["hint"] = _unpaged_overflow_hint(
+                    subject="suggestions", limit=limit, narrow="extend the prefix"
+                )
             # Cache the post-attach payload (Phase B #12). A cold-cache
             # request that hits before the libzim title index has warmed
             # up can return zero suggestions for a query that will
@@ -2232,7 +2446,15 @@ class _SearchMixin:
 
         # Strategy 1: Use search functionality as fallback since direct entry
         # iteration may not work reliably with all ZIM file structures.
-        suggestions = self._get_suggestions_from_search(archive, partial_query, limit)
+        # R2-4: ask for one more than the page so a full page can tell
+        # "exactly ``limit`` exist" from "more lie beyond it". ``has_more``
+        # is the only honest basis for ``done=False`` — this lookup takes
+        # no offset, so a continuation signal must come with a hint.
+        suggestions = self._get_suggestions_from_search(
+            archive, partial_query, limit + 1
+        )
+        has_more = len(suggestions) > limit
+        suggestions = suggestions[:limit]
 
         # D6 (beta): the libzim suggest index / Xapian search both miss
         # the canonical bare-title article for common prefixes.
@@ -2262,7 +2484,9 @@ class _SearchMixin:
             if canonical is not None:
                 suggestions = [canonical] + suggestions
                 # Trim back to limit so the canonical doesn't push the
-                # original last suggestion off the cliff unaccounted.
+                # original last suggestion off the cliff unaccounted —
+                # an evicted row is a real suggestion beyond the page.
+                has_more = has_more or len(suggestions) > limit
                 suggestions = suggestions[:limit]
 
             logger.info(f"Found {len(suggestions)} suggestions using search fallback")
@@ -2270,6 +2494,7 @@ class _SearchMixin:
                 "partial_query": partial_query,
                 "suggestions": suggestions,
                 "count": len(suggestions),
+                "has_more": has_more,
             }
 
         # Strategy 2: Use the libzim title-index suggestion API. Replaces the
@@ -2364,7 +2589,9 @@ class _SearchMixin:
         # Sort by score and title length (prefer shorter, more relevant titles)
         title_matches.sort(key=lambda x: (-x["score"], len(x["suggestion"])))
 
-        # Take the best matches
+        # Take the best matches. The loop above collects up to ``2 * limit``
+        # candidates, so anything past ``limit`` is a match beyond the page.
+        has_more = len(title_matches) > limit
         for match in title_matches[:limit]:
             suggestions.append(
                 {
@@ -2392,12 +2619,14 @@ class _SearchMixin:
             )
             if canonical is not None:
                 suggestions = [canonical] + suggestions
+                has_more = has_more or len(suggestions) > limit
                 suggestions = suggestions[:limit]
 
         return {
             "partial_query": partial_query,
             "suggestions": suggestions[:limit],
             "count": len(suggestions[:limit]),
+            "has_more": has_more,
         }
 
     def _get_suggestions_from_search(  # NOSONAR(python:S3776)
@@ -2784,11 +3013,13 @@ class _SearchMixin:
                 seen.add(v)
                 variants.append(v)
 
-        # Single character deletion. Capped to titles >= 5 chars on the
-        # *result* (i.e. >= 6 on the input) — below that, deletions match
+        # Single character deletion. Capped to titles >= 4 chars on the
+        # *result* (i.e. >= 5 on the input) — below that, deletions match
         # too many spurious short articles ("test" -> "tes" -> any 3-char
-        # title is a false positive).
-        if len(title) >= 6:
+        # title is a false positive). The floor used to be 6, which never
+        # generated the doubled-letter typo of a short name ("Kannt" ->
+        # "Kant"); 5 keeps the 3-char spray out while admitting it.
+        if len(title) >= 5:
             for i in range(len(title)):
                 v = title[:i] + title[i + 1 :]
                 if v and v not in seen:
@@ -2880,23 +3111,36 @@ class _SearchMixin:
         extra_probes = 0
         verified: List[str] = []
         seen_titles: set[str] = set()
+        # One suggestion searcher for the whole sweep; built lazily so a
+        # sweep that resolves every variant through the exact probes never
+        # pays for it.
+        title_index: Optional[Any] = None
         for variant in self._typo_variants(title):
-            # Early-out once we have a canonical hit AND enough suggestions.
-            best_is_done = best is not None and (
-                best_is_canonical or extra_probes >= self._TYPO_MAX_EXTRA_PROBES
-            )
-            if best_is_done and len(verified) >= suggestion_limit:
-                break
+            # Stop once the extra-probe budget after the first hit is spent,
+            # or earlier if the best entry is already canonical and the
+            # suggestion pool is full. The pool alone can never end the
+            # sweep: ``seen_titles`` dedupes by title, so a misspelling that
+            # reaches a single article leaves ``verified`` at 1 forever and
+            # the sweep ran every variant — each one a title-index
+            # suggestion query since the D26 verification landed.
+            if best is not None:
+                if extra_probes >= self._TYPO_MAX_EXTRA_PROBES or (
+                    best_is_canonical and len(verified) >= suggestion_limit
+                ):
+                    break
+                extra_probes += 1
 
             try:
                 entry = self._find_entry_fast_path(archive, variant)
+                if entry is None:
+                    if title_index is None:
+                        title_index = _zim_ops_mod.SuggestionSearcher(archive)
+                    entry = self._verify_variant_via_title_index(
+                        archive, variant, searcher=title_index
+                    )
             except Exception:
-                if best is not None and not best_is_done:
-                    extra_probes += 1
                 continue
             if entry is None:
-                if best is not None and not best_is_done:
-                    extra_probes += 1
                 continue
 
             source_is_canonical = not bool(getattr(entry, "is_redirect", False))
@@ -2915,10 +3159,57 @@ class _SearchMixin:
             elif source_is_canonical and not best_is_canonical:
                 best = resolved
                 best_is_canonical = True
-            else:
-                if not best_is_done:
-                    extra_probes += 1
         return best, verified
+
+    # Suggestion rows examined per typo variant when verifying it against
+    # the title index. The top few prefix matches are enough to tell a real
+    # word from a non-word; deeper rows only add cost.
+    _TYPO_VERIFY_SUGGESTION_ROWS = 3
+
+    def _verify_variant_via_title_index(
+        self, archive: Any, variant: str, *, searcher: Optional[Any] = None
+    ) -> Optional[Any]:
+        """Resolve a typo ``variant`` through the title index.
+
+        ``_find_entry_fast_path`` verifies a candidate only through exact
+        title equality and the ``C/``/``A/`` path conventions. On
+        site-scraped archives neither can ever hold — titles carry a site
+        suffix (``Diabetes | MedlinePlus``) and paths are URLs
+        (``medlineplus.gov/diabetes.html``) — so the whole Levenshtein-1
+        sweep verified nothing and the advertised typo tolerance never
+        fired. Ask libzim's suggestion index instead and accept a row whose
+        title starts with the variant as a *whole word*: ``Diabetes`` is
+        verified by ``Diabetes | Type 1 Diabetes ...`` and ``Kant`` by
+        ``Kant, Immanuel | ...``, while the non-word ``Diabete`` (which the
+        prefix index matches just as happily) is not.
+
+        ``searcher`` lets the sweep reuse one ``SuggestionSearcher`` across
+        its ~400 variants. Returns the matching Entry (pre-redirect; the
+        caller walks the chain) or ``None``. Never raises.
+        """
+        wanted = variant.strip().lower()
+        if not wanted:
+            return None
+        try:
+            if searcher is None:
+                searcher = _zim_ops_mod.SuggestionSearcher(archive)
+            suggestion = searcher.suggest(variant)
+            if suggestion.getEstimatedMatches() <= 0:
+                return None
+            paths = list(suggestion.getResults(0, self._TYPO_VERIFY_SUGGESTION_ROWS))
+        except Exception as e:
+            logger.debug(f"title-index verification of {variant!r} failed: {e}")
+            return None
+        for path in paths:
+            try:
+                entry = archive.get_entry_by_path(path)
+            except Exception as e:
+                logger.debug(f"title-index verification read failed for {path}: {e}")
+                continue
+            entry_title = (getattr(entry, "title", "") or "").strip().lower()
+            if _starts_with_whole_word(entry_title, wanted):
+                return entry
+        return None
 
     @staticmethod
     def _follow_redirect_chain(entry: Any) -> Any:
@@ -3034,12 +3325,14 @@ class _SearchMixin:
         fast_path_hit: bool,
         fuzzy_path_hit: bool,
         verified_variants: List[str],
+        reason: Optional[str] = None,
     ) -> "FindEntryResponse":
         """Sort, dedupe, and assemble the contract envelope.
 
         Pure transformation of the per-file accumulated state — no
         archive access, no control flow. Mirrors the legacy post-loop
-        block exactly.
+        block exactly. ``reason`` overrides the derived ``0_hits`` verdict
+        (the blank-query page is ``bad_query``, not a miss).
         """
         structured_suggestions_limit = self.config.search.structured_suggestions_limit
 
@@ -3078,36 +3371,46 @@ class _SearchMixin:
             for resolved in verified_variants[:structured_suggestions_limit]:
                 suggestions.append({"type": "alt_spelling", "value": resolved})
 
-        reason = None if aggregate_results else "0_hits"
+        if reason is None and not aggregate_results:
+            reason = "0_hits"
 
         # Trim to limit and build the contract envelope. ``find_entry_by_title``
         # is non-paginated (no cursor input, no offset), but the v2 Phase B
         # contract still applies for uniformity: ``next_cursor=None``,
-        # ``done=True``, ``total=len(results)``, ``page_info.offset=0``.
+        # ``total=len(results)``, ``page_info.offset=0``. ``done`` was
+        # stamped True even when the trim dropped rows (R2-4); a trimmed
+        # page now says so, with the lower-bound flag and the ``limit``
+        # hint, because ``offset`` is not honoured here either.
         trimmed_results = aggregate_results[:limit]
+        has_more = len(aggregate_results) > limit
+        page_info: Dict[str, Any] = {
+            "offset": 0,
+            "limit": limit,
+            "returned_count": len(trimmed_results),
+        }
+        if has_more:
+            page_info["total_is_lower_bound"] = True
         payload: Dict[str, Any] = {
             "query": title,
             "results": trimmed_results,
             "next_cursor": None,
             "total": len(trimmed_results),
-            "done": True,
-            "page_info": {
-                "offset": 0,
-                "limit": limit,
-                "returned_count": len(trimmed_results),
-            },
+            "done": not has_more,
+            "page_info": page_info,
             "fast_path_hit": fast_path_hit,
             "fuzzy_path_hit": fuzzy_path_hit,
             "files_searched": len(files),
         }
-        return cast(
-            "FindEntryResponse",
-            attach_meta(
-                payload,
-                suggestions=suggestions if suggestions else None,
-                reason=reason,
-            ),
+        with_meta = attach_meta(
+            payload,
+            suggestions=suggestions if suggestions else None,
+            reason=reason,
         )
+        if has_more:
+            with_meta["_meta"]["hint"] = _unpaged_overflow_hint(
+                subject="title matches", limit=limit, narrow="lengthen the title"
+            )
+        return cast("FindEntryResponse", with_meta)
 
     def find_entry_by_title_data(
         self,
@@ -3130,13 +3433,24 @@ class _SearchMixin:
              title match is promoted to score 1.0 and flips fast_path_hit.
           3. Return list sorted by score (descending).
         """
-        if not title or not title.strip():
-            raise OpenZimMcpValidationError(
-                "Input is empty or contains only whitespace/control characters"
-            )
         if limit < 1 or limit > 50:
             raise OpenZimMcpValidationError(
                 f"limit must be between 1 and 50 (provided: {limit})"
+            )
+        # Empty / whitespace-only title: the same structured reason the
+        # fulltext and suggest modes return, so a model can self-correct
+        # without parsing an error envelope. This used to raise a generic
+        # validation error — one tool, three contracts for one mistake.
+        if not title or not title.strip():
+            return self._assemble_find_response(
+                [],
+                title=title,
+                limit=limit,
+                files=[],
+                fast_path_hit=False,
+                fuzzy_path_hit=False,
+                verified_variants=[],
+                reason="bad_query",
             )
 
         if cross_file:
@@ -3153,14 +3467,16 @@ class _SearchMixin:
         # archive content, so the stat-token key invalidates on file change.
         # This also collapses the M30 Pass-1/Pass-3 and L4 duplicate-probe
         # re-queries into cache hits. cross_file aggregates multiple archives,
-        # so it is left uncached.
+        # so it is left uncached. Bumped to v2 when ``done``,
+        # ``page_info.total_is_lower_bound`` and the site-suffixed ``exact_ci``
+        # score changed the payload for an unchanged archive.
         find_cache_key: Optional[str] = None
         if not cross_file:
             try:
                 from openzim_mcp.bundle import archive_stat_token
 
                 find_cache_key = (
-                    f"find_title:v1:{files[0]}:"
+                    f"find_title:v2:{files[0]}:"
                     f"{archive_stat_token(Path(files[0]))}:{title}:{limit}"
                 )
             except Exception:
@@ -3207,7 +3523,13 @@ class _SearchMixin:
                         ).suggest(title)
                         total = suggestion_search.getEstimatedMatches()
                         if total > 0:
-                            paths = list(suggestion_search.getResults(0, limit))
+                            # R2-4: pull one row past the page so the
+                            # assembler's trim can tell "exactly ``limit``
+                            # matched" from "more exist" — pulling exactly
+                            # ``limit`` made every full page claim ``done``.
+                            # Rank scores decay against a fixed window, so
+                            # the extra row leaves the page's scores alone.
+                            paths = list(suggestion_search.getResults(0, limit + 1))
                             # Score by rank — first result is the best
                             # libzim suggestion match. Legacy behaviour was a
                             # hardcoded 0.8 for every hit, which made the
@@ -3253,7 +3575,17 @@ class _SearchMixin:
                                 suggest_post_path = getattr(entry, "path", None)
                                 redirect_walked = suggest_pre_path != suggest_post_path
                                 resolved_title = entry.title or path
-                                exact_ci = resolved_title.lower() == title_lower
+                                # A site-suffixed title whose own name is
+                                # the query (``Virtue Ethics | Internet
+                                # Encyclopedia of Philosophy``) is an exact
+                                # match too: without this, scraped archives
+                                # topped out at 0.95 and the strict 1.0
+                                # promotion gates could never fire.
+                                exact_ci = (
+                                    resolved_title.lower() == title_lower
+                                    or strip_site_suffix(resolved_title).lower()
+                                    == title_lower
+                                )
                                 if exact_ci:
                                     score: float = 1.0
                                     fast_path_hit = True

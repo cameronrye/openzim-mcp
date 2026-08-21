@@ -53,6 +53,19 @@ class OpenZimMcpValidationError(OpenZimMcpError):
     error_code: str = "OPENZIM_VALIDATION_ERROR"
 
 
+class OpenZimMcpCursorMismatchError(OpenZimMcpValidationError):
+    """A pagination cursor's archive identity does not match the call's archive.
+
+    Subclasses ``OpenZimMcpValidationError`` so existing callers that catch
+    the broad class keep working, but is distinct so the tool wrappers can
+    render it under the same ``cursor_context_mismatch`` operation code the
+    entry/kind cursor guards use — the archive-identity check can only run
+    in the data layer (it needs the validated path), and as a plain
+    validation error it fell into the wrappers' generic envelope, the one
+    cursor failure mode a client's ``cursor_*`` recovery branch missed.
+    """
+
+
 class OpenZimMcpArchivePathError(OpenZimMcpValidationError):
     """Raised when the ZIM archive itself is missing or unusable.
 
@@ -64,6 +77,20 @@ class OpenZimMcpArchivePathError(OpenZimMcpValidationError):
     """
 
     error_code: str = "OPENZIM_ARCHIVE_PATH_ERROR"
+
+
+class OpenZimMcpArchiveNameError(OpenZimMcpArchivePathError):
+    """Raised when a relative ``zim_file_path`` matches no loaded archive.
+
+    A relative input carries no traversal (``..`` is rejected earlier) and
+    no absolute escape, so failing to match is a typo or a stale name, not
+    an attack. Keeping it apart from :class:`OpenZimMcpSecurityError` lets
+    the error surface say "did not match any loaded archive" instead of
+    "blocked for security reasons" — the wording the project already ruled
+    a regression for the simple-mode path.
+    """
+
+    error_code: str = "OPENZIM_ARCHIVE_NAME_UNRESOLVED"
 
 
 class OpenZimMcpFileNotFoundError(OpenZimMcpError):

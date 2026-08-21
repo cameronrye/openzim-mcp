@@ -6,7 +6,9 @@ Collapses ``browse_namespace`` + ``walk_namespace`` (2 → 1) via a
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Literal, Optional
+from typing import TYPE_CHECKING, Annotated, Any, Optional
+
+from pydantic import Field
 
 from ..responses import tool_error
 from ._common import (
@@ -25,6 +27,15 @@ _DESCRIPTION = load_description("zim_browse")
 
 _VALID_MODES = {"page", "walk"}
 
+# ``mode`` is typed ``str`` with the enum attached as schema metadata rather
+# than as ``Literal["page", "walk"]``. The wire schema is byte-identical
+# (``enum: ["page", "walk"]`` — the prototype-parity snapshot pins it), but a
+# ``Literal`` let pydantic reject an unknown value before the handler ran,
+# so the documented ``invalid_mode`` envelope below was unreachable over MCP
+# and callers got ``Error executing tool zim_browse: 1 validation error ...
+# errors.pydantic.dev`` instead.
+_ModeArg = Annotated[str, Field(json_schema_extra={"enum": sorted(_VALID_MODES)})]
+
 
 def register(server: "OpenZimMcpServer") -> None:
     """Register the `zim_browse` tool with the MCP server."""
@@ -37,7 +48,7 @@ def register(server: "OpenZimMcpServer") -> None:
     async def zim_browse(
         zim_file_path: str,
         namespace: str,
-        mode: Literal["page", "walk"] = "page",
+        mode: _ModeArg = "page",
         cursor: Optional[str] = None,
         limit: Optional[int] = None,
         offset: int = 0,

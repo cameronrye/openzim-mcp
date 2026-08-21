@@ -24,6 +24,7 @@ from typing import (
     TypeVar,
     cast,
 )
+from urllib.parse import unquote
 
 from libzim.reader import Archive  # type: ignore[import-untyped]
 
@@ -159,6 +160,31 @@ def _render_entry_payload_text(payload: Dict[str, Any]) -> str:
     return f"{result_text}{offset_line}## Content\n\n{body}"
 
 
+def _alternate_entry_spellings(entry_path: str) -> List[str]:
+    """Other spellings of ``entry_path`` worth an exact probe, raw one excluded.
+
+    Mirrors ``zim.structure._resolve_entry_spelling``'s raw-first / decoded-
+    fallback order for the entry-fetch ladder: the percent-decoded form is
+    offered only when it differs from the input, so paths with a literal
+    ``%`` (warc2zim asset names) are never decoded away from a working
+    spelling.
+
+    A leading ``/`` is the other common client slip: ZIM paths are never
+    rooted, so ``/medlineplus.gov/diabetes.html`` can only mean the
+    un-slashed entry. The search fallback cannot recover it — its matcher
+    splits the first segment off both sides asymmetrically — and the
+    not-found error then ran the path through the filesystem redactor,
+    echoing ``...diabetes.html`` back at the caller.
+    """
+    candidates = [unquote(entry_path)]
+    candidates.extend(c.lstrip("/") for c in (entry_path, *candidates))
+    spellings: List[str] = []
+    for candidate in candidates:
+        if candidate and candidate != entry_path and candidate not in spellings:
+            spellings.append(candidate)
+    return spellings
+
+
 def _heading_matches(title: str, tokens: Tuple[str, ...]) -> bool:
     """Return True when a section heading contains any of ``tokens``."""
     t = title.strip().lower()
@@ -249,6 +275,28 @@ def _looks_like_path_traversal(entry_path: str) -> bool:
         .replace("%5C", "\\")
     )
     return any(seg == ".." for seg in decoded.replace("\\", "/").split("/"))
+
+
+def normalize_entry_path(entry_path: str) -> str:
+    """Return ``entry_path`` with a client's leading ``/`` removed.
+
+    ZIM entry paths are never rooted, so a leading slash can only be a client
+    slip — D17 taught the entry-fetch ladder to try the un-slashed spelling
+    for exactly that reason (``_alternate_entry_spellings``). The ladder sits
+    behind ``reject_path_traversal``, though, and every sibling surface calls
+    that guard first, so the same tool served ``/medlineplus.gov/diabetes.html``
+    for the full body and answered the summary, batch and binary fetches with
+    a security-flavoured rejection of a path it had just served.
+
+    Normalizing before the guard fixes the message without loosening it: only
+    the leading separator is dropped, never a segment, so ``/../secret`` still
+    reaches the guard carrying its ``..``. A path that is nothing but slashes
+    is returned unchanged, leaving that decision to the guard.
+
+    Call it at the same boundary as ``reject_path_traversal``; the two belong
+    together.
+    """
+    return entry_path.lstrip("/") or entry_path
 
 
 def reject_path_traversal(entry_path: str) -> None:
@@ -404,7 +452,10 @@ class _ContentMixin:
                 )
             if render_cache_key:
                 try:
-                    self.cache.set(render_cache_key, content)
+                    # One entry per result: ``ancillary`` keeps a wide search
+                    # from charging ~limit slots against the response count
+                    # cap and flushing every other warm response (D65).
+                    self.cache.set(render_cache_key, content, ancillary=True)
                 except Exception as exc:  # pragma: no cover - cache is best-effort
                     logger.debug("snippet render cache set failed: %s", exc)
             entry_title = getattr(entry, "title", None) or ""
@@ -467,7 +518,10 @@ class _ContentMixin:
         # D12 (v2.0.0a9): reject path-traversal-shaped entry paths
         # before reaching the archive layer. ``reject_path_traversal``
         # is shared with the sibling tools so a single injection
-        # vector can't slip in via a different tool name.
+        # vector can't slip in via a different tool name. The rooted
+        # spelling is un-rooted first so this surface agrees with the
+        # ladder in ``get_zim_entry_data`` (see ``normalize_entry_path``).
+        entry_path = normalize_entry_path(entry_path)
         reject_path_traversal(entry_path)
 
         # Validate and resolve file path
@@ -517,7 +571,7 @@ class _ContentMixin:
             raise OpenZimMcpArchiveError(
                 f"Entry retrieval failed for '{entry_path}': {e}. "
                 f"This may be due to file access issues or ZIM file corruption. "
-                f"Try using search_zim_file() to verify the file is accessible."
+                f"Try using zim_health() to verify the archive is loaded and readable."
             ) from e
 
     def _get_zim_entry_from_archive(
@@ -574,6 +628,61 @@ class _ContentMixin:
             self.cache.set(cache_key, result)
         logger.info(f"Retrieved entry: {entry_path}")
         return result
+
+    def _get_batch_entry_body(
+        self,
+        archive: Archive,
+        validated_path: Path,
+        entry_path: str,
+        max_content_length: int,
+        *,
+        compact: bool = False,
+    ) -> str:
+        """Resolve one batch entry and return its clean body text.
+
+        Batch items used to carry the legacy rendered document (``# title``
+        / ``Path:`` / ``Type:`` / ``## Content`` header block) while the
+        single-entry branch serves the bare body with path/title as
+        separate fields. The item already identifies the entry through
+        ``entry_path``, so the batch surface now serves the same body the
+        structured payload builder produces — first page, with the
+        batch-specific truncation footer.
+
+        Own cache namespace (``entry_batch``) because the body differs from
+        both the legacy text (``entry:v3``) and the single-entry dict
+        (``entry_data``) renderings of the same entry.
+        """
+        from openzim_mcp.bundle import archive_stat_token
+
+        cache_key = (
+            f"entry_batch:v1:{validated_path}:{archive_stat_token(validated_path)}:"
+            f"{entry_path}:{max_content_length}:compact={compact}"
+        )
+        cached = self.cache.get(cache_key)
+        if cached is not None:
+            return cast(str, cached)
+
+        payload, content_ok = self._smart_retrieve_entry(
+            archive,
+            entry_path,
+            validated_path,
+            build=lambda actual_path: self._build_entry_payload(
+                archive,
+                actual_path,
+                entry_path,
+                max_content_length,
+                0,
+                compact=compact,
+                batch_item=True,
+            ),
+            fetch_metadata=lambda: self._get_metadata_entry_data(
+                archive, entry_path, max_content_length, 0
+            ),
+        )
+        body = str(payload.get("content") or "")
+        if content_ok:
+            self.cache.set(cache_key, body)
+        return body
 
     def get_zim_entry_data(
         self,
@@ -645,7 +754,7 @@ class _ContentMixin:
             raise OpenZimMcpArchiveError(
                 f"Entry retrieval failed for '{entry_path}': {e}. "
                 f"This may be due to file access issues or ZIM file corruption. "
-                f"Try using search_zim_file() to verify the file is accessible."
+                f"Try using zim_health() to verify the archive is loaded and readable."
             ) from e
 
         # ``_truncated`` / ``_total_chars`` / ``_content_chars`` are internal
@@ -676,7 +785,7 @@ class _ContentMixin:
         logger.info(f"Retrieved entry data: {entry_path}")
         return cast("EntryResponse", with_meta)
 
-    def _smart_retrieve_entry(  # NOSONAR(python:S3776)
+    def _smart_retrieve_entry(
         self,
         archive: Archive,
         entry_path: str,
@@ -696,7 +805,13 @@ class _ContentMixin:
            API via ``fetch_metadata`` (D7).
         2. Try the cached path mapping, dropping it if it went stale.
         3. Try direct entry access, caching the resolved path on success.
-        4. Fall back to search-based retrieval, caching the resolved path.
+        4. Probe the alternate spellings of the raw path (percent-decoded,
+           un-rooted) as cheap exact lookups, caching the resolved path.
+        5. Fall back to search-based retrieval, caching the resolved path.
+
+        Steps 2, 4 and 5 live in ``_retrieve_via_*`` helpers; the order
+        here is the contract (raw spelling before decoded, exact probes
+        before search).
 
         ``build`` constructs the surface-specific result for a candidate
         path and returns ``(result, content_ok, resolved_path)``. Both
@@ -726,27 +841,10 @@ class _ContentMixin:
         ):
             return fetch_metadata()
 
-        # Path mapping cache key includes archive path + stat token so
-        # identical entry names in different ZIM files don't collide and
-        # an atomic file replacement invalidates the resolved-path cache.
-        from openzim_mcp.bundle import archive_stat_token
-
-        cache_key = (
-            f"path_mapping:{validated_path}:"
-            f"{archive_stat_token(validated_path)}:{entry_path}"
-        )
-        cached_actual_path = self.cache.get(cache_key)
-        if cached_actual_path:
-            logger.debug(
-                f"Using cached path mapping: {entry_path} -> {cached_actual_path}"
-            )
-            try:
-                result, content_ok, _resolved = build(cached_actual_path)
-                return result, content_ok
-            except Exception as e:
-                logger.warning(f"Cached path mapping failed: {e}")
-                # Clear invalid cache entry and continue with smart retrieval
-                self.cache.delete(cache_key)
+        cache_key = self._path_mapping_cache_key(validated_path, entry_path)
+        cached = self._retrieve_via_cached_mapping(cache_key, entry_path, build)
+        if cached is not None:
+            return cached
 
         # Try direct access first
         try:
@@ -766,44 +864,137 @@ class _ContentMixin:
             raise
         except Exception as direct_error:
             logger.debug(f"Direct entry access failed for {entry_path}: {direct_error}")
+            # Both fallbacks run inside this handler on purpose: anything
+            # they raise keeps ``direct_error`` as its implicit context.
+            alternate = self._retrieve_via_alternate_spelling(
+                cache_key, entry_path, build
+            )
+            if alternate is not None:
+                return alternate
+            return self._retrieve_via_search(
+                archive, cache_key, entry_path, build, direct_error
+            )
 
-            # Fall back to search-based retrieval
+    @staticmethod
+    def _path_mapping_cache_key(validated_path: Path, entry_path: str) -> str:
+        """Cache key for the requested-path -> resolved-path mapping.
+
+        Includes the archive path + stat token so identical entry names in
+        different ZIM files don't collide and an atomic file replacement
+        invalidates the resolved-path cache.
+        """
+        from openzim_mcp.bundle import archive_stat_token
+
+        return (
+            f"path_mapping:{validated_path}:"
+            f"{archive_stat_token(validated_path)}:{entry_path}"
+        )
+
+    def _retrieve_via_cached_mapping(
+        self,
+        cache_key: str,
+        entry_path: str,
+        build: Callable[[str], Tuple[_EntryResultT, bool, str]],
+    ) -> Optional[Tuple[_EntryResultT, bool]]:
+        """Ladder step 2: serve from the cached path mapping if it still holds.
+
+        Returns ``None`` when there is no mapping or it went stale (the
+        stale entry is dropped so the caller continues down the ladder).
+        """
+        cached_actual_path = self.cache.get(cache_key)
+        if not cached_actual_path:
+            return None
+        logger.debug(f"Using cached path mapping: {entry_path} -> {cached_actual_path}")
+        try:
+            result, content_ok, _resolved = build(cached_actual_path)
+            return result, content_ok
+        except Exception as e:
+            logger.warning(f"Cached path mapping failed: {e}")
+            # Clear invalid cache entry and continue with smart retrieval
+            self.cache.delete(cache_key)
+            return None
+
+    def _retrieve_via_alternate_spelling(
+        self,
+        cache_key: str,
+        entry_path: str,
+        build: Callable[[str], Tuple[_EntryResultT, bool, str]],
+    ) -> Optional[Tuple[_EntryResultT, bool]]:
+        """Ladder step 4: exact probes on the other spellings of ``entry_path``.
+
+        These come BEFORE the search fallback: the archive's own links are
+        percent-encoded per RFC 3986 while libzim stores raw UTF-8, so a
+        client following a link zim_get itself served
+        (``../gau%E1%B8%8Dapad/``) used to dead-end in not-found. The raw
+        spelling was already tried by the caller — some archives store a
+        literal ``%`` in a path — so decoding is strictly a fallback.
+
+        Returns ``None`` when no alternate spelling resolves. Structural
+        ``OpenZimMcpArchiveError``s from ``build`` propagate unchanged.
+        """
+        for alternate in _alternate_entry_spellings(entry_path):
             try:
-                logger.info(f"Falling back to search-based retrieval for: {entry_path}")
-                actual_path = self._find_entry_by_search(archive, entry_path)
-                if actual_path:
-                    result, content_ok, resolved_path = build(actual_path)
-                    # Cache the resolved path (which may differ from
-                    # ``actual_path`` if the search hit a redirect stub).
-                    self.cache.set(cache_key, resolved_path)
-                    logger.info(
-                        f"Smart retrieval successful: {entry_path} -> {resolved_path}"
-                    )
-                    return result, content_ok
-                else:
-                    # No entry found via search
-                    raise OpenZimMcpArchiveError(
-                        f"Entry not found: '{entry_path}'. "
-                        f"The entry path may not exist in this ZIM file. "
-                        f"Try using search_zim_file() to find available entries, "
-                        f"or browse_namespace() to explore the file structure."
-                    )
+                result, content_ok, resolved_path = build(alternate)
             except OpenZimMcpArchiveError:
-                # Re-raise our custom errors with guidance
                 raise
-            except Exception as search_error:
-                logger.error(
-                    f"Search-based retrieval failed for {entry_path}: "
-                    f"{search_error}"
+            except Exception as alternate_error:
+                logger.debug(
+                    f"Alternate spelling {alternate!r} failed: {alternate_error}"
                 )
-                # Provide comprehensive error message with guidance
-                raise OpenZimMcpArchiveError(
-                    f"Failed to retrieve entry '{entry_path}'. "
-                    f"Direct access failed: {direct_error}. "
-                    f"Search-based fallback failed: {search_error}. "
-                    f"The entry may not exist or the path format may be incorrect. "
-                    f"Try using search_zim_file() to find the correct entry path."
-                ) from search_error
+                continue
+            self.cache.set(cache_key, resolved_path)
+            logger.info(f"Resolved {entry_path!r} via alternate spelling {alternate!r}")
+            return result, content_ok
+        return None
+
+    def _retrieve_via_search(
+        self,
+        archive: Archive,
+        cache_key: str,
+        entry_path: str,
+        build: Callable[[str], Tuple[_EntryResultT, bool, str]],
+        direct_error: Exception,
+    ) -> Tuple[_EntryResultT, bool]:
+        """Ladder step 5: search-based retrieval, the last resort.
+
+        Raises ``OpenZimMcpArchiveError`` with tool guidance when the
+        search finds nothing or fails; ``direct_error`` is quoted in the
+        failure message so the caller sees both legs of the ladder.
+        """
+        try:
+            logger.info(f"Falling back to search-based retrieval for: {entry_path}")
+            actual_path = self._find_entry_by_search(archive, entry_path)
+            if actual_path:
+                result, content_ok, resolved_path = build(actual_path)
+                # Cache the resolved path (which may differ from
+                # ``actual_path`` if the search hit a redirect stub).
+                self.cache.set(cache_key, resolved_path)
+                logger.info(
+                    f"Smart retrieval successful: {entry_path} -> {resolved_path}"
+                )
+                return result, content_ok
+            # No entry found via search
+            raise OpenZimMcpArchiveError(
+                f"Entry not found: '{entry_path}'. "
+                f"The entry path may not exist in this ZIM file. "
+                f"Try using zim_search() to find available entries, "
+                f"or zim_browse() to explore the archive's namespaces."
+            )
+        except OpenZimMcpArchiveError:
+            # Re-raise our custom errors with guidance
+            raise
+        except Exception as search_error:
+            logger.error(
+                f"Search-based retrieval failed for {entry_path}: {search_error}"
+            )
+            # Provide comprehensive error message with guidance
+            raise OpenZimMcpArchiveError(
+                f"Failed to retrieve entry '{entry_path}'. "
+                f"Direct access failed: {direct_error}. "
+                f"Search-based fallback failed: {search_error}. "
+                f"The entry may not exist or the path format may be incorrect. "
+                f"Try using zim_search() to find the correct entry path."
+            ) from search_error
 
     def _get_entry_data_from_archive(
         self,
@@ -855,6 +1046,7 @@ class _ContentMixin:
         content_offset: int = 0,
         *,
         compact: bool = False,
+        batch_item: bool = False,
     ) -> Tuple[Dict[str, Any], bool, str]:
         """Construct the dict payload for a resolved entry.
 
@@ -862,7 +1054,9 @@ class _ContentMixin:
         checks), content extraction, compact link-stripping, and
         offset/truncation accounting. The legacy text surface
         (``_get_entry_content_direct``) renders this payload via
-        ``_render_entry_payload_text``.
+        ``_render_entry_payload_text``. ``batch_item`` selects the
+        truncation footer batch mode can act on (see
+        ``ContentProcessor.truncate_content``).
         """
         entry = archive.get_entry_by_path(actual_path)
 
@@ -934,6 +1128,7 @@ class _ContentMixin:
             max_content_length,
             current_offset=content_offset,
             original_total=total_length,
+            batch_item=batch_item,
         )
         # Compare against the cap, NOT the rendered lengths: ``truncate_content``
         # appends a ~150-char truncation note, so ``len(truncated) < len(content)``
@@ -1077,14 +1272,16 @@ class _ContentMixin:
                             # Per-entry path-traversal guard. Without this
                             # check inside the batch loop, a malicious
                             # entry slips through D12 by hiding inside a
-                            # batched request.
-                            reject_path_traversal(entry_path)
-                            content = self._get_zim_entry_from_archive(
+                            # batched request. The normalized spelling is
+                            # kept local so the result still echoes the
+                            # path the caller sent, for correlation.
+                            fetch_path = normalize_entry_path(entry_path)
+                            reject_path_traversal(fetch_path)
+                            content = self._get_batch_entry_body(
                                 archive,
                                 validated_path,
-                                entry_path,
+                                fetch_path,
                                 max_content_length,
-                                0,
                                 compact=compact,
                             )
                             results.append(
@@ -1437,6 +1634,7 @@ class _ContentMixin:
         if max_size_bytes is None:
             max_size_bytes = DEFAULT_MAX_BINARY_SIZE
 
+        entry_path = normalize_entry_path(entry_path)
         reject_path_traversal(entry_path)
 
         # Validate and resolve file path
@@ -1483,8 +1681,8 @@ class _ContentMixin:
                     else:
                         raise OpenZimMcpArchiveError(
                             f"Entry not found: '{entry_path}'. "
-                            f"Try using search_zim_file() to find available entries, "
-                            f"or browse_namespace() to explore the file structure."
+                            f"Try using zim_search() to find available entries, "
+                            f"or zim_browse() to explore the archive's namespaces."
                         )
 
                 # Resolve the redirect chain — libzim raises RuntimeError on
@@ -1591,11 +1789,15 @@ class _ContentMixin:
                 result["encoding"] = None
                 result["data"] = None
                 result["truncated"] = True
+                # Name the knob the caller can actually turn: zim_get maps
+                # ``max_content_length`` onto this byte cap and never exposes
+                # ``include_data`` / ``max_size_bytes``, so the old hint sent
+                # callers to parameters the tool silently ignores.
                 result["message"] = (
-                    f"Content size ({self._format_size(size)}) "
-                    f"exceeds max_size_bytes ({self._format_size(max_size_bytes)}). "
-                    f"Set include_data=False for metadata only, "
-                    f"or increase max_size_bytes."
+                    f"Content size ({self._format_size(size)}) exceeds the "
+                    f"{self._format_size(max_size_bytes)} byte cap. The metadata "
+                    f"above is complete; raise max_content_length to at least "
+                    f"{size} to fetch the bytes."
                 )
         else:
             result["encoding"] = None
@@ -1641,6 +1843,7 @@ class _ContentMixin:
         elif max_words > 1000:
             max_words = 1000
 
+        entry_path = normalize_entry_path(entry_path)
         reject_path_traversal(entry_path)
 
         # Validate and resolve file path

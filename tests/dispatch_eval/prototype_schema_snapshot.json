@@ -167,10 +167,39 @@
     }
   },
   "zim_get_section": {
-    "bytes": 2354,
-    "description": "Fetch one named section of an article \u2014 by `section_id` (from the\nTOC), with optional subsection inclusion.\n\nEXTRACT a specific section before calling \u2014 use `zim_get(view=\"toc\")`\nfirst to discover available section ids if the caller didn't supply\none.\n\nALIASES: callers may say \"section <X> of <article>\", \"show me the\n<X> section\", \"<article> section <X>\". Route through THIS tool.\n\nPARAMETERS:\n  zim_file_path        REQUIRED. The archive containing the article.\n  entry_path           REQUIRED. The article whose section to fetch.\n  section_id           REQUIRED. The TOC id (e.g. \"History\",\n                       \"Early_life\") of the section.\n  max_chars            Optional char cap on the section body.\n  compact              Default True. Present for surface uniformity\n                       with `zim_query` / `zim_get`. At v2.0 the\n                       parameter is a no-op: section bodies always\n                       ship in the bundle's compact rendering so the\n                       slice shape matches `zim_get(view=\"full\")`\n                       output on the same article. v2.5 #18 wires a\n                       true raw-text path.\n  compact_budget       Named profile (\"tiny\"/\"small\"/\"medium\"/\"large\")\n                       or raw integer char cap. Same v2.0 no-op\n                       caveat as `compact`.\n\nRESPONSE:\n  GetSectionResponse \u2014 section body markdown (always compact-rendered\n  at v2.0), metadata, and any nested subsections.\n\nERRORS:\n  Returns a ToolErrorPayload on missing/unknown section_id with a\n  hint listing the available section ids from the article's TOC.\n",
+    "bytes": 2151,
+    "description": "Fetch one named section of an article \u2014 by `section_id` (from the\nTOC), with optional subsection inclusion.\n\nEXTRACT the section id before calling \u2014 `zim_get(view=\"toc\")` lists\nthem if the caller didn't supply one.\n\nALIASES: callers may say \"section <X> of <article>\", \"show me the\n<X> section\", \"<article> section <X>\". Route through THIS tool.\n\nPARAMETERS:\n  zim_file_path        REQUIRED. The archive containing the article.\n  entry_path           REQUIRED. The article whose section to fetch.\n  section_id           REQUIRED. The TOC id (e.g. \"History\").\n  max_chars            Optional char cap on the section body.\n  include_subsections  Default True: include nested subsections.\n                       False: stop at the next heading of any level.\n  compact              Default True: oversized tables become\n                       placeholders and link markup is stripped (the\n                       zim_get compact=True shape). False: raw body\n                       with full tables and links.\n  compact_budget       Named profile or integer char cap. Inert.\n\nRESPONSE:\n  GetSectionResponse \u2014 section body markdown, metadata, and any\n  nested subsections.\n\nERRORS:\n  Unknown section_id \u2192 ToolErrorPayload with `available_section_ids`\n  (not a `hint`) and `closest_match`. Missing entry \u2192 `entry_not_found`.\n",
     "inputSchema": {
       "properties": {
+        "zim_file_path": {
+          "title": "Zim File Path",
+          "type": "string"
+        },
+        "entry_path": {
+          "title": "Entry Path",
+          "type": "string"
+        },
+        "section_id": {
+          "title": "Section Id",
+          "type": "string"
+        },
+        "max_chars": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Chars"
+        },
+        "include_subsections": {
+          "default": true,
+          "title": "Include Subsections",
+          "type": "boolean"
+        },
         "compact": {
           "default": true,
           "title": "Compact",
@@ -190,30 +219,6 @@
           ],
           "default": null,
           "title": "Compact Budget"
-        },
-        "entry_path": {
-          "title": "Entry Path",
-          "type": "string"
-        },
-        "max_chars": {
-          "anyOf": [
-            {
-              "type": "integer"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Max Chars"
-        },
-        "section_id": {
-          "title": "Section Id",
-          "type": "string"
-        },
-        "zim_file_path": {
-          "title": "Zim File Path",
-          "type": "string"
         }
       },
       "required": [
@@ -248,8 +253,8 @@
     }
   },
   "zim_links": {
-    "bytes": 2845,
-    "description": "Look up links from one article \u2014 outbound/inbound link buckets or\nrelated-article suggestions.\n\nEXTRACT the direction before calling. `direction=\"outbound\"` returns\nthe article's own outgoing links (internal / external / media\nbuckets). `direction=\"inbound\"` returns pages that link TO this\nentry. `direction=\"related\"` returns articles connected by\noutbound-link overlap \u2014 the canonical \"see also\" experience.\n\nALIASES: \"links in <article>\" / \"what does <article> link to\"\n(outbound); \"what links here\" / \"pages linking to <article>\"\n(inbound); \"related to <article>\" / \"articles like <article>\"\n(related). Route through THIS tool with the matching direction.\n\nDIRECTIONS:\n  `\"outbound\"` (default) \u2014 paginated.\n  `\"inbound\"`  \u2014 ranked by linker importance; paginated. Requires a\n                 built link-graph sidecar (`openzim-mcp build\n                 link-graph`); absent/stale \u2192 structured error.\n  `\"related\"`  \u2014 one ranked set (no pagination).\n\nPARAMETERS:\n  zim_file_path   REQUIRED. The archive containing the article.\n  entry_path      REQUIRED. The article whose links to inspect.\n  direction       See DIRECTIONS above.\n  kind            Outbound only \u2014 which bucket to return: \"internal\"\n                  (default) / \"external\" / \"media\". One per call;\n                  `category_totals` reports all three counts.\n  cursor          Cursor handle (outbound/inbound).\n  limit           Page size.\n  offset          Pagination offset (outbound/inbound).\n\nRESPONSE:\n  LinksResponse (outbound) or RelatedArticlesResponse (inbound /\n  related). Outbound/inbound paginate; related is one ranked set.\n  Outbound `category_totals.internal` excludes in-page `#anchor`\n  links \u2014 those are counted separately as `category_totals.anchor`.\n\nERRORS:\n  Invalid `direction` \u2192 `invalid_direction`. Missing/stale inbound\n  sidecar \u2192 `inbound_sidecar_unavailable`. Missing/unknown\n  `entry_path` \u2192 the underlying data-layer error envelope.\n",
+    "bytes": 3109,
+    "description": "Look up links from one article \u2014 outbound/inbound link buckets or\nrelated-article suggestions.\n\nEXTRACT the direction before calling: `\"outbound\"` = the article's\nown links (internal / external / media buckets); `\"inbound\"` = pages\nthat link TO it; `\"related\"` = \"see also\" by outbound-link overlap.\n\nALIASES: \"links in <article>\" / \"what does <article> link to\"\n(outbound); \"what links here\" / \"pages linking to <article>\"\n(inbound); \"related to <article>\" / \"articles like <article>\"\n(related). Route through THIS tool with the matching direction.\n\nDIRECTIONS:\n  `\"outbound\"` (default) \u2014 paginated.\n  `\"inbound\"`  \u2014 ranked by linker importance; paginated. Requires a\n                 built link-graph sidecar (`openzim-mcp build\n                 link-graph`); absent/stale \u2192 structured error.\n  `\"related\"`  \u2014 one ranked set (no pagination).\n\nPARAMETERS:\n  zim_file_path   REQUIRED. The archive containing the article.\n  entry_path      REQUIRED. The article whose links to inspect.\n  direction       See DIRECTIONS above.\n  kind            Outbound only \u2014 which bucket to return: \"internal\"\n                  (default) / \"external\" / \"media\". One per call;\n                  `category_totals` reports all three counts.\n  cursor          Cursor handle (outbound/inbound).\n  limit           Page size. Outbound 1-500 (default 100);\n                  inbound and related 1-100 (default 10).\n  offset          Pagination offset (outbound/inbound).\n\nRESPONSE:\n  LinksResponse (outbound) or RelatedArticlesResponse (inbound /\n  related). Outbound is occurrence-level (document order, duplicates\n  kept; `total` counts occurrences). `url` is the raw href; internal\n  rows add `path`, the resolved entry path for `zim_get`. Related\n  dedupes targets and reports `mention_count`.\n  `category_totals.internal` excludes `#anchor` links (counted as\n  `category_totals.anchor`) and anchor-wrapped assets, which move to\n  the media bucket as `type: \"asset\"`.\n\nERRORS:\n  Invalid `direction` \u2192 `invalid_direction`. Missing/stale inbound\n  sidecar \u2192 `inbound_sidecar_unavailable`. Unknown `entry_path` \u2192\n  not-found envelope. Cursor from another archive/entry/tool \u2192\n  `cursor_context_mismatch` / `cursor_mismatch`.\n",
     "inputSchema": {
       "properties": {
         "zim_file_path": {
