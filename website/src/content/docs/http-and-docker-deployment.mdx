@@ -55,6 +55,8 @@ The published image:
 
 Binding a non-loopback host (`0.0.0.0`) requires `OPENZIM_MCP_AUTH_TOKEN` as a safe default; the bind is refused without it.
 
+> **Tool surface.** The image sets `OPENZIM_MCP_TOOL_MODE=advanced`, so it registers all 8 tools. That matches the `.mcpb` bundle and the MCP Registry entry, and it is what directory listings show. The code default elsewhere (a bare `uvx openzim-mcp`) is still `simple`, the single `zim_query` entry point. Add `-e OPENZIM_MCP_TOOL_MODE=simple` to get that narrower surface in a container.
+
 > **Upgrading an existing HTTP deployment?** Earlier images defaulted the *container* to HTTP, so a token-only `docker run -p 8000:8000 -e OPENZIM_MCP_AUTH_TOKEN=… <image>` was enough. The image now defaults to **stdio**, so that same command starts a stdio server instead — nothing listens on `:8000`. Add `-e OPENZIM_MCP_TRANSPORT=http -e OPENZIM_MCP_HOST=0.0.0.0` (as shown above) when you pull the new image.
 
 ## Authentication

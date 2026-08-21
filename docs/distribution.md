@@ -11,7 +11,9 @@ Two listings, two artifacts, one source of truth (the PyPI release):
 | **Official MCP Registry** (`registry.modelcontextprotocol.io`) | [`server.json`](../server.json) | Points clients at the PyPI package, run via `uvx`. Aggregators (PulseMCP, mcp.so, …) ingest from here — highest-leverage. |
 | **Smithery** (`smithery.ai/servers/rye/openzim-mcp`) | `.mcpb` bundle | A local stdio server distributed as an MCPB bundle clients download and run locally. |
 
-Both expose the **advanced 8-tool surface** (`OPENZIM_MCP_TOOL_MODE=advanced`).
+Both expose the **advanced 8-tool surface** (`OPENZIM_MCP_TOOL_MODE=advanced`),
+as does the Docker image — registry directories launch it with no
+configuration, so the image has to name the surface itself.
 A guard test, [`tests/test_mcpb_distribution.py`](../tests/test_mcpb_distribution.py),
 keeps both artifacts in lockstep with the package version and tool surface.
 
