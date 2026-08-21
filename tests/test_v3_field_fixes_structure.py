@@ -7,6 +7,7 @@ order. Each docstring names the defect id and the behaviour it pins.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Optional
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -425,9 +426,22 @@ class TestD25RateLimitWaitFloor:
 # D33 — related rows must follow redirects: real title, canonical path
 # ---------------------------------------------------------------------------
 
-CLIMATE_ZIM = Path(
-    "test_data/zim-testing-suite/withns/wikipedia_en_climate_change_mini_2024-06.zim"
-)
+
+@pytest.fixture
+def climate_zim(zim_test_data_dir: Optional[Path]) -> Path:
+    """The withns climate archive, located the way the rest of the suite is.
+
+    A bare relative ``Path`` skipped this — the only real-libzim test in the
+    file — whenever pytest ran from anywhere but the repo root, and ignored
+    the ``ZIM_TEST_DATA_DIR`` override the corpus is actually provisioned
+    through (``test_data/`` is gitignored).
+    """
+    if zim_test_data_dir is None:
+        pytest.skip("test ZIM corpus absent")
+    path = zim_test_data_dir / "withns" / "wikipedia_en_climate_change_mini_2024-06.zim"
+    if not path.exists():
+        pytest.skip("test ZIM corpus absent")
+    return path
 
 
 def _redirect_archive() -> MagicMock:
@@ -483,12 +497,11 @@ class TestD33RelatedFollowsRedirects:
         assert rows[0]["path"] == "C/aristotle/"
         assert rows[0]["title"].startswith("Aristotle")
 
-    @pytest.mark.skipif(not CLIMATE_ZIM.exists(), reason="test ZIM corpus absent")
-    def test_real_archive_redirect_is_followed(self) -> None:
+    def test_real_archive_redirect_is_followed(self, climate_zim: Path) -> None:
         from openzim_mcp.zim.structure import _StructureMixin
 
         rows = [{"path": 'A/"dry_spell"', "title": 'A/"dry_spell"'}]
-        _StructureMixin._resolve_outbound_titles(str(CLIMATE_ZIM), rows)
+        _StructureMixin._resolve_outbound_titles(str(climate_zim), rows)
 
         assert rows[0]["path"] == "A/Drought"
         assert rows[0]["title"] != rows[0]["path"]
