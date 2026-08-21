@@ -228,6 +228,12 @@ def _health_of(directory: Path) -> Tuple[Dict[str, Any], List[str], List[str]]:
 @pytest.fixture
 def denied_zim(tmp_path: Path) -> Path:
     """A genuine ZIM header the process is not allowed to read."""
+    if os.name != "posix":
+        # Windows has no os.getuid, and its chmod only toggles the read-only
+        # bit — the owner can still read a 0o000 file. The EACCES this fixture
+        # exists to produce is simply unreachable there, so the distinction
+        # under test (denied vs not-a-ZIM) has no failing case to guard.
+        pytest.skip("chmod cannot deny the owner a read on this platform")
     if os.getuid() == 0:
         pytest.skip("root reads a chmod-000 file regardless of its mode")
     archive = tmp_path / "real.zim"
