@@ -282,9 +282,22 @@ jobs:
           echo "::error::openzim-mcp ${VERSION} never appeared on PyPI"
           exit 1
 
+      # Skipped when the registry already serves this version, so a re-dispatch
+      # of an old tag (backfilling the registry) does not re-publish a version
+      # that is already live. The verification step below still runs, so a
+      # skipped publish is proved rather than assumed.
       - name: Publish server.json
         run: |
           set -euo pipefail
+          SERVER_NAME=$(jq -r '.name' server.json)
+          VERSION=$(jq -r '.version' server.json)
+          if curl --proto '=https' --tlsv1.2 -fsS \
+            "https://registry.modelcontextprotocol.io/v0/servers?search=${SERVER_NAME}&version=${VERSION}" \
+            | jq -e --arg n "$SERVER_NAME" --arg v "$VERSION" \
+              'any(.servers[]; .server.name == $n and .server.version == $v)' >/dev/null; then
+            echo "Registry already serves ${SERVER_NAME} ${VERSION} — nothing to publish"
+            exit 0
+          fi
           ./mcp-publisher validate
           ./mcp-publisher login github-oidc
           ./mcp-publisher publish
@@ -364,8 +377,25 @@ jobs:
           if gh release view "$TAG_NAME" --json tagName >/dev/null 2>&1; then
             echo "release_exists=true" >> $GITHUB_OUTPUT
             echo "✅ Release already exists for $TAG_NAME (created by release-please)"
+            # A release that is already PUBLISHED *and* already carries assets is
+            # finished. This run is then a re-dispatch of an old tag — backfilling
+            # the MCP Registry, say — not the tail of a real release. Its assets
+            # rebuild from the same source but are not byte-identical (wheels
+            # embed a build timestamp), so re-uploading them with --clobber would
+            # change published checksums for no reason. A draft, or a published
+            # release with no assets, still needs populating and is untouched by
+            # this branch.
+            is_draft=$(gh release view "$TAG_NAME" --json isDraft --jq .isDraft)
+            asset_count=$(gh release view "$TAG_NAME" --json assets --jq '.assets | length')
+            if [ "$is_draft" = "false" ] && [ "$asset_count" -gt 0 ]; then
+              echo "release_is_complete=true" >> $GITHUB_OUTPUT
+              echo "ℹ️  $TAG_NAME is published with $asset_count assets — leaving them as they are"
+            else
+              echo "release_is_complete=false" >> $GITHUB_OUTPUT
+            fi
           else
             echo "release_exists=false" >> $GITHUB_OUTPUT
+            echo "release_is_complete=false" >> $GITHUB_OUTPUT
             echo "📝 Release does not exist for $TAG_NAME, will create new release"
           fi
 
@@ -420,7 +450,7 @@ jobs:
           " VERSION="$VERSION"
 
       - name: Upload assets to existing release
-        if: steps.check-release.outputs.release_exists == 'true'
+        if: steps.check-release.outputs.release_exists == 'true' && steps.check-release.outputs.release_is_complete != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |

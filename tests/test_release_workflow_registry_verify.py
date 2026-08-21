@@ -57,6 +57,54 @@ def test_publish_registry_reads_the_published_version_back(
     assert "$VERSION" in script, script
 
 
+def test_registry_publish_is_skipped_when_the_version_is_already_live(
+    registry_job: Dict[str, Any],
+) -> None:
+    """A re-dispatch of an old tag must not re-publish a live version.
+
+    Backfilling the registry for an already-released tag re-runs this job.
+    ``mcp-publisher publish`` for a version the registry already serves is at
+    best a no-op and at worst a 409 that reds the job, so the publish is
+    gated on a read of the registry first.
+    """
+    script = _run_scripts(registry_job)
+    publish_step = next(
+        step["run"]
+        for step in registry_job["steps"]
+        if "run" in step and "mcp-publisher publish" in step["run"]
+    )
+    assert "registry.modelcontextprotocol.io" in publish_step, publish_step
+    assert "nothing to publish" in publish_step, publish_step
+    # The read-back afterwards is what proves a skipped publish was correct.
+    assert "Registry serves" in script, script
+
+
+def test_a_finished_release_keeps_its_published_assets(
+    workflow_text: str,
+) -> None:
+    """Re-running the release for a finished tag must not re-upload assets.
+
+    Wheels embed a build timestamp, so artifacts rebuilt from the same source
+    are not byte-identical; ``gh release upload --clobber`` over a published
+    release would change asset checksums that people may have pinned, for a
+    run that changed nothing. A draft — the release-please path — still gets
+    populated, which is the case the step exists for.
+    """
+    job = yaml.safe_load(workflow_text)["jobs"]["create-release"]
+    check = next(step for step in job["steps"] if step.get("id") == "check-release")
+    assert "release_is_complete" in check["run"], check["run"]
+    assert "isDraft" in check["run"] and "assets" in check["run"], check["run"]
+
+    # Selected on the command, not the flag name: check-release's own comment
+    # explains why --clobber is avoided, so a substring match finds it first.
+    upload = next(
+        step
+        for step in job["steps"]
+        if "run" in step and "gh release upload" in step["run"]
+    )
+    assert "release_is_complete" in upload["if"], upload["if"]
+
+
 def test_release_workflow_curls_pin_the_https_scheme(workflow_text: str) -> None:
     """Sonar's ``new_security_rating`` gate reds on any workflow ``curl``
     that lets the URL choose the scheme."""
