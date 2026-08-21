@@ -277,6 +277,28 @@ def _looks_like_path_traversal(entry_path: str) -> bool:
     return any(seg == ".." for seg in decoded.replace("\\", "/").split("/"))
 
 
+def normalize_entry_path(entry_path: str) -> str:
+    """Return ``entry_path`` with a client's leading ``/`` removed.
+
+    ZIM entry paths are never rooted, so a leading slash can only be a client
+    slip — D17 taught the entry-fetch ladder to try the un-slashed spelling
+    for exactly that reason (``_alternate_entry_spellings``). The ladder sits
+    behind ``reject_path_traversal``, though, and every sibling surface calls
+    that guard first, so the same tool served ``/medlineplus.gov/diabetes.html``
+    for the full body and answered the summary, batch and binary fetches with
+    a security-flavoured rejection of a path it had just served.
+
+    Normalizing before the guard fixes the message without loosening it: only
+    the leading separator is dropped, never a segment, so ``/../secret`` still
+    reaches the guard carrying its ``..``. A path that is nothing but slashes
+    is returned unchanged, leaving that decision to the guard.
+
+    Call it at the same boundary as ``reject_path_traversal``; the two belong
+    together.
+    """
+    return entry_path.lstrip("/") or entry_path
+
+
 def reject_path_traversal(entry_path: str) -> None:
     """Raise OpenZimMcpArchiveError on a path-traversal-shaped ``entry_path``.
 
@@ -496,7 +518,10 @@ class _ContentMixin:
         # D12 (v2.0.0a9): reject path-traversal-shaped entry paths
         # before reaching the archive layer. ``reject_path_traversal``
         # is shared with the sibling tools so a single injection
-        # vector can't slip in via a different tool name.
+        # vector can't slip in via a different tool name. The rooted
+        # spelling is un-rooted first so this surface agrees with the
+        # ladder in ``get_zim_entry_data`` (see ``normalize_entry_path``).
+        entry_path = normalize_entry_path(entry_path)
         reject_path_traversal(entry_path)
 
         # Validate and resolve file path
@@ -1247,12 +1272,15 @@ class _ContentMixin:
                             # Per-entry path-traversal guard. Without this
                             # check inside the batch loop, a malicious
                             # entry slips through D12 by hiding inside a
-                            # batched request.
-                            reject_path_traversal(entry_path)
+                            # batched request. The normalized spelling is
+                            # kept local so the result still echoes the
+                            # path the caller sent, for correlation.
+                            fetch_path = normalize_entry_path(entry_path)
+                            reject_path_traversal(fetch_path)
                             content = self._get_batch_entry_body(
                                 archive,
                                 validated_path,
-                                entry_path,
+                                fetch_path,
                                 max_content_length,
                                 compact=compact,
                             )
@@ -1606,6 +1634,7 @@ class _ContentMixin:
         if max_size_bytes is None:
             max_size_bytes = DEFAULT_MAX_BINARY_SIZE
 
+        entry_path = normalize_entry_path(entry_path)
         reject_path_traversal(entry_path)
 
         # Validate and resolve file path
@@ -1814,6 +1843,7 @@ class _ContentMixin:
         elif max_words > 1000:
             max_words = 1000
 
+        entry_path = normalize_entry_path(entry_path)
         reject_path_traversal(entry_path)
 
         # Validate and resolve file path
