@@ -34,10 +34,16 @@ them to ``-32603 Internal server error`` with no detail, and both put either
 nothing or pydantic's rendered report on the wire. :meth:`get_prompt` makes
 the caller's mistakes ``-32602`` with a message naming the prompt and the
 arguments, and a fault inside a prompt body ``-32603`` naming only the prompt.
+
+:meth:`~EnvelopeAwareMCPServer.call_tool` closes the same gap for *tools*.
+Prompts already rejected an undeclared argument; tools dropped one silently,
+because the SDK's generated argument models inherit pydantic's default
+``extra="ignore"``. See :func:`_unknown_argument_error`.
 """
 
 from __future__ import annotations
 
+import difflib
 import json
 from typing import Any
 
@@ -55,6 +61,8 @@ from mcp_types import (
     TextResourceContents,
 )
 from pydantic import ValidationError
+
+from .responses import tool_error
 
 __all__ = ["EnvelopeAwareMCPServer", "is_tool_error_envelope"]
 
@@ -169,6 +177,88 @@ def error_result(payload: dict) -> CallToolResult:
     return CallToolResult(
         content=[TextContent(type="text", text=_serialize_envelope(payload))],
         is_error=True,
+    )
+
+
+# Keys the MCP spec reserves on the *params* object rather than inside
+# ``arguments`` (``mcp_types.RequestParams.meta``, alias ``_meta``). A
+# conforming client never nests one here, but tolerating exactly this key keeps
+# a lenient client's protocol metadata from reading as the caller's typo.
+# Nothing else is tolerated — ``_limit`` has to stay a rejection, or the silent
+# no-op comes straight back for anything underscore-prefixed.
+_RESERVED_ARGUMENT_KEYS = frozenset({"_meta"})
+
+
+def _unknown_argument_error(
+    tool: Any, name: str, arguments: dict[str, Any]
+) -> dict | None:
+    """The ``unknown_argument`` envelope for argument names ``tool`` does not declare.
+
+    Returns ``None`` when every key is declared, so the caller falls through to
+    the ordinary dispatch.
+
+    The SDK builds one pydantic model per tool and its ``ArgModelBase`` sets
+    only ``arbitrary_types_allowed``, so pydantic's default ``extra="ignore"``
+    made a misspelled parameter a silent no-op: ``zim_search(query=...,
+    limitt=2)`` ran at the default page size and returned ten hits while the
+    caller believed it had asked for two.
+
+    ``extra="forbid"`` would reject it, but as a pydantic ``ValidationError``
+    the SDK stringifies into a bare text block ("1 validation error for
+    zim_searchArguments ... errors.pydantic.dev/...") — the exact leak D04
+    removed from ``zim_browse``. Checking here instead makes the rejection the
+    same ``tool_error`` envelope every other rejected argument gets, which is
+    the contract ``instructions.py`` already advertises.
+
+    The rejection is deliberately runtime-only: publishing
+    ``additionalProperties: false`` costs ~232 bytes across the advanced
+    surface against ~159 bytes of headroom under the hard schema cap, and it
+    would only *hint* — a client that does not validate still sends the stray
+    key, so this check is required either way. Do not re-open that trade
+    without buying the bytes first.
+
+    ``tool.parameters["properties"]`` is the allow-list rather than
+    ``arg_model.model_fields`` because it is alias-correct: ``func_metadata``
+    renames a field that shadows a ``BaseModel`` attribute to ``field_<name>``
+    and keeps the wire name only as the alias.
+    """
+    declared = tool.parameters.get("properties") or {}
+    unknown = sorted(set(arguments) - set(declared) - _RESERVED_ARGUMENT_KEYS)
+    if not unknown:
+        return None
+
+    # Case-folded, mirroring the section-id repair in ``zim/structure.py``:
+    # difflib is case-sensitive and a pure case variant of a short name scores
+    # under the cutoff, so the easiest typo to repair would get no suggestion.
+    folded: dict[str, str] = {}
+    for prop in declared:
+        folded.setdefault(prop.casefold(), prop)
+    closest: dict[str, str] = {}
+    for key in unknown:
+        match = difflib.get_close_matches(key.casefold(), list(folded), n=1, cutoff=0.6)
+        if match:
+            closest[key] = folded[match[0]]
+
+    hint = " ".join(f"Did you mean {v!r} instead of {k!r}?" for k, v in closest.items())
+    accepted = sorted(declared)
+    extras: dict[str, Any] = {
+        "unknown_arguments": unknown,
+        "accepted_arguments": accepted,
+    }
+    if closest:
+        extras["closest_matches"] = closest
+    # ``dict(...)`` widens the ``ToolErrorPayload`` TypedDict to the plain
+    # mapping ``error_result`` takes; the payload itself is unchanged.
+    return dict(
+        tool_error(
+            operation="unknown_argument",
+            message=(
+                f"`{name}` does not accept argument(s): {', '.join(unknown)}. "
+                + (hint + " " if hint else "")
+                + f"Accepted: {', '.join(accepted) or 'none'}."
+            ),
+            extras=extras,
+        )
     )
 
 
@@ -346,6 +436,15 @@ class EnvelopeAwareMCPServer(MCPServer):
     ) -> CallToolResult | InputRequiredResult:
         if context is None:
             context = Context(mcp_server=self, subscriptions=self._subscriptions)
+        # Reject argument names the tool does not declare before dispatching:
+        # pydantic drops them silently, so this is the only place the stray key
+        # is still visible. ``get_tool`` returning ``None`` falls through, so an
+        # unknown *tool* name keeps raising the SDK's ``ToolError`` as before.
+        tool = self._tool_manager.get_tool(name)
+        if tool is not None:
+            rejected = _unknown_argument_error(tool, name, arguments)
+            if rejected is not None:
+                return error_result(rejected)
         # convert_result=False so the raw return value is still inspectable;
         # the success path is then converted by the same
         # ``fn_metadata.convert_result`` the base class would have used, which
@@ -356,7 +455,6 @@ class EnvelopeAwareMCPServer(MCPServer):
         if is_tool_error_envelope(result):
             return error_result(result)
 
-        tool = self._tool_manager.get_tool(name)
         if tool is None:  # pragma: no cover - call_tool raises on unknown names
             return result  # type: ignore[no-any-return]
         converted: CallToolResult | InputRequiredResult = (
