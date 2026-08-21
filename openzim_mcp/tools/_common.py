@@ -6,13 +6,42 @@ import pathlib
 from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple
 
 from ..constants import MAX_SEARCH_RESULT_LIMIT
+from ..exceptions import (
+    OpenZimMcpEntryNotFoundError,
+    OpenZimMcpFileNotFoundError,
+    OpenZimMcpRateLimitError,
+    OpenZimMcpSecurityError,
+    OpenZimMcpValidationError,
+)
 from ..responses import ToolErrorPayload, tool_error
-from ..security import sanitize_context_for_error, sanitize_control_chars
+from ..security import sanitize_context_for_error, sanitize_for_log
 
 if TYPE_CHECKING:
     from ..server import OpenZimMcpServer
 
 _DESCRIPTIONS_DIR = pathlib.Path(__file__).parent
+
+# A caller mistake is not a server fault. Every family here means "the request
+# was wrong and the same request will always be wrong": the process is healthy
+# and there is no operator action to take. Logging them at ERROR — which this
+# seam did for the whole 8-tool surface — trains an operator to ignore ERROR,
+# which is how a real archive corruption gets missed. Security denials stay at
+# WARNING rather than INFO so they remain visible for intrusion triage at the
+# shipped default LOG_LEVEL. Split on the exception TYPE, never by
+# string-matching the message.
+#
+# ``OpenZimMcpValidationError`` covers its subclasses (cursor mismatch,
+# archive-path, archive-name); ``OpenZimMcpEntryNotFoundError`` is the reason
+# that type exists. Everything absent from this tuple keeps ERROR: a bare
+# ``OpenZimMcpArchiveError`` (corrupt archive, decode failure), the timeout
+# family, configuration errors, and any raw ``Exception`` (a bug).
+_CALLER_FAULT = (
+    OpenZimMcpValidationError,
+    OpenZimMcpSecurityError,
+    OpenZimMcpFileNotFoundError,
+    OpenZimMcpRateLimitError,
+    OpenZimMcpEntryNotFoundError,
+)
 
 
 def load_description(name: str) -> str:
@@ -50,10 +79,14 @@ def tool_error_response(
 
     # Control characters in the exception text (a ``zim_file_path`` with an
     # embedded LF is echoed verbatim by the validator) would otherwise forge
-    # extra physical lines in the ERROR log (R2-3). Paths are deliberately
-    # NOT redacted here: the operator-facing log needs the real one.
-    logging.getLogger(f"openzim_mcp.tools.{operation}").error(
-        "Error in %s: %s", operation, sanitize_control_chars(str(error))
+    # extra physical lines in the log (R2-3), and its LENGTH is caller-chosen
+    # too — a 1 MB ``entry_path`` wrote a 1 MB record while the client-facing
+    # envelope was already bounded. ``sanitize_for_log`` applies both, under
+    # the same cap the envelope uses. Paths are deliberately NOT redacted
+    # here: the operator-facing log needs the real one.
+    level = logging.WARNING if isinstance(error, _CALLER_FAULT) else logging.ERROR
+    logging.getLogger(f"openzim_mcp.tools.{operation}").log(
+        level, "Error in %s: %s", operation, sanitize_for_log(str(error))
     )
     enhanced = server._create_enhanced_error_message(
         operation=operation, error=error, context=context or ""

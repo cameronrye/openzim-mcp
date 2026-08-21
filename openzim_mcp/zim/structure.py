@@ -32,6 +32,7 @@ import openzim_mcp.zim_operations as _zim_ops_mod
 from openzim_mcp.exceptions import (
     OpenZimMcpArchiveError,
     OpenZimMcpCursorMismatchError,
+    OpenZimMcpEntryNotFoundError,
     OpenZimMcpFileNotFoundError,
     OpenZimMcpValidationError,
 )
@@ -205,7 +206,7 @@ class _OutboundLinkBuckets(NamedTuple):
         return self.external
 
 
-def _entry_not_found_error(entry_path: str) -> OpenZimMcpArchiveError:
+def _entry_not_found_error(entry_path: str) -> OpenZimMcpEntryNotFoundError:
     """Typed not-found error for a missing ``entry_path``.
 
     libzim reports a miss as a bare ``KeyError('Cannot find entry')``. Left
@@ -213,12 +214,13 @@ def _entry_not_found_error(entry_path: str) -> OpenZimMcpArchiveError:
     a generic "Operation Failed / KeyError" envelope advising retries and a
     health check; wrapped as a generic archive error it renders as
     "verify the ZIM file is not corrupted". Neither points at the one thing
-    actually wrong — the path. The "Entry not found" phrasing is what
-    ``error_messages.get_error_config`` pattern-matches onto the focused
+    actually wrong — the path. The TYPE is what
+    ``error_messages.get_error_config`` resolves onto the focused
     *Resource Not Found* template, the same envelope ``zim_get`` produces
-    for the identical miss.
+    for the identical miss, and what marks the failure a caller mistake
+    rather than a server fault when the tool seam picks a log level.
     """
-    return OpenZimMcpArchiveError(
+    return OpenZimMcpEntryNotFoundError(
         f"Entry not found: '{entry_path}'. Double-check the spelling and "
         "path (entry paths are case-sensitive), or use "
         "`zim_search(mode='title')` to locate the entry."

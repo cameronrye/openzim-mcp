@@ -228,6 +228,39 @@ async def test_completion_reflects_archives_added_after_startup(
 
 
 @pytest.mark.asyncio
+async def test_completion_values_are_ordered_independently_of_the_filesystem(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A picker must not reorder itself between keystrokes.
+
+    ``list_zim_files_data`` globs each allowed directory, so it hands back
+    whatever order the filesystem walked — which differs between filesystems
+    and, on some, between two runs over the same directory. The listing is
+    stubbed here rather than staged on disk precisely because the bad order
+    cannot be provoked reliably; what is under test is that the handler sorts
+    whatever it is given, not that any particular filesystem misbehaves.
+    """
+    from openzim_mcp.zim.archive import ZimOperations
+
+    monkeypatch.setattr(
+        ZimOperations,
+        "list_zim_files_data",
+        lambda self: [
+            {"path": str(tmp_path / "second.zim")},
+            {"path": str(tmp_path / "first.zim")},
+        ],
+    )
+
+    async with _session(tmp_path) as session:
+        result = await session.complete(
+            ref=ResourceTemplateReference(type="ref/resource", uri="zim://{name}"),
+            argument={"name": "name", "value": ""},
+        )
+
+    assert result.completion.values == ["first", "second"]
+
+
+@pytest.mark.asyncio
 async def test_completion_scan_runs_off_the_event_loop(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

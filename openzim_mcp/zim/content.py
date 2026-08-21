@@ -32,6 +32,7 @@ import openzim_mcp.zim_operations as _zim_ops_mod
 from openzim_mcp.content_processor import paged_slice_length
 from openzim_mcp.exceptions import (
     OpenZimMcpArchiveError,
+    OpenZimMcpEntryNotFoundError,
     OpenZimMcpValidationError,
 )
 from openzim_mcp.meta import attach_meta
@@ -974,7 +975,7 @@ class _ContentMixin:
                 )
                 return result, content_ok
             # No entry found via search
-            raise OpenZimMcpArchiveError(
+            raise OpenZimMcpEntryNotFoundError(
                 f"Entry not found: '{entry_path}'. "
                 f"The entry path may not exist in this ZIM file. "
                 f"Try using zim_search() to find available entries, "
@@ -1679,7 +1680,7 @@ class _ContentMixin:
                         entry = archive.get_entry_by_path(actual_path)
                         entry_path = actual_path
                     else:
-                        raise OpenZimMcpArchiveError(
+                        raise OpenZimMcpEntryNotFoundError(
                             f"Entry not found: '{entry_path}'. "
                             f"Try using zim_search() to find available entries, "
                             f"or zim_browse() to explore the archive's namespaces."

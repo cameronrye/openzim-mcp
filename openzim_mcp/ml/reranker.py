@@ -28,9 +28,18 @@ from openzim_mcp.ml.fallback import ml_fallback
 logger = logging.getLogger(__name__)
 
 
-def _load_model(model_id: str, cache_dir: Optional[Path]) -> Any:
+def _load_model(
+    model_id: str, cache_dir: Optional[Path], *, allow_download: bool = True
+) -> Any:
     """Lazy import + load. Called inside BGEReranker.get(). Kept as a
-    module-level function so tests can mock it cleanly."""
+    module-level function so tests can mock it cleanly.
+
+    ``allow_download`` defaults to True because the only callers that omit
+    it are the ones whose whole job is to populate the cache (the
+    ``openzim-mcp download-models`` CLI and the live-model test fixture).
+    The serving path always passes ``cfg.allow_model_download``, which
+    defaults to False — see RerankerConfig for why.
+    """
     from fastembed.rerank.cross_encoder import (  # type: ignore[import-not-found]
         TextCrossEncoder,
     )
@@ -38,6 +47,11 @@ def _load_model(model_id: str, cache_dir: Optional[Path]) -> Any:
     kwargs: dict[str, Any] = {"model_name": model_id}
     if cache_dir is not None:
         kwargs["cache_dir"] = str(cache_dir)
+    # local_files_only is the portable switch: FastEmbed has accepted it
+    # since 0.4.0, our declared floor. HF_HUB_OFFLINE would have been
+    # simpler but FastEmbed only started honouring it well after 0.4.x, so
+    # it would silently no-op across most of the range pyproject.toml admits.
+    kwargs["local_files_only"] = not allow_download
     return TextCrossEncoder(**kwargs)
 
 
@@ -189,14 +203,34 @@ class BGEReranker:
             try:
                 cls._instance = cls._load_with_timeout(cfg)
             except Exception as exc:  # noqa: BLE001
+                # Two very different situations produce a load failure now,
+                # and an operator cannot act without knowing which: "you
+                # never staged the model" vs "the staged model is broken /
+                # HuggingFace is unreachable". Name the flag in the first
+                # case so the fix is one command away.
+                if cfg.allow_model_download:
+                    remedy = (
+                        "Run `openzim-mcp download-models` to pre-stage the "
+                        "model offline."
+                    )
+                else:
+                    remedy = (
+                        "Model downloads are off by default "
+                        "(ml.reranker.allow_model_download=false), so the "
+                        "model must already be in the local cache. Run "
+                        "`openzim-mcp download-models` on a networked "
+                        "machine to stage it, or set "
+                        "OPENZIM_MCP_ML__RERANKER__ALLOW_MODEL_DOWNLOAD=true "
+                        "to accept first-call egress."
+                    )
                 logger.warning(
                     (
                         "reranker model load failed: %s. "
                         "Falling back to Xapian-only ranking for this "
-                        "process. Run `openzim-mcp download-models` to "
-                        "pre-stage the model offline."
+                        "process. %s"
                     ),
                     exc,
+                    remedy,
                 )
                 cls._load_failed = True
                 return None
@@ -227,7 +261,14 @@ class BGEReranker:
                 RuntimeError("reranker model load thread terminated abnormally"),
             )
             try:
-                outcome = ("ok", _load_model(cfg.model_id, cfg.cache_dir))
+                outcome = (
+                    "ok",
+                    _load_model(
+                        cfg.model_id,
+                        cfg.cache_dir,
+                        allow_download=cfg.allow_model_download,
+                    ),
+                )
             except Exception as exc:  # noqa: BLE001 — relayed to caller
                 outcome = ("err", exc)
             finally:

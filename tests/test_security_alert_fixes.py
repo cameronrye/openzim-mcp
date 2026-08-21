@@ -53,7 +53,7 @@ class TestRerankerWorkerAlwaysReportsBack:
         """
         from openzim_mcp.ml.reranker import BGEReranker, RerankerConfig
 
-        def abort(_model_id, _cache_dir):
+        def abort(_model_id, _cache_dir, **_kwargs):
             raise _WorkerAbort("interpreter is going down")
 
         cfg = RerankerConfig(first_call_timeout_seconds=5.0)
@@ -78,7 +78,7 @@ class TestRerankerWorkerAlwaysReportsBack:
         """
         from openzim_mcp.ml.reranker import BGEReranker, RerankerConfig
 
-        def abort(_model_id, _cache_dir):
+        def abort(_model_id, _cache_dir, **_kwargs):
             raise SystemExit(3)
 
         cfg = RerankerConfig(first_call_timeout_seconds=5.0)

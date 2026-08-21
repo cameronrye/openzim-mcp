@@ -218,14 +218,61 @@ def _fold_with_index_map(text: str) -> Tuple[str, List[int]]:
     return "".join(out), index_map
 
 
+# A query term, plus the trailing ``*`` that marks it as a PREFIX probe.
+# Xapian honours ``*`` only at the END of a term, so that is the only
+# position treated as a wildcard here: ``a*b`` reads as two ordinary terms,
+# exactly as Xapian reads it.
+_QUERY_TERM_RE = re.compile(r"(\w+)(\*?)")
+
+# Shortest prefix term that is allowed to match beyond its own characters.
+# Higher than the 3-char floor literal terms use: a 3-char prefix is too
+# unselective to be informative (``car*`` bolds carbon, cardiac, carry and
+# careful alike). Mirrors ``_RELEVANCE_STEM_MIN_LEN`` in
+# :mod:`openzim_mcp.zim.search`, the existing "shortest prefix that counts
+# as a stem" constant.
+_PREFIX_TERM_MIN_LEN = 4
+
+
+def _split_query_terms_typed(query: str) -> List[Tuple[str, bool]]:
+    """``(term, is_prefix)`` pairs; ``diabet*`` -> ``("diabet", True)``.
+
+    WHY the flag: the ``*`` used to be dropped as punctuation, so a
+    truncated term could only ever be matched whole-word — and ``diabet``
+    is never a whole word, so the very hit Xapian's stemmer found went
+    unhighlighted and could even anchor a different paragraph.
+    """
+    return [
+        (m.group(1), bool(m.group(2))) for m in _QUERY_TERM_RE.finditer(_fold(query))
+    ]
+
+
 def _split_query_terms(query: str) -> list:
     """Split a query string into individual terms; drop punctuation."""
-    return [t for t in re.split(r"\W+", _fold(query)) if t]
+    return [t for t, _ in _split_query_terms_typed(query)]
 
 
-def _word_in(folded_paragraph: str, term: str) -> bool:
-    """Whole-word match of `term` in already-folded paragraph text."""
-    return bool(re.search(rf"\b{re.escape(term)}\b", folded_paragraph))
+def _word_in(folded_paragraph: str, term: str, *, prefix: bool = False) -> bool:
+    """Whole-word match of `term` in already-folded paragraph text.
+
+    With ``prefix=True`` the term only has to open a word (``climat*``
+    matches ``climate``), so paragraph selection agrees with what
+    ``_highlight_terms`` will actually bold.
+    """
+    tail = r"\w*" if prefix else r"\b"
+    return bool(re.search(rf"\b{re.escape(term)}{tail}", folded_paragraph))
+
+
+def _keep_highlightable_terms(query: str) -> List[Tuple[str, bool]]:
+    """Query terms long enough to be worth matching, with their prefix flag.
+
+    Shared by paragraph anchoring and highlighting so the paragraph a
+    snippet starts on is always one the highlighter can mark up.
+    """
+    return [
+        (term, is_prefix)
+        for term, is_prefix in _split_query_terms_typed(query)
+        if len(term) >= (_PREFIX_TERM_MIN_LEN if is_prefix else 3)
+    ]
 
 
 # A complete ``[text](href "title")`` markdown link, matched as ONE unit.
@@ -596,11 +643,22 @@ def _highlight_terms(text: str, query: str, *, max_hits: int) -> str:
     layering ``**…**`` on top of those produces malformed markdown that
     confuses small models more than it helps them.
     """
-    terms = [t for t in _split_query_terms(query) if len(t) >= 3]
-    if not terms:
+    typed = _keep_highlightable_terms(query)
+    if not typed:
         return text
+    # Longest first: alternation is first-match-wins, so a short term must
+    # not shadow a longer alternative sharing its opening characters.
+    typed.sort(key=lambda tp: len(tp[0]), reverse=True)
+    # A prefix term closes on ``\w*`` — the remainder of the word the
+    # stemmer matched; a literal term keeps its closing ``\b``. Both keep
+    # the leading ``\b``: Xapian prefixes anchor at a word start, so
+    # ``diabet*`` must not light up the middle of ``prediabetes``.
+    alts = [
+        re.escape(term) + (r"\w*" if is_prefix else r"\b") for term, is_prefix in typed
+    ]
     # No ``re.IGNORECASE``: both sides are already lowercased by the fold.
-    pattern = re.compile(r"\b(" + "|".join(re.escape(t) for t in terms) + r")\b")
+    # The group is non-capturing — only ``m.start()``/``m.end()`` are read.
+    pattern = re.compile(r"\b(?:" + "|".join(alts) + r")")
     folded, index_map = _fold_with_index_map(text)
 
     # Pre-compute spans where we must not wrap. Overlapping markdown
@@ -1664,7 +1722,8 @@ class ContentProcessor:
             snippet_length if snippet_length is not None else self.snippet_length
         )
 
-        terms = [t for t in _split_query_terms(query) if len(t) >= 3] if query else []
+        typed = _keep_highlightable_terms(query) if query else []
+        terms = [t for t, _ in typed]
 
         # Site furniture (share-widget boilerplate, in-page navigation
         # lists) is neither a useful anchor nor useful fill: on MedlinePlus
@@ -1675,7 +1734,9 @@ class ContentProcessor:
         paragraphs = _drop_boilerplate_paragraphs(
             content.split("\n\n"),
             is_query_hit=(
-                (lambda p: any(_word_in(_fold(p), t) for t in terms)) if terms else None
+                (lambda p: any(_word_in(_fold(p), t, prefix=pfx) for t, pfx in typed))
+                if typed
+                else None
             ),
         )
         start_idx = 0
@@ -1687,7 +1748,7 @@ class ContentProcessor:
                 # Phase A #1 spec promise).
                 whole_word_idx: Optional[int] = None
                 for i, p in enumerate(folded_paragraphs):
-                    if any(_word_in(p, t) for t in terms):
+                    if any(_word_in(p, t, prefix=pfx) for t, pfx in typed):
                         whole_word_idx = i
                         break
                 if whole_word_idx is not None:
