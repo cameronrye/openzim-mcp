@@ -5,9 +5,8 @@ before calling. Most read-the-table-of-contents-style requests are
 `mode="page"`; only full-enumeration tasks (e.g. "list every article
 in namespace A") need `mode="walk"`.
 
-ALIASES: callers may say "browse <namespace>", "list <namespace>",
-"walk namespace <letter>". Route through THIS tool with the matching
-mode.
+ALIASES: "browse <namespace>", "list <namespace>", "walk namespace
+<letter>". Route through THIS tool with the matching mode.
 
 PARAMETERS:
   zim_file_path     REQUIRED. The archive to browse.
@@ -31,5 +30,5 @@ RESPONSE:
 ERRORS:
   Invalid `mode` returns `invalid_mode`; an empty `namespace` returns
   a validation envelope. An unknown namespace letter is a soft reject
-  (isError=false): `total: 0`, `discovery_method:
-  "rejected_unknown_namespace"`, `_meta.reason: "bad_namespace"`.
+  (isError=false): `_meta.reason: "bad_namespace"`, plus page-only
+  `total: 0`/`discovery_method: "rejected_unknown_namespace"`.
