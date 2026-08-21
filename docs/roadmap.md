@@ -11,7 +11,7 @@ v3 is reserved for a future breaking change (libzim major bump or a deeper surfa
 ## Foundational decisions (carried forward)
 
 - **ML accelerators are opt-in via extras.** Default install stays lean.
-- **Offline-first.** Sidecars and models load from disk; build steps are explicit operator commitments.
+- **Offline-first.** Sidecars and models load from disk; acquiring them (sidecar builds, `openzim-mcp download-models`) is an explicit operator commitment. No tool fetches on the caller's behalf.
 - **Markdown for prose, JSON for navigation; no XML in tool responses.**
 - **Backward compat at the data layer.** Sidecars live next to `.zim` files; absence is reported gracefully.
 - **Clean breaks land at major versions only.** v2.5 ships zero wire-format changes.

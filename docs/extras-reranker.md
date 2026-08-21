@@ -13,12 +13,18 @@ pip install openzim-mcp[reranker]
 ```
 
 Install footprint: roughly 200 MB of Python packages (FastEmbed +
-onnxruntime + tokenizers + huggingface_hub). The cross-encoder model
-itself is downloaded lazily on first use (~1.1 GB for the default
-`BAAI/bge-reranker-base`) and cached in FastEmbed's model cache
+onnxruntime + tokenizers + huggingface_hub). Installing the extra is
+**not** enough on its own: the cross-encoder model (~1.1 GB for the
+default `BAAI/bge-reranker-base`) is never fetched by the server, so a
+second step is required — see
+[Staging the model](#staging-the-model-required).
+
+The model is read from FastEmbed's model cache
 (`$FASTEMBED_CACHE_PATH`, defaulting to `<tempdir>/fastembed_cache`);
-set `OPENZIM_MCP_ML__RERANKER__CACHE_DIR` to pin a persistent location
-for offline deployments.
+set `OPENZIM_MCP_ML__RERANKER__CACHE_DIR` to pin a persistent location.
+Pinning it is strongly recommended: the default cache lives under the
+system temp directory, so a reboot or a temp sweeper discards the
+staged model and rerank goes quiet until you stage it again.
 
 ## Supported platforms
 
@@ -35,20 +41,40 @@ Edge platforms (Alpine, FreeBSD, ARM32) are not part of the supported
 matrix; FastEmbed wheels may not be available there. The base install
 (`pip install openzim-mcp`) is unaffected.
 
-## Pre-staging models for offline deployment
+## Staging the model (required)
 
-By default, the first call after install downloads `BAAI/bge-reranker-base`
-(~1.1 GB) from HuggingFace. Operators running in air-gapped environments
-should pre-stage:
+The server never downloads the model. `ml.reranker.allow_model_download`
+defaults to `false`, so the runtime loads the cross-encoder from the
+local cache only — the MCP `instructions` payload tells callers this
+server reads content from local archives, and an unannounced 1.1 GB
+fetch to huggingface.co on someone's first question contradicts that.
+
+Stage it once, on a machine with network access:
 
 ```bash
 openzim-mcp download-models
 ```
 
-Idempotent — safe to re-run. Without pre-staging, the first MCP query
-that triggers rerank has a 15-second timeout; on timeout the reranker
-falls back to Xapian-only ranking for the rest of the process and logs
-a structured warning.
+Idempotent — safe to re-run; it checks the cache and fetches only what
+is missing. It honours `OPENZIM_MCP_ML__RERANKER__CACHE_DIR`, so run it
+with the same cache directory the server uses.
+
+If the model is not in the cache, the first rerank-eligible query falls
+back to Xapian-only ranking for the rest of the process and logs a
+WARNING naming this command. Search still works; results are simply
+ranked by Xapian alone.
+
+Operators who would rather trade the offline guarantee for convenience
+can opt back into the old behaviour:
+
+```bash
+export OPENZIM_MCP_ML__RERANKER__ALLOW_MODEL_DOWNLOAD=true
+```
+
+With that set, the first rerank-eligible query fetches the model from
+HuggingFace, bounded by `first_call_timeout_seconds` (default 15 s) —
+and the "content is read from local archives" statement in the server's
+instructions no longer tells the whole story for that deployment.
 
 ## Verifying it's active
 
@@ -87,6 +113,8 @@ export OPENZIM_MCP_ML__RERANKER__ENABLED=true
 export OPENZIM_MCP_ML__RERANKER__MIN_QUERY_TOKENS=4
 export OPENZIM_MCP_ML__RERANKER__FINAL_TOP_K=10
 export OPENZIM_MCP_ML__RERANKER__FIRST_CALL_TIMEOUT_SECONDS=15.0
+export OPENZIM_MCP_ML__RERANKER__ALLOW_MODEL_DOWNLOAD=false
+export OPENZIM_MCP_ML__RERANKER__CACHE_DIR=/var/lib/openzim-mcp/models
 ```
 
 (The `__` double-underscore delimits nested config sections.)
@@ -116,8 +144,9 @@ operators running in simple tool mode, who don't have access to the
 advanced-mode `zim_health` tool to read the counter directly. Set the
 logger to WARNING or higher to suppress them.
 
-A model-load failure (timeout, network error) logs a one-line WARNING
-to the configured logger and trips a process-wide kill switch
+A model-load failure (model not staged, timeout, corrupt cache) logs a
+one-line WARNING to the configured logger and trips a process-wide kill
+switch
 (`BGEReranker`'s load-failure latch; mid-inference failures are
 separately kill-switched by the `ml_fallback` decorator) — subsequent
 search calls emit
@@ -126,13 +155,18 @@ None) until the process restarts.
 
 ## Troubleshooting
 
+**"reranker model load failed: ... Model downloads are off by default"**
+The model is not in the local cache. Run `openzim-mcp download-models`
+with the same `CACHE_DIR` the server uses. If you staged it earlier and
+it has vanished, the cache is probably still on its default path under
+the system temp directory — pin `OPENZIM_MCP_ML__RERANKER__CACHE_DIR`.
+
 **"reranker model load failed: timeout"**
-The first-call download exceeded the configured
-`first_call_timeout_seconds` (default 15s — sized for ONNX session
-creation on a warm cache). Run `openzim-mcp download-models` once to
-pre-stage; the next server start will use the cached model. On slower
-hardware or cold-cache fetches, raise the timeout via
-`OPENZIM_MCP_ML__RERANKER__FIRST_CALL_TIMEOUT_SECONDS`.
+Loading exceeded the configured `first_call_timeout_seconds` (default
+15s — sized for ONNX session creation on a warm cache). Raise it via
+`OPENZIM_MCP_ML__RERANKER__FIRST_CALL_TIMEOUT_SECONDS` on slow hardware,
+or — if you enabled `allow_model_download` — stage the model with
+`openzim-mcp download-models` instead of paying the fetch at query time.
 
 **Install fails with "no wheel for fastembed"**
 The platform isn't in the supported matrix (see above). Use the base

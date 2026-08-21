@@ -24,6 +24,7 @@ from typing import Any, Iterator, List
 import pytest
 
 from openzim_mcp.config import RerankerConfig
+from openzim_mcp.instructions import ADVANCED_INSTRUCTIONS, SIMPLE_INSTRUCTIONS
 from openzim_mcp.ml.fallback import reset_kill_switches
 from openzim_mcp.ml.reranker import BGEReranker, _load_model
 
@@ -185,3 +186,12 @@ def test_synthesize_rerank_path_makes_no_outbound_connection(
     assert out_passages == passages
     assert out_keys == hit_keys
     assert no_egress == [], f"synthesize path dialled out: {no_egress}"
+
+
+def test_instructions_do_not_promise_absolute_network_isolation() -> None:
+    """The [reranker] extra can still fetch a model when an operator opts
+    in, so the shipped instructions must not claim the tools *never* reach
+    the network. This guard stops the absolute phrasing coming back."""
+    for text in (ADVANCED_INSTRUCTIONS, SIMPLE_INSTRUCTIONS):
+        assert "never reach" not in text
+        assert "never reaches" not in text
