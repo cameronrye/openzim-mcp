@@ -38,7 +38,7 @@ OpenZIM MCP provides **intelligent, structured access** that LLMs need:
 
 - **Research & knowledge management** — offline Wikipedia / Wiktionary / academic archives behind an MCP-aware assistant.
 - **Knowledge chatbots** — give a small/local LLM real reference material instead of relying on weights.
-- **Compliance / air-gapped environments** — offline knowledge access without internet egress.
+- **Compliance / air-gapped environments** — offline knowledge access without internet egress. The optional `[reranker]` extra also stays offline: its model is loaded from the local cache only, staged by an explicit `openzim-mcp download-models` run on a networked machine (see [docs/extras-reranker.md](https://github.com/cameronrye/openzim-mcp/blob/main/docs/extras-reranker.md)).
 - **Multi-agent workflows** — extract binary entries (PDFs, images) and pass to specialized processors.
 
 ## Project Status

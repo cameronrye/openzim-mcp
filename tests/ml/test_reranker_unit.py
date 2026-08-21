@@ -80,7 +80,7 @@ class TestBGEGet:
         """Regression: after a load failure, subsequent get() calls must NOT retry."""
         call_count = 0
 
-        def failing_load(model_id: str, cache_dir: object) -> object:
+        def failing_load(model_id: str, cache_dir: object, **kwargs: object) -> object:
             nonlocal call_count
             call_count += 1
             raise RuntimeError("simulated load failure")

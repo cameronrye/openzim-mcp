@@ -35,7 +35,7 @@ small-model surface and belongs in its own commit.
 
 ADVANCED_INSTRUCTIONS = """\
 Offline ZIM archives (Wikipedia, Stack Exchange, Wiktionary, …). Retrieval \
-only — these tools never reach the network.
+only — content is read from local archives.
 
 Choosing a tool:
 - zim_query — a natural-language question when you don't have an entry path. \
@@ -59,7 +59,7 @@ a "message" describing how to correct the call.
 
 SIMPLE_INSTRUCTIONS = """\
 Offline ZIM archives (Wikipedia, Stack Exchange, Wiktionary, …). Retrieval \
-only — this tool never reaches the network.
+only — content is read from local archives.
 
 zim_query takes a natural-language question and handles search, entry \
 selection and rendering in one call. Ask it the question directly rather than \

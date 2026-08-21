@@ -26,6 +26,7 @@ OpenZIM MCP serves offline knowledge archives to MCP clients. The relevant threa
 | Prompt injection via user args | Control characters stripped, backticks stripped (template delimiter), length capped before interpolation |
 | Resource exhaustion | Token-bucket rate limiter with per-operation costs, atomic acquire, per-client buckets with LRU eviction |
 | Self-referential redirects causing infinite loops | Bounded redirect-chain follow (`MAX_REDIRECT_DEPTH = 10`), self-referential refs rejected |
+| Unannounced outbound egress from a "retrieval only" server | The base install makes no outbound connections. The optional `[reranker]` extra loads its cross-encoder from the local model cache only (`ml.reranker.allow_model_download` defaults to `false`); fetching it requires an explicit `openzim-mcp download-models` run |
 | DNS rebinding against a local HTTP server | `Host`-header validation — only loopback hosts accepted by default; extend via `OPENZIM_MCP_ALLOWED_HOSTS` behind a Host-preserving reverse proxy |
 
 ## Path validation
