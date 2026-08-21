@@ -554,6 +554,19 @@ def _is_initialize_request(body: bytes) -> bool:
     return message.get("params", None) is None or isinstance(message["params"], dict)
 
 
+def _accepts_json_and_sse(scope: Scope) -> bool:
+    """Whether ``Accept`` satisfies the SDK's POST precondition.
+
+    Delegated to the SDK's own parser so the gate's answer and the transport's
+    stay in step, wildcards included. The app is built without
+    ``json_response``, so the SSE branch applies: both types are required.
+    """
+    from mcp.server.streamable_http import check_accept_headers
+
+    has_json, has_sse = check_accept_headers(Request(scope))
+    return bool(has_json and has_sse)
+
+
 class _BodyTooLarge(Exception):
     """A buffered sessionless body crossed the request-size cap mid-stream."""
 
@@ -635,6 +648,20 @@ class SessionlessRequestGateMiddleware:
             # ``None``: disconnected mid-body — nothing to classify and nobody
             # to answer, but the outer middleware needs *a* response.
             await self._reject_missing_session(scope, receive, send)
+            return
+        if not _accepts_json_and_sse(scope):
+            # The SDK validates ``Accept`` inside the transport it has already
+            # minted, registered and task-started, so an ``initialize`` it is
+            # about to refuse with 406 leaks a session all the same. Answer it
+            # here, in the SDK's own words, before anything is minted.
+            await self._send_jsonrpc_error(
+                scope,
+                receive,
+                send,
+                "Not Acceptable: Client must accept both application/json and "
+                "text/event-stream",
+                406,
+            )
             return
 
         async def replay() -> Message:

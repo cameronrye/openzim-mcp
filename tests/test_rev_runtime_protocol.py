@@ -15,6 +15,7 @@ from starlette.testclient import TestClient
 
 from openzim_mcp.server import OpenZimMcpServer
 from tests.test_v3_field_fixes_http import (
+    INITIALIZE_BODY,
     LEGACY_HEADERS,
     MISSING_SESSION_BODY,
     _build_client,
@@ -106,4 +107,23 @@ def test_deeply_nested_body_is_answered_not_500(
 
     assert response.status_code == 400
     assert response.json() == MISSING_SESSION_BODY
+    assert _sessions(server) == {}
+
+
+def test_sessionless_initialize_with_narrow_accept_mints_nothing(
+    gated_client: Tuple[TestClient, OpenZimMcpServer],
+) -> None:
+    """D62 again: the SDK validates ``Accept`` only after it has minted and
+    task-started the session, so an ``initialize`` the gate waved through on
+    the strength of its body still leaked one per request."""
+    client, server = gated_client
+
+    for _ in range(3):
+        response = client.post(
+            "/mcp",
+            headers={"Content-Type": "application/json", "Accept": "application/json"},
+            json=INITIALIZE_BODY,
+        )
+        assert response.status_code == 406, response.text
+
     assert _sessions(server) == {}
