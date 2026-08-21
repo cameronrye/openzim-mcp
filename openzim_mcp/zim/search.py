@@ -651,13 +651,16 @@ class _SearchMixin:
             )
 
         # Cache key bumped to v2b (Phase B) so v1.x cached responses (old shape)
-        # don't leak through after the upgrade. The stat token (mtime_ns:size)
-        # invalidates results when the archive is replaced in place
-        # (archive_stat_token contract).
+        # don't leak through after the upgrade, then to v2c when the page
+        # gained canonical-path dedup, ``page_info.source_consumed`` and
+        # ``_snippet_query`` anchoring — a persisted v2b payload would keep
+        # re-serving the duplicate-laden page for its TTL. The stat token
+        # (mtime_ns:size) invalidates results when the archive is replaced in
+        # place (archive_stat_token contract).
         from openzim_mcp.bundle import archive_stat_token
 
         cache_key = (
-            f"search_v2b:{validated_path}:"
+            f"search_v2c:{validated_path}:"
             f"{archive_stat_token(validated_path)}:{query}:{limit}:{offset}"
         )
         cached_result = self.cache.get(cache_key)
@@ -1202,23 +1205,24 @@ class _SearchMixin:
                 # the window.
                 next_offset = total_results
             else:
-                next_offset = offset + limit
-                if next_cursor is None:
+                # ``source_consumed`` is the number of ranked rows this
+                # page actually consumed, which exceeds the rows shown
+                # whenever the canonical splice prepended a synthetic row
+                # (``_splice_title_match_into_search``) or the dedup
+                # collapsed query-string variants (``_collect_distinct_hits``).
+                # It is the same resume point the cursor encodes, so honour
+                # it whether or not a cursor was minted — the rendered footer
+                # is what a model without cursor support pages by, and
+                # ``offset + limit`` would replay the collapsed rows.
+                consumed = page_info.get("source_consumed")
+                if isinstance(consumed, int) and not isinstance(consumed, bool):
+                    next_offset = offset + consumed
+                elif next_cursor is None:
                     # Limited path that doesn't know the next-page boundary
                     # precisely; advance by what we actually returned.
-                    #
-                    # ``len(results)`` is the wrong count once the canonical
-                    # splice has prepended a synthetic row: that row came from
-                    # the title index, not the ranked stream, so counting it
-                    # here would advance one slot too far and skip a real hit.
-                    # ``source_consumed`` (set by
-                    # ``_splice_title_match_into_search``) is the ranked-row
-                    # count; absent on every unspliced payload, which then
-                    # falls back to the row count as before.
-                    consumed = page_info.get("source_consumed")
-                    if not isinstance(consumed, int) or isinstance(consumed, bool):
-                        consumed = len(results)
-                    next_offset = offset + consumed
+                    next_offset = offset + len(results)
+                else:
+                    next_offset = offset + limit
             result_text += (
                 f"Showing {offset + 1}-{offset + len(results)} "
                 f"of {total_text} — "
@@ -1573,13 +1577,15 @@ class _SearchMixin:
         # Post-b1 P3-D1: include display_query in the cache key. Two calls
         # with the same matched query but different display forms must
         # render different text; a stale cache would echo the wrong
-        # casing back to the second caller.
+        # casing back to the second caller. Versioned to v1b when snippets
+        # moved to ``_snippet_query`` anchoring — a persisted unversioned
+        # payload would keep re-serving Boolean-operator snippets for its TTL.
         # The stat token (mtime_ns:size) invalidates results when the archive
         # is replaced in place (archive_stat_token contract).
         from openzim_mcp.bundle import archive_stat_token
 
         cache_key = (
-            f"search_filtered:{validated_path}:"
+            f"search_filtered:v1b:{validated_path}:"
             f"{archive_stat_token(validated_path)}:{query}:{namespace}:"
             f"{content_type}:{limit}:{offset}:dq={display_query or ''}"
         )
@@ -1713,12 +1719,13 @@ class _SearchMixin:
         # Cache key bumped to v2b (Phase B) so v1.x cached responses (markdown
         # strings under the legacy ``search_filtered:`` prefix) don't leak
         # through after the upgrade — different prefix, different cache slot.
-        # The stat token (mtime_ns:size) invalidates results when the archive
+        # Bumped again to v2c for the ``_snippet_query`` anchoring and
+        # ``page_info.total_is_lower_bound``. The stat token (mtime_ns:size) invalidates results when the archive
         # is replaced in place (archive_stat_token contract).
         from openzim_mcp.bundle import archive_stat_token
 
         cache_key = (
-            f"search_filtered_v2b:{validated_path}:"
+            f"search_filtered_v2c:{validated_path}:"
             f"{archive_stat_token(validated_path)}:{query}:{namespace}:"
             f"{content_type}:{limit}:{offset}"
         )
@@ -3109,12 +3116,19 @@ class _SearchMixin:
         # pays for it.
         title_index: Optional[Any] = None
         for variant in self._typo_variants(title):
-            # Early-out once we have a canonical hit AND enough suggestions.
-            best_is_done = best is not None and (
-                best_is_canonical or extra_probes >= self._TYPO_MAX_EXTRA_PROBES
-            )
-            if best_is_done and len(verified) >= suggestion_limit:
-                break
+            # Stop once the extra-probe budget after the first hit is spent,
+            # or earlier if the best entry is already canonical and the
+            # suggestion pool is full. The pool alone can never end the
+            # sweep: ``seen_titles`` dedupes by title, so a misspelling that
+            # reaches a single article leaves ``verified`` at 1 forever and
+            # the sweep ran every variant — each one a title-index
+            # suggestion query since the D26 verification landed.
+            if best is not None:
+                if extra_probes >= self._TYPO_MAX_EXTRA_PROBES or (
+                    best_is_canonical and len(verified) >= suggestion_limit
+                ):
+                    break
+                extra_probes += 1
 
             try:
                 entry = self._find_entry_fast_path(archive, variant)
@@ -3125,12 +3139,8 @@ class _SearchMixin:
                         archive, variant, searcher=title_index
                     )
             except Exception:
-                if best is not None and not best_is_done:
-                    extra_probes += 1
                 continue
             if entry is None:
-                if best is not None and not best_is_done:
-                    extra_probes += 1
                 continue
 
             source_is_canonical = not bool(getattr(entry, "is_redirect", False))
@@ -3149,9 +3159,6 @@ class _SearchMixin:
             elif source_is_canonical and not best_is_canonical:
                 best = resolved
                 best_is_canonical = True
-            else:
-                if not best_is_done:
-                    extra_probes += 1
         return best, verified
 
     # Suggestion rows examined per typo variant when verifying it against
@@ -3460,14 +3467,16 @@ class _SearchMixin:
         # archive content, so the stat-token key invalidates on file change.
         # This also collapses the M30 Pass-1/Pass-3 and L4 duplicate-probe
         # re-queries into cache hits. cross_file aggregates multiple archives,
-        # so it is left uncached.
+        # so it is left uncached. Bumped to v2 when ``done``,
+        # ``page_info.total_is_lower_bound`` and the site-suffixed ``exact_ci``
+        # score changed the payload for an unchanged archive.
         find_cache_key: Optional[str] = None
         if not cross_file:
             try:
                 from openzim_mcp.bundle import archive_stat_token
 
                 find_cache_key = (
-                    f"find_title:v1:{files[0]}:"
+                    f"find_title:v2:{files[0]}:"
                     f"{archive_stat_token(Path(files[0]))}:{title}:{limit}"
                 )
             except Exception:

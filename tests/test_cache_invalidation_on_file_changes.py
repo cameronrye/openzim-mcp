@@ -146,22 +146,22 @@ _CONTENT_CACHE_CASES = [
     (
         # An explicit limit is passed so the key is not affected by the
         # ``limit is None -> default_search_limit`` resolution these methods do.
-        "search_v2b",
+        "search_v2c",
         lambda zo, p: zo.search_zim_file_data(p, "test", 5, 0),
-        lambda vp: f"search_v2b:{vp}:test:5:0",
-        lambda vp, tok: f"search_v2b:{vp}:{tok}:test:5:0",
+        lambda vp: f"search_v2c:{vp}:test:5:0",
+        lambda vp, tok: f"search_v2c:{vp}:{tok}:test:5:0",
     ),
     (
-        "search_filtered",
+        "search_filtered:v1b",
         lambda zo, p: zo.search_with_filters(p, "test", limit=5),
-        lambda vp: f"search_filtered:{vp}:test:None:None:5:0:dq=",
-        lambda vp, tok: f"search_filtered:{vp}:{tok}:test:None:None:5:0:dq=",
+        lambda vp: f"search_filtered:v1b:{vp}:test:None:None:5:0:dq=",
+        lambda vp, tok: f"search_filtered:v1b:{vp}:{tok}:test:None:None:5:0:dq=",
     ),
     (
-        "search_filtered_v2b",
+        "search_filtered_v2c",
         lambda zo, p: zo.search_with_filters_data(p, "test", limit=5),
-        lambda vp: f"search_filtered_v2b:{vp}:test:None:None:5:0",
-        lambda vp, tok: f"search_filtered_v2b:{vp}:{tok}:test:None:None:5:0",
+        lambda vp: f"search_filtered_v2c:{vp}:test:None:None:5:0",
+        lambda vp, tok: f"search_filtered_v2c:{vp}:{tok}:test:None:None:5:0",
     ),
     (
         "suggestions_data",
