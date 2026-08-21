@@ -5,6 +5,54 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.1.0](https://github.com/cameronrye/openzim-mcp/compare/v3.0.0...v3.1.0) (2026-08-21)
+
+
+### Upgrade notes
+
+Two behaviour changes. Neither makes a tool call fail.
+
+**`[reranker]` users: the cross-encoder no longer downloads its model.**
+`ml.reranker.allow_model_download` is new and defaults to `false`, so the model
+loads from the local FastEmbed cache only. If it was never staged, rerank-eligible
+queries fall back to Xapian-only ranking — results still return, without
+`rerank_score` — and log one warning naming the fix. Stage it once with
+`openzim-mcp download-models`; pin `OPENZIM_MCP_ML__RERANKER__CACHE_DIR` first,
+because FastEmbed's default cache lives under the system temp directory and does
+not survive a reboot. To restore download-on-first-use, set
+`OPENZIM_MCP_ML__RERANKER__ALLOW_MODEL_DOWNLOAD=true`. The base install is
+unaffected. This exists because the shipped MCP `instructions` told every caller
+these tools never reach the network, while a cold cache made the first
+rerank-eligible query pull ~1.1 GB from huggingface.co.
+
+**All clients: an argument name a tool does not declare is now rejected.**
+`zim_search(query=..., limitt=2)` previously ran at the default page size and
+returned ten results with `isError: false`; it now returns an `unknown_argument`
+error envelope naming the argument, the accepted list, and a "Did you mean ...?"
+suggestion. `_meta` nested inside `arguments` is tolerated. The published
+`inputSchema` is unchanged, so `tools/list` is byte-identical.
+
+**Operators:** caller mistakes — a mistyped `entry_path`, a rejected argument, a
+path outside `allowed_directories`, a rate-limit denial — now log at WARNING
+rather than ERROR, and caller-supplied text in those records is bounded at 1024
+characters. Alerting keyed on ERROR from `openzim_mcp.tools.*` will go quiet for
+user input; add WARNING to keep seeing it.
+
+
+### Added
+
+* close the pre-existing follow-ups surfaced by the v3 field sweep ([#377](https://github.com/cameronrye/openzim-mcp/issues/377)) ([97e7ab2](https://github.com/cameronrye/openzim-mcp/commit/97e7ab2a69be8a4911cd7250ce55c795710791a2))
+
+
+### Fixed
+
+* resolve the v3.0.0 field-test defect sweep ([#374](https://github.com/cameronrye/openzim-mcp/issues/374)) ([a59eb03](https://github.com/cameronrye/openzim-mcp/commit/a59eb03ed9577f01e19a10a5feeef0cfe1e644fe))
+
+
+### Documentation
+
+* catch the release surface up to the 3.0.0 it describes ([#372](https://github.com/cameronrye/openzim-mcp/issues/372)) ([3a48bba](https://github.com/cameronrye/openzim-mcp/commit/3a48bba7f174398ba6af6cdefda1de7c18576118))
+
 ## [3.0.0](https://github.com/cameronrye/openzim-mcp/compare/v2.7.0...v3.0.0) (2026-08-20)
 
 
