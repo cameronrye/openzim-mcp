@@ -1565,23 +1565,28 @@ class _StructureMixin:
         """Best-effort canonical spelling of a resolved link ``target``.
 
         Tries the raw and percent-decoded spellings (``_resolve_entry_spelling``)
-        and, when the entry resolves to a redirect, walks the chain to the
-        served entry's path. Returns ``target`` unchanged when nothing in the
-        archive can verify it, so the caller keeps a best-effort path rather
-        than dropping the row. Same walk ``_parse_internal_link_edges`` uses
-        for the sidecar, so outbound rows, related rows, and the inbound index
-        all name one entry the same way.
+        and then names the entry libzim actually served — its own ``path``,
+        after walking any redirect chain. Reporting the spelling that *resolved*
+        is not enough: libzim matches a namespace prefix leniently, so
+        ``C/main.html`` and ``A/main.html`` both serve the entry stored as
+        ``main.html`` and only the stored path is the key
+        ``_parse_internal_link_edges`` indexed. Returns ``target`` unchanged
+        when nothing in the archive can verify it, so the caller keeps a
+        best-effort path rather than dropping the row. Same walk
+        ``_parse_internal_link_edges`` uses for the sidecar, so outbound rows,
+        related rows, and the inbound index all name one entry the same way.
         """
         from openzim_mcp.zim.redirects import best_effort_redirect_chain
 
         try:
             entry, spelling = _resolve_entry_spelling(archive, target)
-            # ``is True``: test-suite mock archives return MagicMock entries
-            # whose ``is_redirect`` is itself a truthy MagicMock.
-            if entry is not None and getattr(entry, "is_redirect", False) is True:
-                resolved_path = getattr(best_effort_redirect_chain(entry), "path", None)
-                if isinstance(resolved_path, str) and resolved_path:
-                    return resolved_path
+            if entry is None:
+                return spelling
+            resolved_path = getattr(best_effort_redirect_chain(entry), "path", None)
+            # ``isinstance``: test-suite mock archives hand back MagicMock
+            # entries whose ``path`` is itself a truthy MagicMock.
+            if isinstance(resolved_path, str) and resolved_path:
+                return resolved_path
             return spelling
         except Exception as e:  # pragma: no cover - defensive
             logger.debug(f"canonical path for {target} failed: {e}")
