@@ -170,9 +170,12 @@ dev = [
     "httpx>=0.28",
     "flake8>=7.3.0",
     "isort>=8.0.1",
-    # Capped below 2.0: mypy 2.x changes defaults and can red an otherwise
-    # routine `uv lock --upgrade`; take the major deliberately, as its own PR.
-    "mypy>=1.20.2,<2.0",
+    # Capped below 3.0. The 2.x major was taken deliberately, as the old cap
+    # comment asked: 2.3.1 type-checks the whole package clean under both the
+    # Makefile config and the pre-commit hook's args, and the pre-commit rev
+    # moves in lockstep with this floor. Keep crossing this cap by hand —
+    # Dependabot is set to lockfile-only so it cannot widen the line itself.
+    "mypy>=2.3.1,<3.0",
     "pytest>=9.0.3",
     "pytest-asyncio>=1.3.0",
     "pytest-benchmark>=5.2.3",
