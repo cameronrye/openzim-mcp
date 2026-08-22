@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.1.2](https://github.com/cameronrye/openzim-mcp/compare/v3.1.1...v3.1.2) (2026-08-22)
+
+
+### Dependencies
+
+* take mypy 2.x and stop Dependabot widening deliberate caps ([#385](https://github.com/cameronrye/openzim-mcp/issues/385)) ([fc6910d](https://github.com/cameronrye/openzim-mcp/commit/fc6910d696ffaa282021f034c27c51ca8c8b35cb))
+
 ## [3.1.1](https://github.com/cameronrye/openzim-mcp/compare/v3.1.0...v3.1.1) (2026-08-22)
 
 
