@@ -16,6 +16,14 @@ on:
         required: true
         type: string
 
+# Least-privilege default: every job below either declares its own
+# ``permissions`` (which replaces this wholesale) or needs nothing beyond
+# reading the checkout. Without a top-level block a job inherits the
+# repository default, which is a setting that can be widened out from under
+# this file (Scorecard Token-Permissions).
+permissions:
+  contents: read
+
 jobs:
   # Build once with the classic (non-BuildKit) builder. The publish job below
   # goes through buildx, which is always BuildKit — so BuildKit-only Dockerfile
@@ -30,7 +38,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       # No setup-buildx-action on purpose: DOCKER_BUILDKIT=0 selects the
       # classic builder, which rejects BuildKit-only flags the way a
@@ -46,7 +54,7 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ github.event.inputs.tag || github.ref }}
 
@@ -67,9 +75,12 @@ jobs:
       - name: Extract version from tag
         id: meta
         if: github.event_name != 'pull_request'
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_TAG: ${{ github.event.inputs.tag }}
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            TAG="${{ github.event.inputs.tag }}"
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            TAG="$INPUT_TAG"
           else
             TAG="${GITHUB_REF#refs/tags/}"
           fi

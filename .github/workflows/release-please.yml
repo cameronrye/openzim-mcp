@@ -6,6 +6,14 @@ on:
       - main
   workflow_dispatch:
 
+# Least-privilege default: every job below either declares its own
+# ``permissions`` (which replaces this wholesale) or needs nothing beyond
+# reading the checkout. Without a top-level block a job inherits the
+# repository default, which is a setting that can be widened out from under
+# this file (Scorecard Token-Permissions).
+permissions:
+  contents: read
+
 jobs:
   release-please:
     runs-on: ubuntu-latest
@@ -59,7 +67,7 @@ jobs:
         # env var and JSON.parse to avoid embedding the body content into
         # the github-script source, which previously broke when commit
         # subjects contained single-quoted tokens like ``plumb 'rc1'``.
-        uses: actions/github-script@v9
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         env:
           RELEASE_PR_JSON: ${{ needs.release-please.outputs.pr }}
         with:
@@ -133,7 +141,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: release-please--branches--main
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -184,7 +192,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ needs.release-please.outputs.tag_name }}
 
@@ -252,10 +260,12 @@ jobs:
       actions: write
     steps:
       - name: Trigger release workflow
-        uses: actions/github-script@v9
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        env:
+          TAG_NAME: ${{ needs.release-please.outputs.tag_name }}
         with:
           script: |
-            const tagName = '${{ needs.release-please.outputs.tag_name }}';
+            const tagName = process.env.TAG_NAME;
             console.log(`Triggering release workflow for tag: ${tagName}`);
 
             try {
@@ -289,10 +299,12 @@ jobs:
       actions: write
     steps:
       - name: Trigger docker-publish workflow
-        uses: actions/github-script@v9
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        env:
+          TAG_NAME: ${{ needs.release-please.outputs.tag_name }}
         with:
           script: |
-            const tagName = '${{ needs.release-please.outputs.tag_name }}';
+            const tagName = process.env.TAG_NAME;
             console.log(`Triggering docker-publish workflow for tag: ${tagName}`);
 
             try {

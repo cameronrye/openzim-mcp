@@ -89,3 +89,24 @@ updates:
         update-types:
           - "minor"
           - "patch"
+
+  # Docker base images. The Dockerfile pins python:3.13-slim and the uv binary
+  # image by digest (Scorecard Pinned-Dependencies), which freezes them until
+  # something advances the digest — without this ecosystem a pinned base image
+  # quietly stops receiving upstream security patches.
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:30"
+      timezone: "Etc/UTC"
+    open-pull-requests-limit: 5
+    assignees:
+      - "cameronrye"
+    labels:
+      - "dependencies"
+      - "docker"
+    commit-message:
+      prefix: "ci"
+      include: "scope"

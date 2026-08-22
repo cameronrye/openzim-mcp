@@ -39,7 +39,7 @@ jobs:
       contents: read
       actions: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           # Scorecard reads the repo through the API, not the checkout, and a
           # persisted credential in the working tree is one of the things it
@@ -64,7 +64,7 @@ jobs:
       # does. `publish_results` above already puts the score where the
       # aggregators read it; the artifact keeps the detail one click away.
       - name: Upload results as an artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: scorecard-results
           path: results.sarif
