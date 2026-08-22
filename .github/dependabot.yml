@@ -6,6 +6,22 @@ updates:
   # Python dependencies (uv.lock)
   - package-ecosystem: "pip"
     directory: "/"
+    # Lockfile-only: Dependabot may move resolved versions inside uv.lock but
+    # must never edit a constraint in pyproject.toml. Two reasons.
+    #
+    # It cannot produce a working PR when it widens one. uv records each
+    # requirement's specifier inside uv.lock, so editing a bound in
+    # pyproject.toml desyncs the lockfile — and every job installs with
+    # `--locked`, which refuses the drift. #383 (widening the mypy cap) died
+    # that way in all ten jobs, before a single test ran.
+    #
+    # And a widened cap is not the upgrade it looks like. `uv lock` keeps the
+    # already-resolved version, so the PR advertises a new ceiling while CI
+    # goes on testing the old floor — green, and proving nothing. Every capped
+    # dependency here (libzim, mcp, pydantic, beautifulsoup4, mypy, ...) is
+    # capped on purpose; crossing one is a human decision that needs its own
+    # PR and its own evidence.
+    versioning-strategy: lockfile-only
     schedule:
       interval: "weekly"
       day: "monday"
