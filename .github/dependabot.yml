@@ -110,3 +110,20 @@ updates:
     commit-message:
       prefix: "ci"
       include: "scope"
+    ignore:
+      # Digest and patch refreshes only. The point of this ecosystem is to keep
+      # a digest-pinned base image receiving upstream security patches — not to
+      # move the runtime interpreter. The image must track the Python this
+      # project actually tests (the CI matrix is 3.12/3.13 and the classifiers
+      # say the same); a minor bump here would ship a container running on an
+      # interpreter no test ever exercised. Raise the Python version by editing
+      # the Dockerfile alongside the CI matrix and classifiers, not from here.
+      - dependency-name: "python"
+        update-types:
+          - "version-update:semver-major"
+          - "version-update:semver-minor"
+      # Same reasoning for the uv binary image: the tag is deliberate.
+      - dependency-name: "ghcr.io/astral-sh/uv"
+        update-types:
+          - "version-update:semver-major"
+          - "version-update:semver-minor"
