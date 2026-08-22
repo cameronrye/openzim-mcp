@@ -325,3 +325,53 @@ async def test_invalid_view_rejected(
     fn, _ = server._tools_store["zim_get"]
     result = await fn(zim_file_path="/x.zim", entry_path="A", view="bogus")  # type: ignore[arg-type]
     assert result["operation"] == "invalid_view"
+
+
+# ---------------------------------------------------------------------------
+# Validator-regression guards
+#
+# The two handler branches that need ``entry_path`` used to narrow it with a
+# bare ``assert``. That assert sat inside the b13 ``except Exception``, which
+# swallowed the AssertionError into a generic ``zim_get`` envelope — and
+# ``python -O`` strips asserts entirely, so under an optimised interpreter
+# None went straight through to the data layer. These tests simulate the
+# validator regressing (it is the only thing that makes the branches
+# reachable) and pin the structured envelope.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_binary_without_entry_path_returns_envelope_if_validator_regresses(
+    server: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ops = _patch_async_ops(monkeypatch, get_binary_entry_data={"content": b""})
+    monkeypatch.setattr(
+        "openzim_mcp.tools.zim_get._validate_branch_combination",
+        lambda **_kwargs: None,
+    )
+    register_zim_get(server)
+    fn, _ = server._tools_store["zim_get"]
+    result = await fn(zim_file_path="/x.zim", entry_path=None, binary=True)
+    assert result["operation"] == "invalid_path_combination"
+    assert result["message"] == "Binary mode requires `entry_path`."
+    ops.get_binary_entry_data.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_single_entry_without_entry_path_returns_envelope_if_validator_regresses(
+    server: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ops = _patch_async_ops(monkeypatch, get_zim_entry_data={"content": ""})
+    monkeypatch.setattr(
+        "openzim_mcp.tools.zim_get._validate_branch_combination",
+        lambda **_kwargs: None,
+    )
+    register_zim_get(server)
+    fn, _ = server._tools_store["zim_get"]
+    result = await fn(zim_file_path="/x.zim", entry_path=None)
+    assert result["operation"] == "invalid_path_combination"
+    assert (
+        result["message"]
+        == "Provide one of `entry_path`, `entry_paths`, or `main_page=True`."
+    )
+    ops.get_zim_entry_data.assert_not_awaited()

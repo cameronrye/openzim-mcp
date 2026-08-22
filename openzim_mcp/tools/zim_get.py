@@ -58,6 +58,13 @@ _DESCRIPTION = load_description("zim_get")
 
 _VALID_VIEWS = {"full", "summary", "toc", "structure"}
 
+# Shared by ``_validate_branch_combination`` and the unreachable-branch guards
+# in the handler. Both must produce the identical envelope: the guards exist
+# only for the case where the validator has regressed, and a caller should not
+# be able to tell which layer answered.
+_ERR_BINARY_NEEDS_PATH = "Binary mode requires `entry_path`."
+_ERR_NO_BRANCH = "Provide one of `entry_path`, `entry_paths`, or `main_page=True`."
+
 
 def register(server: "OpenZimMcpServer") -> None:
     """Register the `zim_get` tool with the MCP server."""
@@ -190,7 +197,16 @@ def register(server: "OpenZimMcpServer") -> None:
                     max_content_length=max_content_length,
                 )
             if binary:
-                assert entry_path is not None  # validator guarantees this
+                # Not an ``assert``: this sits inside the b13 ``except
+                # Exception`` below, which would swallow the AssertionError
+                # into a generic envelope — and ``python -O`` strips the
+                # check entirely, passing None straight through to the data
+                # layer. Re-state the validator's own error instead.
+                if entry_path is None:
+                    return tool_error(
+                        operation="invalid_path_combination",
+                        message=_ERR_BINARY_NEEDS_PATH,
+                    )
                 # ``max_content_length`` caps the fetched BYTES here — it maps
                 # onto the data layer's ``max_size_bytes`` (default 10MB when
                 # None); oversize entries come back metadata-only with
@@ -215,7 +231,11 @@ def register(server: "OpenZimMcpServer") -> None:
                 )
 
             # Single-entry body view
-            assert entry_path is not None
+            if entry_path is None:
+                return tool_error(
+                    operation="invalid_path_combination",
+                    message=_ERR_NO_BRANCH,
+                )
             if view == "summary":
                 return await ops.get_entry_summary_data(
                     zim_file_path, entry_path, compact=compact
@@ -312,7 +332,7 @@ def _validate_branch_combination(
         if not entry_path:
             return tool_error(
                 operation="invalid_path_combination",
-                message="Binary mode requires `entry_path`.",
+                message=_ERR_BINARY_NEEDS_PATH,
             )
     if main_page:
         if entry_path or entry_paths:
@@ -331,8 +351,6 @@ def _validate_branch_combination(
     if not (entry_path or entry_paths or main_page):
         return tool_error(
             operation="invalid_path_combination",
-            message=(
-                "Provide one of `entry_path`, `entry_paths`, or " "`main_page=True`."
-            ),
+            message=_ERR_NO_BRANCH,
         )
     return None
