@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.1.1](https://github.com/cameronrye/openzim-mcp/compare/v3.1.0...v3.1.1) (2026-08-22)
+
+
+### Fixed
+
+* raise a structured envelope instead of asserting a validator invariant ([#381](https://github.com/cameronrye/openzim-mcp/issues/381)) ([d9a3a12](https://github.com/cameronrye/openzim-mcp/commit/d9a3a120d5187e1804c7f39eefcf9a1c2ae2fe37))
+
 ## [3.1.0](https://github.com/cameronrye/openzim-mcp/compare/v3.0.0...v3.1.0) (2026-08-21)
 
 
