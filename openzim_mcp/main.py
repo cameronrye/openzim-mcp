@@ -111,8 +111,9 @@ Environment Variables:
         default=None,
         help=(
             "Transport: 'stdio' (default, for local MCP clients), 'http' "
-            "(streamable HTTP), or 'sse' (legacy SSE — no auth middleware, "
-            "localhost only). Env: OPENZIM_MCP_TRANSPORT"
+            "(streamable HTTP), or 'sse' (DEPRECATED, removed in 4.0.0 — "
+            "legacy SSE, no auth middleware, localhost only). "
+            "Env: OPENZIM_MCP_TRANSPORT"
         ),
     )
     parser.add_argument(

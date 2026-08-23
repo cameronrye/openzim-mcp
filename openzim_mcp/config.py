@@ -374,7 +374,8 @@ class OpenZimMcpConfig(BaseSettings):
         default="stdio",
         description=(
             "Transport protocol: 'stdio' (default), 'http' (streamable HTTP), "
-            "or 'sse' (legacy SSE — no auth middleware, intended for local use)"
+            "or 'sse' (DEPRECATED, removed in 4.0.0 — legacy SSE, no auth "
+            "middleware, intended for local use)"
         ),
     )
     host: str = Field(

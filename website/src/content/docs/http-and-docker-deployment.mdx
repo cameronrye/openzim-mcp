@@ -19,7 +19,7 @@ If you only want to use OpenZIM MCP locally with Claude Desktop, Cursor, or anot
 |-----------|----------|
 | `stdio` (default) | Local desktop MCP hosts (Claude Desktop, Inspector, MCP-aware editors). The host owns the process lifetime. |
 | `http` (streamable HTTP) | Long-running service. Multiple clients, possibly across the network. Bearer-token auth, CORS, health probes. |
-| `sse` (legacy) | Older clients that haven't migrated to streamable HTTP. **Loopback only** — no auth middleware. |
+| `sse` (legacy, **deprecated**) | Older clients that haven't migrated to streamable HTTP. **Loopback only** — no auth middleware. Deprecated and removed in 4.0.0 — the server logs a deprecation warning on every SSE start; migrate to `http`. |
 
 The rest of this page assumes `--transport http`.
 
