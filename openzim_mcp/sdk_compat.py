@@ -1,31 +1,41 @@
-"""Patches for defects in the pinned MCP SDK.
+"""Where this server departs from the pinned MCP SDK's behaviour.
 
-Two residents. Each has a canary test that fails the day the locked SDK
-fixes the defect itself, which is the signal to delete the patch.
+Two residents. Each has a canary test pinning the upstream behaviour it
+works around, so a shift underneath us surfaces as a test failure rather
+than as silent drift. Only the second can ever be *retired* by that signal:
+its canary fails when the SDK fixes the defect itself, while the first works
+around a deliberate spec decision that leaves nothing to wait for.
 
-The first is the ping keepalive shim for
-https://github.com/modelcontextprotocol/python-sdk/issues/3273. SDK 2.0.0's
-per-version method tables lack ``("ping", "2026-07-28")``, in both directions
-that matter to a server: ``CLIENT_REQUESTS`` (the runner's version gate, so
-the request dies as -32601 before the SDK's own ping handler is consulted)
-and ``SERVER_RESULTS`` (the outbound sieve, so fixing only the gate would
-turn the miss into an unhandled ``KeyError`` mid-response). A modern client
-that pings on a keepalive timer — FastMCP 4 does — sees an error per ping
-and flaps the connection.
+The first is the ping keepalive shim. SDK 2.0.0's per-version method tables
+lack ``("ping", "2026-07-28")`` because the revision itself does:
+``PingRequest`` appears nowhere in ``schema/2026-07-28/schema.json``, and
+https://github.com/modelcontextprotocol/python-sdk/issues/3273 was closed
+not-planned on 2026-08-20 as "intended behaviour of the 2026-07-28 MCP
+spec". The absence bites in both directions that matter to a server:
+``CLIENT_REQUESTS`` (the runner's version gate, so the request dies as
+-32601 before the SDK's own ping handler is consulted) and ``SERVER_RESULTS``
+(the outbound sieve, so filling only the gate would turn the miss into an
+unhandled ``KeyError`` mid-response). A modern client that pings on a
+keepalive timer — FastMCP 4 does — sees an error per ping and flaps the
+connection, which is why this server answers ping on a revision that
+dropped it.
 
 The tables are ``MappingProxyType`` views over module-private dicts, and the
 SDK binds them as call-time *defaults*, so neither rebinding the module
 attribute nor passing ``surface=`` from our layer can reach the runner's
 calls. The one seam that reaches every consumer is the dict under the proxy:
-a proxy is a live view, so inserting the missing rows there is exactly the
-edit upstream's fix will make to the literal. ``gc.get_referents`` is how
-CPython hands out that dict; it is deliberate surgery on SDK internals,
-confined to this module and covered by ``tests/test_sdk_ping_shim.py``.
+a proxy is a live view, so inserting the missing rows there reaches the gate
+and the sieve at once. ``gc.get_referents`` is how CPython hands out that
+dict; it is deliberate surgery on SDK internals, confined to this module and
+covered by ``tests/test_sdk_ping_shim.py``.
 
-Retirement: the canary in ``tests/test_sdk_ping_shim.py`` fails the day the
-locked SDK ships the rows itself. Delete the shim, its install call in
-``server.py``, and the canary file; the wire tests in ``test_mcp_session.py``
-stay.
+No retirement condition: ping is absent from 2026-07-28 on purpose, so no
+SDK release is going to ship these rows and the shim is a permanent
+deviation from the revision, held for clients that keepalive-ping. The
+canary in ``tests/test_sdk_ping_shim.py`` therefore pins upstream's stance
+rather than counting down to a fix, and fails only if that stance reverses.
+Keeping the shim versus dropping ping on modern connections is the open
+question in issue #371; a canary cannot decide it.
 
 The second is :func:`stdio_server_answering_malformed_frames`, which wires
 around the SDK's stdio transport to fix three things its stdio path gets
@@ -109,16 +119,18 @@ MODERN_PING_ROW = ("ping", "2026-07-28")
 # hung up.
 STDIN_EOF_DRAIN_TIMEOUT_S = 30.0
 
-# The newest revision whose ping rows upstream does define. Ping's wire shape
-# did not change in 2026 — the gap is a missing table entry, not a missing
-# schema — so the modern rows are copies of these, which also keeps this
-# module off the ``mcp_types._v*`` internal packages.
+# The newest revision whose ping rows upstream does define. 2026-07-28 defines
+# no ping at all, so there is no modern frame model to copy: the modern rows
+# reuse the last revision that has one, which is exactly what "ping on a modern
+# connection" means here and also keeps this module off the ``mcp_types._v*``
+# internal packages.
 _PREVIOUS_PING_ROW = ("ping", "2025-11-25")
 
 # Captured before ``install_ping_keepalive_shim`` can have run: the module
-# body executes on first import and the only caller lives below it. The
-# canary test asserts this is still False; when it flips, the SDK has fixed
-# python-sdk#3273 and this module must be deleted.
+# body executes on first import and the only caller lives below it. The canary
+# test asserts this is still False — not because a fix is pending (2026-07-28
+# drops ping deliberately) but because a flip would mean upstream reversed
+# that, which is the one event that reopens issue #371's keep-or-drop call.
 UPSTREAM_DEFINES_MODERN_PING = (
     MODERN_PING_ROW in CLIENT_REQUESTS and MODERN_PING_ROW in SERVER_RESULTS
 )
@@ -144,8 +156,8 @@ def install_ping_keepalive_shim() -> bool:
             added = True
     if added:
         logger.debug(
-            "Installed ping keepalive shim for python-sdk#3273; "
-            "modern connections can now be kept alive"
+            "Installed the ping keepalive shim; 2026-07-28 defines no ping, "
+            "so this server answers it anyway to keep modern connections alive"
         )
     return added
 

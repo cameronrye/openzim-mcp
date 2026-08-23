@@ -1,11 +1,15 @@
-"""Mechanics and retirement condition of the SDK ping keepalive shim.
+"""Mechanics of the SDK ping keepalive shim, and the SDK stance it pins.
 
-The shim exists because of a concrete upstream defect
-(https://github.com/modelcontextprotocol/python-sdk/issues/3273): SDK 2.0.0's
-per-version method tables lack ``("ping", "2026-07-28")``, so every
-modern-negotiated connection has its keepalive rejected with -32601. The wire
-tests proving the fix works live in ``test_mcp_session.py``; this file pins
-how the shim installs and — via the canary — when it must be deleted.
+The shim works around a deliberate spec decision, not an upstream defect:
+2026-07-28 drops ping (``PingRequest`` is absent from that revision's schema),
+SDK 2.0.0's per-version method tables lack ``("ping", "2026-07-28")`` to
+match, and python-sdk#3273 was closed not-planned on 2026-08-20 as intended
+behaviour. Left alone, every modern-negotiated connection would have its
+keepalive rejected with -32601; this server answers it regardless, for clients
+that ping on a timer. The wire tests proving that work live in
+``test_mcp_session.py``; this file pins how the shim installs and — via the
+canary — that upstream's stance has not moved. Whether to keep the deviation
+or drop ping on modern connections is open in issue #371.
 """
 
 from mcp_types.methods import CLIENT_REQUESTS, SERVER_RESULTS
@@ -15,13 +19,15 @@ from openzim_mcp.sdk_compat import MODERN_PING_ROW
 
 
 def test_canary_upstream_still_lacks_modern_ping() -> None:
-    """Fails the day the locked SDK defines modern ping: delete the shim then.
+    """Fails if the locked SDK ever defines modern ping — a reversal, not a fix.
 
     Membership is captured at ``sdk_compat`` import time, which necessarily
     precedes any install call, so it observes the SDK as shipped rather than
-    our own patch. When this fails: remove ``sdk_compat.py``, its install
-    call in ``server.py``, and this file. Keep the wire tests in
-    ``test_mcp_session.py`` — they assert the behavior either way.
+    our own patch. 2026-07-28 omits ping on purpose, so this is expected to
+    hold for as long as the pin does; a failure means upstream reversed that
+    stance, and the shim is then re-decided under issue #371 rather than
+    deleted on the spot. Either way the wire tests in ``test_mcp_session.py``
+    assert the behavior clients see.
     """
     assert sdk_compat.UPSTREAM_DEFINES_MODERN_PING is False
 
@@ -51,10 +57,10 @@ def test_install_is_idempotent() -> None:
 def test_shim_reuses_the_previous_revision_frame_models() -> None:
     """The modern rows are copies of the 2025-11-25 rows, not new models.
 
-    Ping's wire shape did not change between revisions — the upstream gap is
-    a missing table entry, not a missing schema. Copying the newest pre-2026
-    row keeps the shim free of ``mcp_types._v*`` internals and guarantees the
-    modern path validates exactly what the legacy path already accepts.
+    2026-07-28 defines no ping at all, so there is no modern frame model to
+    reach for. Copying the newest revision that has one keeps the shim free of
+    ``mcp_types._v*`` internals and guarantees the modern path validates
+    exactly what the legacy path already accepts.
     """
     sdk_compat.install_ping_keepalive_shim()
 

@@ -87,10 +87,12 @@ async def test_listen_stream_receives_both_notification_kinds(
                 # against a real server over real HTTP.
                 await session.discover()
 
-                # Keepalive on the modern connection: the exact call
-                # python-sdk#3273 rejects with -32601. One ping here pins the
-                # sdk_compat shim working in a *spawned* server process over
-                # real HTTP, where the in-memory tests cannot see it.
+                # Keepalive on the modern connection: the exact call a
+                # stock SDK rejects with -32601, because 2026-07-28 defines no
+                # ping (python-sdk#3273, closed as intended). One ping here
+                # pins this server's deliberate deviation — the sdk_compat
+                # shim — working in a *spawned* server process over real HTTP,
+                # where the in-memory tests cannot see it.
                 await session.send_ping()
 
                 # Opt into both kinds. resource_subscriptions names URIs for

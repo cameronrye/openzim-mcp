@@ -57,8 +57,9 @@ dependencies = [
     # lockfile, but fresh installs (pip/uvx, Smithery, Docker) resolve the
     # newest wheel this range admits — a 2.1 that moves any of those seams
     # would break them at runtime with the suite still green. Raising the
-    # ceiling is a deliberate bump PR that re-audits the seams (and likely
-    # retires the ping shim; its canary test will say).
+    # ceiling is a deliberate bump PR that re-audits the seams. It will not
+    # retire the ping shim: 2026-07-28 defines no ping, so no SDK release is
+    # going to supply those rows (see sdk_compat and issue #371).
     "mcp[cli]>=2.0.0,<2.1",
     "pydantic>=2.13.3,<3.0",
     "pydantic-settings>=2.14.0,<3.0",

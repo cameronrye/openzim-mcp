@@ -240,8 +240,10 @@ class OpenZimMcpServer:
         Args:
             config: Server configuration
         """
-        # SDK 2.0.0 rejects keepalive pings on 2026-07-28 connections
-        # (python-sdk#3273); patch its method tables before serving anything.
+        # 2026-07-28 drops ping, so a stock SDK rejects keepalive pings on a
+        # modern connection. This server answers them anyway, for clients that
+        # ping on a timer — a deliberate deviation from the revision (see
+        # ``sdk_compat`` and issue #371), installed before anything is served.
         install_ping_keepalive_shim()
         self.config = config
 
