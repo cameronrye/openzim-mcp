@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+import warnings
 from pathlib import Path
 from typing import Dict, Optional
 from unittest.mock import MagicMock
@@ -73,17 +74,27 @@ def test_build_force_overwrites_atomically(tmp_path: Path) -> None:
 class _FakeEntry:
     """Minimal stand-in for a libzim entry."""
 
-    def __init__(self, path: str, html: str, is_redirect: bool = False) -> None:
-        """Store the entry's path, HTML body, and redirect flag."""
+    def __init__(
+        self,
+        path: str,
+        html: str,
+        is_redirect: bool = False,
+        mimetype: str = "text/html",
+    ) -> None:
+        """Store the entry's path, HTML body, redirect flag, and mimetype."""
         self.path = path
         self._html = html
         self.is_redirect = is_redirect
+        # Default text/html so the path-filter tests are unaffected; per-row
+        # overrides drive the content-type gate.
+        self._mimetype = mimetype
 
     def get_item(self) -> MagicMock:
         """Return an item whose ``.content`` is the encoded HTML bytes."""
         # Mirrors the real idiom: bytes(entry.get_item().content).decode(...)
         item = MagicMock()
         item.content = self._html.encode()
+        item.mimetype = self._mimetype
         return item
 
 
@@ -114,6 +125,49 @@ def test_iter_article_links_walks_content_entries() -> None:
     assert ("C/A", [("C/T", "t")]) in pairs
     assert all(src.startswith("C/") for src, _ in pairs)
     assert not any(src == "C/Redir" for src, _ in pairs)
+
+
+def test_iter_article_links_skips_non_article_mimetypes() -> None:
+    """Assets in the content namespace are not decoded or parsed as HTML.
+
+    ``_is_content_source`` is namespace-only and returns True unconditionally
+    on a new-scheme archive, so the images, fonts and styles ZIMIT stores under
+    C reach the walk. Before this gate each one was UTF-8-decoded, handed to
+    BeautifulSoup, and interned as a source node — contributing bogus edges
+    (an SVG's ``<a>`` elements are drawing markup, not article links) and
+    emitting XMLParsedAsHTMLWarning.
+
+    The unknown-mimetype row pins the fail-open half: a corrupt dirent makes
+    ``item.mimetype`` raise (zim-testing-suite ships such an archive), and a
+    source whose type cannot be read must still be parsed rather than silently
+    losing its outbound edges.
+    """
+    entries = [
+        _FakeEntry("Evolution", '<a href="Mystery">m</a>'),
+        # Mimetype string copied verbatim from a real archive: the charset and
+        # profile parameters ride along, so the gate has to match on prefix.
+        _FakeEntry(
+            "graph.svg",
+            '<svg><a href="P">p</a></svg>',
+            mimetype='image/svg+xml; charset=utf-8; profile="https://example/1.0"',
+        ),
+        _FakeEntry("Mystery", '<a href="Evolution">e</a>', mimetype=""),
+    ]
+    archive = MagicMock()
+    archive.has_new_namespace_scheme = True
+    archive.entry_count = len(entries)
+    archive._get_entry_by_id.side_effect = lambda i: entries[i]
+    archive.get_entry_by_path.side_effect = KeyError("no entry")
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        pairs = list(iter_article_links(archive))
+
+    # The SVG contributes neither a source node nor an edge; the row whose
+    # mimetype could not be read is still walked.
+    assert [src for src, _ in pairs] == ["Evolution", "Mystery"]
+    assert not any("graph.svg" in str(targets) for _, targets in pairs)
+    assert [type(w.message).__name__ for w in caught] == []
 
 
 def test_iter_article_links_old_scheme_accepts_a_namespace() -> None:
