@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.2.0](https://github.com/cameronrye/openzim-mcp/compare/v3.1.2...v3.2.0) (2026-08-23)
+
+
+### Added
+
+* deprecate the legacy sse transport ahead of its 4.0.0 removal ([#389](https://github.com/cameronrye/openzim-mcp/issues/389)) ([58bc0d8](https://github.com/cameronrye/openzim-mcp/commit/58bc0d803070520416806e71c5f3e0249e15fa57))
+
+
+### Fixed
+
+* skip non-article mimetypes when building the link graph ([#387](https://github.com/cameronrye/openzim-mcp/issues/387)) ([f8e1275](https://github.com/cameronrye/openzim-mcp/commit/f8e12757415a7812977f54859b8995b6d0255b1c))
+
+
+### Documentation
+
+* the ping shim works around a spec decision, not an SDK defect ([#390](https://github.com/cameronrye/openzim-mcp/issues/390)) ([83948e5](https://github.com/cameronrye/openzim-mcp/commit/83948e5ee07e876e42964c3a5e8d7e8df10859da))
+
 ## [3.1.2](https://github.com/cameronrye/openzim-mcp/compare/v3.1.1...v3.1.2) (2026-08-22)
 
 
