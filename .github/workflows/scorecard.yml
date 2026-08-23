@@ -31,8 +31,10 @@ jobs:
     name: Scorecard analysis
     runs-on: ubuntu-latest
     permissions:
-      # Uploads the SARIF to the Security tab.
-      security-events: write
+      # No `security-events: write`, which the upstream template grants: the
+      # SARIF is kept as a build artifact and never uploaded to the Security
+      # tab (the last step says why), so nothing here writes an alert.
+      #
       # Required by publish_results: the OIDC token is how the OpenSSF
       # dataset verifies the result came from this repo's own workflow.
       id-token: write
@@ -63,6 +65,8 @@ jobs:
       # standing list that only clears when the whole supply-chain backlog
       # does. `publish_results` above already puts the score where the
       # aggregators read it; the artifact keeps the detail one click away.
+      # No step uploads SARIF, which is why the job requests no
+      # `security-events` scope.
       - name: Upload results as an artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:

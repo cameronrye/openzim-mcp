@@ -28,8 +28,11 @@ import json
 import pathlib
 import tempfile
 
+import pytest
+
 from openzim_mcp.config import OpenZimMcpConfig
 from openzim_mcp.server import OpenZimMcpServer
+from tests.dispatch_eval import oneof_parse_benchmark
 
 SNAPSHOT_PATH = (
     pathlib.Path(__file__).parent / "dispatch_eval" / "prototype_schema_snapshot.json"
@@ -169,3 +172,106 @@ def test_prototype_snapshot_covers_all_rc1_tools():
         f"rc1 tools missing from prototype snapshot: {sorted(missing)}. "
         "Re-capture the snapshot (tests/dispatch_eval/prototype_schema_snapshot.json)."
     )
+
+
+# ---------------------------------------------------------------------------
+# The snapshot is also the oneof_variant of the Gate 0.3 benchmark
+# ---------------------------------------------------------------------------
+#
+# ``oneof_parse_benchmark`` A/Bs a oneOf-wired surface against a flat one, and
+# it sources the wired arm from this same snapshot file. Re-capturing the
+# snapshot against the flat rc1 surface (``428bec1``) therefore did something
+# the parity tests above cannot see: it pointed both arms of the benchmark at
+# the same shape. A run in that state completes, reports a ~0pp delta and
+# prints PROCEED-AS-DESIGNED-UNVALIDATED — a null that reads exactly like the
+# finding "oneOf makes no difference to small-model dispatch".
+#
+# Re-wiring the oneOf variant needs a Qwen host and a Gate 0.3 re-run, so the
+# loader refuses instead. These tests pin that refusal against synthetic
+# snapshots, so they keep holding whichever shape the committed file carries.
+
+_FLAT_INPUT_SCHEMA = {
+    "type": "object",
+    "properties": {"query": {"type": "string"}},
+    "required": ["query"],
+}
+_ONEOF_INPUT_SCHEMA = {
+    "type": "object",
+    "properties": {"entry_path": {"type": "string"}},
+    "oneOf": [{"required": ["entry_path"]}, {"required": ["main_page"]}],
+}
+# Nested one branch deep. The prototype's own wiring was NOT nested — the
+# snapshot at ``428bec1^`` carried a single hand-authored ``{"oneOf": [...],
+# "type": "object"}`` at the root of each inputSchema, which a bare key check
+# would have cleared. The walk is for what a *re-capture* produces: pydantic
+# emits a union-typed field as a branch under ``properties``/``$defs``, not at
+# the root, so a top-level-only guard would read a genuinely wired surface as
+# flat and refuse the run. This fixture is what pins the walk.
+_NESTED_ONEOF_INPUT_SCHEMA = {
+    "type": "object",
+    "properties": {"target": _ONEOF_INPUT_SCHEMA},
+}
+
+
+def _write_snapshot(tmp_path, search_schema, get_schema):
+    """Write a two-tool snapshot in the committed file's shape.
+
+    Both descriptions mention the word "oneOf" the way the real zim_get
+    description does ("even if a small model flattens the wire-schema
+    oneOf …"). A substring check over the serialized snapshot passes on that
+    prose alone, so the fixture makes the flat case actively hostile to one.
+    """
+    payload = {
+        name: {
+            "bytes": 0,
+            "description": "Prose that happens to mention oneOf.",
+            "inputSchema": schema,
+        }
+        for name, schema in (("zim_search", search_schema), ("zim_get", get_schema))
+    }
+    path = tmp_path / "prototype_schema_snapshot.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
+
+
+def test_oneof_benchmark_refuses_a_flat_snapshot(tmp_path, monkeypatch):
+    """A flat oneof_variant must abort the run, not quietly measure nothing."""
+    snapshot = _write_snapshot(tmp_path, _FLAT_INPUT_SCHEMA, _FLAT_INPUT_SCHEMA)
+    monkeypatch.setattr(oneof_parse_benchmark, "PROTOTYPE_SNAPSHOT", snapshot)
+
+    with pytest.raises(SystemExit) as excinfo:
+        oneof_parse_benchmark.load_oneof_variant_schemas()
+    message = str(excinfo.value)
+    assert "oneOf" in message
+    assert "zim_search" in message and "zim_get" in message
+
+    # The run loop reaches the loader through build_tool_specs, so the guard
+    # has to hold at that seam too — that is the call an actual run makes.
+    with pytest.raises(SystemExit):
+        oneof_parse_benchmark.build_tool_specs("oneof")
+
+
+def test_oneof_benchmark_accepts_a_wired_snapshot(tmp_path, monkeypatch):
+    """The guard keys on ``oneOf`` at any depth, so a re-wired snapshot loads."""
+    snapshot = _write_snapshot(
+        tmp_path, _ONEOF_INPUT_SCHEMA, _NESTED_ONEOF_INPUT_SCHEMA
+    )
+    monkeypatch.setattr(oneof_parse_benchmark, "PROTOTYPE_SNAPSHOT", snapshot)
+
+    zim_search, zim_get = oneof_parse_benchmark.load_oneof_variant_schemas()
+    assert zim_search["inputSchema"] == _ONEOF_INPUT_SCHEMA
+    assert zim_get["inputSchema"] == _NESTED_ONEOF_INPUT_SCHEMA
+    assert len(oneof_parse_benchmark.build_tool_specs("oneof")) == 2
+
+
+def test_flat_benchmark_variant_is_untouched_by_the_guard():
+    """The flat arm is *supposed* to have no oneOf — it is the control.
+
+    It is also built in-process rather than read from the snapshot, so the
+    guard must not reach it. Without this, a stricter version of the check
+    would take the control arm down with the treatment arm.
+    """
+    specs = oneof_parse_benchmark.build_tool_specs("flat")
+    assert [spec["function"]["name"] for spec in specs] == ["zim_search", "zim_get"]
+    for spec in specs:
+        assert not oneof_parse_benchmark.contains_one_of(spec["function"]["parameters"])
