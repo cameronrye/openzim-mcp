@@ -57,19 +57,33 @@ _ALLOWED_DIR = tempfile.mkdtemp(prefix="openzim_mcp_schema_budget_")
 # ``TOTAL_CAP - total``. In aggregate the ceilings over-commit on purpose
 # (26,460 > 25,600): eight tools each drifting 100B is precisely the drift no
 # per-tool ceiling can see and TOTAL_CAP exists to catch.
+#
+# Post-3.1.2, second change: ``openzim_mcp.schema_slimming`` stopped publishing
+# pydantic's ``title`` echoes and ``default: null`` entries, which cost 1,621B
+# and said nothing (25,432 → 23,811). The allocations below are deliberately
+# NOT re-derived from the new measurements, which is the opposite of the call
+# made above — the difference is where the bytes came from. That rebalance was
+# correcting ceilings that had drifted away from a surface nobody had shrunk;
+# these bytes were freed on purpose, as budget for the description and schema
+# work #370 defers. Re-deriving now would hand them straight back and make
+# spending a single byte of them a table edit. The property the rebalance was
+# protecting still holds meanwhile: every ceiling sits 186–438B above its
+# tool's measurement, all of them under the 1,789B the total now has left, so a
+# single tool's drift still trips its own named assertion first. Re-derive at
+# ``(measured + ~130) / 1.2`` once that work lands and the headroom is spent.
 TOTAL_CAP = 25 * 1024
-# Trailing comments are the wire bytes measured at 3.1.2. The allocation is
-# deliberately not that number any more, so it is recorded here — otherwise
-# the table stops telling a reader what the surface actually costs.
+# Trailing comments are the wire bytes measured after the schema trim. The
+# allocation is deliberately not that number any more, so it is recorded here —
+# otherwise the table stops telling a reader what the surface actually costs.
 ALLOCATION = {
-    "zim_query": 5_550,  # 6,534B
-    "zim_search": 3_620,  # 4,211B
-    "zim_get": 3_650,  # 4,249B
-    "zim_get_section": 1_840,  # 2,087B
-    "zim_browse": 2_080,  # 2,364B
-    "zim_metadata": 1_310,  # 1,442B
-    "zim_links": 2_700,  # 3,109B
-    "zim_health": 1_300,  # 1,436B
+    "zim_query": 5_550,  # 6,222B
+    "zim_search": 3_620,  # 3,937B
+    "zim_get": 3_650,  # 3,946B
+    "zim_get_section": 1_840,  # 1,863B
+    "zim_browse": 2_080,  # 2,170B
+    "zim_metadata": 1_310,  # 1,386B
+    "zim_links": 2_700,  # 2,920B
+    "zim_health": 1_300,  # 1,367B
 }
 
 
@@ -148,12 +162,17 @@ def test_per_tool_allocations():
 
     A tool that legitimately needs more (e.g., Stage E F2 traces a class
     regression to a too-tight description) can no longer just be handed a
-    bigger number. The surface sits within ~170B of TOTAL_CAP, so the bytes
-    have to be freed from another tool's prose before this ceiling can follow;
-    raising the allocation on its own only moves the failure to
+    bigger number without saying where the bytes come from. Raising an
+    allocation on its own only moves the failure to
     ``test_advanced_total_under_cap``, which names no tool. The total is the
     only hard cap — the per-tool split stays a distribution decision the gate
     can revise (see spec §Tool-by-tool budget allocation).
+
+    The schema trim left 1,789B under TOTAL_CAP, so for the moment a tool can
+    be handed some of that rather than taken from a neighbour's prose. That is
+    what the headroom is for; it is not a reason to raise a ceiling past its
+    measurement by more than the total can still absorb, which is the condition
+    that keeps this assertion firing before the aggregate one.
     """
     bytes_by_tool = _measure_tools("advanced")
     for name, alloc in ALLOCATION.items():

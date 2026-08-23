@@ -22,6 +22,27 @@ prototype (description rewrites, parameter additions), re-capture the
 snapshot AND append a ``scope_limitations`` entry to gate_0b_decision.json
 naming the divergence. The Stage E F2 enforcement (Task E3 Step 3) is the
 post-hoc dispatch check covering the re-snapshotted surface.
+
+The rc1 side is the *generated* schema — ``arg_model.model_json_schema()``,
+the value ``Tool.from_function`` assigns before ``add_tool`` trims it — not the
+published ``tool.parameters``. The snapshot holds the generated form (nothing
+trimmed it when it was captured), so measuring the published schema against it
+compares two different representations and reads ``schema_slimming`` as
+prototype drift. The loud half of that is the shape gate, which fails on all
+eight tools: ``_strip_descriptions`` drops only ``description``, so every
+``title`` the trim removed still stands on the snapshot side. The byte gate
+fails on two, zim_get_section at 11.3% and zim_browse at 5.1%.
+
+The quiet half is the reason no tolerance value would fix it. The trim shrinks
+the rc1 side, so it *nets against* prose growth instead of adding to it, and a
+tool whose description really has drifted reads as closer to the prototype than
+it is: zim_get's 195B of genuine description drift — 4.7% measured against the
+generated schema, the reading this gate has always taken — comes out as a 3.3%
+shrink once the trim's own saving is subtracted from it. A gate that
+under-reports the drift it exists to catch is worse than one that fails loudly.
+Comparing like with like keeps every reading here meaning what it has always
+meant. ``test_published_schema_is_the_generated_one_slimmed`` is what licenses
+the reconstruction: it pins that the trim is the only thing separating the two.
 """
 
 import json
@@ -31,6 +52,7 @@ import tempfile
 import pytest
 
 from openzim_mcp.config import OpenZimMcpConfig
+from openzim_mcp.schema_slimming import slim_input_schema
 from openzim_mcp.server import OpenZimMcpServer
 from tests.dispatch_eval import oneof_parse_benchmark
 
@@ -42,22 +64,36 @@ DESCRIPTION_EDIT_DISTANCE_TOLERANCE = 0.30  # ≤30% Levenshtein / max(len_a, le
 _ALLOWED_DIR = tempfile.mkdtemp(prefix="openzim_mcp_prototype_parity_")
 
 
-def _rc1_footprints() -> dict[str, dict]:
+def _advanced_tools():
     cfg = OpenZimMcpConfig(allowed_directories=[_ALLOWED_DIR], tool_mode="advanced")
-    srv = OpenZimMcpServer(cfg)
+    return OpenZimMcpServer(cfg).mcp._tool_manager._tools
+
+
+def _generated_schema(tool) -> dict:
+    """The pre-trim schema, rebuilt from the tool's own argument model.
+
+    Byte-identical to what ``Tool.from_function`` assigned to
+    ``tool.parameters`` before ``EnvelopeAwareMCPServer.add_tool`` slimmed it,
+    which is the form the committed snapshot holds.
+    """
+    return tool.fn_metadata.arg_model.model_json_schema(by_alias=True)
+
+
+def _rc1_footprints() -> dict[str, dict]:
     out = {}
-    for name, tool in srv.mcp._tool_manager._tools.items():
+    for name, tool in _advanced_tools().items():
+        schema = _generated_schema(tool)
         wire = json.dumps(
             {
                 "name": name,
                 "description": tool.description,
-                "inputSchema": tool.parameters,
+                "inputSchema": schema,
             }
         )
         out[name] = {
             "bytes": len(wire.encode()),
             "description": tool.description,
-            "inputSchema": tool.parameters,
+            "inputSchema": schema,
         }
     return out
 
@@ -92,6 +128,25 @@ def _normalized_edit_distance(a: str, b: str) -> float:
             curr[j] = min(curr[j - 1] + 1, prev[j] + 1, prev[j - 1] + cost)
         prev = curr
     return prev[n] / max(m, n)
+
+
+def test_published_schema_is_the_generated_one_slimmed():
+    """The two representations this file straddles must differ only by the trim.
+
+    Every measurement above is taken against ``_generated_schema``, a
+    reconstruction; what ships is ``tool.parameters``. This pins the exact
+    relationship between them, so the parity guard cannot quietly start
+    measuring a fiction — if a future SDK builds ``parameters`` some other way,
+    or ``add_tool`` stops trimming, this fails by name instead of leaving the
+    tests above green against a schema no client receives.
+    """
+    for name, tool in _advanced_tools().items():
+        assert slim_input_schema(_generated_schema(tool)) == tool.parameters, (
+            f"{name}: the published inputSchema is no longer the generated "
+            "schema with schema_slimming applied. The parity measurements in "
+            "this file are taken against the generated form; re-derive them "
+            "from whatever the SDK now publishes."
+        )
 
 
 def test_prototype_parity_byte_budget():

@@ -39,13 +39,20 @@ arguments, and a fault inside a prompt body ``-32603`` naming only the prompt.
 Prompts already rejected an undeclared argument; tools dropped one silently,
 because the SDK's generated argument models inherit pydantic's default
 ``extra="ignore"``. See :func:`_unknown_argument_error`.
+
+Finally, :meth:`~EnvelopeAwareMCPServer.add_tool` is where every tool's
+generated ``inputSchema`` loses the annotation keys pydantic emits for its own
+bookkeeping — see :mod:`openzim_mcp.schema_slimming`. Registration is the seam
+because it is the last point before the schema becomes shared: the SDK serves
+this same dict from ``tools/list``, :func:`_unknown_argument_error` reads it to
+reject undeclared arguments, and the schema-budget test measures it.
 """
 
 from __future__ import annotations
 
 import difflib
 import json
-from typing import Any
+from typing import Any, Callable
 
 import pydantic_core
 from mcp.server.mcpserver import Context, MCPServer
@@ -55,14 +62,17 @@ from mcp_types import (
     INVALID_PARAMS,
     CallToolResult,
     GetPromptResult,
+    Icon,
     InputRequiredResult,
     ReadResourceResult,
     TextContent,
     TextResourceContents,
+    ToolAnnotations,
 )
 from pydantic import ValidationError
 
 from .responses import tool_error
+from .schema_slimming import slim_input_schema
 
 __all__ = ["EnvelopeAwareMCPServer", "is_tool_error_envelope"]
 
@@ -210,12 +220,13 @@ def _unknown_argument_error(
     same ``tool_error`` envelope every other rejected argument gets, which is
     the contract ``instructions.py`` already advertises.
 
-    The rejection is deliberately runtime-only: publishing
-    ``additionalProperties: false`` costs ~232 bytes across the advanced
-    surface against ~159 bytes of headroom under the hard schema cap, and it
-    would only *hint* — a client that does not validate still sends the stray
-    key, so this check is required either way. Do not re-open that trade
-    without buying the bytes first.
+    The rejection is deliberately runtime-only. Publishing
+    ``additionalProperties: false`` would only *hint*: a client that does not
+    validate still sends the stray key, so this check is required either way,
+    and a second mechanism that catches a strict subset of what this one
+    catches is not worth ~232 bytes of the advanced surface. The cap is no
+    longer the argument — the schema trim left 1,789 bytes free, so the bytes
+    could be found — which leaves the redundancy as the whole of the case.
 
     ``tool.parameters["properties"]`` is the allow-list rather than
     ``arg_model.model_fields`` because it is alias-correct: ``func_metadata``
@@ -279,6 +290,46 @@ class EnvelopeAwareMCPServer(MCPServer):
         """Capture the archive TTL, then defer to the SDK constructor."""
         super().__init__(*args, **kwargs)
         self._archive_read_ttl_ms = archive_read_ttl_ms
+
+    def add_tool(
+        self,
+        fn: Callable[..., Any],
+        name: str | None = None,
+        title: str | None = None,
+        description: str | None = None,
+        annotations: ToolAnnotations | None = None,
+        icons: list[Icon] | None = None,
+        meta: dict[str, Any] | None = None,
+        structured_output: bool | None = None,
+    ) -> None:
+        """Register a tool, then trim its generated schema down to what informs.
+
+        Every tool arrives here — ``@mcp.tool()`` is a thin wrapper over this
+        method — so applying the trim at this one seam covers the whole surface
+        without any registration site having to know about it, the same way
+        ``call_tool`` centralizes the error-envelope mapping.
+
+        The lookup repeats ``Tool.from_function``'s own ``name or fn.__name__``
+        because the SDK's ``add_tool`` returns ``None``. It is deliberately
+        silent when that misses rather than raising during import: the guard
+        that a registered schema is actually trimmed belongs in the test that
+        walks the published surface (``tests/test_schema_slimming.py``), which
+        names the tool it found untrimmed instead of failing server startup.
+        """
+        super().add_tool(
+            fn,
+            name=name,
+            title=title,
+            description=description,
+            annotations=annotations,
+            icons=icons,
+            meta=meta,
+            structured_output=structured_output,
+        )
+        registered_name: str = name or str(getattr(fn, "__name__", ""))
+        registered = self._tool_manager.get_tool(registered_name)
+        if registered is not None:
+            registered.parameters = slim_input_schema(registered.parameters)
 
     async def _handle_read_resource(
         self, ctx: Any, params: Any

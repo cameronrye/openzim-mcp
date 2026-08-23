@@ -204,13 +204,14 @@ def test_rejection_is_runtime_only_and_costs_no_schema_bytes(tmp_path: Path) -> 
     """Deliberately NOT published as ``additionalProperties: false``.
 
     The keyword would cost ~29 bytes per tool (~232 across the advanced
-    surface) against roughly 159 bytes of headroom under the hard 25600-byte
-    cap in ``tests/test_phase_f_schema_budget.py``, and it would breach
-    ``zim_health``'s per-tool allocation, force a prototype-schema re-snapshot
-    and a Gate 0b re-run. It is also only a hint: a client that does not
-    validate still sends the stray key, so runtime enforcement is required
-    regardless. Enforcement is therefore runtime-only — do not "helpfully" add
-    the schema keyword without buying the bytes first.
+    surface) and force a prototype-schema re-snapshot and a Gate 0b re-run.
+    The 25600-byte cap in ``tests/test_phase_f_schema_budget.py`` used to be
+    the decisive half of that: the surface had ~159 bytes free, so the bytes
+    simply were not there. The schema trim freed 1,621 and the argument now
+    rests entirely on what the keyword buys, which is nothing — it is only a
+    hint, and a client that does not validate still sends the stray key, so
+    the runtime rejection below is required either way. Do not "helpfully" add
+    the schema keyword on the grounds that the budget can now afford it.
     """
     config = OpenZimMcpConfig(allowed_directories=[str(tmp_path)], tool_mode="advanced")
     server = OpenZimMcpServer(config)
