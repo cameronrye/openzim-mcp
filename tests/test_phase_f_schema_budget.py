@@ -26,10 +26,12 @@ _ALLOWED_DIR = tempfile.mkdtemp(prefix="openzim_mcp_schema_budget_")
 # Budget caps are baked from the rc1-re-snapshotted baseline (see
 # ``tests/dispatch_eval/prototype_schema_snapshot.json`` and the
 # ``rc1-description-rewrite`` entry in gate_0b_decision.json's
-# scope_limitations). The total stays well below the 25KB MCP Tax pain band
-# the spec targets; per-tool allocations match the measured rc1 footprint
-# with explicit headroom and the test enforces a *1.2 slack so a single
-# tool's drift trips before total drift does.
+# scope_limitations). The total stays below the 25KB MCP Tax pain band the
+# spec targets; the per-tool entries below are pre-slack budgets whose
+# enforced ceiling is ``alloc * 1.2``, sized so a single tool's drift trips
+# its own named assertion before the aggregate total does — "the advanced
+# surface is 130 bytes over" names no culprit, "zim_health exceeds its
+# ceiling" does.
 #
 # v2.5.2: added the ``kind`` (zim_links) and ``include_assets`` (zim_browse)
 # params for the bucket-reachability and binary-discovery fixes. That nudges
@@ -40,16 +42,34 @@ _ALLOWED_DIR = tempfile.mkdtemp(prefix="openzim_mcp_schema_budget_")
 # counts the bytes that actually ship rather than ``json.dumps`` padding. The
 # allocations below are unchanged and still measured against the same tools,
 # so every per-tool ceiling simply gained the padding back as real headroom.
+#
+# Post-3.1.2: rebalanced. The allocations had stayed at the rc1 footprints
+# while the surface grew into the cap, so the eight ceilings summed to 29,940
+# against a 25,600 total — headroom the total cap would never honour, handed
+# out unevenly. zim_query's ceiling floated 1,266B above its measurement;
+# zim_health's sat 4B above its own, so a one-word edit to zim_health failed
+# the budget while 168B of the total was still free. Sizing now runs the other
+# way round: the *ceiling* is what tracks the measurement, so each allocation
+# is ``(measured + ~130) / 1.2``. That leaves every tool 121–133B of room — a
+# phrase, not a rewrite — and keeps each ceiling under the 168B the total has
+# left, which is what makes the per-tool assertion fire first. Re-derive the
+# same way after any surface change, keeping the margin below
+# ``TOTAL_CAP - total``. In aggregate the ceilings over-commit on purpose
+# (26,460 > 25,600): eight tools each drifting 100B is precisely the drift no
+# per-tool ceiling can see and TOTAL_CAP exists to catch.
 TOTAL_CAP = 25 * 1024
+# Trailing comments are the wire bytes measured at 3.1.2. The allocation is
+# deliberately not that number any more, so it is recorded here — otherwise
+# the table stops telling a reader what the surface actually costs.
 ALLOCATION = {
-    "zim_query": 6_500,
-    "zim_search": 4_200,
-    "zim_get": 4_250,
-    "zim_get_section": 2_250,
-    "zim_browse": 2_400,
-    "zim_metadata": 1_250,
-    "zim_links": 2_900,
-    "zim_health": 1_200,
+    "zim_query": 5_550,  # 6,534B
+    "zim_search": 3_620,  # 4,211B
+    "zim_get": 3_650,  # 4,249B
+    "zim_get_section": 1_840,  # 2,087B
+    "zim_browse": 2_080,  # 2,364B
+    "zim_metadata": 1_310,  # 1,442B
+    "zim_links": 2_700,  # 3,109B
+    "zim_health": 1_300,  # 1,436B
 }
 
 
@@ -124,19 +144,25 @@ def test_measurement_counts_wire_bytes_not_serializer_padding():
 
 
 def test_per_tool_allocations():
-    """Per-tool 20% slack. If a tool legitimately needs more (e.g., Stage E
-    F2 traces a class regression to too-tight description), redistribute by
-    editing ALLOCATION above — take budget from a tool that's under-using
-    its share, keep TOTAL_CAP fixed. The total is the only hard cap; per-tool
-    allocations are a distribution decision the gate can revise (see spec
-    §Tool-by-tool budget allocation).
+    """Per-tool ceiling: the allocation plus its 20% slack.
+
+    A tool that legitimately needs more (e.g., Stage E F2 traces a class
+    regression to a too-tight description) can no longer just be handed a
+    bigger number. The surface sits within ~170B of TOTAL_CAP, so the bytes
+    have to be freed from another tool's prose before this ceiling can follow;
+    raising the allocation on its own only moves the failure to
+    ``test_advanced_total_under_cap``, which names no tool. The total is the
+    only hard cap — the per-tool split stays a distribution decision the gate
+    can revise (see spec §Tool-by-tool budget allocation).
     """
     bytes_by_tool = _measure_tools("advanced")
     for name, alloc in ALLOCATION.items():
         actual = bytes_by_tool[name]
         assert actual <= alloc * 1.2, (
-            f"{name} exceeds allocation: {actual} > {int(alloc * 1.2)} "
-            f"(alloc={alloc}, slack=20%)"
+            f"{name} exceeds its ceiling: {actual} > {int(alloc * 1.2)} "
+            f"(allocation {alloc} + 20% slack). Free the bytes elsewhere on "
+            f"the surface first, then re-derive this tool's allocation from "
+            f"its new measurement."
         )
 
 

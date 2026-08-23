@@ -20,7 +20,9 @@ USAGE (Cameron runs this; this module only builds the harness):
     python tests/dispatch_eval/oneof_parse_benchmark.py | tee /tmp/oneof_parse.json
 
 Fails fast with a clear "vLLM not running" message if the endpoint is
-unreachable.
+unreachable, and refuses to run at all if the snapshot backing the
+oneof_variant carries no `oneOf` — an A/B of the flat surface against
+itself would print a null delta that reads like a real measurement.
 """
 
 from __future__ import annotations
@@ -85,11 +87,36 @@ def load_probes() -> List[Probe]:
 # ---------------------------------------------------------------------------
 
 
+def contains_one_of(node: Any) -> bool:
+    """True if ``oneOf`` appears as a schema *key* anywhere under ``node``.
+
+    Keyed rather than substring: the committed snapshot's zim_get description
+    warns about small models that flatten "the wire-schema oneOf", so a text
+    search over the serialized snapshot answers yes for a schema that holds
+    none.
+    """
+    if isinstance(node, dict):
+        if "oneOf" in node:
+            return True
+        return any(contains_one_of(value) for value in node.values())
+    if isinstance(node, list):
+        return any(contains_one_of(item) for item in node)
+    return False
+
+
 def load_oneof_variant_schemas() -> Tuple[Dict[str, Any], Dict[str, Any]]:
     """Load the prototype's oneOf-wired schemas for zim_get + zim_search.
 
     Reads the snapshot committed in Task B2 Step 6 — so the script does not
     need to import the openzim_mcp package and can be vendored anywhere.
+
+    Refuses to return a snapshot whose schemas carry no ``oneOf``. The whole
+    benchmark is an A/B of one shape against the other; if the oneof_variant
+    is flat too, both arms describe the same surface and the run prints a
+    ~0pp delta under a PROCEED-AS-DESIGNED-UNVALIDATED verdict, which no
+    reader can tell apart from an honest "oneOf changed nothing" result.
+    That is the state the snapshot has been in since ``428bec1`` re-captured
+    it against the flat rc1 surface, so the check is not hypothetical.
     """
     if not PROTOTYPE_SNAPSHOT.exists():
         raise SystemExit(
@@ -97,7 +124,23 @@ def load_oneof_variant_schemas() -> Tuple[Dict[str, Any], Dict[str, Any]]:
             "Re-run Task B2 Step 6 to regenerate it on the prototype branch."
         )
     snapshot = json.loads(PROTOTYPE_SNAPSHOT.read_text())
-    return snapshot["zim_search"], snapshot["zim_get"]
+    zim_search, zim_get = snapshot["zim_search"], snapshot["zim_get"]
+    flat = [
+        name
+        for name, tool in (("zim_search", zim_search), ("zim_get", zim_get))
+        if not contains_one_of(tool["inputSchema"])
+    ]
+    if flat:
+        raise SystemExit(
+            f"oneof_variant is not wired: {', '.join(flat)} in "
+            f"{PROTOTYPE_SNAPSHOT.name} has no oneOf in its inputSchema. "
+            "Running anyway would A/B the flat surface against itself and "
+            "print a ~0pp delta that reads like a measurement. Re-capture "
+            "the snapshot from a oneOf-wired surface "
+            "(OZM_PHASE_F_PROTOTYPE=1 on the prototype branch) before "
+            "running Gate 0.3."
+        )
+    return zim_search, zim_get
 
 
 def build_flat_variant_schemas() -> Tuple[Dict[str, Any], Dict[str, Any]]:
