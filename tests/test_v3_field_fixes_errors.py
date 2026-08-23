@@ -268,7 +268,13 @@ async def test_d04_invalid_mode_is_a_structured_envelope_over_the_wire(
 
 def test_d04_browse_mode_schema_still_advertises_the_enum(tmp_path: Path) -> None:
     """Dropping ``Literal`` must not drop the wire enum: the prototype-parity
-    snapshot (and dispatch quality) depend on clients seeing the two values."""
+    snapshot (and dispatch quality) depend on clients seeing the two values.
+
+    Compared whole rather than by key, so this also pins that ``"page"``
+    survives as the declared default — ``schema_slimming`` walks this property
+    and drops only ``title``, and a transform that took real defaults with it
+    would land here.
+    """
     config = OpenZimMcpConfig(allowed_directories=[str(tmp_path)], tool_mode="advanced")
     server = OpenZimMcpServer(config)
     mode_schema = server.mcp._tool_manager._tools["zim_browse"].parameters[
@@ -278,7 +284,6 @@ def test_d04_browse_mode_schema_still_advertises_the_enum(tmp_path: Path) -> Non
     assert mode_schema == {
         "default": "page",
         "enum": ["page", "walk"],
-        "title": "Mode",
         "type": "string",
     }
 
