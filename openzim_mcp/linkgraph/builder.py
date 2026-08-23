@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 import os
 import sqlite3
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -155,7 +156,10 @@ def iter_article_links(archive: Any) -> Iterator[Tuple[str, List[Tuple[str, str]
 
     Walk the open archive once via ``_get_entry_by_id`` over ``entry_count``,
     keep only content sources (scheme-aware: see ``_is_content_source``), skip
-    redirects-as-source, and reuse ``_parse_internal_link_edges`` for
+    redirects-as-source and entries whose item mimetype is not an article type
+    (the path filter is namespace-only, so the images, fonts and styles ZIMIT
+    stores in the content namespace would otherwise be decoded and parsed as
+    HTML), and reuse ``_parse_internal_link_edges`` for
     extraction + redirect canonicalization. The yielded ``source_path`` is the
     raw ``entry.path`` exactly as libzim returns it for that scheme
     (``"C/Evolution"`` old-scheme, ``"Evolution"`` new-scheme) so it stays
@@ -164,7 +168,13 @@ def iter_article_links(archive: Any) -> Iterator[Tuple[str, List[Tuple[str, str]
     """
     # Imported here (not at module scope) so the pure ``build_from_link_stream``
     # core keeps no dependency on the ZIM/structure layer.
-    from openzim_mcp.zim.structure import _StructureMixin
+    from openzim_mcp.zim.structure import _HTML_MIME_PREFIX, _StructureMixin
+
+    # Mimetypes that can carry link structure. ``_HTML_MIME_PREFIX`` is matched
+    # as a prefix so charset parameters ride along ("text/html; charset=utf-8");
+    # the XHTML spelling is included because ``_is_non_article_target`` counts
+    # it as a real article too.
+    article_mimes = (_HTML_MIME_PREFIX, "application/xhtml+xml")
 
     has_new_scheme = bool(getattr(archive, "has_new_namespace_scheme", False))
     total = int(getattr(archive, "entry_count", 0) or 0)
@@ -179,7 +189,27 @@ def iter_article_links(archive: Any) -> Iterator[Tuple[str, List[Tuple[str, str]
         if getattr(entry, "is_redirect", False):
             continue
         try:
-            html = bytes(entry.get_item().content).decode("utf-8", "replace")
+            item = entry.get_item()
+            # ``_is_content_source`` is namespace-only and accepts EVERY entry
+            # on a new-scheme archive, so the images, fonts, styles and PDFs
+            # ZIMIT stores in the content namespace arrive here. Decoding those
+            # as UTF-8 and handing them to BeautifulSoup interns each asset as a
+            # source node with bogus edges and logs a parse failure.
+            # ``item.mimetype`` is a dirent header read (no cluster
+            # decompression) off the item already in hand, so this gate also
+            # skips the asset's content read.
+            mime = ""
+            with suppress(Exception):
+                # A corrupt mimetype code raises (zim-testing-suite ships
+                # ``invalid.bad_mimetype_in_dirent.zim``) and mock archives hand
+                # back a non-str. An unreadable mimetype fails OPEN: parse it
+                # rather than silently drop a real article's outbound edges.
+                # ``getattr(..., "")`` would not do — its default only catches
+                # AttributeError, letting a RuntimeError skip the entry.
+                mime = item.mimetype or ""
+            if isinstance(mime, str) and mime and not mime.startswith(article_mimes):
+                continue
+            html = bytes(item.content).decode("utf-8", "replace")
         except Exception:  # nosec B112 - skip entry whose content won't read
             continue
         try:
