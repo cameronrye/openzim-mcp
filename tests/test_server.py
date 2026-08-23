@@ -666,6 +666,57 @@ class TestOpenZimMcpServerRun:
         assert "SSE transport" in str(exc.value)
         server.mcp.run.assert_not_called()
 
+    def test_run_sse_warns_deprecated_but_stdio_and_http_do_not(
+        self, test_config: OpenZimMcpConfig, monkeypatch
+    ):
+        """Starting on SSE logs a deprecation notice; the others stay silent.
+
+        The notice is the only warning 3.x users get before SSE disappears
+        in 4.0.0, so it has to name the replacement transport — and it must
+        not fire for operators already on a supported transport, or it
+        becomes background noise nobody reads.
+
+        Records are collected with a handler attached to the server module
+        logger AFTER each server is constructed: ``OpenZimMcpConfig``'s
+        ``setup_logging`` runs ``logging.basicConfig(force=True)`` during
+        server init, which strips pytest's ``caplog`` handler off the root.
+        """
+        import logging
+
+        monkeypatch.setattr(
+            "openzim_mcp.http_app.serve_streamable_http", lambda s: None
+        )
+
+        def deprecation_warnings_for(transport: str) -> list[str]:
+            test_config.transport = transport
+            server = OpenZimMcpServer(test_config)
+            server.mcp.run = MagicMock()
+
+            captured: list[str] = []
+
+            class _Capture(logging.Handler):
+                def emit(self, record: logging.LogRecord) -> None:
+                    captured.append(record.getMessage())
+
+            srv_logger = logging.getLogger("openzim_mcp.server")
+            handler = _Capture(level=logging.WARNING)
+            srv_logger.addHandler(handler)
+            try:
+                server.run()
+            finally:
+                srv_logger.removeHandler(handler)
+
+            return [msg for msg in captured if "DEPRECATED" in msg]
+
+        sse_warnings = deprecation_warnings_for("sse")
+        assert len(sse_warnings) == 1, sse_warnings
+        assert "'sse'" in sse_warnings[0]
+        assert "4.0.0" in sse_warnings[0]
+        assert "--transport http" in sse_warnings[0]
+
+        assert deprecation_warnings_for("stdio") == []
+        assert deprecation_warnings_for("http") == []
+
 
 class TestOpenZimMcpServerNewTools:
     """Test new MCP tools in OpenZimMcpServer."""

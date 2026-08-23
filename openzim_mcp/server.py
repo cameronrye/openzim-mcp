@@ -525,6 +525,26 @@ class OpenZimMcpServer:
                 if transport == "sse":
                     from . import http_app
 
+                    # This is the one site that runs exactly once per SSE
+                    # start and never on stdio/http, so the deprecation
+                    # notice lives here rather than in main.py's argparse:
+                    # operators who select SSE through
+                    # OPENZIM_MCP_TRANSPORT, an MCP client config, or a
+                    # library call never see argparse help at all. It is a
+                    # logger.warning and not a DeprecationWarning because
+                    # Python's default filters hide DeprecationWarning
+                    # outside __main__ — the notice would be swallowed for
+                    # exactly the operators it is aimed at — and because the
+                    # other operator-facing startup notice (the INSECURE
+                    # banner in check_safe_startup) already uses the logger.
+                    logger.warning(
+                        "DEPRECATED: the 'sse' transport is deprecated and "
+                        "will be removed in the next major release (4.0.0). "
+                        "Switch to --transport http (streamable HTTP): it is "
+                        "the transport the current MCP revision specifies, "
+                        "and the only network transport here that can "
+                        "enforce an auth token."
+                    )
                     http_app.check_safe_startup(self.config)
                     # The v2 SDK has no settings object: the SSE path takes
                     # host/port (and transport security) as run() kwargs, which

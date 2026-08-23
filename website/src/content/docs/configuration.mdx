@@ -46,7 +46,7 @@ openzim-mcp --mode advanced /path/to/zim/files
 
 ```bash
 # Default: stdio (no network)
-# Other values: http (streamable HTTP), sse (legacy, localhost-only)
+# Other values: http (streamable HTTP), sse (legacy, localhost-only, deprecated — removed in 4.0.0)
 export OPENZIM_MCP_TRANSPORT=http
 export OPENZIM_MCP_HOST=127.0.0.1            # default 127.0.0.1
 export OPENZIM_MCP_PORT=8000                 # default 8000
@@ -60,7 +60,7 @@ export OPENZIM_MCP_CORS_ORIGINS='["https://app.example"]'  # JSON list; "*" reje
 | `cors_origins` | `OPENZIM_MCP_CORS_ORIGINS` | `[]` | JSON list of allowed origins. Wildcard `"*"` is rejected at startup (whitespace-padded `" * "` too). |
 | `host` | `OPENZIM_MCP_HOST` | `127.0.0.1` | Bind address. Non-loopback hosts require `auth_token` for `http`; `sse` always rejects non-loopback. |
 | `port` | `OPENZIM_MCP_PORT` | `8000` | 1-65535. |
-| `transport` | `OPENZIM_MCP_TRANSPORT` | `stdio` | One of `stdio`/`http`/`sse`. `sse` has no auth middleware and is loopback-only. |
+| `transport` | `OPENZIM_MCP_TRANSPORT` | `stdio` | One of `stdio`/`http`/`sse`. `sse` has no auth middleware and is loopback-only, and is **deprecated** — it warns on every start and is removed in 4.0.0. |
 
 **Safe-default startup check** — the server *refuses* to bind if either:
 
@@ -239,7 +239,7 @@ Sorted alphabetically by field name within each grouping.
 | `server_name` | `OPENZIM_MCP_SERVER_NAME` | `openzim-mcp` | reported in serverInfo |
 | `subscriptions_enabled` | `OPENZIM_MCP_SUBSCRIPTIONS_ENABLED` | `true` | watcher master switch |
 | `tool_mode` | `OPENZIM_MCP_TOOL_MODE` | `simple` | `simple` or `advanced` |
-| `transport` | `OPENZIM_MCP_TRANSPORT` | `stdio` | `stdio`/`http`/`sse` |
+| `transport` | `OPENZIM_MCP_TRANSPORT` | `stdio` | `stdio`/`http`/`sse` (`sse` deprecated, removed in 4.0.0) |
 | `watch_interval_seconds` | `OPENZIM_MCP_WATCH_INTERVAL_SECONDS` | `5` | 1-60 |
 
 Further nested groups exist for specialized tuning — `search.*` (e.g. `OPENZIM_MCP_SEARCH__SEARCH_ALL_TOTAL_TIMEOUT_SECONDS`), `query_rewrite.*`, `synthesize.*`, `meta.*`, and `ml.reranker.*` (documented in [docs/extras-reranker.md](https://github.com/cameronrye/openzim-mcp/blob/main/docs/extras-reranker.md)). Their fields and defaults live in [`openzim_mcp/config.py`](https://github.com/cameronrye/openzim-mcp/blob/main/openzim_mcp/config.py).
