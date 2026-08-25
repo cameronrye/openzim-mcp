@@ -564,8 +564,8 @@ async def test_modern_clients_can_ping(tmp_path: Path) -> None:
     this port exists to serve — would see METHOD_NOT_FOUND on every ping and
     flap its connection. ``install_ping_keepalive_shim`` answers it anyway at
     server construction: a deliberate, standing deviation from the revision,
-    open for review in issue #371. This test asserts the behavior clients see,
-    not the mechanism.
+    kept permanently per the decision in issue #371. This test asserts the
+    behavior clients see, not the mechanism.
     """
     async with _modern_client(tmp_path) as session:
         result = await session.send_ping()
