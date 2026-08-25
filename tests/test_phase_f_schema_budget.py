@@ -64,13 +64,18 @@ _ALLOWED_DIR = tempfile.mkdtemp(prefix="openzim_mcp_schema_budget_")
 # NOT re-derived from the new measurements, which is the opposite of the call
 # made above — the difference is where the bytes came from. That rebalance was
 # correcting ceilings that had drifted away from a surface nobody had shrunk;
-# these bytes were freed on purpose, as budget for the description and schema
-# work #370 defers. Re-deriving now would hand them straight back and make
-# spending a single byte of them a table edit. The property the rebalance was
-# protecting still holds meanwhile: every ceiling sits 186–438B above its
+# these bytes were freed on purpose, as headroom to spend rather than as a new
+# baseline. The schema work they were originally held for is not coming: #370
+# closed not-planned on 2026-08-24, declining ``outputSchema`` on its per-call
+# cost (structured content duplicates the whole body — ~+100% on
+# ``zim_get_section``) rather than on budget. They stay reserved as general
+# description budget, and for a wider ``zim_search`` input schema should #395
+# adopt the oneOf variant. Re-deriving now would hand them straight back and
+# make spending a single byte of them a table edit. The property the rebalance
+# was protecting still holds meanwhile: every ceiling sits 186–438B above its
 # tool's measurement, all of them under the 1,789B the total now has left, so a
 # single tool's drift still trips its own named assertion first. Re-derive at
-# ``(measured + ~130) / 1.2`` once that work lands and the headroom is spent.
+# ``(measured + ~130) / 1.2`` once the headroom is actually spent.
 TOTAL_CAP = 25 * 1024
 # Trailing comments are the wire bytes measured after the schema trim. The
 # allocation is deliberately not that number any more, so it is recorded here —

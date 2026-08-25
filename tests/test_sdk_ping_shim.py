@@ -9,7 +9,9 @@ keepalive rejected with -32601; this server answers it regardless, for clients
 that ping on a timer. The wire tests proving that work live in
 ``test_mcp_session.py``; this file pins how the shim installs and — via the
 canary — that upstream's stance has not moved. Whether to keep the deviation
-or drop ping on modern connections is open in issue #371.
+or drop ping on modern connections was settled in issue #371 (2026-08-24):
+keep, permanently, because dropping it regresses keepalive-pinging clients
+and saves nothing.
 """
 
 from mcp_types.methods import CLIENT_REQUESTS, SERVER_RESULTS
@@ -25,9 +27,11 @@ def test_canary_upstream_still_lacks_modern_ping() -> None:
     precedes any install call, so it observes the SDK as shipped rather than
     our own patch. 2026-07-28 omits ping on purpose, so this is expected to
     hold for as long as the pin does; a failure means upstream reversed that
-    stance, and the shim is then re-decided under issue #371 rather than
-    deleted on the spot. Either way the wire tests in ``test_mcp_session.py``
-    assert the behavior clients see.
+    stance, which retires the shim rather than reopening the keep-or-drop call
+    issue #371 settled: ``install_ping_keepalive_shim`` no-ops against an SDK
+    that defines the rows itself, so the install simply becomes dead code.
+    Either way the wire tests in ``test_mcp_session.py`` assert the behavior
+    clients see.
     """
     assert sdk_compat.UPSTREAM_DEFINES_MODERN_PING is False
 

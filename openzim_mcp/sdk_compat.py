@@ -34,8 +34,11 @@ SDK release is going to ship these rows and the shim is a permanent
 deviation from the revision, held for clients that keepalive-ping. The
 canary in ``tests/test_sdk_ping_shim.py`` therefore pins upstream's stance
 rather than counting down to a fix, and fails only if that stance reverses.
-Keeping the shim versus dropping ping on modern connections is the open
-question in issue #371; a canary cannot decide it.
+Keeping the shim versus dropping ping on modern connections was decided
+in issue #371 (2026-08-24): keep, permanently. Deleting it would regress
+every client that pings on a timer and save nothing, and the deviation is
+one of tolerance — it adds an answer to a request the revision declines to
+define, so a client that never pings cannot observe it.
 
 The second is :func:`stdio_server_answering_malformed_frames`, which wires
 around the SDK's stdio transport to fix three things its stdio path gets
@@ -130,7 +133,10 @@ _PREVIOUS_PING_ROW = ("ping", "2025-11-25")
 # body executes on first import and the only caller lives below it. The canary
 # test asserts this is still False — not because a fix is pending (2026-07-28
 # drops ping deliberately) but because a flip would mean upstream reversed
-# that, which is the one event that reopens issue #371's keep-or-drop call.
+# that. A flip retires the shim rather than reopening the keep-or-drop call
+# settled in issue #371: ``install_ping_keepalive_shim`` is already a no-op
+# against an SDK that defines the rows itself, so it becomes redundant code
+# to delete, not a decision to remake.
 UPSTREAM_DEFINES_MODERN_PING = (
     MODERN_PING_ROW in CLIENT_REQUESTS and MODERN_PING_ROW in SERVER_RESULTS
 )
