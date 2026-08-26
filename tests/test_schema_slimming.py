@@ -330,17 +330,40 @@ def test_a_boolean_subschema_is_left_alone():
 
 
 def test_the_input_schema_is_not_mutated():
-    """The trim returns a new schema and shares no mutable structure with it."""
+    """The trim reads its argument and writes nothing back into it."""
     schema = {
         "type": "object",
         "title": "Root",
         "properties": {"a": {"type": "string", "title": "A", "default": None}},
     }
     original = json.loads(json.dumps(schema))
-    slimmed = slim_input_schema(schema)
+
+    slim_input_schema(schema)
+
     assert schema == original
 
-    slimmed["properties"]["a"]["type"] = "integer"
+
+def test_the_result_shares_no_mutable_structure_with_the_input():
+    """Mutating the returned schema cannot reach the caller's copy.
+
+    The mutation deliberately targets a value under a keyword the trim has no
+    reason to rewrite. Any position carrying a ``title`` or a null ``default``
+    gets a fresh dict as a *side effect* of being rebuilt without them, so
+    mutating one of those would pass just as well against an implementation
+    that shared every subtree it left alone — which is the sharing this test
+    exists to rule out. ``examples`` goes through the verbatim branch instead,
+    where returning ``value`` rather than a copy is the tempting shortcut, and
+    the nesting means a shallow copy fails here too.
+    """
+    schema = {
+        "type": "object",
+        "properties": {"a": {"type": "string", "examples": [{"nested": ["x"]}]}},
+    }
+    original = json.loads(json.dumps(schema))
+    slimmed = slim_input_schema(schema)
+
+    slimmed["properties"]["a"]["examples"][0]["nested"].append("y")
+
     assert schema == original
 
 
