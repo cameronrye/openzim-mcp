@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.2.2](https://github.com/cameronrye/openzim-mcp/compare/v3.2.1...v3.2.2) (2026-08-26)
+
+
+### Documentation
+
+* record the ping-shim and outputSchema decisions where the code points ([#396](https://github.com/cameronrye/openzim-mcp/issues/396)) ([a4bf3b9](https://github.com/cameronrye/openzim-mcp/commit/a4bf3b9d75663e7c6a3a2b12c5b1148b6775334d))
+
 ## [3.2.1](https://github.com/cameronrye/openzim-mcp/compare/v3.2.0...v3.2.1) (2026-08-23)
 
 
