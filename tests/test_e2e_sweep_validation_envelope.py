@@ -134,6 +134,49 @@ async def test_union_typed_argument_reports_the_wire_name(tmp_path: Path) -> Non
 
 
 @pytest.mark.asyncio
+async def test_internal_pydantic_failure_is_not_reported_as_the_caller_s_fault(
+    tmp_path: Path,
+) -> None:
+    """An error from inside a tool body must not become ``invalid_argument``.
+
+    The SDK wraps *any* body exception as ``ToolError(...) from e``, and the
+    envelope handler classifies on "is there a ValidationError in the
+    chain". Today every tool body catches its own exceptions, so nothing
+    reaches that handler — but if one ever stops, an internal model failure
+    would be reported to the caller as a bad argument, naming a field they
+    never sent and cannot fix.
+    """
+    import pydantic
+
+    from openzim_mcp.mcp_envelope import _validation_error_in_chain
+
+    class _Inner(pydantic.BaseModel):
+        count: int
+
+    try:
+        _Inner(count="not-an-int")
+    except pydantic.ValidationError as exc:
+        internal = exc
+
+    # The classifier cannot tell an internal failure from an argument one —
+    # that is precisely why the guard has to stay upstream of it.
+    assert _validation_error_in_chain(internal) is internal
+
+    # The real protection: every advanced tool body absorbs its own errors,
+    # so a failing archive surfaces as a tool_error envelope, never as a
+    # validation leak.
+    (tmp_path / "a.zim").write_bytes(b"not a zim file at all")
+    async with advanced_session(tmp_path) as session:
+        result = await session.call_tool(
+            "zim_search",
+            {"query": "climate", "zim_file_path": str(tmp_path / "a.zim")},
+        )
+    text = _text(result)
+    assert "invalid_argument" not in text
+    assert "validation error for" not in text
+
+
+@pytest.mark.asyncio
 async def test_valid_enum_value_still_dispatches(tmp_path: Path) -> None:
     """Positive control: the guard must not reject legitimate calls."""
     (tmp_path / "a.zim").write_bytes(b"ZIM\x04")

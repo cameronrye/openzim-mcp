@@ -1752,18 +1752,29 @@ class ContentProcessor:
 
         typed = _keep_highlightable_terms(query) if query else []
         terms = [t for t, _ in typed]
+        # Function words are dropped from the anchor decision only; ``typed``
+        # still drives highlighting further down.
+        anchor_typed = _keep_anchorable_terms(typed) if typed else []
+        anchor_terms = [t for t, _ in anchor_typed]
 
         # Site furniture (share-widget boilerplate, in-page navigation
         # lists) is neither a useful anchor nor useful fill: on MedlinePlus
         # the paragraph under every H1 was the no-JavaScript sentence, so
         # an H1 match produced a snippet with no article text at all. A
         # paragraph the query actually hits is kept regardless — see
-        # ``_drop_boilerplate_paragraphs``.
+        # ``_drop_boilerplate_paragraphs``. The exemption is keyed on the
+        # anchorable terms because that is what it exists for: keeping the
+        # paragraph the anchor will land on. Keyed on the full set, a nav
+        # block survived for containing "what" and could never be chosen.
         paragraphs = _drop_boilerplate_paragraphs(
             content.split("\n\n"),
             is_query_hit=(
-                (lambda p: any(_word_in(_fold(p), t, prefix=pfx) for t, pfx in typed))
-                if typed
+                (
+                    lambda p: any(
+                        _word_in(_fold(p), t, prefix=pfx) for t, pfx in anchor_typed
+                    )
+                )
+                if anchor_typed
                 else None
             ),
         )
@@ -1772,10 +1783,6 @@ class ContentProcessor:
         if query:
             if terms:
                 folded_paragraphs = [_fold(p) for p in paragraphs]
-                # Function words are dropped from the anchor decision only;
-                # ``typed`` still drives highlighting below.
-                anchor_typed = _keep_anchorable_terms(typed)
-                anchor_terms = [t for t, _ in anchor_typed]
                 # Pass 1: whole-word match (most precise — preserves the
                 # Phase A #1 spec promise).
                 whole_word_idx: Optional[int] = None
