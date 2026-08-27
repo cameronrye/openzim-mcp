@@ -372,7 +372,16 @@ def test_probe_still_promotes_when_canonical_is_absent() -> None:
 
 def test_suggestions_page_keeps_last_genuine_row_when_canonical_present() -> None:
     """End-to-end consequence: a full page no longer loses its lowest
-    genuine suggestion to a spurious rank-1 promotion."""
+    genuine suggestion to a spurious rank-1 promotion.
+
+    The page is now filled from the title index rather than the full-text
+    pass (the two swapped priority once ``suggest`` mode was found to be
+    answering from Xapian and never consulting the archive's suggestion
+    index at all), so the row *order* is the title index's own
+    score-then-length ranking. What this test guards is unchanged: the page
+    still carries ``limit`` distinct, genuine rows, and the entry that did
+    not fit is reported through ``has_more`` rather than silently dropped.
+    """
     entries = {
         "iep.utm.edu/kant/": "Kant, Immanuel",
         "iep.utm.edu/kantaest/": "Kant: Aesthetics",
@@ -402,4 +411,11 @@ def test_suggestions_page_keeps_last_genuine_row_when_canonical_present() -> Non
         out = stub._generate_search_suggestions(archive, "Kant", 5)
 
     texts = [s["text"] for s in out["suggestions"]]
-    assert texts == [row["text"] for row in page]
+    paths = [s["path"] for s in out["suggestions"]]
+    assert len(texts) == 5
+    assert len(set(paths)) == 5, "a promoted canonical must not duplicate a row"
+    assert set(paths) <= set(entries), "every row must be a genuine archive entry"
+    # The shortest prefix title is the canonical article D6 exists to keep.
+    assert "Kant, Immanuel" in texts
+    # Six entries match, five fit: the sixth is flagged, not dropped.
+    assert out["has_more"] is True

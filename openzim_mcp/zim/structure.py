@@ -29,6 +29,7 @@ from urllib.parse import unquote
 from libzim.reader import Archive  # type: ignore[import-untyped]
 
 import openzim_mcp.zim_operations as _zim_ops_mod
+from openzim_mcp.error_messages import url_shaped_path_hint
 from openzim_mcp.exceptions import (
     OpenZimMcpArchiveError,
     OpenZimMcpCursorMismatchError,
@@ -224,6 +225,7 @@ def _entry_not_found_error(entry_path: str) -> OpenZimMcpEntryNotFoundError:
         f"Entry not found: '{entry_path}'. Double-check the spelling and "
         "path (entry paths are case-sensitive), or use "
         "`zim_search(mode='title')` to locate the entry."
+        + url_shaped_path_hint(entry_path)
     )
 
 

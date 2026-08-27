@@ -48,6 +48,7 @@ from openzim_mcp.config import OpenZimMcpConfig
 from openzim_mcp.constants import DEFAULT_MAIN_PAGE_TRUNCATION
 from openzim_mcp.content_processor import ContentProcessor
 from openzim_mcp.defaults import CONTENT
+from openzim_mcp.error_messages import url_shaped_path_hint
 from openzim_mcp.exceptions import (
     ArchiveOpenTimeoutError,
     OpenZimMcpArchiveError,
@@ -1714,4 +1715,5 @@ class ZimOperations(
         raise OpenZimMcpEntryNotFoundError(
             f"Entry not found: '{entry_path}'. "
             f"Try using zim_search() to find available entries."
+            + url_shaped_path_hint(entry_path)
         ) from None

@@ -30,6 +30,7 @@ from libzim.reader import Archive  # type: ignore[import-untyped]
 
 import openzim_mcp.zim_operations as _zim_ops_mod
 from openzim_mcp.content_processor import paged_slice_length
+from openzim_mcp.error_messages import url_shaped_path_hint
 from openzim_mcp.exceptions import (
     OpenZimMcpArchiveError,
     OpenZimMcpEntryNotFoundError,
@@ -980,6 +981,7 @@ class _ContentMixin:
                 f"The entry path may not exist in this ZIM file. "
                 f"Try using zim_search() to find available entries, "
                 f"or zim_browse() to explore the archive's namespaces."
+                + url_shaped_path_hint(entry_path)
             )
         except OpenZimMcpArchiveError:
             # Re-raise our custom errors with guidance
@@ -1499,21 +1501,26 @@ class _ContentMixin:
             "title": key or entry_path,
             "content": "",
         }
+        # A miss raises like every other entry miss. Returning the sentence
+        # in ``content`` with ``content_ok=False`` only suppressed caching:
+        # the tool still answered ``isError=false``, so a client rendering
+        # ``content`` displayed "Metadata key … not found" as though it were
+        # the entry's text, while the same miss under ``A/`` surfaced the
+        # Resource Not Found envelope.
         if not key:
-            payload["content"] = (
-                "Empty metadata key. Use a known M/<key> path from "
-                "`metadata for <file>` or `walk namespace M`."
+            raise OpenZimMcpEntryNotFoundError(
+                "Empty metadata key. Pass a known M/<key> path — "
+                'zim_browse(namespace="M") lists the available keys.'
             )
-            return payload, False
         try:
             item = archive.get_metadata_item(key)
         except Exception as e:
             logger.debug(f"get_metadata_item failed for {key}: {e}")
-            payload["content"] = (
-                f"Metadata key {key!r} not found in this archive. "
-                f"Use `walk namespace M` to list available keys."
-            )
-            return payload, False
+            raise OpenZimMcpEntryNotFoundError(
+                f"Entry not found: '{entry_path}'. "
+                f"Metadata key {key!r} does not exist in this archive. "
+                f'Use zim_browse(namespace="M") to list the available keys.'
+            ) from e
         if item is None:
             payload["content"] = f"Metadata key {key!r} resolved to an empty item."
             return payload, False

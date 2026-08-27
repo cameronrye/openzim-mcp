@@ -11,6 +11,7 @@ from typing import Optional
 
 from pydantic import ValidationError as PydanticValidationError
 
+from . import __version__
 from .config import OpenZimMcpConfig
 from .constants import TOOL_MODE_SIMPLE, VALID_TOOL_MODES
 from .exceptions import OpenZimMcpConfigurationError
@@ -89,6 +90,11 @@ Examples:
 Environment Variables:
   OPENZIM_MCP_TOOL_MODE - Set tool mode (advanced or simple)
         """,
+    )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"openzim-mcp {__version__}",
     )
     parser.add_argument(
         "directories",

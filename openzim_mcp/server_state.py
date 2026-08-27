@@ -23,6 +23,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Tuple, Union, cast
 
+from . import __version__
 from .constants import CACHE_HIGH_HIT_RATE_THRESHOLD, CACHE_LOW_HIT_RATE_THRESHOLD
 from .responses import ToolErrorPayload, tool_error
 from .security import redact_paths_in_message, sanitize_path_for_error
@@ -268,6 +269,11 @@ def _build_health_report(
             "timestamp": _utc_now_iso(),
             "status": "healthy",
             "server_name": server.config.server_name,
+            # A stale install can serve an old server for weeks while looking
+            # current; ``serverInfo.version`` exists in the initialize result
+            # but most clients never surface it, so the health report is the
+            # one place an operator can ask what is actually running.
+            "version": __version__,
             "uptime_info": _build_uptime_info(server),
             "configuration": {
                 "allowed_directories": len(server.config.allowed_directories),

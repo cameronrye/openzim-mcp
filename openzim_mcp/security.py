@@ -500,6 +500,36 @@ def sanitize_path_for_error(path: str, show_filename: bool = True) -> str:
         return PATH_HIDDEN_PLACEHOLDER
 
 
+# A URL with an explicit scheme. ``//host/path`` inside one looks exactly
+# like a POSIX absolute path to ``_ABS_PATH_RE``, whose lookbehind excludes
+# path-continuation characters but not ``:`` — so the caller's own
+# ``https://iep.utm.edu/epistemo/`` came back as ``https:<path-hidden>``,
+# hiding the very value they need to correct. Masking keys on ``scheme://``
+# rather than on a bare colon: ``archive:/home/user/x.zim`` is a labelled
+# filesystem path and must keep redacting.
+# The scheme is anchored (a scheme cannot start mid-token) and length-bounded
+# so each starting position fails in constant time. An unanchored, unbounded
+# ``[A-Za-z][A-Za-z0-9+.\-]*://`` rescans the whole tail from every offset,
+# which is quadratic on a long token: a caller-supplied 1 MB ``entry_path``
+# — a shape this module is already hardened against elsewhere, see
+# ``sanitize_for_log`` — turned redaction into a multi-minute stall.
+#
+# The authority is required to be non-empty (``[^/\s...]``): with an empty
+# one — ``file:///home/user/secret.zim``, or any invented ``x:///...`` — the
+# text after ``://`` is a filesystem path, not a host, and exempting it would
+# turn any scheme prefix into a redaction bypass.
+_URL_RE = re.compile(
+    r"(?<![A-Za-z0-9+.\-])[A-Za-z][A-Za-z0-9+.\-]{0,15}://"
+    r"[^/\s'\")\]<>][^\s'\")\]<>]*"
+)
+
+# The mask character is stripped from the message before stashing, so a
+# token cannot survive from caller-supplied text into the restore pass.
+_MASK_CHAR = "\x00"
+_URL_MASK = "\x00u{}\x00"
+_URL_MASK_RE = re.compile(r"\x00u(\d+)\x00")
+
+
 def redact_paths_in_message(raw_message: str) -> str:
     r"""Redact absolute filesystem paths from a free-form message.
 
@@ -538,7 +568,23 @@ def redact_paths_in_message(raw_message: str) -> str:
     if known_dirs_re is not None:
         message = known_dirs_re.sub(_replace, message)
 
-    return _ABS_PATH_RE.sub(_replace, message)
+    # Hide ``scheme://host/...`` URLs so their ``//host/path`` tail isn't
+    # taken for a POSIX path, then put them back verbatim. The mask
+    # character is stripped from the input first, so caller text echoed into
+    # the message cannot pre-forge a token and have it substituted for a URL
+    # it did not supply.
+    urls: List[str] = []
+
+    def _stash(match: "re.Match[str]") -> str:
+        urls.append(match.group(0))
+        return _URL_MASK.format(len(urls) - 1)
+
+    message = _URL_RE.sub(_stash, message.replace(_MASK_CHAR, ""))
+    message = _ABS_PATH_RE.sub(_replace, message)
+    # One pass, not one ``str.replace`` per URL: a message carrying many
+    # small URLs otherwise costs O(len(urls) x len(message)) — 200KB of them
+    # took ~53s.
+    return _URL_MASK_RE.sub(lambda m: urls[int(m.group(1))], message)
 
 
 # Every C0 control character plus DEL — including tab, LF, and CR. Unlike
