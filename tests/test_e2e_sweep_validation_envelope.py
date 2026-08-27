@@ -153,13 +153,12 @@ async def test_internal_pydantic_failure_is_not_reported_as_the_caller_s_fault(
     class _Inner(pydantic.BaseModel):
         count: int
 
-    try:
+    with pytest.raises(pydantic.ValidationError) as exc_info:
         _Inner(count="not-an-int")
-    except pydantic.ValidationError as exc:
-        internal = exc
 
     # The classifier cannot tell an internal failure from an argument one —
     # that is precisely why the guard has to stay upstream of it.
+    internal = exc_info.value
     assert _validation_error_in_chain(internal) is internal
 
     # The real protection: every advanced tool body absorbs its own errors,
