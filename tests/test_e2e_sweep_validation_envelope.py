@@ -161,18 +161,23 @@ async def test_internal_pydantic_failure_is_not_reported_as_the_caller_s_fault(
     internal = exc_info.value
     assert _validation_error_in_chain(internal) is internal
 
-    # The real protection: every advanced tool body absorbs its own errors,
-    # so a failing archive surfaces as a tool_error envelope, never as a
-    # validation leak.
+    # The property that actually protects the caller: a failing archive is
+    # absorbed by the tool body and answered as a tool_error envelope. This
+    # has to assert the envelope's SHAPE, not the absence of the leak
+    # strings — an unabsorbed exception reaches the wire as the SDK's bare
+    # text block ("Error executing tool zim_search: Failed to open ZIM
+    # archive: …"), which contains neither string and would sail past a
+    # negative assertion while the property was broken.
     (tmp_path / "a.zim").write_bytes(b"not a zim file at all")
     async with advanced_session(tmp_path) as session:
         result = await session.call_tool(
             "zim_search",
             {"query": "climate", "zim_file_path": str(tmp_path / "a.zim")},
         )
-    text = _text(result)
-    assert "invalid_argument" not in text
-    assert "validation error for" not in text
+    payload = _payload(result)
+    assert payload["error"] is True
+    assert payload["operation"] == "zim_search"
+    assert payload["operation"] != "invalid_argument"
 
 
 @pytest.mark.asyncio

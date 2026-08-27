@@ -190,6 +190,58 @@ def _alternate_entry_spellings(entry_path: str) -> List[str]:
     return spellings
 
 
+# The size the illustration is actually fetched at. ``has_illustration()``
+# with no argument answers "any size", which is not the same question:
+# an archive can hold a 96px illustration and still fail the 48px fetch,
+# putting the text and binary surfaces back into disagreement.
+_ILLUSTRATION_SIZE = 48
+
+
+def _has_well_known_illustration(archive: Archive) -> bool:
+    """Whether ``get_illustration_item`` can serve the size we fetch."""
+    try:
+        return bool(archive.has_illustration(_ILLUSTRATION_SIZE))
+    except Exception as e:  # pragma: no cover - defensive, libzim-version dependent
+        logger.debug(f"has_illustration probe failed: {e}")
+        return False
+
+
+def rewrite_well_known_path(archive: Archive, entry_path: str) -> str:
+    """Resolve a synthetic ``W/`` browse path to the entry it stands for.
+
+    ``zim_browse``/``zim_metadata`` publish ``W/mainPage`` on new-scheme
+    archives, but it is not a literal entry — it is resolved through
+    ``archive.main_entry``. Every surface that resolves an entry path has to
+    agree about that, or one tool answers contradictorily an argument apart:
+    ``zim_get`` returned the article while ``view=toc``, ``zim_get_section``
+    and ``zim_links`` — which run a second, independent ladder — returned
+    Resource Not Found for the same path.
+
+    The leading slash is accepted because ``get_zim_entry_data`` does not
+    normalize at its boundary the way the binary surface does, so
+    ``/W/mainPage`` would otherwise miss a check that sits above the ladder
+    whose un-rooting recovery would have caught it.
+
+    Any other path, and any old-scheme archive, is returned unchanged.
+    """
+    if not entry_path or not getattr(archive, "has_new_namespace_scheme", False):
+        return entry_path
+    if entry_path.lstrip("/") != "W/mainPage":
+        return entry_path
+    try:
+        entry = best_effort_redirect_chain(archive.main_entry)
+        resolved = getattr(entry, "path", None)
+    except Exception as e:
+        logger.debug(f"W/mainPage resolution failed: {e}")
+        resolved = None
+    if not resolved:
+        raise OpenZimMcpEntryNotFoundError(
+            "This archive declares no main page, so 'W/mainPage' cannot be "
+            "resolved. Use zim_search() to find an entry."
+        )
+    return str(resolved)
+
+
 def _heading_matches(title: str, tokens: Tuple[str, ...]) -> bool:
     """Return True when a section heading contains any of ``tokens``."""
     t = title.strip().lower()
@@ -852,18 +904,26 @@ class _ContentMixin:
         # advertised by one tool and rejected by another — with the
         # rejection advising "use browsing tools", the tool that had just
         # handed the caller the path.
-        if entry_path and getattr(archive, "has_new_namespace_scheme", False):
-            if entry_path == "W/mainPage":
-                entry_path = self._resolve_well_known_main_entry(archive)
-            elif entry_path == "W/favicon":
-                # Served, but only as bytes: the illustration is an image, so
-                # the binary route is the one that can carry it (see
-                # ``get_binary_entry_data``). Name that instead of sending
-                # the caller back to the browse tool that offered the path.
+        entry_path = rewrite_well_known_path(archive, entry_path)
+        if entry_path == "W/favicon" and getattr(
+            archive, "has_new_namespace_scheme", False
+        ):
+            # Served, but only as bytes: the illustration is an image, so the
+            # binary route is the one that can carry it (see
+            # ``get_binary_entry_data``). Name that instead of sending the
+            # caller back to the browse tool that offered the path — but only
+            # when there is something to fetch, or the retry we prescribe
+            # fails and the caller spends two round trips learning the first
+            # answer was false.
+            if _has_well_known_illustration(archive):
                 raise OpenZimMcpEntryNotFoundError(
                     "'W/favicon' is the archive illustration, an image. "
                     "Fetch it with binary=True."
                 )
+            raise OpenZimMcpEntryNotFoundError(
+                "This archive carries no illustration, so 'W/favicon' cannot "
+                "be fetched."
+            )
 
         cache_key = self._path_mapping_cache_key(validated_path, entry_path)
         cached = self._retrieve_via_cached_mapping(cache_key, entry_path, build)
@@ -898,30 +958,6 @@ class _ContentMixin:
             return self._retrieve_via_search(
                 archive, cache_key, entry_path, build, direct_error
             )
-
-    @staticmethod
-    def _resolve_well_known_main_entry(archive: Archive) -> str:
-        """The real entry path behind the synthetic ``W/mainPage`` row.
-
-        Resolved through ``archive.main_entry`` and its redirect chain, the
-        same way ``namespace._materialise_new_scheme_main_entry`` renders
-        the browse row — so the two surfaces agree on what ``W/mainPage``
-        means. Handing the resolved path back to the ordinary retrieval
-        ladder is what gives the fetch normal entry semantics (views,
-        offsets, truncation) instead of a second main-page code path.
-        """
-        try:
-            entry = best_effort_redirect_chain(archive.main_entry)
-            path = getattr(entry, "path", None)
-        except Exception as e:
-            logger.debug(f"W/mainPage resolution failed: {e}")
-            path = None
-        if not path:
-            raise OpenZimMcpEntryNotFoundError(
-                "This archive declares no main page, so 'W/mainPage' cannot "
-                "be resolved. Use zim_search() to find an entry."
-            )
-        return str(path)
 
     @staticmethod
     def _resolve_well_known_illustration(archive: Archive) -> Any:

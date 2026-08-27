@@ -59,7 +59,7 @@ from openzim_mcp.preset_data import ArchivePreset, resolve_preset_from_entries
 from openzim_mcp.security import PathValidator
 from openzim_mcp.timeout_utils import run_with_timeout
 from openzim_mcp.zim._ops_base import _ArchiveAccessMixin, _json
-from openzim_mcp.zim.content import _ContentMixin
+from openzim_mcp.zim.content import _ContentMixin, rewrite_well_known_path
 from openzim_mcp.zim.namespace import _NamespaceMixin
 from openzim_mcp.zim.redirects import resolve_redirect_chain
 from openzim_mcp.zim.search import _SearchMixin
@@ -1702,6 +1702,11 @@ class ZimOperations(
         # raised from _follow propagate — they are real failures, not
         # "not found", and falling through to a search fallback would mask
         # malformed-archive bugs.
+        # A synthetic ``W/`` browse path names an entry not stored under that
+        # name, so rewrite before probing — otherwise this ladder answers
+        # not-found for a path the plain-body ladder serves.
+        entry_path = rewrite_well_known_path(archive, entry_path)
+
         entry = None
         with suppress(Exception):
             entry = archive.get_entry_by_path(entry_path)

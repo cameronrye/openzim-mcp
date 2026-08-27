@@ -41,7 +41,11 @@ from openzim_mcp.meta import attach_meta
 from openzim_mcp.pagination import Cursor
 from openzim_mcp.responses import ToolErrorPayload, tool_error
 from openzim_mcp.zim._ops_base import _json
-from openzim_mcp.zim.content import _strip_markdown_links_shared, reject_path_traversal
+from openzim_mcp.zim.content import (
+    _strip_markdown_links_shared,
+    reject_path_traversal,
+    rewrite_well_known_path,
+)
 
 if TYPE_CHECKING:
     from openzim_mcp.cache import OpenZimMcpCache
@@ -81,6 +85,17 @@ def _resolve_entry_spelling(archive: Any, path: str) -> Tuple[Optional[Any], str
     caller that cannot verify the target still keeps its best-effort edge
     rather than dropping it.
     """
+    # A synthetic ``W/`` path browse published stands for an entry that is
+    # not stored under that name, so it has to be rewritten before any
+    # spelling is probed. Without this the structure surfaces
+    # (``view=toc``/``summary``/``structure``, ``zim_get_section``,
+    # ``zim_links``) answered Resource Not Found for a path the plain-body
+    # surface served — the same tool contradicting itself one argument apart.
+    # Best-effort: a resolution failure here must not turn a link-graph probe
+    # into a raise (``get_inbound_links_data`` relies on that).
+    with suppress(Exception):
+        path = rewrite_well_known_path(archive, path)
+
     # Broad on purpose: libzim reports a miss as a bare ``KeyError`` and a
     # corrupt cluster as ``RuntimeError``, and the probe's only job is to
     # answer "does this spelling resolve?" — any failure means "no". Callers
@@ -313,6 +328,13 @@ class _StructureMixin:
         ``zim_get``.
         """
         from openzim_mcp.bundle import get_or_build_bundle
+
+        # The single lookup point for all four bundle surfaces is also the
+        # single place a synthetic ``W/`` browse path has to become the entry
+        # it stands for; rewriting here keys the bundle on the resolved path,
+        # so ``W/mainPage`` shares one bundle with the real landing page
+        # rather than building a second under a name libzim cannot serve.
+        entry_path = rewrite_well_known_path(archive, entry_path)
 
         try:
             return get_or_build_bundle(

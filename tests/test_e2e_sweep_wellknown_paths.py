@@ -45,6 +45,7 @@ def ops(tmp_path):
 def _archive_with_main_page() -> MagicMock:
     archive = MagicMock()
     archive.has_new_namespace_scheme = True
+    archive.has_illustration.return_value = True
 
     landing = MagicMock()
     landing.path = "iep.utm.edu/"
@@ -125,3 +126,93 @@ class TestFaviconIsServedAsBytes:
         with pytest.raises(OpenZimMcpEntryNotFoundError) as exc_info:
             ops._resolve_well_known_illustration(archive)
         assert "illustration" in str(exc_info.value).lower()
+
+    def test_no_illustration_is_not_promised_to_the_text_caller(self, ops):
+        """Don't send the caller to a retry that cannot succeed.
+
+        The text branch matched on the path string alone, so an archive
+        carrying no illustration was told "it's an image, fetch it with
+        binary=True" — and the binary call then reported there was nothing
+        there. Two round trips to learn the first answer was false.
+        """
+        archive = _archive_with_main_page()
+        archive.has_illustration.return_value = False
+        with pytest.raises(OpenZimMcpEntryNotFoundError) as exc_info:
+            ops._smart_retrieve_entry(
+                archive,
+                "W/favicon",
+                "/zim/iep.zim",
+                build=lambda p: ({}, True, p),
+                fetch_metadata=lambda: ({}, False),
+            )
+        message = str(exc_info.value)
+        assert "binary=True" not in message
+        assert "no illustration" in message.lower()
+
+    def test_gate_asks_for_the_size_actually_served(self, ops):
+        """``has_illustration()`` means "any size"; the fetch uses 48.
+
+        An archive whose only illustration is some other size would pass a
+        bare ``has_illustration()`` and then fail the 48-px fetch, putting
+        the two surfaces right back into disagreement.
+        """
+        archive = _archive_with_main_page()
+        archive.has_illustration.return_value = True
+        with pytest.raises(OpenZimMcpEntryNotFoundError):
+            ops._smart_retrieve_entry(
+                archive,
+                "W/favicon",
+                "/zim/iep.zim",
+                build=lambda p: ({}, True, p),
+                fetch_metadata=lambda: ({}, False),
+            )
+        archive.has_illustration.assert_called_with(48)
+
+
+class TestWellKnownPathsResolveOnEverySurface:
+    """One tool must not answer contradictorily an argument apart.
+
+    The rewrite first landed only in ``_smart_retrieve_entry``, which backs
+    the plain-body and batch surfaces. ``view=toc``/``summary``/``structure``,
+    ``zim_get_section`` and ``zim_links`` resolve entries through a second,
+    independent ladder that knew nothing about ``W/``, so ``W/mainPage``
+    returned the article for one call and Resource Not Found for the next.
+    """
+
+    def test_shared_rewrite_helper_resolves_main_page(self, ops):
+        from openzim_mcp.zim.content import rewrite_well_known_path
+
+        archive = _archive_with_main_page()
+        assert rewrite_well_known_path(archive, "W/mainPage") == "iep.utm.edu/"
+
+    def test_shared_helper_passes_ordinary_paths_through(self, ops):
+        from openzim_mcp.zim.content import rewrite_well_known_path
+
+        archive = _archive_with_main_page()
+        assert (
+            rewrite_well_known_path(archive, "iep.utm.edu/stoicism/")
+            == "iep.utm.edu/stoicism/"
+        )
+
+    def test_shared_helper_ignores_old_scheme_archives(self, ops):
+        from openzim_mcp.zim.content import rewrite_well_known_path
+
+        archive = _archive_with_main_page()
+        archive.has_new_namespace_scheme = False
+        assert rewrite_well_known_path(archive, "W/mainPage") == "W/mainPage"
+
+
+class TestRootedSpellingResolves:
+    """``/W/mainPage`` must behave like ``W/mainPage``.
+
+    The binary surface normalizes at its boundary, so ``/W/favicon``
+    resolved while ``/W/mainPage`` 404'd — a divergence inside one tool on
+    the same synthetic path, because the ``W/`` check sits above the ladder
+    whose un-rooting recovery would otherwise have caught it.
+    """
+
+    def test_leading_slash_still_resolves(self, ops):
+        from openzim_mcp.zim.content import rewrite_well_known_path
+
+        archive = _archive_with_main_page()
+        assert rewrite_well_known_path(archive, "/W/mainPage") == "iep.utm.edu/"
