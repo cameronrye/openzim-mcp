@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.2.3](https://github.com/cameronrye/openzim-mcp/compare/v3.2.2...v3.2.3) (2026-08-28)
+
+
+### Fixed
+
+* consult the title index for suggest, and stop three silent-success paths ([#398](https://github.com/cameronrye/openzim-mcp/issues/398)) ([4fc95e6](https://github.com/cameronrye/openzim-mcp/commit/4fc95e6e75ebd1d59a6c9429fa14ae5c4552163b))
+
 ## [3.2.2](https://github.com/cameronrye/openzim-mcp/compare/v3.2.1...v3.2.2) (2026-08-26)
 
 
