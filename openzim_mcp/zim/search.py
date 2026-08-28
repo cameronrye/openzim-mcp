@@ -187,6 +187,28 @@ def _unpaged_overflow_hint(*, subject: str, limit: int, narrow: str) -> str:
     )
 
 
+# Separators a ZIM builder uses to append site branding (and often a
+# synonym list) to an article's own name. Only these two: a bare " - " is
+# ordinary title punctuation — "Diabetes - Multiple Languages" is a
+# distinct article, not the ``Diabetes`` page with a suffix.
+_TITLE_SEGMENT_SEPARATORS = (" | ", ": ")
+
+
+def _leading_title_segment(title: str) -> str:
+    """The article's own name from a site-suffixed title.
+
+    ``diabetes | type 1 diabetes | medlineplus`` -> ``diabetes``;
+    ``epistemology | internet encyclopedia of philosophy`` ->
+    ``epistemology``. A title carrying no separator comes back unchanged.
+    """
+    earliest = title
+    for sep in _TITLE_SEGMENT_SEPARATORS:
+        head, found, _tail = title.partition(sep)
+        if found and len(head) < len(earliest):
+            earliest = head
+    return earliest.strip()
+
+
 def _is_pseudo_namespace_entry(
     path: str, title: str, *, extended: bool = False
 ) -> bool:
@@ -2491,6 +2513,20 @@ class _SearchMixin:
     ) -> Dict[str, Any]:
         """Generate search suggestions based on partial query.
 
+        The archive's title/redirect index (``SuggestionSearcher``) is the
+        primary source — prefix autocomplete is what that index is for, and
+        it is what the tool description advertises. Xapian full-text hits,
+        filtered by title substring, supplement it only when the title index
+        leaves room on the page.
+
+        The order used to be reversed, with the full-text pass
+        short-circuiting the whole function whenever it returned anything at
+        all. On MedlinePlus that meant ``diab`` answered with ``Diabetic
+        Diet`` plus three genetics pages and reported ``done=True``, while
+        the title index held 99 matches and ranked the canonical
+        ``Diabetes`` page first: the index was never consulted, and
+        completeness was asserted over a set the server had not looked at.
+
         Errors during iteration of individual entries are logged and skipped
         (per-entry isolation). Errors that escape the per-entry try/except
         propagate so callers can avoid caching a sentinel response — a
@@ -2501,45 +2537,58 @@ class _SearchMixin:
             f"Starting suggestion generation for query: '{partial_query}', "
             f"limit: {limit}"
         )
-        suggestions = []
-        partial_lower = partial_query.lower().strip()
 
-        # Strategy 1: Use search functionality as fallback since direct entry
-        # iteration may not work reliably with all ZIM file structures.
-        # R2-4: ask for one more than the page so a full page can tell
-        # "exactly ``limit`` exist" from "more lie beyond it". ``has_more``
-        # is the only honest basis for ``done=False`` — this lookup takes
-        # no offset, so a continuation signal must come with a hint.
-        suggestions = self._get_suggestions_from_search(
-            archive, partial_query, limit + 1
+        suggestions, has_more, result_paths = self._get_suggestions_from_title_index(
+            archive, partial_query, limit
         )
-        has_more = len(suggestions) > limit
-        suggestions = suggestions[:limit]
 
-        # D6 (beta): the libzim suggest index / Xapian search both miss
-        # the canonical bare-title article for common prefixes.
-        # ``suggestions for Photosyn`` returns 15 results — ``PhotoSynth``,
-        # ``Photosyntesis`` (typo), ``Photosynthetic_efficiency``,
-        # ``Photosynthesis_(song)`` etc. — but NOT bare ``Photosynthesis``,
-        # which has score 1.0 in the title index. The Xapian search
-        # ranks broader articles (mentioning photosynt-* many times)
-        # above the canonical short-title article. Probe the title-index
-        # fast-path for the partial query directly and prepend the
-        # canonical entry when it's a clean prefix match and not
-        # already in the result list. Strategy 1 takes priority for
-        # cases where the prefix lands across many same-prefix titles;
-        # this prepend just fills the canonical gap.
-        #
-        # D6 (beta, second pass): only run the canonical probe when
-        # Strategy 1 returned something. The probe's purpose is to fill
-        # a gap in a populated list; when Strategy 1 is empty, Strategy 2
-        # below runs SuggestionSearcher with its own canonical-promotion
-        # logic (sorted by score+length), so running the canonical probe
-        # here would just be a duplicate SuggestionSearcher call against
-        # the same archive on the cold path.
+        # Full-text fallback: fills the rest of the page when the title
+        # index is thin, and carries archives that ship no usable title
+        # index at all.
+        if len(suggestions) < limit:
+            seen_paths = {s["path"] for s in suggestions}
+            seen_titles = {s["text"].strip().lower() for s in suggestions}
+            remaining = limit - len(suggestions)
+            # R2-4: ask for one more than the page can hold so a full page
+            # can tell "exactly ``limit`` exist" from "more lie beyond it".
+            # ``has_more`` is the only honest basis for ``done=False`` —
+            # this lookup takes no offset, so a continuation signal must
+            # come with a hint.
+            #
+            # Sized by ``limit``, not by the slots left: the helper derives
+            # its Xapian candidate window from the limit it is handed
+            # (``limit * 5``), so asking for the leftovers shrank the window
+            # rather than the answer — with one slot free it scanned 10
+            # candidates instead of 50, matched none, and returned a short
+            # page under ``done=True``. Take the leftovers from the result.
+            from_search = self._get_suggestions_from_search(
+                archive, partial_query, limit + 1
+            )
+            fresh = [
+                s
+                for s in from_search
+                if s["path"] not in seen_paths
+                and s["text"].strip().lower() not in seen_titles
+            ]
+            has_more = has_more or len(fresh) > remaining
+            suggestions = suggestions + fresh[:remaining]
+
+        # D6 (beta): both indexes routinely miss the canonical bare-title
+        # article for common prefixes. ``suggestions for Photosyn`` returns
+        # 15 results — ``PhotoSynth``, ``Photosyntesis`` (typo),
+        # ``Photosynthetic_efficiency``, ``Photosynthesis_(song)`` etc. —
+        # but NOT bare ``Photosynthesis``, which has score 1.0 in the title
+        # index. Probe the title-index fast-path for the partial query
+        # directly and prepend the canonical entry when it's a clean prefix
+        # match and not already in the result list. Reuse the candidates the
+        # title-index pass already pulled so the probe doesn't pay a second
+        # ``suggest()`` round trip against the same archive.
         if suggestions:
             canonical = self._find_canonical_prefix_match(
-                archive, partial_query, suggestions
+                archive,
+                partial_query,
+                suggestions,
+                result_paths=[str(p) for p in result_paths] or None,
             )
             if canonical is not None:
                 suggestions = [canonical] + suggestions
@@ -2549,21 +2598,30 @@ class _SearchMixin:
                 has_more = has_more or len(suggestions) > limit
                 suggestions = suggestions[:limit]
 
-            logger.info(f"Found {len(suggestions)} suggestions using search fallback")
-            return {
-                "partial_query": partial_query,
-                "suggestions": suggestions,
-                "count": len(suggestions),
-                "has_more": has_more,
-            }
+        logger.info(f"Found {len(suggestions)} suggestions for '{partial_query}'")
+        return {
+            "partial_query": partial_query,
+            "suggestions": suggestions[:limit],
+            "count": len(suggestions[:limit]),
+            "has_more": has_more,
+        }
 
-        # Strategy 2: Use the libzim title-index suggestion API. Replaces the
-        # previous strided ``_get_entry_by_id`` scan, which only inspected
-        # ~entry_count/step entries and missed almost everything on large
-        # archives. ``SuggestionSearcher`` works against the title/redirect
-        # index and is independent of the full-text index used by Strategy 1,
-        # so it remains a legitimate fallback when full-text returns zero.
+    def _get_suggestions_from_title_index(  # NOSONAR(python:S3776)
+        self, archive: Archive, partial_query: str, limit: int
+    ) -> Tuple[List[Dict[str, str]], bool, List[Any]]:
+        """Suggestions from libzim's title/redirect suggestion index.
+
+        Returns ``(suggestions, has_more, result_paths)``. The raw
+        ``result_paths`` are handed back so the canonical probe can reuse
+        them instead of issuing a second ``suggest()`` call.
+
+        Replaces the pre-Phase-B strided ``_get_entry_by_id`` scan, which
+        only inspected ~entry_count/step entries and missed almost
+        everything on large archives.
+        """
+        partial_lower = partial_query.lower().strip()
         title_matches: List[Dict[str, Any]] = []
+        suggestions: List[Dict[str, str]] = []
 
         try:
             suggestion_search = _zim_ops_mod.SuggestionSearcher(archive).suggest(
@@ -2583,8 +2641,9 @@ class _SearchMixin:
             )
         except Exception as e:
             logger.debug(f"SuggestionSearcher failed for '{partial_query}': {e}")
-            result_paths = []
+            return [], False, []
 
+        seen_titles: set = set()
         for result_path in result_paths:
             try:
                 entry = archive.get_entry_by_path(str(result_path))
@@ -2599,10 +2658,42 @@ class _SearchMixin:
                 if _is_pseudo_namespace_entry(path, title):
                     continue
 
+                # One suggestion per title, matching the full-text pass this
+                # one now runs ahead of. Distinct paths are not distinct
+                # choices: MedlinePlus files each frame of a slideshow under
+                # its own path with one shared title, and a quiz page appears
+                # again as ``…?quiz=1``, so an undeduped page offered ten rows
+                # carrying three articles. Dropping them here (rather than at
+                # emit time) keeps the ``limit * 2`` candidate budget spent on
+                # distinct articles, so ``has_more`` still counts suggestions
+                # a caller could actually pick.
+                title_key = title.strip().lower()
+                if title_key in seen_titles:
+                    continue
+                seen_titles.add(title_key)
+
                 title_lower = title.lower()
 
+                # An article the query names outright outranks every merely
+                # prefixed title. The comparison is against the leading
+                # segment rather than the whole title because site-suffixed
+                # corpora append their own name (and often a synonym list)
+                # to every heading: MedlinePlus files ``Diabetes`` as
+                # ``Diabetes | Type 1 Diabetes | Type 2 Diabetes |
+                # MedlinePlus``, one of the LONGEST titles matching
+                # ``diabetes``, so the shortest-title tiebreak below buried
+                # the canonical page under half a dozen narrower ones.
+                if _leading_title_segment(title_lower) == partial_lower:
+                    title_matches.append(
+                        {
+                            "suggestion": title,
+                            "path": path,
+                            "type": "title_start_match",
+                            "score": 150,
+                        }
+                    )
                 # Prioritize titles that start with the query
-                if title_lower.startswith(partial_lower):
+                elif title_lower.startswith(partial_lower):
                     title_matches.append(
                         {
                             "suggestion": title,
@@ -2651,6 +2742,10 @@ class _SearchMixin:
 
         # Take the best matches. The loop above collects up to ``2 * limit``
         # candidates, so anything past ``limit`` is a match beyond the page.
+        # ``getEstimatedMatches`` is deliberately NOT consulted here: it is a
+        # loose estimate, and inflating ``has_more`` from it would advertise
+        # "re-run with a larger limit" for pages the filtering had already
+        # exhausted.
         has_more = len(title_matches) > limit
         for match in title_matches[:limit]:
             suggestions.append(
@@ -2661,33 +2756,7 @@ class _SearchMixin:
                 }
             )
 
-        # D6 (beta, third pass): also probe for the canonical bare-title
-        # article on the Strategy 2 path. The earlier "skip probe when
-        # Strategy 1 is empty" optimisation regressed the empty-Strategy-1
-        # case (``Photosynt`` returns 0 hits via Xapian on cold Strategy 1
-        # locally; Strategy 2 then surfaces ``PhotoSynth`` but misses
-        # bare ``Photosynthesis``). Reuse the same ``result_paths``
-        # the loop above already pulled so we don't pay a second
-        # ``SuggestionSearcher.suggest()`` round trip — the helper
-        # accepts pre-fetched paths via its ``result_paths=`` arg.
-        if result_paths and suggestions:
-            canonical = self._find_canonical_prefix_match(
-                archive,
-                partial_query,
-                suggestions,
-                result_paths=[str(p) for p in result_paths],
-            )
-            if canonical is not None:
-                suggestions = [canonical] + suggestions
-                has_more = has_more or len(suggestions) > limit
-                suggestions = suggestions[:limit]
-
-        return {
-            "partial_query": partial_query,
-            "suggestions": suggestions[:limit],
-            "count": len(suggestions[:limit]),
-            "has_more": has_more,
-        }
+        return suggestions, has_more, result_paths
 
     def _get_suggestions_from_search(  # NOSONAR(python:S3776)
         self, archive: Archive, partial_query: str, limit: int

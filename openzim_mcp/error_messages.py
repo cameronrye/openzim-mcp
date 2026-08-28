@@ -266,6 +266,35 @@ def _bound_details(details: str) -> str:
     return details[:_DETAILS_MAX_LENGTH].rstrip() + "..."
 
 
+def url_shaped_path_hint(entry_path: str) -> str:
+    """Corrective clause for an ``entry_path`` that was handed a URL.
+
+    Pasting the article's web address is the most natural wrong guess a
+    client makes, and the generic not-found steps ("check the spelling",
+    "try a different namespace") never mention the real mistake. Returns
+    ``""`` for an ordinary path so callers can append unconditionally.
+
+    Bare-host paths are deliberately NOT matched: zimit/warc2zim archives
+    genuinely file entries under host-shaped paths like
+    ``medlineplus.gov/druginfo/meds/a682878.html``, so only an explicit
+    scheme is evidence of the mistake.
+
+    That is also why the suggestion keeps the host and strips only the
+    scheme. Telling the caller to drop the host produces a path that does
+    not exist on exactly the archives this hint fires for most:
+    ``https://iep.utm.edu/stoicism/`` is filed at
+    ``iep.utm.edu/stoicism/``, not at ``stoicism/``.
+    """
+    scheme, separator, remainder = entry_path.partition("://")
+    if not separator or not scheme.isalpha():
+        return ""
+    suggestion = f" (e.g. '{remainder}')" if remainder else ""
+    return (
+        " Entry paths are archive-relative, never URLs: drop the scheme"
+        f"{suggestion}."
+    )
+
+
 def format_error_message(
     config: ErrorConfig,
     operation: str,

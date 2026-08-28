@@ -30,6 +30,7 @@ from libzim.reader import Archive  # type: ignore[import-untyped]
 
 import openzim_mcp.zim_operations as _zim_ops_mod
 from openzim_mcp.content_processor import paged_slice_length
+from openzim_mcp.error_messages import url_shaped_path_hint
 from openzim_mcp.exceptions import (
     OpenZimMcpArchiveError,
     OpenZimMcpEntryNotFoundError,
@@ -37,7 +38,10 @@ from openzim_mcp.exceptions import (
 )
 from openzim_mcp.meta import attach_meta
 from openzim_mcp.zim._ops_base import _json
-from openzim_mcp.zim.redirects import resolve_redirect_chain
+from openzim_mcp.zim.redirects import (
+    best_effort_redirect_chain,
+    resolve_redirect_chain,
+)
 
 if TYPE_CHECKING:
     from openzim_mcp.cache import OpenZimMcpCache
@@ -184,6 +188,58 @@ def _alternate_entry_spellings(entry_path: str) -> List[str]:
         if candidate and candidate != entry_path and candidate not in spellings:
             spellings.append(candidate)
     return spellings
+
+
+# The size the illustration is actually fetched at. ``has_illustration()``
+# with no argument answers "any size", which is not the same question:
+# an archive can hold a 96px illustration and still fail the 48px fetch,
+# putting the text and binary surfaces back into disagreement.
+_ILLUSTRATION_SIZE = 48
+
+
+def _has_well_known_illustration(archive: Archive) -> bool:
+    """Whether ``get_illustration_item`` can serve the size we fetch."""
+    try:
+        return bool(archive.has_illustration(_ILLUSTRATION_SIZE))
+    except Exception as e:  # pragma: no cover - defensive, libzim-version dependent
+        logger.debug(f"has_illustration probe failed: {e}")
+        return False
+
+
+def rewrite_well_known_path(archive: Archive, entry_path: str) -> str:
+    """Resolve a synthetic ``W/`` browse path to the entry it stands for.
+
+    ``zim_browse``/``zim_metadata`` publish ``W/mainPage`` on new-scheme
+    archives, but it is not a literal entry — it is resolved through
+    ``archive.main_entry``. Every surface that resolves an entry path has to
+    agree about that, or one tool answers contradictorily an argument apart:
+    ``zim_get`` returned the article while ``view=toc``, ``zim_get_section``
+    and ``zim_links`` — which run a second, independent ladder — returned
+    Resource Not Found for the same path.
+
+    The leading slash is accepted because ``get_zim_entry_data`` does not
+    normalize at its boundary the way the binary surface does, so
+    ``/W/mainPage`` would otherwise miss a check that sits above the ladder
+    whose un-rooting recovery would have caught it.
+
+    Any other path, and any old-scheme archive, is returned unchanged.
+    """
+    if not entry_path or not getattr(archive, "has_new_namespace_scheme", False):
+        return entry_path
+    if entry_path.lstrip("/") != "W/mainPage":
+        return entry_path
+    try:
+        entry = best_effort_redirect_chain(archive.main_entry)
+        resolved = getattr(entry, "path", None)
+    except Exception as e:
+        logger.debug(f"W/mainPage resolution failed: {e}")
+        resolved = None
+    if not resolved:
+        raise OpenZimMcpEntryNotFoundError(
+            "This archive declares no main page, so 'W/mainPage' cannot be "
+            "resolved. Use zim_search() to find an entry."
+        )
+    return str(resolved)
 
 
 def _heading_matches(title: str, tokens: Tuple[str, ...]) -> bool:
@@ -842,6 +898,33 @@ class _ContentMixin:
         ):
             return fetch_metadata()
 
+        # The sibling route for the synthetic ``W/`` rows browse publishes
+        # (see ``namespace._materialise_browse_entry``). Neither path is a
+        # literal entry on a new-scheme archive, so without this both were
+        # advertised by one tool and rejected by another — with the
+        # rejection advising "use browsing tools", the tool that had just
+        # handed the caller the path.
+        entry_path = rewrite_well_known_path(archive, entry_path)
+        if entry_path == "W/favicon" and getattr(
+            archive, "has_new_namespace_scheme", False
+        ):
+            # Served, but only as bytes: the illustration is an image, so the
+            # binary route is the one that can carry it (see
+            # ``get_binary_entry_data``). Name that instead of sending the
+            # caller back to the browse tool that offered the path — but only
+            # when there is something to fetch, or the retry we prescribe
+            # fails and the caller spends two round trips learning the first
+            # answer was false.
+            if _has_well_known_illustration(archive):
+                raise OpenZimMcpEntryNotFoundError(
+                    "'W/favicon' is the archive illustration, an image. "
+                    "Fetch it with binary=True."
+                )
+            raise OpenZimMcpEntryNotFoundError(
+                "This archive carries no illustration, so 'W/favicon' cannot "
+                "be fetched."
+            )
+
         cache_key = self._path_mapping_cache_key(validated_path, entry_path)
         cached = self._retrieve_via_cached_mapping(cache_key, entry_path, build)
         if cached is not None:
@@ -875,6 +958,25 @@ class _ContentMixin:
             return self._retrieve_via_search(
                 archive, cache_key, entry_path, build, direct_error
             )
+
+    @staticmethod
+    def _resolve_well_known_illustration(archive: Archive) -> Any:
+        """The illustration Item behind the synthetic ``W/favicon`` row.
+
+        Matches the size ``namespace._materialise_new_scheme_favicon`` probes
+        for the browse row, so the two surfaces describe the same asset.
+        """
+        try:
+            item = archive.get_illustration_item(48)
+        except Exception as e:
+            logger.debug(f"get_illustration_item failed: {e}")
+            item = None
+        if item is None:
+            raise OpenZimMcpEntryNotFoundError(
+                "This archive carries no illustration, so 'W/favicon' cannot "
+                "be fetched."
+            )
+        return item
 
     @staticmethod
     def _path_mapping_cache_key(validated_path: Path, entry_path: str) -> str:
@@ -980,6 +1082,7 @@ class _ContentMixin:
                 f"The entry path may not exist in this ZIM file. "
                 f"Try using zim_search() to find available entries, "
                 f"or zim_browse() to explore the archive's namespaces."
+                + url_shaped_path_hint(entry_path)
             )
         except OpenZimMcpArchiveError:
             # Re-raise our custom errors with guidance
@@ -1499,24 +1602,37 @@ class _ContentMixin:
             "title": key or entry_path,
             "content": "",
         }
+        # A miss raises like every other entry miss. Returning the sentence
+        # in ``content`` with ``content_ok=False`` only suppressed caching:
+        # the tool still answered ``isError=false``, so a client rendering
+        # ``content`` displayed "Metadata key … not found" as though it were
+        # the entry's text, while the same miss under ``A/`` surfaced the
+        # Resource Not Found envelope.
         if not key:
-            payload["content"] = (
-                "Empty metadata key. Use a known M/<key> path from "
-                "`metadata for <file>` or `walk namespace M`."
+            raise OpenZimMcpEntryNotFoundError(
+                "Empty metadata key. Pass a known M/<key> path — "
+                'zim_browse(namespace="M") lists the available keys.'
             )
-            return payload, False
         try:
             item = archive.get_metadata_item(key)
         except Exception as e:
             logger.debug(f"get_metadata_item failed for {key}: {e}")
-            payload["content"] = (
-                f"Metadata key {key!r} not found in this archive. "
-                f"Use `walk namespace M` to list available keys."
-            )
-            return payload, False
+            raise OpenZimMcpEntryNotFoundError(
+                f"Entry not found: '{entry_path}'. "
+                f"Metadata key {key!r} does not exist in this archive. "
+                f'Use zim_browse(namespace="M") to list the available keys.'
+            ) from e
         if item is None:
-            payload["content"] = f"Metadata key {key!r} resolved to an empty item."
-            return payload, False
+            # Same contract as the raising branch above: a key that resolves
+            # to nothing is a miss, not a body. Real libzim raises rather
+            # than returning ``None``, so this is defence for a stubbed or
+            # future backend — but it must not be the one path that still
+            # answers isError=false with an error sentence as the content.
+            raise OpenZimMcpEntryNotFoundError(
+                f"Entry not found: '{entry_path}'. "
+                f"Metadata key {key!r} resolved to an empty item. "
+                f'Use zim_browse(namespace="M") to list the available keys.'
+            )
         mime = item.mimetype or ""
         try:
             raw = bytes(item.content)
@@ -1670,6 +1786,40 @@ class _ContentMixin:
 
         try:
             with _zim_ops_mod.zim_archive(validated_path) as archive:
+                # The synthetic ``W/favicon`` row browse publishes. The
+                # illustration is an Item reached through
+                # ``get_illustration_item``, not an Entry with a path, so the
+                # ordinary lookup below can never find it — which is why the
+                # path browse advertises used to 404. It carries the same
+                # size/mimetype/content surface an Item from ``get_item()``
+                # does, so everything downstream serves it unchanged.
+                if entry_path == "W/favicon" and getattr(
+                    archive, "has_new_namespace_scheme", False
+                ):
+                    item = self._resolve_well_known_illustration(archive)
+                    entry_title = "favicon"
+                    content_size = item.size
+                    meta = {
+                        "path": entry_path,
+                        "title": entry_title,
+                        "mime_type": item.mimetype or "image/png",
+                        "size": content_size,
+                        "size_human": self._format_size(content_size),
+                    }
+                    illustration_data: Optional[str] = None
+                    if include_data and content_size <= max_size_bytes:
+                        illustration_data = base64.b64encode(
+                            bytes(item.content)
+                        ).decode("ascii")
+                    self.cache.set(cache_key, meta)
+                    payload = self._format_binary_response(
+                        meta, include_data, max_size_bytes, data=illustration_data
+                    )
+                    return cast(
+                        "BinaryEntryResponse",
+                        attach_meta(payload, truncated=payload.get("truncated", False)),
+                    )
+
                 # Try direct access first
                 try:
                     entry = archive.get_entry_by_path(entry_path)
@@ -1699,10 +1849,12 @@ class _ContentMixin:
                     entry_path = entry.path
 
                 item = entry.get_item()
+                entry_title = entry.title or "Untitled"
+
                 content_size = item.size
                 meta = {
                     "path": entry_path,
-                    "title": entry.title or "Untitled",
+                    "title": entry_title,
                     "mime_type": item.mimetype or "application/octet-stream",
                     "size": content_size,
                     "size_human": self._format_size(content_size),

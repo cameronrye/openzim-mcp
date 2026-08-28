@@ -16,6 +16,7 @@ from .constants import (
     FURNITURE_HEADING_PREFIXES,
     UNWANTED_HTML_SELECTORS,
 )
+from .title_promotion import _DISCRIMINATOR_STOP_WORDS
 
 logger = logging.getLogger(__name__)
 
@@ -265,14 +266,41 @@ def _word_in(folded_paragraph: str, term: str, *, prefix: bool = False) -> bool:
 def _keep_highlightable_terms(query: str) -> List[Tuple[str, bool]]:
     """Query terms long enough to be worth matching, with their prefix flag.
 
-    Shared by paragraph anchoring and highlighting so the paragraph a
-    snippet starts on is always one the highlighter can mark up.
+    The highlighting set, and the base the anchoring set is drawn from by
+    :func:`_keep_anchorable_terms` — anchoring narrows this further, so the
+    paragraph a snippet starts on is still always one the highlighter can
+    mark up.
     """
     return [
         (term, is_prefix)
         for term, is_prefix in _split_query_terms_typed(query)
         if len(term) >= (_PREFIX_TERM_MIN_LEN if is_prefix else 3)
     ]
+
+
+def _keep_anchorable_terms(
+    typed: List[Tuple[str, bool]],
+) -> List[Tuple[str, bool]]:
+    """The subset of ``typed`` specific enough to anchor a snippet on.
+
+    Length alone is a poor filter for anchoring: ``what``, ``does`` and
+    ``about`` all clear the three-character bar, so a natural-language
+    question anchored on whichever paragraph first said "what" — for
+    ``what causes migraines`` that was an article's lead sentence about
+    "becoming what one is", 11k chars above the paragraph that actually
+    discussed migraines. Highlighting keeps the full term set; only the
+    anchor decision drops function words.
+
+    Falls back to ``typed`` when filtering empties the list, so an
+    all-function-word query keeps its previous behavior instead of
+    silently anchoring every result on the lead.
+    """
+    content_terms = [
+        (term, is_prefix)
+        for term, is_prefix in typed
+        if term not in _DISCRIMINATOR_STOP_WORDS
+    ]
+    return content_terms or typed
 
 
 # A complete ``[text](href "title")`` markdown link, matched as ONE unit.
@@ -1724,18 +1752,29 @@ class ContentProcessor:
 
         typed = _keep_highlightable_terms(query) if query else []
         terms = [t for t, _ in typed]
+        # Function words are dropped from the anchor decision only; ``typed``
+        # still drives highlighting further down.
+        anchor_typed = _keep_anchorable_terms(typed) if typed else []
+        anchor_terms = [t for t, _ in anchor_typed]
 
         # Site furniture (share-widget boilerplate, in-page navigation
         # lists) is neither a useful anchor nor useful fill: on MedlinePlus
         # the paragraph under every H1 was the no-JavaScript sentence, so
         # an H1 match produced a snippet with no article text at all. A
         # paragraph the query actually hits is kept regardless — see
-        # ``_drop_boilerplate_paragraphs``.
+        # ``_drop_boilerplate_paragraphs``. The exemption is keyed on the
+        # anchorable terms because that is what it exists for: keeping the
+        # paragraph the anchor will land on. Keyed on the full set, a nav
+        # block survived for containing "what" and could never be chosen.
         paragraphs = _drop_boilerplate_paragraphs(
             content.split("\n\n"),
             is_query_hit=(
-                (lambda p: any(_word_in(_fold(p), t, prefix=pfx) for t, pfx in typed))
-                if typed
+                (
+                    lambda p: any(
+                        _word_in(_fold(p), t, prefix=pfx) for t, pfx in anchor_typed
+                    )
+                )
+                if anchor_typed
                 else None
             ),
         )
@@ -1748,7 +1787,7 @@ class ContentProcessor:
                 # Phase A #1 spec promise).
                 whole_word_idx: Optional[int] = None
                 for i, p in enumerate(folded_paragraphs):
-                    if any(_word_in(p, t, prefix=pfx) for t, pfx in typed):
+                    if any(_word_in(p, t, prefix=pfx) for t, pfx in anchor_typed):
                         whole_word_idx = i
                         break
                 if whole_word_idx is not None:
@@ -1764,7 +1803,7 @@ class ContentProcessor:
                     # (-ic, -is, -ise, -ate). Falls through to the
                     # legacy lead-text behavior (start_idx=0) when no
                     # paragraph carries even a stem-prefix.
-                    stems = [t[: max(4, (len(t) * 2 + 2) // 3)] for t in terms]
+                    stems = [t[: max(4, (len(t) * 2 + 2) // 3)] for t in anchor_terms]
                     for i, p in enumerate(folded_paragraphs):
                         if any(stem in p for stem in stems):
                             start_idx = i
@@ -2064,7 +2103,13 @@ class ContentProcessor:
             elif mime_type.startswith("text/"):
                 return raw_content.strip()
             elif mime_type.startswith("image/"):
-                return "(Image content - Cannot display directly)"
+                # Names the single-entry call rather than a bare
+                # ``binary=True``: batch mode rejects that combination, so
+                # the shorter phrasing sent batch callers to an error.
+                return (
+                    "(Image content - Cannot display directly; fetch it with "
+                    "zim_get(entry_path=..., binary=True))"
+                )
             else:
                 return f"(Unsupported content type: {mime_type})"
 

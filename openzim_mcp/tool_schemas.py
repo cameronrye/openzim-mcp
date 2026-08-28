@@ -727,6 +727,7 @@ class HealthStatus(TypedDict, total=False):
     timestamp: str
     status: str
     server_name: str
+    version: str
     uptime_info: UptimeInfo
     configuration: HealthConfiguration
     cache_performance: dict[str, Any]

@@ -56,6 +56,7 @@ from typing import Any, Callable
 
 import pydantic_core
 from mcp.server.mcpserver import Context, MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
 from mcp.shared.exceptions import MCPError
 from mcp_types import (
     INTERNAL_ERROR,
@@ -174,6 +175,72 @@ def _validation_error_in_chain(exc: BaseException) -> ValidationError | None:
 def _invalid_params(message: str, **data: Any) -> MCPError:
     """An ``-32602`` naming what the caller got wrong, with the same facts in ``data``."""
     return MCPError(code=INVALID_PARAMS, message=message, data=data)
+
+
+def _argument_field(loc: tuple[Any, ...], declared: set[str]) -> str:
+    """The argument name a pydantic error location points at.
+
+    Only the caller's own wire name is useful: they cannot act on anything
+    else. List/dict positions inside a value (``("filters", 0)``) and union
+    member tags both get dropped — a ``str | int`` argument reports one
+    error per member with locs ``("compact_budget", "str")`` and
+    ``("compact_budget", "int")``, so joining every part named
+    ``compact_budget.str``, an argument that does not exist.
+
+    ``declared`` is the tool's published property set, which is
+    alias-correct: ``func_metadata`` renames a field shadowing a
+    ``BaseModel`` attribute to ``field_<name>`` and keeps the wire name only
+    as the alias.
+    """
+    for part in loc:
+        if isinstance(part, str) and part in declared:
+            return part
+    parts = [str(part) for part in loc if not isinstance(part, int)]
+    return ".".join(parts) if parts else "<arguments>"
+
+
+def _argument_validation_error(
+    name: str, exc: ValidationError, declared: set[str]
+) -> dict:
+    """The ``invalid_argument`` envelope for a schema-level rejection.
+
+    ``_unknown_argument_error`` above catches argument *names* the tool does
+    not declare, but a declared argument carrying an illegal value never
+    reaches it: pydantic raises inside the SDK's dispatch and the SDK
+    stringifies the report into a bare text block ("1 validation error for
+    zim_searchArguments … errors.pydantic.dev/…"). That is the same leak
+    D04 removed from ``zim_browse``, and it defeats the contract
+    ``instructions.py`` advertises — a client parsing the body as JSON gets
+    a parse failure instead of a correction.
+
+    pydantic's own ``msg`` is kept verbatim: for the enum case it already
+    spells out the legal values ("Input should be 'fulltext', 'title' or
+    'suggest'"), which is exactly what the caller needs to retry.
+    """
+    fields: list[str] = []
+    details: list[str] = []
+    seen_details: set[str] = set()
+    for error in exc.errors():
+        field = _argument_field(error.get("loc", ()), declared)
+        if field not in fields:
+            fields.append(field)
+        # One line per distinct complaint: collapsing union members onto the
+        # wire name makes several errors describe the same argument, and a
+        # list-typed argument reports one error per bad element.
+        detail = f"{field}: {error.get('msg', 'invalid value')}"
+        if detail not in seen_details:
+            seen_details.add(detail)
+            details.append(detail)
+
+    return dict(
+        tool_error(
+            operation="invalid_argument",
+            message=(
+                f"`{name}` received invalid argument(s): " + "; ".join(details) + "."
+            ),
+            extras={"invalid_arguments": fields},
+        )
+    )
 
 
 def error_result(payload: dict) -> CallToolResult:
@@ -500,9 +567,24 @@ class EnvelopeAwareMCPServer(MCPServer):
         # the success path is then converted by the same
         # ``fn_metadata.convert_result`` the base class would have used, which
         # keeps that path byte-identical to a stock server.
-        result = await self._tool_manager.call_tool(
-            name, arguments, context, convert_result=False
-        )
+        try:
+            result = await self._tool_manager.call_tool(
+                name, arguments, context, convert_result=False
+            )
+        except ToolError as exc:
+            # A declared argument carrying an illegal value (bad enum member,
+            # wrong type, missing required) fails inside pydantic, which the
+            # SDK stringifies into a bare text block. Convert it to the same
+            # envelope every other rejected argument gets. An unknown *tool*
+            # name also arrives as ``ToolError`` but carries no
+            # ``ValidationError``, so it keeps raising as before.
+            validation_error = _validation_error_in_chain(exc)
+            if validation_error is None:
+                raise
+            declared = set((tool.parameters.get("properties") or {}) if tool else {})
+            return error_result(
+                _argument_validation_error(name, validation_error, declared)
+            )
         if is_tool_error_envelope(result):
             return error_result(result)
 
