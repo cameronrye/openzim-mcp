@@ -266,7 +266,7 @@ Further nested groups exist for specialized tuning — `search.*` (e.g. `OPENZIM
 
 ## Profiles
 
-These are the canonical deployment profiles; [Performance optimization](/openzim-mcp/docs/performance-optimization/) explains *which* knob to move for a given symptom and links back here for the recipes. Every value below is an environment variable, so each block works unchanged in a shell, a systemd `EnvironmentFile`, or a container's `environment:`. Comments name the code default so you can see what each line is actually changing.
+These are the canonical deployment profiles; [Performance optimization](/openzim-mcp/docs/performance-optimization/) explains *which* knob to move for a given symptom and links back here for the recipes. Every setting is an environment variable, so the same names and values carry into a systemd `EnvironmentFile` or a container's `environment:` block — drop the `export` keyword there. Each comment names the code default, so you can see what the line is actually changing.
 
 ### Local development (stdio)
 
@@ -279,7 +279,7 @@ openzim-mcp ~/zim-files
 
 ### Single-user desktop (stdio, e.g. Claude Desktop)
 
-The defaults are already sized for this — one client, one archive set, a cache that does not need to outlive the session. Change something only if you have a reason:
+The defaults already fit this shape — one client, one archive set. Reach for these only if you keep a lot of articles hot and want the cache to survive a restart:
 
 ```bash
 export OPENZIM_MCP_CACHE__MAX_SIZE=500                # default 100

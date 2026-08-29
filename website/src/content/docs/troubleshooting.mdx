@@ -65,7 +65,7 @@ It prints `openzim-mcp` followed by the installed version. A version older than 
 "list available ZIM files"
 ```
 
-This is the one server-level operation `zim_query` dispatches without needing an archive, and it exercises directory resolution, permissions and archive readability in a single call. The response names each archive with its path, size, modification time and a `readable` flag; an archive missing from it is an allowed-directories or file-permission problem, not a server fault.
+This is the only intent that reports on the *server* rather than reading an archive, and it exercises directory resolution, permissions and archive readability in a single call. The response names each archive with its path, size, modification time and a `readable` flag; an archive missing from it is an allowed-directories or file-permission problem, not a server fault.
 
 Do **not** ask "check the server health and configuration" on a default install. There is no health intent in simple mode, so the phrase is parsed as a *topic* and searched inside the archive — what comes back is `No search results found for "check the server health and configuration"`, which reads like a broken server and is not one.
 
