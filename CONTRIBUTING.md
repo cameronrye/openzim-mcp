@@ -203,13 +203,19 @@ This project uses [Conventional Commits](https://www.conventionalcommits.org/) f
 - **`feat:`** - New features (triggers minor version bump)
 - **`fix:`** - Bug fixes (triggers patch version bump)
 - **`perf:`** - Performance improvements (triggers patch version bump)
-- **`docs:`** - Documentation changes (no version bump)
+- **`deps:`** - Dependency updates (triggers patch version bump)
+- **`docs:`** - Documentation changes (triggers patch version bump)
+- **`refactor:`** - Code refactoring (triggers patch version bump)
+- **`revert:`** - Reverts (triggers patch version bump)
 - **`style:`** - Code style changes (no version bump)
-- **`refactor:`** - Code refactoring (no version bump)
 - **`test:`** - Test changes (no version bump)
 - **`chore:`** - Maintenance tasks (no version bump)
 - **`ci:`** - CI/CD changes (no version bump)
 - **`build:`** - Build system changes (no version bump)
+
+The rule is the changelog config, not the type name: any type with a **visible**
+section in `release-please-config.json` cuts a release on its own. Only the
+`hidden: true` types (`style`, `test`, `chore`, `ci`, `build`) are free.
 
 #### Breaking Changes
 
@@ -298,12 +304,16 @@ Test files are automatically organized by category and priority level. Set `ZIM_
 
 ### Test Markers
 
-The project registers two custom markers (see `tests/conftest.py`):
+The project registers three custom markers:
 
 ```python
-@pytest.mark.live    # Spawns a real server subprocess (deselected by default via addopts)
-@pytest.mark.docker  # Additionally requires a running Docker daemon
+@pytest.mark.live               # Spawns a real server subprocess (deselected by default via addopts)
+@pytest.mark.docker             # Additionally requires a running Docker daemon
+@pytest.mark.requires_reranker  # Needs the [reranker] extra; auto-skipped when fastembed is missing
 ```
+
+The first two are registered in `tests/conftest.py`, the third in
+`tests/ml/conftest.py`.
 
 ### Running Specific Tests
 
@@ -451,7 +461,7 @@ We use labels to categorize issues:
 
 ### Documentation
 
-- [README.md](README.md) - Project overview, configuration, and API reference
+- [README.md](README.md) - Project overview and install/quick-start (the configuration and API reference live on the [docs site](https://cameronrye.github.io/openzim-mcp/docs/))
 - [CHANGELOG.md](CHANGELOG.md) - Release history
 - [SECURITY.md](SECURITY.md) - Security policy and reporting
 - [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) - Community standards
@@ -499,11 +509,15 @@ Commit message prefixes map to semver bumps and `CHANGELOG.md` sections:
 | `feat:` | Added | minor |
 | `fix:` | Fixed | patch |
 | `perf:` | Performance | patch |
-| `deps:` | Dependencies | none |
-| `docs:` | Documentation | none |
-| `refactor:` | Refactored | none |
-| `revert:` | Reverted | none |
-| `chore:` / `ci:` / `build:` / `test:` / `style:` | hidden (per-type sections) | none |
+| `deps:` | Dependencies | patch |
+| `docs:` | Documentation | patch |
+| `refactor:` | Refactored | patch |
+| `revert:` | Reverted | patch |
+| `chore:` / `ci:` / `build:` / `test:` / `style:` | hidden (no section) | none |
+
+Every type above with a visible section cuts a release by itself. This is not
+theoretical: **v3.2.2 was cut from a single `docs:` commit** and **v3.1.2 from a
+single `deps:` commit**, with no `feat`/`fix`/`perf` in either range.
 
 Breaking changes: append `!` to the type (`feat!:`) or include a `BREAKING CHANGE:` footer. Either form triggers a major bump.
 
@@ -513,7 +527,7 @@ Breaking changes: append `!` to the type (`feat!:`) or include a `BREAKING CHANG
 2. `release-please.yml` opens a release PR (updates `CHANGELOG.md`, `pyproject.toml`, `.release-please-manifest.json`, `website/public/llms.txt`, `server.json`, `packaging/mcpb/manifest.json`, and the `x-release-please-version`-annotated docs; a follow-up `sync-uv-lock` job keeps `uv.lock` in step). `openzim_mcp/__init__.py` needs no stamp — it derives `__version__` via `importlib.metadata`.
 3. Review and merge the release PR.
 4. `release-please` pushes the `v<X.Y.Z>` tag and creates the GitHub Release. `release-please-config.json` sets `"draft": false`, so the release is **published immediately** — briefly with no assets attached.
-5. `release-please.yml`'s `trigger-release` job dispatches `release.yml`: full `make check` gate → wheel + sdist + `.mcpb` bundle build → PyPI upload (Trusted Publishing, no token) → assets uploaded to the existing release (notes come from `CHANGELOG.md`).
+5. `release-please.yml`'s `trigger-release` job dispatches `release.yml`: full `make check` gate → wheel + sdist + `.mcpb` bundle build → PyPI upload (Trusted Publishing, no token) → assets uploaded to the existing release (notes come from `CHANGELOG.md`). `release.yml` also runs a `publish-registry` job that publishes to the official MCP Registry via OIDC; it is deliberately *not* a dependency of `create-release`, so a registry hiccup cannot hold up the GitHub release.
 6. `release-please.yml`'s `trigger-docker-publish` job dispatches `docker-publish.yml`: multi-arch build → push to `ghcr.io/cameronrye/openzim-mcp:<X.Y.Z>` and `:latest`.
 
 Both workflows also declare a `push: tags: v*` trigger, but that trigger never fires for an automated release: release-please pushes the tag with `GITHUB_TOKEN`, and GitHub deliberately does not start workflow runs from `GITHUB_TOKEN`-authored events. The explicit `workflow_dispatch` calls in steps 5 and 6 are what actually start them — which is why every automated release run shows up as `workflow_dispatch`. The `push: tags` trigger exists for the manual path below.
@@ -533,7 +547,8 @@ git push origin v<X.Y.Z>
 
 ### Troubleshooting
 
-- **No release PR after merging commits**: check commit messages are conventional. Non-`feat`/`fix`/`perf`/`deps` commits don't bump versions on their own.
+- **No release PR after merging commits**: check commit messages are conventional. Only the `hidden: true` types (`chore`, `ci`, `build`, `test`, `style`) fail to bump a version on their own.
+- **`test_no_unannotated_current_version_claims` fails after a release**: a doc states the new version without an `x-release-please-version` marker, or `_HISTORICAL_VERSIONS` in `tests/test_mcpb_distribution.py` has not been given the *previous* version yet. This gate runs after the tag is pushed, so it fails on `main` rather than blocking the release PR — add the previous version to that set as part of the follow-up.
 - **Version sync failure**: `pyproject.toml`, `.release-please-manifest.json`, `server.json` (both version fields), and `packaging/mcpb/manifest.json` must agree on the version (`openzim_mcp/__init__.py` is intentionally excluded — it reads its version via `importlib.metadata`). If they drift (rare; usually a manual edit), align them in a follow-up PR.
 - **PyPI upload failure with "already exists"**: harmless; the workflow uses `skip-existing: true`. A true conflict (same version, different artifact) requires bumping the version.
 

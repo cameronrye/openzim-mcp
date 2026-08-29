@@ -141,7 +141,10 @@ mcp-publisher validate            # checks ./server.json against the schema
 mcp-publisher login github        # device-code OAuth as cameronrye;
                                   # authorizes the io.github.cameronrye/* namespace
 mcp-publisher publish             # defaults to ./server.json
-mcp-publisher status
+
+# Do NOT run `mcp-publisher status` as a check. It MUTATES a version's
+# lifecycle state and exits 1 without `--status`, which is why release.yml
+# dropped it (a test now forbids re-adding it). Read the entry back instead:
 
 # Confirm:
 curl "https://registry.modelcontextprotocol.io/v0/servers?search=openzim-mcp"
