@@ -67,7 +67,7 @@ export OPENZIM_MCP_CORS_ORIGINS='["https://app.example"]'  # JSON list; "*" reje
 - `transport=http` + non-loopback host + no `auth_token` → `OpenZimMcpConfigurationError: HTTP transport bound to {host} requires authentication.`
 - `transport=sse` + non-loopback host → `OpenZimMcpConfigurationError: SSE transport bound to {host} is not allowed.`
 
-Exception: setting `OPENZIM_MCP_INSECURE_DISABLE_AUTH=1` lets `http` bind a non-loopback host without a token — intended for closed networks (Docker bridge, Tailscale-only, isolated LAN). The server logs a WARNING naming the bound host; the SSE refusal has no escape hatch. Behind a Host-preserving reverse proxy, also set `OPENZIM_MCP_ALLOWED_HOSTS` to the public hostname(s) — only loopback Host values are accepted by default (DNS-rebinding protection).
+Exception: setting `OPENZIM_MCP_INSECURE_DISABLE_AUTH=1` lets `http` bind a non-loopback host without a token — intended for closed networks (Docker bridge, Tailscale-only, isolated LAN). The server logs a WARNING naming the bound host; the SSE refusal has no escape hatch. Behind a Host-preserving reverse proxy, also set `OPENZIM_MCP_ALLOWED_HOSTS` to the public hostname(s). On a loopback bind only loopback `Host` values are accepted; on a **bind-all** host (`0.0.0.0`, `::`) with an empty allow-list the server turns DNS-rebinding `Host` validation **off** and warns, since any allow-list would 421 every direct-IP client — setting `OPENZIM_MCP_ALLOWED_HOSTS` turns it back on.
 
 For full HTTP deployment guidance see [HTTP and Docker Deployment](/openzim-mcp/docs/http-and-docker-deployment/).
 
@@ -208,7 +208,7 @@ Sorted alphabetically by field name within each grouping.
 
 | Field | Env var | Default | Notes |
 |-------|---------|---------|-------|
-| `allowed_hosts` | `OPENZIM_MCP_ALLOWED_HOSTS` | `[]` | JSON list of extra accepted `Host` header values (HTTP); only loopback accepted by default — set behind Host-preserving reverse proxies |
+| `allowed_hosts` | `OPENZIM_MCP_ALLOWED_HOSTS` | `[]` | JSON list of extra accepted `Host` header values (HTTP). On a loopback bind only loopback is accepted; leaving this empty on a bind-all host (`0.0.0.0`, `::`) **disables** `Host` validation with a warning. Set it behind Host-preserving reverse proxies. An entry of exactly `*` is rejected at startup; a `:*` port suffix is allowed |
 | `auth_token` | `OPENZIM_MCP_AUTH_TOKEN` | unset | `SecretStr`, never logged, env-only |
 | `cache.enabled` | `OPENZIM_MCP_CACHE__ENABLED` | `true` | bool |
 | `cache.max_bytes` | `OPENZIM_MCP_CACHE__MAX_BYTES` | 64 MiB | approximate byte cap on cached values; `0` disables |

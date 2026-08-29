@@ -404,7 +404,7 @@ Include:
 
 ### Before Requesting
 
-1. **Check existing issues** and discussions
+1. **Check existing issues**
 2. **Consider scope**: Does it fit the project goals?
 3. **Think about implementation**: How might it work?
 
@@ -471,8 +471,7 @@ Please read and follow our [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ### Getting Help
 
-- **GitHub Issues**: For bugs and feature requests
-- **GitHub Discussions**: For questions and general discussion
+- **GitHub Issues**: For bugs, feature requests, and questions
 - **Documentation**: Check existing docs first
 
 ### Recognition

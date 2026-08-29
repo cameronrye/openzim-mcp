@@ -5,7 +5,7 @@ group: Guides
 sidebar_order: 5
 ---
 
-OpenZIM MCP's security model and operator-level hardening. This page covers the in-process protections (path validation, redaction, input sanitization, prompt hardening, rate limiting) and the network-layer protections (bearer-token auth, CORS, safe-default startup, container hardening) that ship in the v2 release.
+OpenZIM MCP's security model and operator-level hardening. This page covers the in-process protections (path validation, redaction, input sanitization, prompt hardening, rate limiting) and the network-layer protections (bearer-token auth, CORS, safe-default startup, container hardening) as they ship in the current release.
 
 > **Notation:** examples on this page use JSON-RPC tool-call framing (`{"name": "...", "arguments": {...}}`) and shell snippets. Tool names referenced match the 8-tool advanced surface (`zim_query`, `zim_search`, `zim_get`, `zim_get_section`, `zim_browse`, `zim_metadata`, `zim_links`, `zim_health`).
 
@@ -21,13 +21,13 @@ OpenZIM MCP serves offline knowledge archives to MCP clients. The relevant threa
 | TOCTOU symlink swap between path validation and open | `validate_zim_file` re-resolves and re-checks containment after open |
 | Information disclosure via error messages | Paths/PIDs in error responses are redacted on all transports; `zim_health` diagnostics redact paths/PIDs over the HTTP/SSE transports and report them in full on the local stdio transport |
 | Unauthenticated network access | HTTP transport requires bearer token unless bound to loopback; SSE transport is loopback-only |
-| Cross-origin browser abuse | CORS allow-list; wildcard `*` rejected at startup; `OPTIONS` not exempt from auth |
+| Cross-origin browser abuse | CORS allow-list; an entry equal to `*` rejected at startup; no blanket `OPTIONS` exemption — a bare `OPTIONS /mcp` still gets a 401. A genuine preflight (carrying `Origin` and `Access-Control-Request-Method`) from an **allow-listed** origin is answered 200 by the outer CORS layer before auth runs, because browsers never attach `Authorization` to a preflight. Neither path mints a session |
 | Cache poisoning via transient libzim errors | Failed reads do not write to cache |
 | Prompt injection via user args | Control characters stripped, backticks stripped (template delimiter), length capped before interpolation |
 | Resource exhaustion | Token-bucket rate limiter with per-operation costs, atomic acquire, per-client buckets with LRU eviction |
 | Self-referential redirects causing infinite loops | Bounded redirect-chain follow (`MAX_REDIRECT_DEPTH = 10`), self-referential refs rejected |
-| Unannounced outbound egress from a "retrieval only" server | The base install makes no outbound connections. The optional `[reranker]` extra loads its cross-encoder from the local model cache only (`ml.reranker.allow_model_download` defaults to `false`); fetching it requires an explicit `openzim-mcp download-models` run |
-| DNS rebinding against a local HTTP server | `Host`-header validation — only loopback hosts accepted by default; extend via `OPENZIM_MCP_ALLOWED_HOSTS` behind a Host-preserving reverse proxy |
+| Unannounced outbound egress from a "retrieval only" server | The base install makes no outbound connections. The optional `[reranker]` extra loads its cross-encoder from the local model cache only, because `ml.reranker.allow_model_download` defaults to `false`. There are two ways to opt in: pre-stage with `openzim-mcp download-models`, or set `OPENZIM_MCP_ML__RERANKER__ALLOW_MODEL_DOWNLOAD=true`, which accepts ~1.1 GB of egress on the first rerank-eligible query |
+| DNS rebinding against a local HTTP server | `Host`-header validation, when it is active. On a loopback bind only loopback hosts are accepted. On a **bind-all** host (`0.0.0.0`, `::`) with no `OPENZIM_MCP_ALLOWED_HOSTS`, the server **disables** `Host` validation and logs a warning — otherwise every direct-IP client would get a 421. Set `OPENZIM_MCP_ALLOWED_HOSTS` to your reachable hostname(s) to turn it back on |
 
 ## Path validation
 
@@ -43,7 +43,7 @@ There are no env vars to relax this — path validation is unconditional. The se
 Every operator-visible string is run through `redact_paths_in_message` / `sanitize_path_for_error` before it leaves the server:
 
 - **MCP error responses** — rejected traversals previously leaked the canonical allowed-directory layout; now they appear as `...filename.zim`.
-- **`zim_health` health/configuration views** — `process_id` / `server_pid` and `allowed_directories` are redacted (`[REDACTED]` / `[...basename]`) over the HTTP/SSE transports, where the client may be remote. Over the local **stdio** transport they report the real PID and full paths: the client already shares the filesystem, and `loaded_archives[].path` (a functional argument clients pass back to other tools) is unredacted there regardless — so masking only the directory list created an inconsistency without protecting anything. Warning strings about inaccessible directories always use the redacted form.
+- **`zim_health` health/configuration views** — `process_id` / `server_pid` and `allowed_directories` are redacted (`[REDACTED]` / `<redacted>/<basename>`) over the HTTP/SSE transports, where the client may be remote. Over the local **stdio** transport they report the real PID and full paths: the client already shares the filesystem, and `loaded_archives[].path` (a functional argument clients pass back to other tools) is unredacted there regardless — so masking only the directory list created an inconsistency without protecting anything. Warning strings about inaccessible directories always use the redacted form.
 
 The redaction regex (`_ABS_PATH_RE`) handles cross-platform separators (`/` and `\`), wrapped/quoted forms (`(/opt/foo)`, `"/opt/bar"`, `file=/opt/foo`), and URL-decoded forms (`%2Fopt%2Fzims`). Operators can still see unredacted paths in server logs — only the wire-visible diagnostics are redacted.
 
@@ -51,23 +51,22 @@ This also means error text is **safe to copy into bug reports**.
 
 ## Input sanitization
 
-`sanitize_input(value, max_length, allow_empty=False)` applies to every string input:
+`sanitize_input(input_string, max_length=1000, allow_empty=False)` strips ASCII control characters and enforces a length cap. It deliberately **keeps** tab, LF and CR — the C0 characters it removes are `\x00-\x08`, `\x0b`, `\x0c`, `\x0e-\x1f` and `\x7f` — because it also cleans legitimately multi-line query text.
 
-- Strips ASCII control characters (C0 range, including `\x00`/`\n`/`\r`/`\t`).
-- Caps length per input class:
+It has exactly one call site: the `{path}` component of the `zim://{name}/entry/{path}` resource template, capped at `INPUT_LIMIT_ENTRY_PATH` (500 chars). The other `INPUT_LIMIT_*` constants in `constants.py` are defined but currently unused; do not treat them as enforced limits.
 
-| Class | Limit |
-|-------|-------|
-| `INPUT_LIMIT_FILE_PATH` | 1000 chars |
-| `INPUT_LIMIT_QUERY` | 500 chars |
-| `INPUT_LIMIT_ENTRY_PATH` | 500 chars |
-| `INPUT_LIMIT_NAMESPACE` | 100 chars |
-| `INPUT_LIMIT_CONTENT_TYPE` | 100 chars |
-| `INPUT_LIMIT_PARTIAL_QUERY` | 200 chars |
+The caps that tool arguments actually hit are:
 
-Numeric ranges (limit/offset/cursor) are validated per tool — bounds documented in the [API reference](/openzim-mcp/docs/api-reference/). Content max length must be ≥100 chars.
+| Input | Enforced cap | Where |
+|-------|--------------|-------|
+| Any filesystem path | 4096 chars | `security.MAX_PATH_LENGTH`, checked in `validate_path` |
+| `query` on `zim_query` and `zim_search` | 4096 chars | `constants.MAX_QUERY_LENGTH` |
+| `{path}` in the entry resource URI | 500 chars | `INPUT_LIMIT_ENTRY_PATH` |
+| Subscription URI length | 2048 chars | `subscriptions.MAX_SUBSCRIPTION_URI_LENGTH` |
 
-`name_filter` on `zim_health` is sanitized; cursor strings on `zim_search` are validated against the encoded query they were issued for (mismatch is rejected, not silently honored).
+Numeric ranges (limit/offset/cursor) are validated per tool — bounds documented in the [API reference](/openzim-mcp/docs/api-reference/). A `max_content_length` passed to a tool call only has to be ≥1; the ≥100 floor applies to the `content.max_content_length` **config field**, not to the per-call argument.
+
+Two things this section used to claim that are not true, and are worth knowing if you built on them: `zim_health` takes a single parameter, `zim_file_path` — there is no `name_filter` argument to sanitize, and the internal `name_filter` used by the archive layer is never passed through `sanitize_input`. And `zim_search` does not validate cursors against a query: it **rejects every non-empty cursor** with `invalid_combination` and never issues one. Cursor-context validation belongs to `zim_browse` and `zim_links`, which raise `cursor_context_mismatch` when a cursor is replayed against different arguments.
 
 ## HTTP transport security
 
@@ -187,13 +186,14 @@ Real defaults (verify against [openzim_mcp/defaults.py](https://github.com/camer
 | Limit | Default | Where set |
 |-------|---------|-----------|
 | Max content length per entry | 100,000 chars | `ContentDefaults.MAX_CONTENT_LENGTH` |
-| Max binary entry size | 10 MB (default) | `ContentDefaults.MAX_BINARY_SIZE` |
+| Max binary entry size | 10,000,000 bytes (10 MB decimal, not 10 MiB) | `ContentDefaults.MAX_BINARY_SIZE` |
 | Max batch size (`zim_get(entry_paths=[...])`) | 50 entries | `BatchDefaults.MAX_SIZE` |
 | Max redirect chain depth | 10 | `ContentDefaults.MAX_REDIRECT_DEPTH` |
 | Max namespace sample size | 1000 entries | `NamespaceSamplingDefaults.MAX_SAMPLE_SIZE` |
 | Rate limit burst cap | 1000 | `RateLimitConfig.burst_size.le` |
-| Path input cap | 1000 chars | `INPUT_LIMITS.FILE_PATH` |
-| Query input cap | 500 chars | `INPUT_LIMITS.QUERY` |
+| Path input cap | 4096 chars | `security.MAX_PATH_LENGTH` |
+| Query input cap | 4096 chars | `constants.MAX_QUERY_LENGTH` |
+| Entry-path cap (resource URI only) | 500 chars | `INPUT_LIMIT_ENTRY_PATH` |
 | Concurrent `subscriptions/listen` streams | 1024 | SDK `ListenHandler.max_subscriptions` |
 | Buffered events per listen stream | 1024 | SDK `ListenHandler.max_buffered_events` |
 | Subscription URIs per listen stream | 256 | `subscriptions.MAX_SUBSCRIPTION_URIS` |
@@ -203,7 +203,7 @@ Real defaults (verify against [openzim_mcp/defaults.py](https://github.com/camer
 
 **Sensitive issues:** [GitHub Private Vulnerability Reporting](https://github.com/cameronrye/openzim-mcp/security/advisories/new). Encrypted communication, attachments, and coordinated disclosure are all built in — no email or PGP channel.
 
-**Non-sensitive hardening suggestions:** open a GitHub issue using the "Security Vulnerability Report" template, or start a Discussions thread.
+**Non-sensitive hardening suggestions:** open a GitHub issue using the "Security Vulnerability Report" template.
 
 Response timeline (per [SECURITY.md](https://github.com/cameronrye/openzim-mcp/blob/main/SECURITY.md)):
 
@@ -217,17 +217,16 @@ Response timeline (per [SECURITY.md](https://github.com/cameronrye/openzim-mcp/b
 
 ## Security review highlights
 
-These are the load-bearing protections that distinguish v2's posture:
+These are the load-bearing protections in the current posture:
 
 - Path/PID redaction in error and diagnostics responses (regex handles wrapped/quoted/URL-encoded paths).
-- `OPTIONS /mcp` locked behind auth (closed preflight-bypass attack surface).
+- Bare `OPTIONS /mcp` locked behind auth, so non-browser callers cannot probe the endpoint tokenlessly (only a genuine preflight from an allow-listed origin is answered ahead of auth).
 - Cache poisoning on transient libzim errors fixed (failed reads no longer write to cache).
 - Redirects resolved before rendering with cycle detection.
 - Heading slugs preserve Unicode (Arabic, Chinese, Cyrillic, Japanese).
 - Rate-limiting acquire made atomic (no transient over-consumption).
 - `zim_get(entry_paths=[...])` charges per-entry to prevent batch bypass.
 - `zim_links(direction="related", ...)` rejects self-referential refs.
-- `name_filter` sanitized.
 - CORS whitespace-wildcard rejection.
 - Symlink-tightened archive scan (TOCTOU close).
 - Per-entry path sanitization in `zim_get(entry_paths=[...])`.

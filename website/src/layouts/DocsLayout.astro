@@ -39,6 +39,9 @@ const breadcrumbLd = {
     <meta name="color-scheme" content="dark light">
     <link rel="icon" type="image/svg+xml" href={`${base}/assets/favicon.svg`}>
     <link rel="canonical" href={canonicalUrl}>
+    <!-- robots.txt is inert on a Pages project site (crawlers read the origin
+         root, which this repo does not own), so the sitemap is advertised here. -->
+    <link rel="sitemap" type="application/xml" href={`${base}/sitemap-index.xml`}>
 
     <!-- Open Graph -->
     <meta property="og:type" content="article">

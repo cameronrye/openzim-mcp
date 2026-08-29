@@ -13,9 +13,10 @@ body:
         **For sensitive security vulnerabilities, please DO NOT use this public issue template.**
 
         Instead, please report sensitive security issues privately by:
-        1. Emailing the maintainers directly (see SECURITY.md)
-        2. Using GitHub's private vulnerability reporting feature
-        3. Contacting us through other secure channels listed in SECURITY.md
+        1. Using [GitHub Private Vulnerability Reporting](https://github.com/cameronrye/openzim-mcp/security/advisories/new) — the preferred channel
+        2. Emailing the maintainer at c@meron.io if you cannot use GitHub advisories
+
+        Both routes are documented in SECURITY.md.
 
         **Only use this template for:**
         - Non-sensitive security improvements
