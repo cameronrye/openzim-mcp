@@ -262,7 +262,7 @@ The `/readyz` probe has its own dedicated single-slot pool, which is not
 configurable — sharing the I/O pool let repeated probes against a wedged mount
 burn workers that every MCP tool call also needs.
 
-Further nested groups exist for specialized tuning — `search.*` (e.g. `OPENZIM_MCP_SEARCH__SEARCH_ALL_TOTAL_TIMEOUT_SECONDS`), `query_rewrite.*`, `synthesize.*`, `meta.*`, and `ml.reranker.*` (documented in [docs/extras-reranker.md](https://github.com/cameronrye/openzim-mcp/blob/main/docs/extras-reranker.md)). Their fields and defaults live in [`openzim_mcp/config.py`](https://github.com/cameronrye/openzim-mcp/blob/main/openzim_mcp/config.py).
+Further nested groups exist for specialized tuning — `search.*` (e.g. `OPENZIM_MCP_SEARCH__SEARCH_ALL_TOTAL_TIMEOUT_SECONDS`), `query_rewrite.*`, `synthesize.*`, `meta.*`, and `ml.reranker.*` (documented on [Search reranking](/openzim-mcp/docs/search-reranking/)). Their fields and defaults live in [`openzim_mcp/config.py`](https://github.com/cameronrye/openzim-mcp/blob/main/openzim_mcp/config.py).
 
 ## Profiles
 

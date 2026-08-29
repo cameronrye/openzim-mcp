@@ -339,3 +339,121 @@ def test_every_doc_group_is_renderable() -> None:
         elif match.group(1).strip().strip("\"'") not in nav_groups:
             bad.append(f"{page.name}: group {match.group(1).strip()!r}")
     assert not bad, f"pages with a group the sidebar cannot render: {bad}"
+
+
+# --------------------------------------------------------------------------
+# 5. The social-preview image.
+# --------------------------------------------------------------------------
+
+_OG_SVG = REPO / "website/public/assets/og-image.svg"
+_OG_PNG = REPO / "website/public/assets/og-image.png"
+
+
+def test_social_preview_image_is_a_raster() -> None:
+    """Scrapers do not render SVG, so the og:image must be the PNG.
+
+    Facebook, X, LinkedIn, Slack and Discord all decline SVG og:images —
+    pointing at one means every shared link previews with no image at all.
+    """
+    assert _OG_PNG.is_file(), "website/public/assets/og-image.png is missing"
+    header = _OG_PNG.read_bytes()[:8]
+    assert header == b"\x89PNG\r\n\x1a\n", "og-image.png is not a PNG"
+
+    referenced: list[str] = []
+    for rel in (
+        "website/src/layouts/DocsLayout.astro",
+        "website/src/pages/index.astro",
+    ):
+        text = (REPO / rel).read_text(encoding="utf-8")
+        for match in re.finditer(
+            r'(og:image|twitter:image)"\s+content="([^"]+)"', text
+        ):
+            if not match.group(2).endswith(".png"):
+                referenced.append(f"{rel}: {match.group(1)} -> {match.group(2)}")
+    assert not referenced, f"social images that are not the raster: {referenced}"
+
+
+def test_social_preview_image_states_no_version() -> None:
+    """The OG image shipped ``v1.1.1`` into the 3.x era.
+
+    Nothing stamps an SVG text node, so a version baked into the artwork
+    silently advertises a release that is majors behind on every shared link.
+    Keep the artwork version-free.
+    """
+    # Only the rendered <text> content — path data is full of number triples
+    # like "a3 3 0 1 0-5.997.125" that read as a semver to a naive scan.
+    svg = _OG_SVG.read_text(encoding="utf-8")
+    rendered = " ".join(re.findall(r"<text[^>]*>(.*?)</text>", svg, re.S))
+    found = re.findall(r"v?\d+\.\d+\.\d+", rendered)
+    assert not found, (
+        f"og-image.svg names a version ({found}). Nothing updates it at "
+        "release time, so it will be stale within one release — leave the "
+        "version out of the artwork."
+    )
+
+
+# --------------------------------------------------------------------------
+# 6. Documented rate-limit costs must match RATE_LIMIT_COSTS.
+# --------------------------------------------------------------------------
+
+# Four pages describe the rate limiter, each for a different audience: the API
+# reference maps tool call -> internal operation -> cost, Configuration lists
+# the knobs, Performance gives tuning advice, and Security covers atomicity
+# and per-client buckets. Consolidating them would make each page worse, so
+# they stay — but the *numbers* they share are pinned here instead, which is
+# what actually drifted (the three tool-name-keyed exceptions were documented
+# two different ways at once).
+
+_RATE_LIMIT_PAGES = [
+    "website/src/content/docs/api-reference.mdx",
+    "website/src/content/docs/configuration.mdx",
+    "website/src/content/docs/performance-optimization.mdx",
+    "website/src/content/docs/security-best-practices.mdx",
+]
+
+
+def test_documented_rate_limit_costs_match_code() -> None:
+    """Every `| <operation> | ... | <cost> |` row must match the real cost."""
+    from openzim_mcp.defaults import RATE_LIMIT_COSTS
+
+    wrong: list[str] = []
+    for rel in _RATE_LIMIT_PAGES:
+        path = REPO / rel
+        if not path.is_file():
+            wrong.append(f"{rel}: missing")
+            continue
+        for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            if not line.startswith("|"):
+                continue
+            cells = [c.strip() for c in line.strip().strip("|").split("|")]
+            if len(cells) < 2:
+                continue
+            tail = cells[-1]
+            if not tail.isdigit():
+                continue
+            claimed = int(tail)
+            for op, real in RATE_LIMIT_COSTS.items():
+                if f"`{op}`" in line and claimed != real:
+                    wrong.append(
+                        f"{rel}:{lineno}: says {op} costs {claimed}, code says {real}"
+                    )
+    assert (
+        not wrong
+    ), "documented rate-limit costs disagree with code:\n  " + "\n  ".join(wrong)
+
+
+def test_tools_without_their_own_cost_entry_are_described_as_default() -> None:
+    """zim_query / zim_get_section / zim_health charge the ``default`` cost.
+
+    They have no ``RATE_LIMIT_COSTS`` entry and are bucketed on their wire tool
+    name. Performance guidance once said keys are "never the tool names",
+    which is wrong for exactly these three.
+    """
+    from openzim_mcp.defaults import RATE_LIMIT_COSTS
+
+    for tool in ("zim_query", "zim_get_section", "zim_health"):
+        assert tool not in RATE_LIMIT_COSTS, (
+            f"{tool} gained a RATE_LIMIT_COSTS entry — the docs describe it as "
+            "charging the default cost under its own tool name. Update "
+            "api-reference.mdx and performance-optimization.mdx together."
+        )

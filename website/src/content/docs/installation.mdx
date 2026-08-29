@@ -70,6 +70,25 @@ uv sync
 uv sync --no-dev
 ```
 
+### Optional extras
+
+One extra ships: `[reranker]`, which adds cross-encoder relevance reranking
+over Xapian's results.
+
+```bash
+uv tool install "openzim-mcp[reranker]"    # or: pip install "openzim-mcp[reranker]"
+openzim-mcp download-models                 # required second step — see below
+```
+
+**Installing it is not enough.** The server never downloads the model
+(`allow_model_download` defaults to `false`, deliberately — an unannounced
+1.1 GB fetch to HuggingFace would contradict what this server promises about
+reading only local archives). Without the second command, the first
+rerank-eligible query falls back to Xapian-only ranking and logs a warning.
+
+Full details, including which platforms have wheels and how to turn rerank
+off without uninstalling, on [Search reranking](/openzim-mcp/docs/search-reranking/).
+
 ### Option 2: Using pip (development)
 
 ```bash
