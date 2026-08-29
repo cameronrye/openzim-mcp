@@ -29,6 +29,63 @@ Tools return one of:
 
 ---
 
+## The `_meta` envelope
+
+Every response carries a `_meta` key. It is the machine-readable answer to
+"why is this response empty, partial, or smaller than I expected" — and in
+simple mode it is also what the rendered one-line footer is built from.
+
+**Always present:**
+
+| Key | Meaning |
+|---|---|
+| `tokens_est` | Estimated token count of the response body (`cl100k_base` by default, `OPENZIM_MCP_META__TOKENIZER_ENCODING`) |
+| `chars` | Character count of the body |
+
+**Present when they apply:**
+
+| Key | Meaning |
+|---|---|
+| `truncated` | The body was cut to fit a cap |
+| `more_at_offset` | The `content_offset` / `offset` that continues from where this response stopped |
+| `total_chars` | Full length of the underlying body, of which you received `chars` |
+| `suggestions` | Up to three concrete recovery calls, as `{title, path}`-shaped rows |
+| `reason` | Why the response is empty or partial — the taxonomy below |
+| `hint` | Free-text next step, on lookups whose only continuation is a larger `limit` rather than an `offset` (`suggest`, title search) |
+| `detected_type` / `detection_confidence` | Archive-type detection on metadata responses — e.g. `"wikipedia"` / `"high"` |
+| `preset_applied` | Named archive preset that shaped a search or summary response |
+
+### `reason` values and what to do about them
+
+A `reason` means the call succeeded and the *answer* is thin. Retrying the
+identical call will return the identical thin answer — each value implies a
+different next move.
+
+| `reason` | What happened | Recovery |
+|---|---|---|
+| `0_hits` | The index was searched and matched nothing | Broaden the query, or use `zim_search(mode="title")` for an exact title |
+| `low_relevance` | Hits came back, but none token-match the query | Same as `0_hits` — treat it as a miss, not a ranking problem |
+| `bad_query` | The query could not be parsed into anything searchable | Rewrite it; punctuation-only and stop-word-only queries land here |
+| `no_xapian_index` | This archive ships no full-text index | Full-text search cannot work here at all. Use `zim_search(mode="title")` or `zim_browse` |
+| `bad_namespace` | The namespace does not exist in this archive | Call `zim_metadata` for the real namespace list — old and new archives use different schemes |
+| `no_content_type_match` | The `content_type` filter excluded everything | Drop the filter, or widen it |
+| `sample_only` | The page came from a **sampled** discovery: more entries exist even though `done: true` | Switch to `zim_browse(mode="walk")` for exhaustive iteration. `done` alone is not proof of completeness here |
+| `archive_unavailable` | In a `cross_file` fan-out, every archive failed | Infrastructural, not a query problem — check mounts and `zim_health` |
+| `search_all_budget_exceeded` | The aggregate `cross_file` timeout fired before every archive was searched | Partial results. Raise `OPENZIM_MCP_SEARCH__SEARCH_ALL_TOTAL_TIMEOUT_SECONDS`, or narrow the archive set |
+
+`sample_only` is the one worth special-casing in client code: it is the only
+value that appears on a response that otherwise looks complete.
+
+### The rendered footer
+
+When `OPENZIM_MCP_META__FOOTER_ENABLED` is `true` (the default), simple-mode
+responses get a one-line markdown blockquote built from `_meta` and appended
+to the body — a token-budget summary normally, or the recovery hint when a
+`reason` is set. Set it to `false` to suppress the line; `_meta` itself is
+unaffected and still travels with every response.
+
+---
+
 ## Simple mode
 
 ### `zim_query`
@@ -67,20 +124,102 @@ zim_query(
 | `compact_budget` | str \| int | `None` | Override the compact-mode budget. Named profiles: `tiny` (2000), `small` (4000), `medium` (6000), `large` (12000). Integers are clamped to 500–64000. An unrecognised string silently falls back to `medium` |
 | `synthesize` | bool | `False` | When `True`, return a `SynthesizeResponse` (multi-source briefing) |
 
-**Intents recognized** (incomplete list):
+### Recognized phrasings
 
-- "list available ZIM files"
-- "search for biology in wikipedia.zim"
-- "get article Evolution"
-- "show structure of Biology"
-- "browse namespace C with limit 10"
-- "search all files for python"
-- "walk namespace M"
-- "find article titled Photosynthesis"
-- "articles related to Climate_Change"
-- "summary of Quantum_mechanics"
+In simple mode `zim_query` is the entire tool surface, so the phrasings it
+recognizes **are** the API. There are 21 of them. The parser scores every
+pattern and dispatches the most specific match, so wording matters more than
+it looks — the traps are called out below the table.
+
+| Intent | Say something like | You get back |
+|---|---|---|
+| List archives | "list available ZIM files", "show archives" | Every loaded archive, as JSON embedded in the string |
+| Main page | "show main page", "home page" | The archive's front page |
+| List namespaces | "list namespaces", "what namespaces" | The archive's namespace breakdown |
+| Archive metadata | "metadata for wikipedia.zim", "details about this archive" | Title, language, creator, index capabilities, counts |
+| Fetch an article | "get article Evolution", "show the page Photosynthesis" | The rendered article body |
+| Topic lookup | "tell me about photosynthesis", "everything about ants" | Auto-fetches on a strong title match, otherwise searches |
+| Full-text search | "search for biology", "find quantum entanglement" | Ranked hits |
+| Cross-archive search | "search all files for python", "search everywhere for ants" | One result block per archive |
+| Filtered search | "search protein in namespace C" | Hits restricted to a namespace or content type |
+| Title lookup | "find article titled Photosynthesis", "what's the path for Ant" | The resolved entry path |
+| Autocomplete | "suggestions for photo", "autocomplete diab" | Title-prefix completions |
+| Section outline | "show structure of Biology", "outline of Protein" | Headings and section anchors |
+| Table of contents | "table of contents for Evolution", "toc of Ant" | The hierarchical TOC |
+| Summary | "summary of Quantum_mechanics", "summarize Protein" | Opening-paragraph summary |
+| One section | "the Biochemistry section of Protein", "section Synthesis of Protein" | That section's body |
+| Outbound links | "links in Ant", "references from Protein" | Links extracted from the body |
+| Related articles | "articles related to Climate_Change", "what links to Ant" | Link-graph neighbours |
+| Browse a namespace | "browse namespace C with limit 10" | A sampled page of entries |
+| Walk a namespace | "walk namespace M", "enumerate namespace C" | Deterministic cursor-paginated iteration |
+| Batch fetch | "get articles Ant, Bee, Wasp" | Several entries in one call |
+| Binary content | "get the image Logo.png", "raw content for File.pdf" | Base64 payload with its native MIME type |
+
+**Three phrasings that trip people up:**
+
+- **Metadata needs the literal word.** "metadata for X" and "details about
+  X.zim" match; "tell me about X.zim" does not — it routes to a topic lookup
+  and tries to fetch an article named after the file.
+- **A section needs one of three shapes**: `section <name> of <path>`,
+  `the <name> section of <path>`, or `<path> section <name>` as a trailing
+  suffix. Anything else scores lower than `structure` and you get the outline
+  instead of the section.
+- **"related" is overloaded.** "links in X" gives outbound links from the
+  body; "articles related to X" gives link-graph neighbours. "related to X"
+  alone lands on the latter.
+
+Pagination differs per intent: `suggestions for` and `find article titled` do
+not page at all — raise `limit` rather than passing `offset`.
 
 **Returns:** intent-specific output — a markdown list for searches, a rendered article for retrievals, a `SynthesizeResponse` when `synthesize=True`. On the default (non-synthesize) path, the *guidance* failures — no archive specified, empty query, meta-only query, chained query — come back as markdown rather than an error envelope, so they carry `isError: false`. A `zim_file_path` that matches no loaded archive is **not** one of them: it returns a `zim_path_not_found` envelope, and any other exception the catch-all absorbs returns a `zim_query` envelope. Both set `isError: true`. The `synthesize=True` path instead refuses bad paths, meta-only queries, and chained queries with a `ToolErrorPayload`, so those do set `isError: true`.
+
+### `synthesize=True` — cross-archive briefings
+
+`zim_query(synthesize=True, ...)` is a different operation wearing the same
+tool name. Instead of routing to one underlying call, it runs a retrieval
+pipeline across **every** allowed archive and returns a cited briefing. It is
+the only cross-archive answering path in the product, and the only rich
+capability a simple-mode client can reach.
+
+**Read this before using it:** `answer_markdown` is **not generated prose**.
+It is the selected source passages concatenated verbatim, each followed by an
+inline `[cite: <cite_id>]` marker. Nothing is paraphrased, summarised or
+written by a model — the server has no model. Treat it as a pre-assembled
+evidence bundle to hand your own LLM, not as an answer to display.
+
+The pipeline: per-archive search → RRF fusion across archives → optional
+cross-encoder rerank (only with the `[reranker]` extra) → passage extraction →
+section attribution and heading-affinity boost → answer rendering → budget
+enforcement → citation building.
+
+**Response** (`SynthesizeResponse`):
+
+| Key | Meaning |
+|---|---|
+| `query` | The query as received |
+| `answer_markdown` | Concatenated source passages with `[cite: …]` markers |
+| `passages` | `{cite_id, text_markdown, rank, score}` per passage. Dropped in compact mode, which moves `rank`/`score` onto the citations instead |
+| `citations` | `{cite_id, archive, entry_path, title, section_id, section_title, rank, score}` — `entry_path` is what you pass to `zim_get` |
+| `archives_searched` | Which archives actually contributed |
+| `fallback_used` | The ranking that produced this result: `reranker` (best), `rrf_fusion`, or `xapian_score` (single archive, or fusion unavailable). **Not an error** — it reports which stage the ranking came from |
+| `total_chars` / `total_words` | Size of the assembled answer |
+| `considered_articles` / `considered_sections` | Candidates that did *not* become citations, so a follow-up turn can pivot without re-running the search. Empty when there was no candidate space |
+| `_meta` | The usual envelope |
+
+**Tuning** — all soft budgets under `OPENZIM_MCP_SYNTHESIZE__`:
+
+| Field | Default | Effect |
+|---|---|---|
+| `top_n` | `5` | Passages in the final answer |
+| `per_archive_k` | `10` | Hits taken from each archive before fusion |
+| `output_char_budget` | `4800` | Soft cap on `answer_markdown` (~1200 tokens). Truncates the last passage rather than dropping it |
+| `section_affinity_threshold` | `0.25` | Heading-overlap ratio before a section-attributed passage is boosted |
+| `section_affinity_boost` | `1.5` | Multiplier when it is. Deliberately conservative — it will not dominate a strong BM25 hit |
+| `max_secondary_archive_hits` | `2` | Cap per non-primary archive, bounding cross-archive flooding. `0` restricts to the primary archive |
+
+Unlike the default path, this one **does** return error envelopes: bad paths,
+meta-only queries and chained queries are refused with `isError: true` rather
+than answered with markdown guidance.
 
 ---
 

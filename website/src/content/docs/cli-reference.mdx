@@ -1,0 +1,119 @@
+---
+title: CLI reference
+summary: Every openzim-mcp command and flag — the server invocation, the link-graph sidecar builder, and the model pre-staging command, with their exit-code contracts.
+group: Reference
+sidebar_order: 4
+---
+
+`openzim-mcp` is three commands sharing one binary: the server itself, plus two
+build-time helpers. `--help` only documents the server — the subcommands are
+dispatched before argparse sees them, so `openzim-mcp --help` will not list
+them. This page is the only complete listing.
+
+> **Source of truth:** [openzim_mcp/main.py](https://github.com/cameronrye/openzim-mcp/blob/main/openzim_mcp/main.py), [openzim_mcp/cli/build.py](https://github.com/cameronrye/openzim-mcp/blob/main/openzim_mcp/cli/build.py), and [openzim_mcp/ml/cli/download.py](https://github.com/cameronrye/openzim-mcp/blob/main/openzim_mcp/ml/cli/download.py).
+
+## `openzim-mcp` — run the server
+
+```bash
+openzim-mcp [--mode {simple,advanced}] [--transport {stdio,http,sse}]
+            [--host HOST] [--port PORT] [--version]
+            DIRECTORY [DIRECTORY ...]
+```
+
+| Argument | Default | Notes |
+|---|---|---|
+| `DIRECTORY` | (required, one or more) | Directories containing `.zim` files. These become the allowed-directory set — the only paths the server will ever read |
+| `--mode` | `simple` | `simple` exposes only `zim_query`; `advanced` exposes all 8 tools. Env: `OPENZIM_MCP_TOOL_MODE` |
+| `--transport` | `stdio` | `stdio` for local MCP clients, `http` for the streamable-HTTP service, `sse` **deprecated** and removed in 4.0.0. Env: `OPENZIM_MCP_TRANSPORT` |
+| `--host` | `127.0.0.1` | HTTP/SSE bind address. Env: `OPENZIM_MCP_HOST` |
+| `--port` | `8000` | HTTP/SSE bind port. Env: `OPENZIM_MCP_PORT` |
+| `--version` | — | Prints `openzim-mcp <version>` and exits |
+
+A flag always wins over its environment variable; leaving the flag off falls
+back to the variable, then to the default. Every other setting is
+environment-only — see [Configuration](/openzim-mcp/docs/configuration/).
+
+```bash
+openzim-mcp --version
+# openzim-mcp <version>
+
+# Two archive directories, advanced surface, over HTTP
+openzim-mcp --mode advanced --transport http --host 127.0.0.1 --port 8000 \
+            /srv/zim /mnt/archives
+```
+
+## `openzim-mcp build link-graph` — the inbound-links sidecar
+
+`zim_links(direction="inbound")` — "what links here" — needs a pre-built
+sidecar. Nothing builds it for you: without it the tool returns an
+`inbound_sidecar_unavailable` envelope.
+
+```bash
+openzim-mcp build link-graph ARCHIVE [--output PATH] [--force] [--quiet]
+```
+
+| Argument | Default | Notes |
+|---|---|---|
+| `ARCHIVE` | (required) | Path to the `.zim` file |
+| `--output` | `<archive>.zim.linkgraph.sqlite` | Write the sidecar somewhere else. The server looks beside the archive, so a relocated sidecar needs the same path at read time |
+| `--force` | off | Overwrite an existing sidecar. Required when rebuilding, because the old file is still there |
+| `--quiet` | off | Suppress the `…walked N/M entries` progress lines, which go to stderr |
+
+The build walks every entry in the archive once. **Peak memory scales with
+article count**: the builder interns every node path in an in-memory id map
+and materialises the full node list for insertion, which the code notes
+reaches GB scale on a full Wikipedia build. That matters on a
+memory-limited container. The write is atomic: it builds to a
+temporary file and moves it into place, so an interrupted run cannot leave a
+half-written sidecar for the server to load.
+
+**Exit codes** (scriptable):
+
+| Code | Meaning |
+|---|---|
+| `0` | Built. The success line names the sidecar path, node count, edge count and bytes written |
+| `1` | Expected, actionable failure: archive missing, not a file, not a valid ZIM, sidecar already exists (pass `--force`), or the sidecar path is unwritable |
+| `2` | Anything else, plus argparse usage errors |
+
+```bash
+openzim-mcp build link-graph /srv/zim/wikipedia_en.zim
+# built /srv/zim/wikipedia_en.zim.linkgraph.sqlite: <nodes> nodes, <edges> edges, <n> bytes
+
+# Rebuild every sidecar after upgrading across a schema bump
+for z in /srv/zim/*.zim; do
+  openzim-mcp build link-graph --force --quiet "$z" || echo "FAILED: $z"
+done
+```
+
+**v3.0.0 invalidated every sidecar built by 2.x.** Edge targets are now stored
+under the path the archive can actually serve rather than the raw
+percent-encoded href, so the schema version was bumped and older files are
+rejected on load. Rebuild with `--force`.
+
+## `openzim-mcp download-models` — pre-stage the reranker
+
+Only relevant with the optional `[reranker]` extra. It fetches the
+cross-encoder once, so the server never pays a first-call download — which it
+otherwise refuses to do at all, since `allow_model_download` defaults to
+`false`.
+
+```bash
+openzim-mcp download-models [--reranker-model-id ID]
+```
+
+| Argument | Default | Notes |
+|---|---|---|
+| `--reranker-model-id` | `BAAI/bge-reranker-base` | Stage a different model. Must match `OPENZIM_MCP_ML__RERANKER__MODEL_ID` at serve time, or the server will not find what you staged |
+
+Exit codes are `0` on success **and** when no ML extra is installed (it prints
+a note and does nothing — so it is safe in an unconditional provisioning
+script), `1` when staging fails.
+
+See [the reranker extra](https://github.com/cameronrye/openzim-mcp/blob/main/docs/extras-reranker.md) for the full picture.
+
+## What has no CLI
+
+There is no command to clear the cache, warm it, validate a config file, or
+list archives — those are server-side concerns reachable through the
+`zim_health` tool. Configuration is environment-only; there is no config-file
+flag.

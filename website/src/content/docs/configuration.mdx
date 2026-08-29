@@ -228,6 +228,8 @@ Sorted alphabetically by field name within each grouping.
 | `host` | `OPENZIM_MCP_HOST` | `127.0.0.1` | non-loopback requires auth (http) or refuses (sse) |
 | `insecure_disable_auth` | `OPENZIM_MCP_INSECURE_DISABLE_AUTH` | `false` | escape hatch: allows token-less non-loopback HTTP with a WARNING (closed networks only) |
 | `logging.format` | `OPENZIM_MCP_LOGGING__FORMAT` | structured | format string |
+| `meta.footer_enabled` | `OPENZIM_MCP_META__FOOTER_ENABLED` | `true` | Append the one-line `_meta` footer to simple-mode responses. Turning it off does not remove `_meta` itself — see [the `_meta` envelope](/openzim-mcp/docs/api-reference/#the-_meta-envelope) |
+| `meta.tokenizer_encoding` | `OPENZIM_MCP_META__TOKENIZER_ENCODING` | `cl100k_base` | Encoding used for `_meta.tokens_est` |
 | `logging.level` | `OPENZIM_MCP_LOGGING__LEVEL` | `INFO` | DEBUG/INFO/WARNING/ERROR/CRITICAL |
 | `port` | `OPENZIM_MCP_PORT` | `8000` | 1-65535 |
 | `presets_override_path` | `OPENZIM_MCP_PRESETS_OVERRIDE_PATH` | unset | TOML file deep-merged over the bundled archive-type presets |
