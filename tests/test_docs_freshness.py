@@ -404,12 +404,20 @@ def test_social_preview_image_states_no_version() -> None:
 # what actually drifted (the three tool-name-keyed exceptions were documented
 # two different ways at once).
 
-_RATE_LIMIT_PAGES = [
-    "website/src/content/docs/api-reference.mdx",
-    "website/src/content/docs/configuration.mdx",
-    "website/src/content/docs/performance-optimization.mdx",
-    "website/src/content/docs/security-best-practices.mdx",
-]
+# Page -> the minimum number of operation-keyed rows the gate must still see.
+# The floor is what stops a page from silently contributing nothing:
+# configuration.mdx writes its keys as `"get_binary_entry"` (quotes inside the
+# backticks), which the first version of this gate did not match, so 13 of its
+# 14 rows went unverified while the test happily passed.
+#
+# performance-optimization.mdx keys its cost table by tool call, and
+# security-best-practices.mdx states costs in prose — neither can be scanned by
+# operation name, so neither is listed rather than being listed and silently
+# contributing zero.
+_RATE_LIMIT_PAGES = {
+    "website/src/content/docs/api-reference.mdx": 10,
+    "website/src/content/docs/configuration.mdx": 10,
+}
 
 
 def test_documented_rate_limit_costs_match_code() -> None:
@@ -417,8 +425,10 @@ def test_documented_rate_limit_costs_match_code() -> None:
     from openzim_mcp.defaults import RATE_LIMIT_COSTS
 
     wrong: list[str] = []
+    checked: dict[str, int] = {}
     for rel in _RATE_LIMIT_PAGES:
         path = REPO / rel
+        checked[rel] = 0
         if not path.is_file():
             wrong.append(f"{rel}: missing")
             continue
@@ -433,13 +443,28 @@ def test_documented_rate_limit_costs_match_code() -> None:
                 continue
             claimed = int(tail)
             for op, real in RATE_LIMIT_COSTS.items():
-                if f"`{op}`" in line and claimed != real:
+                # Both `get_entry` and `"get_entry"` appear in the corpus.
+                if f"`{op}`" not in line and f'`"{op}"`' not in line:
+                    continue
+                checked[rel] += 1
+                if claimed != real:
                     wrong.append(
                         f"{rel}:{lineno}: says {op} costs {claimed}, code says {real}"
                     )
     assert (
         not wrong
     ), "documented rate-limit costs disagree with code:\n  " + "\n  ".join(wrong)
+
+    thin = [
+        f"{rel}: only {n} rows checked, expected >= {_RATE_LIMIT_PAGES[rel]}"
+        for rel, n in checked.items()
+        if n < _RATE_LIMIT_PAGES[rel]
+    ]
+    assert not thin, (
+        "the rate-limit gate stopped seeing rows it used to check — the table "
+        "moved, was reformatted, or the key style changed, so the assertions "
+        "above are now vacuous:\n  " + "\n  ".join(thin)
+    )
 
 
 def test_tools_without_their_own_cost_entry_are_described_as_default() -> None:
@@ -479,8 +504,14 @@ _PHRASEBOOK_ROW = re.compile(r"^\|\s*([^|]+?)\s*\|\s*((?:\"[^\"]+\"\s*,?\s*)+)\|
 
 def _phrasebook_rows() -> list[tuple[str, list[str]]]:
     text = _API_REFERENCE.read_text(encoding="utf-8")
+    # Anchor on the section heading and stop at the next blank-line-separated
+    # paragraph after the table, rather than on a prose sentence: the first
+    # version of this gate keyed the end on "Three phrasings that trip people
+    # up", so correcting that count word to "Phrasings" raised ValueError and
+    # errored all three phrasebook tests at once.
     start = text.index("### Recognized phrasings")
-    end = text.index("Three phrasings that trip people up", start)
+    rest = text[start:]
+    end = start + (rest.index("\n\n**") if "\n\n**" in rest else len(rest))
     return [
         (m.group(1), re.findall(r'"([^"]+)"', m.group(2)))
         for m in _PHRASEBOOK_ROW.finditer(text[start:end])

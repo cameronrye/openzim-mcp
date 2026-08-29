@@ -10,9 +10,10 @@ concerns crossing a major boundary.
 
 ## v2 → v3
 
-Two things break. Neither affects a stdio client, and neither touches the tool
-surface: tools, resources and prompts are unchanged, and 2025-era clients keep
-working for all three from the same endpoint.
+Two things break. Neither touches the tool surface — tools, resources and
+prompts are unchanged, and 2025-era clients keep working for all three from
+the same endpoint. The first affects anyone doing inbound link lookups, on
+**any** transport including stdio; the second affects HTTP clients only.
 
 ### 1. Link-graph sidecars must be rebuilt
 

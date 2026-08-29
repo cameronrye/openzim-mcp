@@ -51,7 +51,6 @@
     Schema.org (Structured data)
     Open Graph Protocol (Social media)
     Twitter Cards (Social media)
-    RFC 9116 (security.txt)
     WCAG 2.1 (Accessibility)
 
     ## SEO & Analytics

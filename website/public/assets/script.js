@@ -354,10 +354,21 @@
           const title = document.createElement('strong');
           title.textContent = r.meta?.title || r.url;
           const excerpt = document.createElement('span');
-          // Pagefind's excerpt carries <mark> around the matched terms. It is
-          // built from indexed page text, not from the query, so it is safe to
-          // insert as markup — and the highlight is the point of the excerpt.
-          excerpt.innerHTML = r.excerpt;
+          // Pagefind's excerpt carries <mark> around the matched terms, and the
+          // highlight is the point of the excerpt, so this has to be markup.
+          // Pagefind does escape the surrounding text today, but that is its
+          // invariant to change, not ours — so re-escape everything and put
+          // back only <mark>. An innerHTML sink should not depend on a
+          // third-party escaping guarantee.
+          // Ampersands are deliberately NOT re-escaped: Pagefind has already
+          // escaped them, so a second pass would render "&amp;" as literal
+          // text. Only the angle brackets are neutralised and <mark> restored,
+          // which is a no-op on well-formed output and a net on anything else.
+          excerpt.innerHTML = String(r.excerpt || '')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/&lt;mark&gt;/g, '<mark>')
+            .replace(/&lt;\/mark&gt;/g, '</mark>');
           a.append(title, excerpt);
           panel.appendChild(a);
         });

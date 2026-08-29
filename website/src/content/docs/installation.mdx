@@ -405,12 +405,16 @@ Add to your Claude Desktop configuration file:
 {
   "mcpServers": {
     "openzim-mcp": {
-      "command": "openzim-mcp",
-      "args": ["/path/to/zim/files"]
+      "command": "uvx",
+      "args": ["openzim-mcp", "/path/to/zim/files"]
     }
   }
 }
 ```
+
+Claude Desktop is GUI-launched, so it does not inherit your shell's `PATH` —
+a bare `"command": "openzim-mcp"` is the most common cause of "server failed
+to start" here even when the command works in a terminal.
 
 **Alternative (using Python module):**
 

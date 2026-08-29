@@ -27,7 +27,7 @@ OpenZIM MCP serves offline knowledge archives to MCP clients. The relevant threa
 | Resource exhaustion | Token-bucket rate limiter with per-operation costs, atomic acquire, per-client buckets with LRU eviction |
 | Self-referential redirects causing infinite loops | Bounded redirect-chain follow (`MAX_REDIRECT_DEPTH = 10`), self-referential refs rejected |
 | Unannounced outbound egress from a "retrieval only" server | The base install makes no outbound connections. The optional `[reranker]` extra loads its cross-encoder from the local model cache only, because `ml.reranker.allow_model_download` defaults to `false`. There are two ways to opt in: pre-stage with `openzim-mcp download-models`, or set `OPENZIM_MCP_ML__RERANKER__ALLOW_MODEL_DOWNLOAD=true`, which accepts ~1.1 GB of egress on the first rerank-eligible query |
-| DNS rebinding against a local HTTP server | `Host`-header validation, when it is active. On a loopback bind only loopback hosts are accepted. On a **bind-all** host (`0.0.0.0`, `::`) with no `OPENZIM_MCP_ALLOWED_HOSTS`, the server **disables** `Host` validation and logs a warning — otherwise every direct-IP client would get a 421. Set `OPENZIM_MCP_ALLOWED_HOSTS` to your reachable hostname(s) to turn it back on |
+| DNS rebinding against a local HTTP server | `Host`-header validation, when it is active. On a loopback bind, loopback hosts are accepted by default and `OPENZIM_MCP_ALLOWED_HOSTS` extends the allow-list. On a **bind-all** host (`0.0.0.0`, `::`) with no `OPENZIM_MCP_ALLOWED_HOSTS`, the server **disables** `Host` validation and logs a warning — otherwise every direct-IP client would get a 421. Set `OPENZIM_MCP_ALLOWED_HOSTS` to your reachable hostname(s) to turn it back on |
 
 ## Path validation
 
@@ -201,7 +201,7 @@ Real defaults (verify against [openzim_mcp/defaults.py](https://github.com/camer
 
 ## Reporting vulnerabilities
 
-**Sensitive issues:** [GitHub Private Vulnerability Reporting](https://github.com/cameronrye/openzim-mcp/security/advisories/new). Encrypted communication, attachments, and coordinated disclosure are all built in — no email or PGP channel.
+**Sensitive issues:** [GitHub Private Vulnerability Reporting](https://github.com/cameronrye/openzim-mcp/security/advisories/new). Encrypted communication, attachments, and coordinated disclosure are all built in. If you cannot use GitHub advisories, email the maintainer at [c@meron.io](mailto:c@meron.io); there is no PGP channel.
 
 **Non-sensitive hardening suggestions:** open a GitHub issue using the "Security Vulnerability Report" template.
 

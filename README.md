@@ -88,8 +88,8 @@ Wire it into your MCP client. Example for Claude Desktop's `claude_desktop_confi
 {
   "mcpServers": {
     "openzim-mcp": {
-      "command": "openzim-mcp",
-      "args": ["/path/to/zim/files"]
+      "command": "uvx",
+      "args": ["openzim-mcp", "/path/to/zim/files"]
     }
   }
 }
@@ -103,8 +103,8 @@ For full control, run in Advanced mode to expose all 8 specialized tools:
 {
   "mcpServers": {
     "openzim-mcp-advanced": {
-      "command": "openzim-mcp",
-      "args": ["--mode", "advanced", "/path/to/zim/files"]
+      "command": "uvx",
+      "args": ["openzim-mcp", "--mode", "advanced", "/path/to/zim/files"]
     }
   }
 }

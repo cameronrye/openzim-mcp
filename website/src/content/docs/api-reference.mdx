@@ -25,31 +25,38 @@ Tools return one of:
 
 - **JSON payload responses** (most tools) — typed payloads (`SearchResponse`, `ArchiveMetadataResponse`, `ServerHealthResponse`, etc.) serialized as JSON **text** inside a `TextContent` block. All 8 tools are annotated `-> Any`, so the SDK derives no `outputSchema` and **nothing arrives in `structuredContent`** — parse the text block as JSON.
 - **Markdown-string responses** — `zim_query` renders article bodies as a string with `Title:`, `Path:`, `Type:` lines and then a `## Content` block (and `Requested Path:` / `Actual Path:` when smart retrieval resolved somewhere else). This rendering is reachable **only** through `zim_query`; `zim_get` returns the JSON payload described under its own entry.
-- **Tool errors** — every tool catches exceptions and returns a structured `ToolErrorPayload` (`{error: true, operation, message, context?}`) rather than raising. The exception is `zim_query` on its default path: handler-side failures there return markdown guidance instead of an envelope, so they carry `isError: false`; only its argument rejections and its `synthesize=True` refusals produce one. There is no `status` key and no `hint` key. Only `error`, `operation`, and `message` are guaranteed; individual failures may merge extra self-correction keys into the same envelope (a `section_not_found` error, for example, also carries `available_section_ids`, `available_section_ids_truncated`, `available_section_ids_total`, and `closest_match`). The envelope arrives as JSON text in the response's `content` — no tool advertises an `outputSchema`, so nothing lands in `structuredContent` — and `openzim_mcp/mcp_envelope.py` recognises it on the way out and sets `isError: true` on the `CallToolResult`. Path entries inside errors are redacted to `...filename.zim` form so the canonical allowed-directory layout is never leaked.
+- **Tool errors** — every tool catches exceptions and returns a structured `ToolErrorPayload` (`{error: true, operation, message, context?}`) rather than raising. The exception is `zim_query` on its default path, and only partly: its *guidance* failures — no archive specified, empty query, meta-only query, chained query — return markdown with `isError: false`, but a `zim_file_path` matching no archive returns a `zim_path_not_found` envelope and any other exception returns a `zim_query` envelope, both with `isError: true`. There is no `status` key and no `hint` key. Only `error`, `operation`, and `message` are guaranteed; individual failures may merge extra self-correction keys into the same envelope (a `section_not_found` error, for example, also carries `available_section_ids`, `available_section_ids_truncated`, `available_section_ids_total`, and `closest_match`). The envelope arrives as JSON text in the response's `content` — no tool advertises an `outputSchema`, so nothing lands in `structuredContent` — and `openzim_mcp/mcp_envelope.py` recognises it on the way out and sets `isError: true` on the `CallToolResult`. Path entries inside errors are redacted to `...filename.zim` form so the canonical allowed-directory layout is never leaked.
 
 ---
 
 ## The `_meta` envelope
 
-Every response carries a `_meta` key. It is the machine-readable answer to
-"why is this response empty, partial, or smaller than I expected" — and in
-simple mode it is also what the rendered one-line footer is built from.
+Every **dict-returning** response carries a `_meta` key. It is the
+machine-readable answer to "why is this response empty, partial, or smaller
+than I expected".
+
+> **Simple mode does not give you the key.** `zim_query` returns a *string* on
+> its ordinary paths, and `_meta` is built only to render the one-line footer
+> appended to it. So in simple mode the footer is the sole carrier: setting
+> `OPENZIM_MCP_META__FOOTER_ENABLED=false` removes the information entirely
+> rather than merely hiding a line. Advanced-mode tools return dicts and carry
+> the real key.
 
 **Always present:**
 
 | Key | Meaning |
 |---|---|
-| `tokens_est` | Estimated token count of the response body (`cl100k_base` by default, `OPENZIM_MCP_META__TOKENIZER_ENCODING`) |
 | `chars` | Character count of the body |
+| `truncated` | Whether the body was cut to fit a cap. Always present, `false` when nothing was cut — do not test for the key's presence |
 
 **Present when they apply:**
 
 | Key | Meaning |
 |---|---|
-| `truncated` | The body was cut to fit a cap |
-| `more_at_offset` | The `content_offset` / `offset` that continues from where this response stopped |
+| `tokens_est` | Estimated tokens in the body. **Omitted** when the tokenizer cannot initialise, deliberately, so a model can tell "zero tokens" from "no tokenizer" |
+| `more_at_offset` | The `content_offset` that continues from where this response stopped |
 | `total_chars` | Full length of the underlying body, of which you received `chars` |
-| `suggestions` | Up to three concrete recovery calls, as `{title, path}`-shaped rows |
+| `suggestions` | Up to 5 recovery hints as `{type, value}` rows (e.g. `{"type": "alt_spelling", "value": "Photosynthesis"}`). The footer renders the first 3 |
 | `reason` | Why the response is empty or partial — the taxonomy below |
 | `hint` | Free-text next step, on lookups whose only continuation is a larger `limit` rather than an `offset` (`suggest`, title search) |
 | `detected_type` / `detection_confidence` | Archive-type detection on metadata responses — e.g. `"wikipedia"` / `"high"` |
@@ -72,17 +79,26 @@ different next move.
 | `sample_only` | The page came from a **sampled** discovery: more entries exist even though `done: true` | Switch to `zim_browse(mode="walk")` for exhaustive iteration. `done` alone is not proof of completeness here |
 | `archive_unavailable` | In a `cross_file` fan-out, every archive failed | Infrastructural, not a query problem — check mounts and `zim_health` |
 | `search_all_budget_exceeded` | The aggregate `cross_file` timeout fired before every archive was searched | Partial results. Raise `OPENZIM_MCP_SEARCH__SEARCH_ALL_TOTAL_TIMEOUT_SECONDS`, or narrow the archive set |
+| `scan_truncated` | A link scan stopped before reading the whole article | Totals are a floor, not a count |
+| `suggestion_total_is_lower_bound` | A suggestion listing did not reach the end of the index | `total` undercounts; raise `limit` |
 
-`sample_only` is the one worth special-casing in client code: it is the only
-value that appears on a response that otherwise looks complete.
+The last three are the ones worth special-casing in client code: `sample_only`,
+`scan_truncated` and `suggestion_total_is_lower_bound` all ride responses that
+otherwise look complete — `sample_only` even arrives with `done: true`. The
+first nine also shape the simple-mode footer; the last two only appear in
+`_meta`.
 
 ### The rendered footer
 
 When `OPENZIM_MCP_META__FOOTER_ENABLED` is `true` (the default), simple-mode
 responses get a one-line markdown blockquote built from `_meta` and appended
 to the body — a token-budget summary normally, or the recovery hint when a
-`reason` is set. Set it to `false` to suppress the line; `_meta` itself is
-unaffected and still travels with every response.
+`reason` is set. It also requires `compact=True`, which is the simple-mode
+default.
+
+Setting it to `false` suppresses the line. On an advanced-mode dict response
+that costs you nothing, because `_meta` is a real key there; in simple mode it
+is the only channel, so the information is gone.
 
 ---
 
@@ -152,10 +168,10 @@ it looks — the traps are called out below the table.
 | Related articles | "articles related to Climate_Change", "what links to Ant" | Link-graph neighbours |
 | Browse a namespace | "browse namespace C with limit 10" | A sampled page of entries |
 | Walk a namespace | "walk namespace M", "enumerate namespace C" | Deterministic cursor-paginated iteration |
-| Batch fetch | "get articles Ant, Bee, Wasp" | Several entries in one call |
+| Batch fetch | "get articles C/Ant, C/Bee" | Several entries in one call. The values must be **path-shaped** — bare titles reach the intent but extract nothing and return "Missing Entry Paths" |
 | Binary content | "get image Logo.png", "download pdf Manual.pdf", "raw content for File.pdf" | Base64 payload with its native MIME type |
 
-**Three phrasings that trip people up:**
+**Phrasings that trip people up:**
 
 - **Metadata needs the literal word.** "metadata for X" and "details about
   X.zim" match; "tell me about X.zim" does not — it routes to a topic lookup
