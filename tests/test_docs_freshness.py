@@ -285,3 +285,57 @@ def test_api_reference_enum_values_match() -> None:
         "they cannot use."
     )
     assert live, "no live tools resolved"
+
+
+# --------------------------------------------------------------------------
+# 4. The sidebar's group list must cover the schema's group enum.
+# --------------------------------------------------------------------------
+
+_CONTENT_CONFIG = REPO / "website/src/content.config.ts"
+_DOCS_ORDER = REPO / "website/src/lib/docs-order.ts"
+
+
+def _ts_string_list(source: str, marker: str) -> list[str]:
+    """Pull the quoted strings out of the array literal following ``marker``."""
+    start = source.index(marker)
+    body = source[start : source.index("]", start)]
+    return re.findall(r"['\"]([^'\"]+)['\"]", body)
+
+
+def test_sidebar_group_order_covers_the_schema_enum() -> None:
+    """A group in the schema but not in GROUP_ORDER vanishes from the sidebar.
+
+    ``Sidebar.astro`` renders one section per entry in ``GROUP_ORDER``. A page
+    whose ``group`` is absent from that list passes frontmatter validation,
+    builds without a warning, and is then silently unreachable from the nav —
+    and ``sortDocsForNav`` pushes it to the end of the prev/next chain.
+    """
+    schema_groups = _ts_string_list(
+        _CONTENT_CONFIG.read_text(encoding="utf-8"), "group: z.enum("
+    )
+    nav_groups = _ts_string_list(
+        _DOCS_ORDER.read_text(encoding="utf-8"), "GROUP_ORDER = ["
+    )
+    assert schema_groups, "could not parse the group enum from content.config.ts"
+    assert nav_groups, "could not parse GROUP_ORDER from docs-order.ts"
+    assert set(schema_groups) == set(nav_groups), (
+        "content.config.ts and docs-order.ts disagree about the doc groups.\n"
+        f"  only in the schema:     {sorted(set(schema_groups) - set(nav_groups))}\n"
+        f"  only in GROUP_ORDER:    {sorted(set(nav_groups) - set(schema_groups))}\n"
+        "A group missing from GROUP_ORDER is dropped from the sidebar entirely."
+    )
+
+
+def test_every_doc_group_is_renderable() -> None:
+    """Frontmatter must only use groups the sidebar knows how to render."""
+    nav_groups = set(
+        _ts_string_list(_DOCS_ORDER.read_text(encoding="utf-8"), "GROUP_ORDER = [")
+    )
+    bad: list[str] = []
+    for page in sorted((REPO / "website/src/content/docs").glob("*.mdx")):
+        match = re.search(r"^group:\s*(.+)$", page.read_text(encoding="utf-8"), re.M)
+        if match is None:
+            bad.append(f"{page.name}: no group in frontmatter")
+        elif match.group(1).strip().strip("\"'") not in nav_groups:
+            bad.append(f"{page.name}: group {match.group(1).strip()!r}")
+    assert not bad, f"pages with a group the sidebar cannot render: {bad}"

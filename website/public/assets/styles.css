@@ -81,6 +81,11 @@
      Swap to a deeper mustard for any signal-as-text use. Backgrounds and
      SVG fills can override locally if a brighter accent is needed. */
   --signal: #946F1C;
+  /* #5B8DEF is sized for the dark ground (5.9:1 on --ink). On the cream
+     paper it measures 2.87:1 — below WCAG AA for body text, and it is the
+     colour of every prose link on the site. This deeper blue is 5.3:1 on
+     --paper and 6.0:1 on --paper-elev, in the same hue family. */
+  --secondary: #2C5FBF;
 }
 
 /* ============= RESET ============= */
@@ -126,6 +131,81 @@ p { color: var(--text-secondary); }
 .container--narrow { max-width: var(--container-narrow); }
 .section { padding-block: clamp(4rem, 10vw, 6rem); }
 .section--surface { background: var(--surface); }
+/* Screen-reader-only text that still gets announced and can hold focus. */
+.visually-hidden {
+  position: absolute;
+  width: 1px; height: 1px;
+  margin: -1px; padding: 0; border: 0;
+  clip-path: inset(50%);
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+/* ===== Docs search (Pagefind) ===== */
+.nav__search { position: relative; flex: 0 1 260px; margin-left: auto; }
+.nav__search-input {
+  width: 100%;
+  min-height: 36px;
+  padding: var(--space-2) var(--space-3);
+  font: inherit;
+  font-size: var(--text-sm);
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  transition: border-color var(--dur-fast) ease;
+}
+.nav__search-input::placeholder { color: var(--text-secondary); }
+.nav__search-input:focus-visible { outline: 2px solid var(--signal); outline-offset: 2px; }
+.nav__search-input:hover { border-color: var(--signal); }
+
+.nav__search-panel {
+  position: absolute;
+  top: calc(100% + var(--space-2));
+  right: 0;
+  width: min(460px, calc(100vw - 2rem));
+  max-height: min(60vh, 480px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  z-index: 60;
+  padding: var(--space-2);
+  background: var(--surface);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  box-shadow: 0 12px 32px -12px rgba(0, 0, 0, 0.5);
+}
+.nav__search-panel[hidden] { display: none; }
+.nav__search-result {
+  display: block;
+  padding: var(--space-3);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+}
+.nav__search-result:hover,
+.nav__search-result[aria-selected="true"] {
+  background: var(--bg);
+  color: var(--signal);
+}
+.nav__search-result strong { display: block; font-size: var(--text-sm); font-weight: var(--weight-semibold); }
+.nav__search-result span {
+  display: block;
+  margin-top: 2px;
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+  line-height: 1.45;
+}
+.nav__search-result mark {
+  background: transparent;
+  color: var(--signal);
+  font-weight: var(--weight-semibold);
+}
+.nav__search-empty { padding: var(--space-3); font-size: var(--text-sm); color: var(--text-secondary); }
+
+@media (max-width: 900px) {
+  /* The hamburger already owns the row; a 260px field would push it off. */
+  .nav__search { display: none; }
+}
+
 .skip-link {
   position: absolute; top: 0; left: 0; transform: translateY(-100%);
   background: var(--signal); color: var(--ink);
@@ -576,7 +656,11 @@ main:focus-visible { outline: 2px solid var(--signal); outline-offset: -4px; }
 /* ===== Docs shell (added for /docs/* route) ===== */
 .docs-shell {
   display: grid;
-  grid-template-columns: 240px 1fr 200px;
+  /* minmax(0, 1fr), not 1fr: a grid item defaults to min-width:auto, so a
+     wide table or a 54-character env var name would push the middle track
+     past its share and scroll the whole page sideways instead of scrolling
+     inside its own container. */
+  grid-template-columns: 240px minmax(0, 1fr) 200px;
   gap: 2rem;
   max-width: 1200px;
   margin: 0 auto;
@@ -613,6 +697,12 @@ main:focus-visible { outline: 2px solid var(--signal); outline-offset: -4px; }
   position: sticky;
   top: 2rem;
   align-self: start;
+  /* Without these, a long page's table of contents (the API reference has
+     53 entries) runs past the bottom of the viewport with no way to reach
+     the tail — the element is stuck to the top and the page scrolls under it. */
+  max-height: calc(100vh - 84px - var(--space-6));
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .docs-toc .toc-h3 {
@@ -771,6 +861,24 @@ main:focus-visible { outline: 2px solid var(--signal); outline-offset: -4px; }
 /* Docs-shell tweaks now that the page has a sticky nav above it */
 .docs-shell { padding-top: var(--space-8); }
 .docs-toc { top: 84px; }
+
+/* Anchor targets must clear the 64px sticky nav. Without this, every
+   in-page link (the whole table of contents, and every cross-page #anchor)
+   scrolls its heading to y=0, which is underneath the nav — the reader
+   lands one heading further down than they asked for. Applied to the scroll
+   target itself rather than to :target, so it works for JS-driven scrolls
+   and the TOC's smooth-scroll alike. */
+.docs-article :where(h1, h2, h3, h4, h5, h6)[id] { scroll-margin-top: 84px; }
+
+/* A wide table scrolls inside its own box. The rehype plugin in
+   astro.config.mjs wraps every docs table in this element; the table keeps
+   width:100% so narrow tables still fill the column. */
+.docs-table-scroll {
+  overflow-x: auto;
+  max-width: 100%;
+  margin-block: var(--space-5);
+}
+.docs-table-scroll > table { margin-block: 0; }
 .docs-toc h4 {
   font-size: 0.75rem;
   text-transform: uppercase;
