@@ -104,6 +104,7 @@ _VERSION_ANNOTATED_DOCS = {
     "website/src/content/docs/index.mdx": 2,
     "website/src/content/docs/http-and-docker-deployment.mdx": 5,
     "website/src/pages/index.astro": 2,  # + 1 date-only annotation, not counted
+    "website/public/humans.txt": 1,
 }
 
 

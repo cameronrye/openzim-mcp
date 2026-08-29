@@ -302,6 +302,30 @@ Test files are automatically organized by category and priority level. Set `ZIM_
 - Mock external dependencies in unit tests
 - Use real ZIM files for integration tests when needed
 
+### Documentation site
+
+The docs site lives in `website/` (Astro + an MDX content collection) and needs
+Node 22+. It is **not** built by `make check` — its gate is the `Website CI`
+workflow, which runs on any PR that touches `website/`.
+
+```bash
+make site-build              # npm ci + astro check + astro build
+make check-links             # internal links and heading anchors
+make check-links EXTERNAL=1  # also probe every external URL
+```
+
+Each page under `website/src/content/docs/` needs four frontmatter fields:
+`title`, `summary`, `group` (one of `Get started`, `Reference`, `Guides`,
+`Operations` — the enum is pinned in `src/content.config.ts`, and a value
+outside it fails the build) and `sidebar_order` (numbered **per group**, not
+globally). Internal links use the full base path, e.g.
+`/openzim-mcp/docs/api-reference/`, with a trailing slash.
+
+Some doc facts are gated by tests rather than review — see
+`tests/test_docs_freshness.py` for the schema footprint, version declarations
+and API-reference signature parity, and `tests/test_mcpb_distribution.py` for
+the release-please-stamped files.
+
 ### Test Markers
 
 The project registers three custom markers:

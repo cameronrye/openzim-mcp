@@ -45,6 +45,12 @@ benchmark:  ## Run performance benchmarks (selects tests marked/named "benchmark
 	uv run pytest -k "benchmark" -v --benchmark-only
 	@echo "Benchmark completed. Results saved to .benchmarks/"
 
+site-build:  ## Build the documentation site (website/dist)
+	cd website && npm ci --ignore-scripts && npm exec --no-install -- astro check && npm run build
+
+check-links:  ## Check docs links (needs `make site-build` first; add EXTERNAL=1 to probe URLs)
+	uv run python scripts/check_docs_links.py $(if $(EXTERNAL),--external,)
+
 lint:  ## Run linting
 	uv run flake8 openzim_mcp tests
 	uv run isort --check-only openzim_mcp tests
