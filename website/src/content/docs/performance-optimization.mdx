@@ -39,7 +39,7 @@ export OPENZIM_MCP_CACHE__PERSISTENCE_ENABLED=true    # cache survives restarts
 
 Cache stats surface in `zim_health().health.cache_performance`, which always carries 13 fields: `enabled`, `size`, `max_size`, `ancillary_entries`, `total_entries`, `size_bytes`, `max_bytes`, `ttl_seconds`, `hits`, `misses`, `hit_rate`, `background_cleanup`, `persistence_enabled` (plus `persistence_path` and `persistence_file_exists` when persistence is on). `size` counts only what `max_size` bounds; `total_entries` also counts per-item fragments, which are capped by `max_bytes` (64 MiB default) instead. There are no `warm_cache` / `cache_stats` / `cache_clear` tools. Restarting flushes the cache only when `CACHE__PERSISTENCE_ENABLED` is off; with persistence on it is saved at exit and reloaded at start.
 
-**Persistence path:** defaults to `~/.cache/openzim-mcp` (resolved to absolute). For containerized deployments, mount a volume there or override `OPENZIM_MCP_CACHE__PERSISTENCE_PATH`.
+**Persistence path:** at the default, the server does *not* write to `~/.cache/openzim-mcp` — it appends a config fingerprint and a `.json` suffix, so the file is `~/.cache/openzim-mcp-<12 hex chars>.json`, a **sibling** of that path rather than a file inside it. Mounting a volume at `~/.cache/openzim-mcp` therefore captures nothing. For containerized deployments set `OPENZIM_MCP_CACHE__PERSISTENCE_PATH` explicitly to a file inside your mount.
 
 ### libzim reader caches (advanced)
 
@@ -77,7 +77,7 @@ Per-operation costs (defaults from `RATE_LIMIT_COSTS`):
 
 A 50-entry batch costs 50 slots — capped at the configured `burst_size`, since a bucket can never hand out more tokens than its capacity — so plan burst size with batch tools in mind.
 
-To carve out a different limit for one operation, use the per-operation overrides. **Keys are the internal operation names, not the v2 tool names** — each v2 tool is a multiplexer and resolves the branch it is about to dispatch. See the full mapping table in [Configuration → Rate limiting](/openzim-mcp/docs/configuration/#rate-limiting).
+To carve out a different limit for one operation, use the per-operation overrides. **Keys are usually the internal operation names, not the tool names** — most tools are multiplexers and resolve the branch they are about to dispatch. The exceptions are `zim_query`, `zim_get_section` and `zim_health`, which are keyed on their **wire tool name** and charge the `default` cost. See the full mapping table in [Configuration → Rate limiting](/openzim-mcp/docs/configuration/#rate-limiting).
 
 ```bash
 export OPENZIM_MCP_RATE_LIMIT__PER_OPERATION_LIMITS='{"search": {"requests_per_second": 4, "burst_size": 8}}'
@@ -259,7 +259,7 @@ zim_get(zim_file_path="/srv/zim/wikipedia.zim", entry_paths=common)
 
 ### Multi-archive perf
 
-`zim_search(cross_file=True, ...)` queries every ZIM file in the allowed directories. Files that can't be searched (corrupt, no full-text index) are skipped without aborting the rest. The merge happens server-side, so the response size scales with `limit × number_of_archives`.
+`zim_search(cross_file=True, ...)` fans out **serially** over the allowed ZIM files under an aggregate time budget (20 s by default, `OPENZIM_MCP_SEARCH__SEARCH_ALL_TOTAL_TIMEOUT_SECONDS`). Files that can't be searched (corrupt, no full-text index) are skipped without aborting the rest. It does not necessarily reach every archive: when the budget expires it stops and returns `budget_exceeded: true`, `done: false`, and `files_searched` below `files_available` — check those before treating the result as exhaustive. The merge happens server-side, so the response size scales with `limit × number_of_archives`.
 
 For very large allowed-dir sets, consider:
 
@@ -280,9 +280,16 @@ export OPENZIM_MCP_HOST=127.0.0.1
 export OPENZIM_MCP_AUTH_TOKEN="$(openssl rand -hex 32)"
 export OPENZIM_MCP_CORS_ORIGINS='["https://app.example.com"]'
 
+# This page's examples call zim_get / zim_search / zim_health directly, so the
+# profile needs the advanced surface. The code default is simple mode, which
+# exposes zim_query only. (The published Docker image already sets this.)
+export OPENZIM_MCP_TOOL_MODE=advanced
+
 export OPENZIM_MCP_CACHE__MAX_SIZE=1000
 export OPENZIM_MCP_CACHE__TTL_SECONDS=14400
 export OPENZIM_MCP_CACHE__PERSISTENCE_ENABLED=true
+# Persistence writes ~/.cache/openzim-mcp-<fingerprint>.json unless this is set.
+export OPENZIM_MCP_CACHE__PERSISTENCE_PATH=/var/lib/openzim-mcp/cache.json
 export OPENZIM_MCP_CONTENT__MAX_CONTENT_LENGTH=200000
 
 export OPENZIM_MCP_RATE_LIMIT__REQUESTS_PER_SECOND=20
@@ -318,7 +325,7 @@ openzim-mcp /srv/zim
 
 ## Targets
 
-*Benchmark numbers captured against v1.x's 22-tool surface in 2026-04. Tool-name dispatch overhead is unchanged in v2; per-call latency numbers remain representative.*
+*Benchmark numbers captured against v1.x's 22-tool surface in 2026-04 and not re-measured since. Tool-name dispatch overhead is unchanged on the 8-tool surface; treat the per-call latency numbers as indicative rather than current.*
 
 Indicative latency targets on a modern desktop / midrange VPS, hot cache:
 

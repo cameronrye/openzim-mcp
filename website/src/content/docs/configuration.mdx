@@ -40,7 +40,7 @@ openzim-mcp --mode advanced /path/to/zim/files
 | `simple` (default) | 1 tool: `zim_query` (NL intent router) | small/local LLMs, MCP hosts that struggle with large tool catalogs |
 | `advanced` | 8 tools: `zim_query`, `zim_search`, `zim_get`, `zim_get_section`, `zim_browse`, `zim_metadata`, `zim_links`, `zim_health` (see [API reference](/openzim-mcp/docs/api-reference/)) | hosts that handle a richer tool surface, scripting, fine-grained control |
 
-**The advanced surface is 8 consolidated tools** — collapsed from the prior 22-tool v1 surface. The advanced-mode wire footprint is ~24.8KB (25,432 bytes, held under a hard 25,600-byte budget by `tests/test_phase_f_schema_budget.py`), down from ~36KB, clearing the [MCP Tax](https://www.mmntm.net/articles/mcp-context-tax) pain band (25–50KB schema) for small-model dispatch. See the [v1 → v2 migration table](/openzim-mcp/docs/api-reference/#v1--v2-migration) if you're upgrading.
+**The advanced surface is 8 consolidated tools** — collapsed from the prior 22-tool v1 surface. The advanced-mode wire footprint is ~23.3KB (23,898 bytes, held under a hard 25,600-byte budget by `tests/test_phase_f_schema_budget.py`), down from ~36KB, clearing the [MCP Tax](https://www.mmntm.net/articles/mcp-context-tax) pain band (25–50KB schema) for small-model dispatch. See the [v1 → v2 migration table](/openzim-mcp/docs/api-reference/#v1--v2-migration) if you're upgrading.
 
 ## Transport
 
@@ -241,6 +241,24 @@ Sorted alphabetically by field name within each grouping.
 | `tool_mode` | `OPENZIM_MCP_TOOL_MODE` | `simple` | `simple` or `advanced` |
 | `transport` | `OPENZIM_MCP_TRANSPORT` | `stdio` | `stdio`/`http`/`sse` (`sse` deprecated, removed in 4.0.0) |
 | `watch_interval_seconds` | `OPENZIM_MCP_WATCH_INTERVAL_SECONDS` | `5` | 1-60 |
+
+### Thread-pool sizing (env-only)
+
+Two knobs are read straight from the environment rather than through the config
+model, so they have no `openzim_mcp.config` field and do not appear above. They
+bound the worker pools that back timed-out libzim and regex work — a timed-out
+worker cannot be killed, so the cap is what makes sustained timeouts show up as
+rising queue depth instead of OS-thread exhaustion. Garbage values fall back to
+the default with a warning.
+
+| Environment variable | Default | Notes |
+|---|---|---|
+| `OPENZIM_MCP_TIMEOUT_MAX_WORKERS` | `16` | I/O pool; sized for a typical 4–8 vCPU server |
+| `OPENZIM_MCP_REGEX_MAX_WORKERS` | `8` | Regex pool |
+
+The `/readyz` probe has its own dedicated single-slot pool, which is not
+configurable — sharing the I/O pool let repeated probes against a wedged mount
+burn workers that every MCP tool call also needs.
 
 Further nested groups exist for specialized tuning — `search.*` (e.g. `OPENZIM_MCP_SEARCH__SEARCH_ALL_TOTAL_TIMEOUT_SECONDS`), `query_rewrite.*`, `synthesize.*`, `meta.*`, and `ml.reranker.*` (documented in [docs/extras-reranker.md](https://github.com/cameronrye/openzim-mcp/blob/main/docs/extras-reranker.md)). Their fields and defaults live in [`openzim_mcp/config.py`](https://github.com/cameronrye/openzim-mcp/blob/main/openzim_mcp/config.py).
 

@@ -152,7 +152,9 @@ In simple mode, the server exposes one tool. Phrase the request in plain languag
 }
 ```
 
-**Expected response:** a summary block for the Photosynthesis article, drawn from the first ZIM file that contains it.
+**Expected response:** a summary block for the Photosynthesis article.
+
+> **With more than one archive in the directory, add `zim_file_path`.** There is no cross-archive scan on this path: the server auto-selects an archive only when exactly one is present. With two or more it returns a **No ZIM File Specified** prompt instead. This matters immediately if you ran `make download-test-data`, which fetches two `.zim` files.
 
 ### List available ZIM files
 

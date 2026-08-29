@@ -67,7 +67,6 @@ const softwareSchema = {
     <meta name="twitter:image:alt" content="OpenZIM MCP — Knowledge that works offline">
 
     <link rel="icon" type="image/svg+xml" href="assets/favicon.svg">
-    <link rel="icon" type="image/x-icon" href="assets/favicon.ico">
     <link rel="author" type="text/plain" href="humans.txt">
     <!-- robots.txt is inert on a Pages project site (crawlers read the origin
          root, which this repo does not own), so the sitemap is advertised here. -->
@@ -126,8 +125,8 @@ const softwareSchema = {
       "headline": "OpenZIM MCP — Knowledge that works offline",
       "description": "MCP server for offline ZIM-archive access. Streamable HTTP transport, batch retrieval, per-entry resources, resource subscriptions.",
       "author": { "@type": "Person", "name": "Cameron Rye", "url": "https://rye.dev" },
-      "datePublished": "2024-01-01T00:00:00Z",
-      "dateModified": "2026-08-28T00:00:00Z", "x-release-please-date": "",
+      "datePublished": "2025-09-14T00:00:00Z",
+      "dateModified": "2026-08-28T00:00:00Z",
       "publisher": {
         "@type": "Organization",
         "name": "OpenZIM MCP",
@@ -290,7 +289,7 @@ const softwareSchema = {
         <header class="section__header">
           <span class="eyebrow">The v2 surface</span>
           <h2>Eight tools. Same surface area.</h2>
-          <p>v2 collapses the 22-tool advanced mode into 8 consolidated tools — schema text drops from ~36KB to ~24.8KB, clearing the <a href="https://www.mmntm.net/articles/mcp-context-tax">MCP Tax</a> pain band for small-model dispatch.</p>
+          <p>v2 collapses the 22-tool advanced mode into 8 consolidated tools — schema text drops from ~36KB to ~23.3KB, clearing the <a href="https://www.mmntm.net/articles/mcp-context-tax">MCP Tax</a> pain band for small-model dispatch.</p>
         </header>
 
         <ul class="v2__cards">
@@ -311,7 +310,7 @@ const softwareSchema = {
           <li class="v2__card">
             <span class="v2__card-dot" aria-hidden="true"></span>
             <h3>Simple mode unchanged</h3>
-            <p>The natural-language <code>zim_query</code> tool is identical to v1.2.0. Small-model clients see one tool; large-model clients can opt into the 8-tool surface with <code>--mode advanced</code>.</p>
+            <p>The natural-language <code>zim_query</code> tool has kept its name and its role since v1.2.0, gaining pagination, compaction and synthesis options along the way. Small-model clients see one tool; large-model clients can opt into the 8-tool surface with <code>--mode advanced</code>.</p>
             <pre><code>openzim-mcp /data/zim/
 # simple mode (default): one tool
 
@@ -322,7 +321,7 @@ openzim-mcp --mode advanced /data/zim/
           <li class="v2__card">
             <span class="v2__card-dot" aria-hidden="true"></span>
             <h3>Dispatch quality validated</h3>
-            <p>300-probe dispatch eval on Qwen-2.5-7B-Instruct (small-model deployment target). Gate decision baked into the release; drift between gate output and shipped constants is caught by a consistency test in CI.</p>
+            <p>300-probe dispatch eval against a small-model deployment target — the committed run is Qwen3-8B-Q4_K_M via llama.cpp, standing in for the canonical qwen-2.5-7b-instruct target. Gate decision baked into the release; drift between gate output and shipped constants is caught by a consistency test in CI.</p>
             <pre><code>tests/dispatch_eval/gate_0b_decision.json
 tests/test_phase_f_gate_decision_consistency.py</code></pre>
           </li>

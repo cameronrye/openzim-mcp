@@ -61,11 +61,13 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 git clone https://github.com/cameronrye/openzim-mcp.git
 cd openzim-mcp
 
-# Install dependencies
+# Install dependencies, including the dev group
+# (`dev` is a PEP 735 dependency group, so plain `uv sync` installs it —
+#  this is what `make install-dev` runs)
 uv sync
 
-# Install development dependencies
-uv sync --dev
+# Runtime dependencies only, without the dev group
+uv sync --no-dev
 ```
 
 ### Option 2: Using pip (development)
@@ -118,6 +120,10 @@ mkdir ~/zim-files
 
 ```powershell
 # Install Python 3.12+ from python.org
+
+# Install uv (the Linux/macOS installer on this page is POSIX-only)
+irm https://astral.sh/uv/install.ps1 | iex
+
 # Then install OpenZIM MCP
 uv tool install openzim-mcp
 # Or, with pip:
@@ -301,6 +307,8 @@ make test
 ```
 
 Default mode is **Simple** (one natural-language tool). For all 8 tools (`zim_query`, `zim_search`, `zim_get`, `zim_get_section`, `zim_browse`, `zim_metadata`, `zim_links`, `zim_health`), pass `--mode advanced`.
+
+**The Docker image is the exception.** It bakes `OPENZIM_MCP_TOOL_MODE=advanced` into the image, so a container registers all 8 tools with no flag. Pass `-e OPENZIM_MCP_TOOL_MODE=simple` if you want simple mode there.
 
 ## MCP Client Configuration
 

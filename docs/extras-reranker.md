@@ -12,7 +12,7 @@ Xapian ranking and is not reranked. Caller surface is unchanged.
 pip install openzim-mcp[reranker]
 ```
 
-Install footprint: roughly 200 MB of Python packages (FastEmbed +
+Install footprint: roughly 150 MB of Python packages (FastEmbed +
 onnxruntime + tokenizers + huggingface_hub). Installing the extra is
 **not** enough on its own: the cross-encoder model (~1.1 GB for the
 default `BAAI/bge-reranker-base`) is never fetched by the server, so a
@@ -161,7 +161,7 @@ with the same `CACHE_DIR` the server uses. If you staged it earlier and
 it has vanished, the cache is probably still on its default path under
 the system temp directory — pin `OPENZIM_MCP_ML__RERANKER__CACHE_DIR`.
 
-**"reranker model load failed: timeout"**
+**"reranker model load exceeded 15.0s timeout"**
 Loading exceeded the configured `first_call_timeout_seconds` (default
 15s — sized for ONNX session creation on a warm cache). Raise it via
 `OPENZIM_MCP_ML__RERANKER__FIRST_CALL_TIMEOUT_SECONDS` on slow hardware,

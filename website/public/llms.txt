@@ -106,7 +106,11 @@ v2.0.0 collapses the prior 22-tool advanced surface into 8 consolidated tools (s
 ### MCP Resources
 - `zim://files`: Index of all available ZIM files
 - `zim://{name}`: Overview of one ZIM (metadata, namespaces, main page preview)
-- `zim://{name}/entry/{path}`: Single entry served with native MIME type
+- `zim://{name}/entry/{path}`: Single entry served with native MIME type.
+  Clients MUST percent-encode `/` as `%2F` inside `{path}` (and other RFC 3986
+  reserved characters). Example: `zim://wikipedia_en/entry/C%2FClimate_change`.
+  This is the one place URL encoding applies — entry paths passed as *tool
+  arguments* are plain UTF-8, as noted under Path Encoding below.
 
 ## Common Use Cases
 
