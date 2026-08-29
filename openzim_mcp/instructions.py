@@ -28,10 +28,11 @@ the ``zim_get``/``zim_metadata`` main-page split, ``zim_browse`` vs
 ``zim_metadata``, and ``zim_links`` needing an entry path rather than a query.
 
 The closing ``isError`` sentence is deliberately scoped to *rejected
-arguments*. ``zim_query``'s handler-side failures (access denied, no archive
-specified) return markdown guidance rather than a ``tool_error`` envelope, so
-they are still delivered with ``isError=False`` — claiming otherwise here would
-describe a contract the default surface does not honor. Routing those templates
+arguments*. ``zim_query``'s intent-level guidance (no archive specified, no results, no
+such article) returns markdown rather than a ``tool_error`` envelope, so it is
+still delivered with ``isError=False``. Path and security failures left that
+set in D58: they now return a ``zim_path_not_found`` envelope with
+``isError=True``. Routing those templates
 through :func:`openzim_mcp.responses.tool_error` is a payload change to the
 small-model surface and belongs in its own commit.
 """

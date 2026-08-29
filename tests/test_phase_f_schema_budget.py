@@ -87,7 +87,7 @@ TOTAL_CAP = 25 * 1024
 # allocation is deliberately not that number any more, so it is recorded here —
 # otherwise the table stops telling a reader what the surface actually costs.
 ALLOCATION = {
-    "zim_query": 5_550,  # 6,277B
+    "zim_query": 5_550,  # 6,243B
     "zim_search": 3_620,  # 3,937B
     "zim_get": 3_650,  # 3,913B
     "zim_get_section": 1_840,  # 1,863B
@@ -277,7 +277,7 @@ def test_gate_decision_scope_limitations_documented():
 # Both were comments before they were tests, and both had gone stale.
 # --------------------------------------------------------------------------
 
-# ``"zim_query": 5_550,  # 6,277B`` -> ("zim_query", "6,277")
+# ``"zim_query": 5_550,  # 6,243B`` -> ("zim_query", "6,277")
 _ALLOCATION_COMMENT_RE = re.compile(
     r'^\s*"(zim_[a-z_]+)":\s*[\d_]+,\s*#\s*([\d,]+)B\s*$', re.MULTILINE
 )

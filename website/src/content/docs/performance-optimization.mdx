@@ -13,7 +13,7 @@ Cache tuning, rate limiting, batching, and request-pattern guidance for OpenZIM 
 
 Most OpenZIM MCP latency comes from one of three places:
 
-1. **libzim cold reads** — first access to an entry pays disk I/O + decompression. Subsequent reads hit page cache (OS) and the in-memory archive cache.
+1. **libzim cold reads** — first access to an entry pays disk I/O + decompression. A repeat of the same call is served from the response cache; anything else re-opens the archive and leans on the OS page cache, because open archive handles are not pooled.
 2. **HTTP round-trips** (when using `--transport http`) — each tool call is a request/response. Batch where possible.
 3. **Search-derived smart-retrieval fallback** — when direct path access fails, the server runs a search loop. Cache hits eliminate this on repeat calls.
 
@@ -136,7 +136,7 @@ If you're running behind `--transport http`:
 - **Keep-alive matters.** A reverse proxy or client that closes connections per request burns the TLS handshake every call.
 - **Auth overhead is negligible** — bearer-token comparison is `hmac.compare_digest`.
 - **Health probes** — use `/healthz` for liveness (auth-exempt, returns 200 OK), `/readyz` for readiness (auth-exempt, returns 503 if no allowed dir is readable). Don't probe `/mcp` from your platform's health checker; that requires a token and a JSON-RPC body.
-- **Subscription watcher cost** — `OPENZIM_MCP_WATCH_INTERVAL_SECONDS` (default 5) controls poll cadence. Increase to 30+ if you don't need sub-minute freshness; set `OPENZIM_MCP_SUBSCRIPTIONS_ENABLED=false` to skip watching entirely.
+- **Subscription watcher cost** — `OPENZIM_MCP_WATCH_INTERVAL_SECONDS` (default 5) controls poll cadence. Raise it to 30-60 if you don't need sub-minute freshness — the field is capped at 60 and a larger value fails config validation at startup; set `OPENZIM_MCP_SUBSCRIPTIONS_ENABLED=false` to skip watching entirely.
 - **Let clients skip the read entirely** — reads of the `zim://{name}` overview advertise a one-hour `ttlMs`, so a 2026-07-28 client re-serves them from its own cache instead of asking again; that pays off because each overview read costs three blocking archive opens. (Per-entry reads keep the watcher-bounded TTL: no `resources/updated` is ever published for an entry URI, so a longer promise could not be invalidated.) Tune with `OPENZIM_MCP_RESOURCE_CACHE_TTL_SECONDS`; see [Read caching and freshness](/openzim-mcp/docs/resources-prompts-subscriptions/#read-caching-and-freshness) for the staleness trade-off if you replace archives in place.
 
 ## Monitoring
@@ -187,7 +187,7 @@ Both endpoints are auth-exempt and CORS-friendly; safe to wire into Kubernetes p
     "zim_files_found": 5,
     "permissions_ok": true
   },
-  "recommendations": [],
+  "recommendations": ["Server is running optimally"],
   "warnings": []
 }
 ```
@@ -280,7 +280,7 @@ What belongs here is the other half: which knob to reach for when something is s
 | Responses are large and slow to render | `CONTENT__MAX_CONTENT_LENGTH`, or ask for `compact` output and page with `content_offset` |
 | Many small round-trips | `zim_get(entry_paths=[...])` batching, not a config change |
 | Memory pressure on a small host | `CACHE__MAX_SIZE` and `CONTENT__SNIPPET_LENGTH` down; `SUBSCRIPTIONS_ENABLED=false` if you do not swap archives |
-| First read of a large archive is slow | Nothing to tune — that is libzim cold I/O; the archive cache amortises it |
+| First read of a large archive is slow | Nothing to tune — that is libzim cold I/O; archive handles are not pooled, so it is the OS page cache that makes the second read faster |
 
 ## Targets
 
@@ -297,7 +297,7 @@ Indicative latency targets on a modern desktop / midrange VPS, hot cache:
 | `zim_search(cross_file=True)` (5 archives) | < 1 s |
 | `zim_get(entry_paths=[...])` (50 batch, mixed cache) | < 2 s |
 
-Cold libzim opens of large archives (multi-GB Wikipedia) can be slow on first use; the archive cache amortises this.
+Cold libzim opens of large archives (multi-GB Wikipedia) can be slow on first use, and the server does not pool archive handles — every tool call re-opens the file. What amortises the repeat is the OS page cache plus the response cache, so a cache hit skips the open entirely.
 
 ---
 

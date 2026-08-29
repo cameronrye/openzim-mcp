@@ -136,7 +136,7 @@ Both are auth-exempt, so they work with no token and regardless of tool mode.
 
 ### No ZIM files found
 
-**Error**: `No ZIM files found in directory`
+**Error**: `No ZIM files found in allowed directories` from the file listing, or the `No ZIM files found in any directory` warning inside `zim_health`
 
 **Symptoms**:
 
@@ -163,7 +163,7 @@ Both are auth-exempt, so they work with no token and regardless of tool mode.
 
 ### Corrupted ZIM files
 
-**Error**: `Failed to open ZIM file` or `Invalid ZIM format`
+**Error**: `Failed to open ZIM archive: ...file.zim` (a corrupt or truncated archive) or `File is not a ZIM file: ...file.txt` (wrong extension)
 
 **Symptoms**:
 
@@ -233,7 +233,7 @@ Both are auth-exempt, so they work with no token and regardless of tool mode.
 
 ### `zim_search` returns 0 results
 
-**Error**: `No matches found` or empty search results
+**Error**: none — a miss comes back as a success payload with `"results": []` and `"total": 0` (`isError: false`); simple-mode `zim_query` renders the same miss as `No search results found for "<query>"`.
 
 **Possible causes**:
 
@@ -321,14 +321,14 @@ The `cache_performance` block always has 13 fields — `enabled`, `size`, `max_s
 
 1. **Increase cache size**: Raise `OPENZIM_MCP_CACHE__MAX_SIZE`.
 2. **Increase TTL**: Raise `OPENZIM_MCP_CACHE__TTL_SECONDS`.
-3. **Flush the cache**: There are no `cache_clear` / `cache_stats` / `warm_cache` tools — restart the server to flush. (For pre-warming after restart, call `zim_get(entry_path=...)` on your high-value entries from your client.)
+3. **Flush the cache**: There are no `cache_clear` / `cache_stats` / `warm_cache` tools — restart the server to flush. If `persistence_enabled` is true that is not enough on its own: the shutdown writes every unexpired entry back out and the next start reloads them, so stop the server, delete the file named by `.health.cache_performance.persistence_path`, then start it again. (For pre-warming after restart, call `zim_get(entry_path=...)` on your high-value entries from your client.)
 4. **Aim for >70% hit rate** for read-heavy workloads.
 
 ## Security issues
 
 ### Path traversal warnings
 
-**Error**: `Path traversal attempt detected`
+**Error**: `Path contains suspicious pattern: ...file.zim` or `Access denied - Path is outside allowed directories: ...file.zim` — both arrive as the `**Technical Details**` line of a `**Security Validation Error**` envelope.
 
 **Cause**: Attempting to access files outside allowed directories
 

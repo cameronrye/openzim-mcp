@@ -55,7 +55,6 @@ Args:
         browse 50, walk 200, links 25, search-all 5/archive);
         pass a value to override. Ignored for atomic intents
         that return a single item or a fixed-shape payload —
-        `tell me about <topic>`,
         `get article <name>`, `show structure of <name>`,
         `show main page`, `list namespaces`, `metadata for
         <file>`, `list available ZIM files`, `summary of

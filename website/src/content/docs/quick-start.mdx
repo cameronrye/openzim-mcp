@@ -165,7 +165,7 @@ In simple mode, the server exposes one tool. Phrase the request in plain languag
 }
 ```
 
-**Expected response:** a summary block for the Photosynthesis article.
+**Expected response:** a summary block for the Photosynthesis article. The Step 1 Option A archive is a climate-change extract with no Photosynthesis entry, so it answers with the nearest article it does hold (`A/Artificial_photosynthesis`) — swap in a topic your archive covers to see the exact-match path.
 
 > **With more than one archive in the directory, add `zim_file_path`.** There is no cross-archive scan on this path: the server auto-selects an archive only when exactly one is present. With two or more it returns a **No ZIM File Specified** prompt instead. This matters immediately if you ran `make download-test-data`, which fetches two `.zim` files.
 
@@ -236,7 +236,7 @@ openzim-mcp --mode advanced ~/zim-files
 
 ### Smoke test
 
-In simple mode, run a search and then a retrieval as two calls — the dispatcher handles one operation per call and answers a chained request ("search X, then fetch Y") with guidance to split it:
+In simple mode, run a search and then a retrieval as two calls — the dispatcher handles one operation per call and answers a chained request ("search for X, then get article Y") with guidance to split it:
 
 ```json
 {

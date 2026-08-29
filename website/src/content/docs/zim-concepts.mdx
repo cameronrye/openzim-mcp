@@ -25,9 +25,7 @@ this server's behaviour follows from that:
 - **"Updating" is replacement**, which the directory watcher notices: a
   replaced archive publishes `resources/updated` for its URI, and an added or
   removed one publishes `resources/list_changed`.
-- **Nothing here writes to an archive.** Every tool is read-only. The one file
-  this server ever creates is the link-graph sidecar, and it sits *beside* the
-  archive.
+- **Nothing here writes to an archive.** Every tool is read-only. The only file that ever lands beside an archive is the link-graph sidecar, and the `openzim-mcp build link-graph` CLI writes it, not the running server. The server's own writes are limited to its cache file, and only when `cache.persistence_enabled` is turned on.
 
 ## Namespaces, and the two schemes
 
@@ -56,13 +54,10 @@ though a naive iteration would report `M` as empty.
 **Old-scheme archives** spread content across `A`, `I` and `-`, with `C`
 sparse or absent.
 
-Do not guess which one you have. `zim_metadata` reports the real namespace
-breakdown, including `has_new_namespace_scheme`, and it is the only reliable
-way to know whether to ask for `C/Photosynthesis` or `A/Photosynthesis`. A
+Do not guess which one you have. `zim_metadata` reports the real namespace breakdown under `namespaces` — one row per letter, with its entry total and sample paths — and those samples are the reliable way to know whether to ask for `A/Photosynthesis` or the bare `Photosynthesis` a new-scheme archive actually serves. A
 wrong namespace returns a `bad_namespace` reason rather than an empty list.
 
-Modern archives may also use **domain-style** namespace names rather than
-single letters. `zim_metadata` reports those too.
+Modern ZIMIT-style archives store domain-shaped entry *paths* (`example.com/page.html`), but those are paths inside `C`, not namespaces of their own. `zim_metadata` files them under `C`, and `zim_browse` accepts only the single-letter namespaces — anything else comes back with a `bad_namespace` reason.
 
 ## Entry paths are archive-relative identifiers
 

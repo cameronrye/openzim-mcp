@@ -15,9 +15,9 @@ How OpenZIM MCP resolves entry paths when direct access fails — and how to deb
 
 ZIM entry paths aren't always predictable. (New to namespaces and entry paths? Start with [ZIM concepts](/openzim-mcp/docs/zim-concepts/).) Wikipedia's "Photosynthesis" might live at `A/Photosynthesis`, `C/Photosynthesis`, `Photosynthesis`, or under a slug variant. Smart retrieval is the fallback path that turns "I have a guess at the path" into "here's the article" without forcing the LLM to do trial-and-error.
 
-The fallback runs automatically whenever `zim_get` is called with an `entry_path` that doesn't match directly — on the default `view="full"` body path and on `view="summary"`.
+The fallback runs automatically whenever `zim_get` is called with an `entry_path` that doesn't match directly — on the default `view="full"` body path and on the batch `entry_paths` form. `view="summary"` resolves through a shorter helper of its own (`_resolve_entry_with_fallback`): direct lookup, then the search step, with no `M/` routing, no cached path mapping and no alternate-spelling probes.
 
-It does **not** cover every surface. `view="toc"`, `view="structure"` and `zim_links` resolve the entry with a single exact `get_entry_by_path` lookup through the shared bundle helper, so a near-miss path there returns an entry-not-found envelope rather than being repaired. If you have only a guessed path, resolve it once with a plain `zim_get` (or `zim_search(mode="title")`) and pass the `path` you get back to those tools.
+It does **not** cover every surface. `view="toc"`, `view="structure"` and `zim_links` in its `outbound` and `related` directions resolve the entry through the shared bundle helper's single exact `get_entry_by_path` lookup, so a near-miss path there is reported as not-found rather than repaired (`related` reports it in an `outbound_error` field rather than an error envelope). `direction="inbound"` skips the bundle entirely, probing the raw then the percent-decoded spelling before it queries the link-graph sidecar — so a percent-encoded near-miss is repaired there. If you have only a guessed path, resolve it once with a plain `zim_get` (or `zim_search(mode="title")`) and pass the `path` you get back to those tools.
 
 ## How it works
 
@@ -47,7 +47,7 @@ The `_smart_retrieve_entry` ladder is five steps. There is no scoring, no confid
 4. Alternate-spelling exact probes
    ────────────────────────────────
    Cheap exact lookups of the same path spelled differently —
-   percent-decoded, and un-rooted (leading namespace or slash removed).
+   percent-decoded, and un-rooted (a leading slash stripped, not the namespace).
    Still exact `get_entry_by_path` calls, not search. Cache on success.
 
 5. Search-derived term retrieval
@@ -72,11 +72,11 @@ The `resolved` path stored in the cache may differ from both the requested path 
 The smart-retrieval cache shares the global `OpenZimMcpCache` (LRU + TTL). Path-mapping entries use the key prefix `path_mapping:` and store the resolved path string as the value:
 
 ```
-key:   "path_mapping:/srv/zim/wikipedia.zim:<mtime_ns>:<size>:A/Photosynthesis"
+key:   "path_mapping:/srv/zim/wikipedia.zim:<mtime_ns>:<size>:<render_epoch>:A/Photosynthesis"
 value: "C/Photosynthesis"
 ```
 
-The archive path is part of the key so identical entry names in different ZIM files don't collide, and the archive's stat token (`mtime_ns:size`) is part of it too — so replacing the `.zim` file in place invalidates every mapping derived from the old one instead of serving paths that no longer exist. There is no separate `OPENZIM_MCP_SMART_RETRIEVAL__*` config namespace — tune via the global `OPENZIM_MCP_CACHE__*` settings (see [Configuration](/openzim-mcp/docs/configuration/)).
+The archive path is part of the key so identical entry names in different ZIM files don't collide, and the archive's stat token (`mtime_ns:size:<render_epoch>`) is part of it too — so replacing the `.zim` file in place invalidates every mapping derived from the old one instead of serving paths that no longer exist, and bumping the render epoch on an upgrade invalidates them all. There is no separate `OPENZIM_MCP_SMART_RETRIEVAL__*` config namespace — tune via the global `OPENZIM_MCP_CACHE__*` settings (see [Configuration](/openzim-mcp/docs/configuration/)).
 
 ## What you see in the response
 
@@ -105,7 +105,7 @@ When smart-retrieval resolves to a different path, a `requested_path` key appear
 }
 ```
 
-Test for `requested_path` to tell whether your guessed paths are accurate or you're relying on the fallback. (`zim_query` renders the same payload as a string, with `Requested Path:` and `Actual Path:` lines — that string form is specific to `zim_query`.)
+Test for `requested_path` to tell whether the path you asked for is the path you got: it is present whenever the two differ, including when direct access succeeded and only a redirect moved you, so it flags a stale guess rather than proving the fallback ran. (`zim_query` renders the same payload as a string, with `Requested Path:` and `Actual Path:` lines — that string form is specific to `zim_query`.)
 
 ## Errors that bypass fallback
 
@@ -161,7 +161,7 @@ When something resolves "wrong":
 
 ## Related
 
-- [API reference → `zim_get`](/openzim-mcp/docs/api-reference/) — the `Requested Path` / `Actual Path` response shape.
+- [API reference → `zim_get`](/openzim-mcp/docs/api-reference/) — the `EntryResponse` dict, and when `requested_path` joins `path`.
 - [Configuration](/openzim-mcp/docs/configuration/) — the only knobs that affect smart retrieval.
 - [Performance optimization](/openzim-mcp/docs/performance-optimization/) — cache tuning patterns.
 - [Architecture overview](/openzim-mcp/docs/architecture-overview/) — where the smart-retrieval code lives.

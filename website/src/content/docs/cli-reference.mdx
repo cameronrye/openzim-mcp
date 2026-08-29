@@ -113,7 +113,5 @@ See [Search reranking](/openzim-mcp/docs/search-reranking/) for the full picture
 
 ## What has no CLI
 
-There is no command to clear the cache, warm it, validate a config file, or
-list archives — those are server-side concerns reachable through the
-`zim_health` tool. Configuration is environment-only; there is no config-file
+There is no command to clear the cache, warm it, validate a config file, or list archives. `zim_health` *reports* cache statistics, the effective configuration and the loaded archives, but nothing on any surface clears or warms the cache — restart the server for that. Configuration is environment-only; there is no config-file
 flag.

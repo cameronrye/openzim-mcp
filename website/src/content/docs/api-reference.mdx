@@ -24,7 +24,7 @@ v2.0.0 collapsed the prior 22-tool advanced surface into 8 consolidated tools. T
 Tools return one of:
 
 - **JSON payload responses** (most tools) — typed payloads (`SearchResponse`, `ArchiveMetadataResponse`, `ServerHealthResponse`, etc.) serialized as JSON **text** inside a `TextContent` block. All 8 tools are annotated `-> Any`, so the SDK derives no `outputSchema` and **nothing arrives in `structuredContent`** — parse the text block as JSON.
-- **Markdown-string responses** — `zim_query` renders article bodies as a string with `Title:`, `Path:`, `Type:` lines and then a `## Content` block (and `Requested Path:` / `Actual Path:` when smart retrieval resolved somewhere else). This rendering is reachable **only** through `zim_query`; `zim_get` returns the JSON payload described under its own entry.
+- **Markdown-string responses** — `zim_query` renders article bodies as a string that opens with the title as an `# ` heading, then a `Path:` line and a `Type:` line, and then a `## Content` block (when smart retrieval resolved somewhere else, a `Requested Path:` / `Actual Path:` pair replaces the single `Path:` line). This rendering is reachable **only** through `zim_query`; `zim_get` returns the JSON payload described under its own entry.
 - **Tool errors** — every tool catches exceptions and returns a structured `ToolErrorPayload` (`{error: true, operation, message, context?}`) rather than raising. The exception is `zim_query` on its default path, and only partly: its *guidance* failures — no archive specified, empty query, meta-only query, chained query — return markdown with `isError: false`, but a `zim_file_path` matching no archive returns a `zim_path_not_found` envelope and any other exception returns a `zim_query` envelope, both with `isError: true`. There is no `status` key and no `hint` key. Only `error`, `operation`, and `message` are guaranteed; individual failures may merge extra self-correction keys into the same envelope (a `section_not_found` error, for example, also carries `available_section_ids`, `available_section_ids_truncated`, `available_section_ids_total`, and `closest_match`). The envelope arrives as JSON text in the response's `content` — no tool advertises an `outputSchema`, so nothing lands in `structuredContent` — and `openzim_mcp/mcp_envelope.py` recognises it on the way out and sets `isError: true` on the `CallToolResult`. Path entries inside errors are redacted to `...filename.zim` form so the canonical allowed-directory layout is never leaked.
 
 ---
@@ -76,15 +76,13 @@ different next move.
 | `no_xapian_index` | This archive ships no full-text index | Full-text search cannot work here at all. Use `zim_search(mode="title")` or `zim_browse` |
 | `bad_namespace` | The namespace does not exist in this archive | Call `zim_metadata` for the real namespace list — old and new archives use different schemes |
 | `no_content_type_match` | The `content_type` filter excluded everything | Drop the filter, or widen it |
-| `sample_only` | The page came from a **sampled** discovery: more entries exist even though `done: true` | Switch to `zim_browse(mode="walk")` for exhaustive iteration. `done` alone is not proof of completeness here |
+| `sample_only` | The page exhausted a **sampled** discovery, so `done` is deliberately held at `false` (and a `next_cursor` is still issued) rather than claiming completeness | Switch to `zim_browse(mode="walk")` for exhaustive iteration. `total` here is the sample size, not the namespace size |
 | `archive_unavailable` | In a `cross_file` fan-out, every archive failed | Infrastructural, not a query problem — check mounts and `zim_health` |
 | `search_all_budget_exceeded` | The aggregate `cross_file` timeout fired before every archive was searched | Partial results. Raise `OPENZIM_MCP_SEARCH__SEARCH_ALL_TOTAL_TIMEOUT_SECONDS`, or narrow the archive set |
 | `scan_truncated` | A link scan stopped before reading the whole article | Totals are a floor, not a count |
 | `suggestion_total_is_lower_bound` | A suggestion listing did not reach the end of the index | `total` undercounts; raise `limit` |
 
-The last three are the ones worth special-casing in client code: `sample_only`,
-`scan_truncated` and `suggestion_total_is_lower_bound` all ride responses that
-otherwise look complete — `sample_only` even arrives with `done: true`. The
+The last three are the ones worth special-casing in client code: `sample_only`, `scan_truncated` and `suggestion_total_is_lower_bound` all ride responses that otherwise look complete — `sample_only` even keeps `done: false` on a page that already returned everything the sample held. The
 first nine also shape the simple-mode footer; the last two only appear in
 `_meta`.
 
@@ -206,10 +204,7 @@ inline `[cite: <cite_id>]` marker. Nothing is paraphrased, summarised or
 written by a model — the server has no model. Treat it as a pre-assembled
 evidence bundle to hand your own LLM, not as an answer to display.
 
-The pipeline: per-archive search → RRF fusion across archives → optional
-cross-encoder rerank (only with the `[reranker]` extra) → passage extraction →
-section attribution and heading-affinity boost → answer rendering → budget
-enforcement → citation building.
+The pipeline: per-archive search → RRF fusion across archives → passage extraction → optional cross-encoder rerank (only with the `[reranker]` extra) → section attribution and heading-affinity boost → budget enforcement → answer rendering → citation building.
 
 **Response** (`SynthesizeResponse`):
 
@@ -220,9 +215,9 @@ enforcement → citation building.
 | `passages` | `{cite_id, text_markdown, rank, score}` per passage. Dropped in compact mode, which moves `rank`/`score` onto the citations instead |
 | `citations` | `{cite_id, archive, entry_path, title, section_id, section_title, rank, score}` — `entry_path` is what you pass to `zim_get` |
 | `archives_searched` | Which archives actually contributed |
-| `fallback_used` | The ranking that produced this result: `reranker` (best), `rrf_fusion`, or `xapian_score` (single archive, or fusion unavailable). **Not an error** — it reports which stage the ranking came from |
+| `fallback_used` | The fusion stage that ordered the hits: `rrf_fusion` (multiple archives) or `xapian_score` (single archive, or fusion unavailable). **Not an error**, and not a reranker signal — the cross-encoder runs after fusion and never changes this field, so the schema's third literal `reranker` is never emitted |
 | `total_chars` / `total_words` | Size of the assembled answer |
-| `considered_articles` / `considered_sections` | Candidates that did *not* become citations, so a follow-up turn can pivot without re-running the search. Empty when there was no candidate space |
+| `considered_articles` / `considered_sections` | Pivot handles for a follow-up turn without re-running the search: the other top hits minus the top passage's own article, and that article's other sections. Only the top passage's article and section are excluded, so lower-ranked cited articles still appear here. Empty when there was no candidate space |
 | `_meta` | The usual envelope |
 
 **Tuning** — all soft budgets under `OPENZIM_MCP_SYNTHESIZE__`:
@@ -344,7 +339,7 @@ zim_get_section(
 | `compact` | Default `True` (compact rendering — `[Table N: …]` placeholders instead of full tables). Since v2.4.0, `compact=False` returns the true raw section body with full tables |
 | `compact_budget` | **Inert on this tool** — declared but never forwarded. Only `zim_query` honors it |
 
-**Returns:** structured response with section body, heading metadata, and adjacent-section hints.
+**Returns:** `{entry_path, title, section_id, section_title, level, parent_id, content_markdown, char_count, word_count, truncated, _meta}` — the section body plus its heading metadata, with a `narrow_widened_to_first_child` flag added when `include_subsections=False` had to widen into the first child. There are no next/previous-section keys; walk the outline from `zim_get(view="toc")` instead.
 
 ---
 
@@ -428,7 +423,7 @@ zim_links(
 
 Relative hrefs are resolved against the source entry's directory; redirects are followed to resolved paths; the content namespace is identified correctly on domain-scheme archives; self-referential refs are rejected.
 
-**Returns:** a paginated `{results, next_cursor, total, done, page_info, …}` envelope for every direction, with `kind` and `category_totals` alongside.
+**Returns:** a paginated `{results, next_cursor, total, done, page_info, …}` envelope for every direction. `direction="outbound"` adds `kind` and `category_totals` alongside; `"inbound"` and `"related"` carry neither, and key the article as `entry_path` rather than `path`/`title`.
 
 Outbound entries carry `url`/`text`/`title` (plus `domain` for external, `alt` for media). **`url` is the raw href as written in the article** — it does not necessarily round-trip into `zim_get`. Internal rows additionally carry `path`, the resolved entry path, and that is the one to pass to `zim_get`. Inbound entries are `{path, title, inbound_degree, anchor_text}`; related entries are `{path, title, …}` rows.
 
@@ -594,7 +589,7 @@ All tools are subject to a global token-bucket limiter (default 20 work units/s,
 
 | Tool call | Internal operation | Cost |
 |-----------|--------------------|------|
-| `zim_search(mode="fulltext")` or `zim_search(mode="title")` | `search` / `find_entry_by_title` | 2 |
+| `zim_search(mode="fulltext")` or `zim_search(mode="title")` | `search` / `find_entry_by_title` — a fulltext call carrying `namespace` or `content_type` keys on `search_with_filters` instead | 2 |
 | `zim_search(mode="suggest")` | `suggestions` | 1 |
 | `zim_search(cross_file=True)` | `search` (charged once per call, not per archive scanned) | 2 |
 | `zim_get(entry_path=...)` | `get_entry` | 1 |
@@ -616,7 +611,7 @@ When the limit is exceeded the tool returns a `ToolErrorPayload` with `operation
 
 ## Error responses
 
-Every tool wraps exceptions and returns a structured `ToolErrorPayload` — except `zim_query`'s default path, which returns markdown guidance for handler-side failures — delivered as JSON text in the response's `content` — never in `structuredContent`, since no tool advertises an `outputSchema` — with `isError: true` set on the `CallToolResult`. `error` (always `true`), `operation`, and `message` are always present; `context` is added only when the tool supplies one. One path merges operation-specific self-correction keys: the `section_not_found` envelope returned by `zim_get_section` also carries `available_section_ids` (capped at 50), `available_section_ids_truncated`, and `available_section_ids_total`, plus `closest_match` when a near-miss section ID is found:
+Every tool wraps exceptions and returns a structured `ToolErrorPayload` — except `zim_query`'s default path, which returns markdown guidance for handler-side failures — delivered as JSON text in the response's `content` — never in `structuredContent`, since no tool advertises an `outputSchema` — with `isError: true` set on the `CallToolResult`. `error` (always `true`), `operation`, and `message` are always present; `context` is added only when the tool supplies one. Three paths merge operation-specific self-correction keys: the `section_not_found` envelope returned by `zim_get_section` also carries `available_section_ids` (capped at 50), `available_section_ids_truncated`, and `available_section_ids_total`, plus `closest_match` when a near-miss section ID is found; an `unknown_argument` envelope carries `unknown_arguments` and `accepted_arguments`, plus `closest_matches` when a stray name is close to a real one; and an `invalid_argument` envelope carries `invalid_arguments`:
 
 ```json
 {

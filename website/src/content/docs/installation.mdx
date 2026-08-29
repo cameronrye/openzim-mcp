@@ -337,7 +337,7 @@ make test
 
 Default mode is **Simple** (one natural-language tool). For all 8 tools (`zim_query`, `zim_search`, `zim_get`, `zim_get_section`, `zim_browse`, `zim_metadata`, `zim_links`, `zim_health`), pass `--mode advanced`.
 
-**The Docker image is the exception.** It bakes `OPENZIM_MCP_TOOL_MODE=advanced` into the image, so a container registers all 8 tools with no flag. Pass `-e OPENZIM_MCP_TOOL_MODE=simple` if you want simple mode there.
+**The packaged distributions are the exception.** The Docker image bakes `OPENZIM_MCP_TOOL_MODE=advanced` into the image, and the `.mcpb` extension's manifest and the MCP Registry `server.json` set the same variable, so all three register all 8 tools with no flag. Pass `-e OPENZIM_MCP_TOOL_MODE=simple` if you want simple mode there.
 
 ## MCP Client Configuration
 

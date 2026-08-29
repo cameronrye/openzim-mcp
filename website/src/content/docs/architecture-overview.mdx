@@ -173,7 +173,7 @@ subscription_bus  → InMemorySubscriptionBus()  (only when subscriptions_enable
 simple_tools_h    → SimpleToolsHandler(zim_operations)
 ```
 
-Tool registration is dispatched from `tools/__init__.py:register_phase_f_tools(server)`. In Simple mode, only `zim_query` is registered as a *new* tool — the underlying advanced tools are still wired for routing but aren't surfaced to the MCP client unless `tool_mode='advanced'`.
+Tool registration is dispatched from `tools/__init__.py:register_phase_f_tools(server)`. In Simple mode only `zim_query` is registered, and the other seven tool modules are never even imported — `zim_query` reaches the business logic through `SimpleToolsHandler` and `ZimOperations` directly, not through them. The advanced tools are surfaced only when `tool_mode='advanced'`.
 
 ### HTTP / SSE transport (`http_app.py`)
 
@@ -200,7 +200,7 @@ Polling-based mtime watcher, plus the mapping from its change kinds onto MCP not
 ### Security layer (`security.py`)
 
 - **`PathValidator.validate_path`** — regex-based traversal-pattern check + `Path.is_relative_to(allowed_dir)` containment + canonical resolution.
-- **`PathValidator.validate_zim_file`** — re-resolves the file and re-checks containment after open to close the TOCTOU window between path validation and the eventual libzim open (defends against symlink swaps).
+- **`PathValidator.validate_zim_file`** — re-resolves the file and re-checks containment immediately before the archive is opened, closing the TOCTOU window between path validation and the eventual libzim open (defends against symlink swaps), and returns the re-resolved path so the caller opens the inode that was just checked.
 - **`sanitize_input`** — strips control characters, caps length per input class.
 - **`redact_paths_in_message`** / **`sanitize_path_for_error`** — regex `_ABS_PATH_RE` redacts absolute paths (cross-platform `/` and `\`, wrapped/quoted forms like `(/opt/foo)` / `"/opt/bar"` / `file=/opt/foo`, and URL-decoded forms like `%2Fopt%2Fzims`). Used in every error message and in diagnostics tools.
 
@@ -222,7 +222,9 @@ Cache stats: 13 fields — `enabled`, `size`, `max_size`, `ancillary_entries`, `
 `zim_operations.py` is a back-compat shim. Real code lives in `openzim_mcp/zim/`, split by concern:
 
 ```python
-class ZimOperations(_SearchMixin, _ContentMixin, _StructureMixin, _NamespaceMixin):
+class ZimOperations(
+    _ArchiveAccessMixin, _SearchMixin, _ContentMixin, _StructureMixin, _NamespaceMixin
+):
     """Composed via mixins so each domain (search, content, structure,
     namespace) lives in its own file. The class proper holds the
     constructor and the handful of cross-cutting helpers (file listing,
@@ -240,7 +242,7 @@ Each mixin uses the same shared services injected into the parent: `config`, `pa
 
 ### Tools package (`tools/`)
 
-One module per tool. Every `zim_*.py` exports a `register(server)` function called from `tools/__init__.py:register_phase_f_tools`. Tools are decorated with `@server.mcp.tool()` (MCPServer) and forward to either `server.async_zim_operations` (for blocking ZIM I/O dispatched via `asyncio.to_thread`) or `server.zim_operations` (for cheap synchronous helpers).
+One module per tool. Every `zim_*.py` exports a `register(server)` function called from `tools/__init__.py:register_phase_f_tools`. Tools are decorated with `@server.mcp.tool()` (MCPServer). Each of the seven data tools builds its own `AsyncZimOperations(server.zim_operations)` inside `register()` and forwards blocking ZIM I/O through it via `asyncio.to_thread`, while `zim_query` dispatches `SimpleToolsHandler` on a worker thread; `server.zim_operations` is called directly only for cheap synchronous helpers.
 
 ### Smart retrieval fallback
 
@@ -252,7 +254,7 @@ Entry lookup in `_ContentMixin` runs a fallback sequence when the literal path m
 4. Alternate-spelling exact probes (percent-decoded, un-rooted) — still `get_entry_by_path`, not search
 5. Search-derived candidate terms (namespace-stripped, underscore ↔ space, URL-decoded variants) queried against libzim's Searcher via `_SearchMixin`
 
-Steps 2, 4 and 5 cache the resolved path on success. The order is the contract: raw spelling before decoded, exact probes before search.
+Steps 3, 4 and 5 cache the resolved path on success; step 2 only reads that cache, dropping a mapping that has gone stale. The order is the contract: raw spelling before decoded, exact probes before search.
 
 Successful resolutions are memoized in the shared cache so repeat lookups bypass the sequence. See [Smart retrieval](/openzim-mcp/docs/smart-retrieval/) for the full algorithm and the diagnostics that surface which step matched.
 

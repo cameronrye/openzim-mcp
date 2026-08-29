@@ -138,10 +138,10 @@ Full documentation lives at **<https://cameronrye.github.io/openzim-mcp/docs/>**
 
 | Group | Pages |
 | --- | --- |
-| [Get started](https://cameronrye.github.io/openzim-mcp/docs/) | Introduction · Installation · Quick start |
-| [Reference](https://cameronrye.github.io/openzim-mcp/docs/api-reference/) | API reference · Configuration · Resources, prompts & subscriptions |
-| [Guides](https://cameronrye.github.io/openzim-mcp/docs/llm-integration-patterns/) | LLM integration patterns · Smart retrieval · HTTP & Docker deployment · Performance optimization · Security best practices · Worked examples |
-| [Operations](https://cameronrye.github.io/openzim-mcp/docs/troubleshooting/) | Troubleshooting · FAQ · Architecture overview |
+| [Get started](https://cameronrye.github.io/openzim-mcp/docs/) | Introduction · Installation · Quick start · ZIM concepts |
+| [Reference](https://cameronrye.github.io/openzim-mcp/docs/api-reference/) | API reference · Configuration · Resources, prompts & subscriptions · CLI reference |
+| [Guides](https://cameronrye.github.io/openzim-mcp/docs/llm-integration-patterns/) | LLM integration patterns · Smart retrieval · HTTP & Docker deployment · Performance optimization · Security best practices · Worked examples · Search reranking |
+| [Operations](https://cameronrye.github.io/openzim-mcp/docs/troubleshooting/) | Troubleshooting · FAQ · Architecture overview · Upgrading |
 
 ## Project status
 

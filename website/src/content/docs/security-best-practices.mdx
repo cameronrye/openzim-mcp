@@ -18,7 +18,7 @@ OpenZIM MCP serves offline knowledge archives to MCP clients. The relevant threa
 | Threat | Mitigation |
 |--------|------------|
 | Path traversal — read files outside allowed dirs | `PathValidator` regex patterns + `Path.is_relative_to` containment + canonical resolution |
-| TOCTOU symlink swap between path validation and open | `validate_zim_file` re-resolves and re-checks containment after open |
+| TOCTOU symlink swap between path validation and open | `validate_zim_file` re-resolves and re-checks containment immediately before the archive is opened, and hands the caller that re-resolved path |
 | Information disclosure via error messages | Paths/PIDs in error responses are redacted on all transports; `zim_health` diagnostics redact paths/PIDs over the HTTP/SSE transports and report them in full on the local stdio transport |
 | Unauthenticated network access | HTTP transport requires bearer token unless bound to loopback; SSE transport is loopback-only |
 | Cross-origin browser abuse | CORS allow-list; an entry equal to `*` rejected at startup; no blanket `OPTIONS` exemption — a bare `OPTIONS /mcp` still gets a 401. A genuine preflight (carrying `Origin` and `Access-Control-Request-Method`) from an **allow-listed** origin is answered 200 by the outer CORS layer before auth runs, because browsers never attach `Authorization` to a preflight. Neither path mints a session |
@@ -34,7 +34,7 @@ OpenZIM MCP serves offline knowledge archives to MCP clients. The relevant threa
 `PathValidator` (in `security.py`) is the single gatekeeper for filesystem access:
 
 - **`validate_path(input_path)`** — applies regex traversal-pattern detection, expands `~`, resolves the path, and verifies containment within at least one allowed directory.
-- **`validate_zim_file(path)`** — calls `validate_path`, then re-resolves the file and re-checks containment after the file handle is opened. This closes the TOCTOU window where a symlink could be swapped between validation and `Archive.open()`.
+- **`validate_zim_file(path)`** — calls `validate_path`, then re-resolves the file with `resolve(strict=True)` and re-checks containment immediately before the caller opens the archive, returning the re-resolved path so the opened inode is the one just verified. This closes the TOCTOU window where a symlink could be swapped between validation and `Archive.open()`.
 
 There are no env vars to relax this — path validation is unconditional. The set of allowed directories is the only knob.
 
@@ -43,7 +43,7 @@ There are no env vars to relax this — path validation is unconditional. The se
 Every operator-visible string is run through `redact_paths_in_message` / `sanitize_path_for_error` before it leaves the server:
 
 - **MCP error responses** — rejected traversals previously leaked the canonical allowed-directory layout; now they appear as `...filename.zim`.
-- **`zim_health` health/configuration views** — `process_id` / `server_pid` and `allowed_directories` are redacted (`[REDACTED]` / `<redacted>/<basename>`) over the HTTP/SSE transports, where the client may be remote. Over the local **stdio** transport they report the real PID and full paths: the client already shares the filesystem, and `loaded_archives[].path` (a functional argument clients pass back to other tools) is unredacted there regardless — so masking only the directory list created an inconsistency without protecting anything. Warning strings about inaccessible directories always use the redacted form.
+- **`zim_health` health/configuration views** — `process_id` / `server_pid` and `allowed_directories` are redacted (`[REDACTED]` / `<redacted>/<basename>`) over the HTTP/SSE transports, where the client may be remote. Over the local **stdio** transport they report the real PID and full paths: the client already shares the filesystem, and `loaded_archives[].path` (a functional argument clients pass back to other tools) is unredacted there regardless — so masking only the directory list created an inconsistency without protecting anything. The health view's warnings about inaccessible directories always use the redacted `...basename` form; the configuration view's `Invalid directories:` warning follows the transport rule like the rest of that report.
 
 The redaction regex (`_ABS_PATH_RE`) handles cross-platform separators (`/` and `\`), wrapped/quoted forms (`(/opt/foo)`, `"/opt/bar"`, `file=/opt/foo`), and URL-decoded forms (`%2Fopt%2Fzims`). Operators can still see unredacted paths in server logs — only the wire-visible diagnostics are redacted.
 
@@ -155,7 +155,7 @@ The published image (`ghcr.io/cameronrye/openzim-mcp`) is hardened by default:
 - **Multi-stage build** — runtime image only contains the venv and source, no build tools.
 - **Multi-arch** — `linux/amd64`, `linux/arm64`.
 - **Minimal runtime** — no `curl` or other extra tooling in the final image; it ships no `HEALTHCHECK` (the default stdio transport has no HTTP endpoint to probe). For HTTP deployments, define a `/readyz` probe in your orchestrator (see [HTTP and Docker Deployment](/openzim-mcp/docs/http-and-docker-deployment/)).
-- **stdio by default** — opting into HTTP with `OPENZIM_MCP_HOST=0.0.0.0` triggers the safe-default startup check, which refuses to bind without `OPENZIM_MCP_AUTH_TOKEN`. Set the token, or keep the loopback-only default.
+- **stdio by default** — HTTP is opt-in via `OPENZIM_MCP_TRANSPORT=http`, and reaching the container from outside also needs `OPENZIM_MCP_HOST=0.0.0.0`; that combination triggers the safe-default startup check, which refuses to bind without `OPENZIM_MCP_AUTH_TOKEN`. Setting the host alone leaves the container on stdio, where the check never runs. Set the token, or keep the loopback-only default.
 
 See the [Dockerfile](https://github.com/cameronrye/openzim-mcp/blob/main/Dockerfile) for full details.
 
@@ -230,7 +230,7 @@ These are the load-bearing protections in the current posture:
 - CORS whitespace-wildcard rejection.
 - Symlink-tightened archive scan (TOCTOU close).
 - Per-entry path sanitization in `zim_get(entry_paths=[...])`.
-- Subscription handler `asyncio.CancelledError` re-raised (not swallowed by `gather(return_exceptions=True)`).
+- Watcher polling loop lets `asyncio.CancelledError` propagate, so `stop()` on the ASGI shutdown really ends change detection instead of leaving a task polling.
 
 For the full review log see the [CHANGELOG](https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md).
 

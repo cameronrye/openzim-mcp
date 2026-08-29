@@ -120,7 +120,7 @@ Response (truncated) — `zim_get` returns an `EntryResponse` dict, and the arti
   "title": "Protein",
   "content_type": "text/html",
   "content": "#  Protein\n\nA representation of the 3D structure of the protein myoglobin showing turquoise α-helices. This protein was the first to have its structure solved by X-ray crystallography ...\n\n**Proteins** are large biomolecules and macromolecules that comprise one or more long chains of amino acid residues ...\n\n... [Content truncated, total of 156,202 characters of body content, only showing first 100,000. Pass `content_offset=100000` to read the next page.] ...",
-  "_meta": {}
+  "_meta": { "chars": 101504, "truncated": true, "tokens_est": 23811, "more_at_offset": 100000, "total_chars": 156202 }
 }
 ```
 
@@ -144,7 +144,7 @@ Response:
   "path": "C/Protein",
   "content_type": "text/html",
   "summary": "Proteins are large biomolecules comprising one or more long chains of amino acid residues. They perform a vast array of functions within organisms, including catalysing metabolic reactions, DNA replication, responding to stimuli, providing structure to cells and organisms, and transporting molecules ...",
-  "word_count": 100,
+  "word_count": 200,
   "is_truncated": true
 }
 ```
@@ -228,8 +228,8 @@ Response (truncated — one `kind` per call, `"internal"` by default):
   ],
   "kind": "internal",
   "category_totals": { "internal": 187, "external": 23, "media": 12, "anchor": 9 },
-  "next_cursor": null,
-  "done": true
+  "next_cursor": "eyJ2IjoyLCJ0IjoiZXh0cmFjdF9hcnRpY2xlX2xpbmtzIiwicyI6ey4uLg",
+  "done": false
 }
 ```
 
@@ -257,7 +257,7 @@ Response:
     { "path": "C/Wasp", "title": "Wasp", "mention_count": 3 },
     { "path": "C/Hymenoptera", "title": "Hymenoptera", "mention_count": 3 },
     { "path": "C/Eusociality", "title": "Eusociality", "mention_count": 2 },
-    { "path": "C/Termite", "title": "Termite" }
+    { "path": "C/Termite", "title": "Termite", "mention_count": 1 }
   ]
 }
 ```
@@ -403,7 +403,7 @@ Response (truncated):
     }
   ],
   "total": 80000,
-  "next_cursor": null,
+  "next_cursor": "eyJ2IjoyLCJ0IjoiYnJvd3NlX25hbWVzcGFjZSIsInMiOnsuLi4",
   "done": false,
   "page_info": { "offset": 0, "limit": 5 }
 }
@@ -476,7 +476,7 @@ Response:
 
 ## Smart retrieval in action
 
-Every `zim_get` call goes through smart retrieval if the direct lookup fails. Asking for a path with a space when the canonical form uses an underscore:
+A `zim_get` call for the `full` or `summary` view goes through smart retrieval if the direct lookup fails; the `toc` and `structure` views resolve the path directly and return a not-found error instead. Asking for a path with a space when the canonical form uses an underscore:
 
 ```python
 zim_get(
@@ -494,7 +494,7 @@ Response (showing the resolved path) — the `requested_path` key appears only w
   "title": "Test Article",
   "content_type": "text/html",
   "content": "# Test Article\n\nThis article demonstrates the smart retrieval system automatically handling path encoding differences. The system tried \"C/Test Article\" directly, then automatically searched and found \"C/Test_Article\". ...",
-  "_meta": {}
+  "_meta": { "chars": 359, "truncated": false, "tokens_est": 85 }
 }
 ```
 

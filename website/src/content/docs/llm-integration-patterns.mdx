@@ -74,10 +74,10 @@ zim_query(query="search every ZIM for climate change")
 zim_query(query="list available ZIM files")
 
 # Walk a namespace
-zim_query(query="walk namespace M in wikipedia.zim")
+zim_query(query="walk namespace M", zim_file_path=zim_path)  # naming the file inside the query only works for metadata/search phrasings
 ```
 
-The intent parser recognises summarise / search / get / browse / structure / TOC / list-files / related-articles / find-by-title phrasings (server health and cache stats require the advanced-mode `zim_health` tool). The response text ends with a telemetry comment — `<!-- intent=<operation> cert=<confidence> -->` — describing which underlying operation the parser picked, useful for diagnosing surprises.
+The intent parser recognises summarise / search / get / browse / structure / TOC / list-files / related-articles / find-by-title phrasings (server health and cache stats require the advanced-mode `zim_health` tool). The response text carries a telemetry comment — `<!-- intent=<operation> cert=<confidence> -->` — describing which underlying operation the parser picked, useful for diagnosing surprises. Search for the comment rather than reading the last line: a `<!-- reranker=... -->` marker, a closing content fence and a token-count footer can follow it.
 
 For everything that follows on this page, switch to advanced mode for fine-grained control.
 
@@ -551,7 +551,7 @@ If your client supports MCP prompts, surface these as slash commands rather than
 
 ### MCP resources
 
-Three URI templates, also available in advanced mode:
+Three resource URIs, also available in advanced mode — `zim://files` is a concrete resource listed by `resources/list`, the other two are URI templates listed by `resources/templates/list`:
 
 - `zim://files` — JSON list of every ZIM file.
 - `zim://{name}` — overview of one ZIM (metadata, namespace summary, main-page preview).

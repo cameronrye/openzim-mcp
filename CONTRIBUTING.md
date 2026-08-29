@@ -572,7 +572,7 @@ git push origin v<X.Y.Z>
 ### Troubleshooting
 
 - **No release PR after merging commits**: check commit messages are conventional. Only the `hidden: true` types (`chore`, `ci`, `build`, `test`, `style`) fail to bump a version on their own.
-- **`test_no_unannotated_current_version_claims` fails after a release**: a doc states the new version without an `x-release-please-version` marker, or `_HISTORICAL_VERSIONS` in `tests/test_mcpb_distribution.py` has not been given the *previous* version yet. This gate runs after the tag is pushed, so it fails on `main` rather than blocking the release PR — add the previous version to that set as part of the follow-up.
+- **`test_no_unannotated_current_version_claims` fails after a release**: a doc states the new version without an `x-release-please-version` marker, or `_HISTORICAL_VERSIONS` in `tests/test_mcpb_distribution.py` has not been given the *previous* version yet. `release-please.yml`'s `sync-uv-lock` job runs `tests/test_mcpb_distribution.py` against the release-PR branch, so this gate now fires before the tag is pushed — add the previous version to `_HISTORICAL_VERSIONS` while the release PR is still open, not as a follow-up on `main`.
 - **Version sync failure**: `pyproject.toml`, `.release-please-manifest.json`, `server.json` (both version fields), and `packaging/mcpb/manifest.json` must agree on the version (`openzim_mcp/__init__.py` is intentionally excluded — it reads its version via `importlib.metadata`). If they drift (rare; usually a manual edit), align them in a follow-up PR.
 - **PyPI upload failure with "already exists"**: harmless; the workflow uses `skip-existing: true`. A true conflict (same version, different artifact) requires bumping the version.
 
