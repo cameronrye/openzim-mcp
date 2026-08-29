@@ -23,7 +23,7 @@ PARAMETERS:
   direction       See DIRECTIONS above.
   kind            Outbound only — which bucket to return: "internal"
                   (default) / "external" / "media". One per call;
-                  `category_totals` reports all three counts.
+                  `category_totals` reports four counts (see below).
   cursor          Cursor handle (outbound/inbound).
   limit           Page size. Outbound 1-500 (default 100);
                   inbound and related 1-100 (default 10).
@@ -41,8 +41,9 @@ RESPONSE:
   for the same entry, which then carries `path`).
 
 ERRORS:
-  Invalid `direction` → `invalid_direction`. Missing/stale inbound
-  sidecar → `inbound_sidecar_unavailable`. Unknown `entry_path` →
+  Bad `direction`/`kind` → `invalid_argument` (enum-typed, so it is
+  rejected before the body runs). Missing/stale inbound sidecar →
+  `inbound_sidecar_unavailable`. Unknown `entry_path` →
   not-found envelope (`related`: `outbound_error`, `total: 0`).
   Cursor from another archive/entry/tool →
   `cursor_context_mismatch` / `cursor_mismatch`.

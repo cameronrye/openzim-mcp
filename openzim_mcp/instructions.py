@@ -1,10 +1,13 @@
-"""Server ``instructions`` advertised in the MCP ``initialize`` response.
+"""Server ``instructions`` advertised through the MCP ``server/discover`` result.
+
+Protocol revision 2026-07-28 has no ``initialize`` handshake; ``server/discover``
+is its stateless replacement, and that is where this text rides.
 
 ``instructions`` is the one place to put *cross-tool* guidance. Tool
 descriptions can only describe themselves, so every disambiguation between two
 tools had to be paid for twice — once in each description — out of the surface
-budget the 8-tool consolidation exists to protect. This text is sent once per
-session instead of on every ``tools/list``.
+budget the 8-tool consolidation exists to protect. This text is sent with
+discovery instead of on every ``tools/list``.
 
 The routing lines below are not guesses. They target the confusion pairs the
 committed dispatch-eval run actually produced against qwen3-8b-q4

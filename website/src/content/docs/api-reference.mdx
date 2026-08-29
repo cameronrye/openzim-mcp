@@ -1,6 +1,6 @@
 ---
 title: API reference
-summary: Every tool, prompt, and resource — 8 consolidated advanced tools, 3 slash-command prompts, 3 resource templates, plus the v1 → v2 migration table.
+summary: Every tool, prompt, and resource — 8 consolidated advanced tools, 3 slash-command prompts, 1 resource and 2 URI templates, plus the v1 → v2 migration table.
 group: Reference
 sidebar_order: 1
 ---
@@ -11,7 +11,7 @@ OpenZIM MCP exposes three kinds of MCP surfaces:
 |---------|------------------------|---------------|
 | **Tools** (callable functions) | 8 | only `zim_query` exposed in Simple mode |
 | **Prompts** (slash-command workflows) | 3 | Advanced mode only |
-| **Resources** (URI-addressable data) | 3 templates + subscriptions | Advanced mode only (change notifications additionally require the HTTP transport) |
+| **Resources** (URI-addressable data) | 1 resource + 2 templates, plus subscriptions | Advanced mode only (change notifications additionally require the HTTP transport) |
 
 In **Simple mode** (the default) only the `zim_query` natural-language tool is exposed. Pass `--mode advanced` (or set `OPENZIM_MCP_TOOL_MODE=advanced`) to expose all 8 specialized tools below.
 
@@ -24,7 +24,7 @@ v2.0.0 collapsed the prior 22-tool advanced surface into 8 consolidated tools. T
 Tools return one of:
 
 - **JSON payload responses** (most tools) — typed payloads (`SearchResponse`, `ArchiveMetadataResponse`, `ServerHealthResponse`, etc.) serialized as JSON **text** inside a `TextContent` block. All 8 tools are annotated `-> Any`, so the SDK derives no `outputSchema` and **nothing arrives in `structuredContent`** — parse the text block as JSON.
-- **Markdown-string responses** — `zim_get` (single-entry mode) returns a rendered string with `Title:`, `Path:`, `Type:` lines, then a `## Content` block.
+- **Markdown-string responses** — `zim_query` renders article bodies as a string with `Title:`, `Path:`, `Type:` lines and then a `## Content` block (and `Requested Path:` / `Actual Path:` when smart retrieval resolved somewhere else). This rendering is reachable **only** through `zim_query`; `zim_get` returns the JSON payload described under its own entry.
 - **Tool errors** — every tool catches exceptions and returns a structured `ToolErrorPayload` (`{error: true, operation, message, context?}`) rather than raising. The exception is `zim_query` on its default path: handler-side failures there return markdown guidance instead of an envelope, so they carry `isError: false`; only its argument rejections and its `synthesize=True` refusals produce one. There is no `status` key and no `hint` key. Only `error`, `operation`, and `message` are guaranteed; individual failures may merge extra self-correction keys into the same envelope (a `section_not_found` error, for example, also carries `available_section_ids`, `available_section_ids_truncated`, `available_section_ids_total`, and `closest_match`). The envelope arrives as JSON text in the response's `content` — no tool advertises an `outputSchema`, so nothing lands in `structuredContent` — and `openzim_mcp/mcp_envelope.py` recognises it on the way out and sets `isError: true` on the `CallToolResult`. Path entries inside errors are redacted to `...filename.zim` form so the canonical allowed-directory layout is never leaked.
 
 ---
@@ -64,7 +64,7 @@ zim_query(
 | `cursor` | string | `None` | Opaque cursor for resuming paginated results |
 | `max_content_length` | int | `None` | Max characters for retrieved articles |
 | `compact` | bool | `True` | Compact prose rendering (token-budget aware) |
-| `compact_budget` | str \| int | `None` | Override the compact-mode budget |
+| `compact_budget` | str \| int | `None` | Override the compact-mode budget. Named profiles: `tiny` (2000), `small` (4000), `medium` (6000), `large` (12000). Integers are clamped to 500–64000. An unrecognised string silently falls back to `medium` |
 | `synthesize` | bool | `False` | When `True`, return a `SynthesizeResponse` (multi-source briefing) |
 
 **Intents recognized** (incomplete list):
@@ -80,7 +80,7 @@ zim_query(
 - "articles related to Climate_Change"
 - "summary of Quantum_mechanics"
 
-**Returns:** intent-specific output — a markdown list for searches, a rendered article for retrievals, a `SynthesizeResponse` when `synthesize=True`. On the default (non-synthesize) path, handler-side failures (no archive specified, `zim_file_path` not found, empty / meta-only / chained query) come back as markdown guidance rather than an error envelope, so they carry `isError: false`. The `synthesize=True` path instead refuses bad paths, meta-only queries, and chained queries with a `ToolErrorPayload`, so those do set `isError: true`.
+**Returns:** intent-specific output — a markdown list for searches, a rendered article for retrievals, a `SynthesizeResponse` when `synthesize=True`. On the default (non-synthesize) path, the *guidance* failures — no archive specified, empty query, meta-only query, chained query — come back as markdown rather than an error envelope, so they carry `isError: false`. A `zim_file_path` that matches no loaded archive is **not** one of them: it returns a `zim_path_not_found` envelope, and any other exception the catch-all absorbs returns a `zim_query` envelope. Both set `isError: true`. The `synthesize=True` path instead refuses bad paths, meta-only queries, and chained queries with a `ToolErrorPayload`, so those do set `isError: true`.
 
 ---
 
@@ -108,7 +108,7 @@ zim_search(
 |-----------|-------|
 | `query` | Required search term, title, or partial-query prefix (depending on `mode`) |
 | `mode` | `"fulltext"` (default; libzim full-text index), `"title"` (title-indexed lookup with fast `C/<Title>` path), or `"suggest"` (auto-complete prefix) |
-| `zim_file_path` | Optional when `cross_file=True`; otherwise required (unless only one ZIM in allowed dirs) |
+| `zim_file_path` | Required unless only one ZIM is in the allowed dirs. **Must be omitted** when `cross_file=True` — passing both returns an `invalid_combination` envelope |
 | `cross_file` | When `True`, queries every allowed ZIM file. The `SearchAllResponse` carries one row per file in `results`; each row's `result` is that file's `SearchResponse` |
 | `namespace`, `content_type` | Optional filters (only meaningful for `mode="fulltext"`) |
 | `limit` | 1–1000 for plain single-archive `fulltext`; 1–100 when `namespace`/`content_type` filters are set; 1–50 for `cross_file=True` and for `title`/`suggest` |
@@ -141,7 +141,7 @@ Exactly one of these four branch selectors must be set:
 
 | Branch | Selector | Returns |
 |--------|----------|---------|
-| Single-entry (article body) | `entry_path="..."` | Markdown string with `Title:` / `Path:` / `## Content` |
+| Single-entry (article body) | `entry_path="..."` | `EntryResponse` dict — `{path, title, content, _meta}` plus `content_type`, `requested_path`, `content_offset` and `total_chars` when they apply |
 | Single-entry view modes | `entry_path="..."` + `view="summary"` / `"toc"` / `"structure"` | Structured response (summary / TOC tree / headings) |
 | Batch | `entry_paths=[...]` (up to 50) | `{results, succeeded, failed}` — per-entry success/error |
 | Binary | `entry_path="..."` + `binary=True` | `{path, title, mime_type, size, encoding, data}` (base64) |
@@ -151,14 +151,14 @@ The four branches are **mutually exclusive**. Setting more than one (e.g. `entry
 
 | Parameter | Notes |
 |-----------|-------|
-| `view` | `"full"` (default; article body), `"summary"` (opening paragraph), `"toc"` (hierarchical TOC), `"structure"` (headings + section anchors). Ignored when `binary=True` or `main_page=True` |
-| `binary` | When `True`, returns raw bytes (base64) with native MIME type. Default per-entry cap 10 MiB |
+| `view` | `"full"` (default; article body), `"summary"` (opening paragraph), `"toc"` (hierarchical TOC), `"structure"` (headings + section anchors). Combining a non-`"full"` `view` with `binary=True` or `main_page=True` is **rejected** with `operation="invalid_path_combination"`, not silently ignored |
+| `binary` | When `True`, returns raw bytes (base64) with native MIME type. Default per-entry cap 10,000,000 bytes (10 MB decimal, not 10 MiB) |
 | `max_content_length` | Per-entry char cap, min 1 (the `OPENZIM_MCP_CONTENT__MAX_CONTENT_LENGTH` config field has its own ≥ 100 floor) |
 | `content_offset` | Page through long articles without re-fetching the prefix |
 | `compact` | Compact-mode prose (default `False` — preserves legacy byte-identical behavior; a default flip was considered and explicitly deferred for lack of adoption telemetry) |
-| `compact_budget` | Optional budget override for compact mode |
+| `compact_budget` | **Inert on this tool.** It is declared in the signature but never forwarded, so it does not cap the response. Only `zim_query` honors it |
 
-**Smart retrieval:** if direct path access fails, single-entry mode falls back to search-derived candidate terms; resolved paths are cached. When fallback resolves to a different path, the response shows both `Requested Path:` and `Actual Path:`.
+**Smart retrieval:** if direct path access fails, single-entry mode falls back through a five-step ladder (see [Smart retrieval](/openzim-mcp/docs/smart-retrieval/)); resolved paths are cached. When fallback resolves to a different path, the response carries a `requested_path` key alongside `path`.
 
 ---
 
@@ -172,6 +172,7 @@ zim_get_section(
     entry_path: str,
     section_id: str,
     max_chars: Optional[int] = None,
+    include_subsections: bool = True,
     compact: bool = True,
     compact_budget: Optional[Union[str, int]] = None,
 ) -> Any
@@ -181,8 +182,9 @@ zim_get_section(
 |-----------|-------|
 | `section_id` | Required; the heading ID or anchor from a prior `zim_get(view="toc")` or `zim_get(view="structure")` response |
 | `max_chars` | Per-section char cap |
+| `include_subsections` | Default `True` — nested subsections are returned with the named section. Set `False` for just the section's own body |
 | `compact` | Default `True` (compact rendering — `[Table N: …]` placeholders instead of full tables). Since v2.4.0, `compact=False` returns the true raw section body with full tables |
-| `compact_budget` | Optional budget override |
+| `compact_budget` | **Inert on this tool** — declared but never forwarded. Only `zim_query` honors it |
 
 **Returns:** structured response with section body, heading metadata, and adjacent-section hints.
 
@@ -212,9 +214,9 @@ zim_browse(
 | Parameter | Range | Notes |
 |-----------|-------|-------|
 | `namespace` | | `C`, `M`, `W`, `X`, `A`, `I` for legacy schemes; domain-style names for modern archives |
-| `limit` | 1–500 | Default 50 (`page`) / 200 (`walk`) |
-| `cursor`, `offset` | | `cursor` only valid with `mode="walk"`; `offset` only valid with `mode="page"` |
-| `include_assets` | | `mode="page"` browses of C-namespace pages on domain-scheme archives hide css/js/font assets by default and set `page_info.assets_filtered`; pass `True` to include them |
+| `limit` | 1–200 (`page`) / 1–500 (`walk`) | Default 50 (`page`) / 200 (`walk`). `page` rejects anything above 200 |
+| `cursor`, `offset` | | Both modes emit and accept a `cursor`. `offset` is the page-only parameter |
+| `include_assets` | | Browses of C-namespace pages on domain-scheme archives hide css/js/font assets by default in **both** modes; pass `True` to include them. Only the `page_info.assets_filtered` flag is `mode="page"`-only |
 
 **Returns:** a paginated envelope for both modes — `{results, next_cursor, total, done, page_info, namespace, …}` — with `next_cursor` driving `walk` iteration until `done: true`.
 
@@ -230,7 +232,7 @@ zim_metadata(zim_file_path: str) -> Any
 
 **Returns:** structured response with:
 
-- **`metadata`** — archive M-namespace fields (`title`, `language`, `creator`, `flavour`, `date`, etc.).
+- **`metadata`** — archive M-namespace fields, keyed exactly as libzim emits them, which is **capitalized**: `Title`, `Language`, `Creator`, `Publisher`, `Date`, `Flavour`, and so on. `metadata["title"]` raises `KeyError` — use `metadata["Title"]`.
 - **`namespaces`** — a deterministic namespace breakdown (surfaces minority namespaces — `M`, `W`, `X`, `I` — that random sampling could miss).
 - **`archive_identity`** — `{uuid, is_multipart}`, the libzim archive identity (*added in v2.1*).
 - **`index_capabilities`** — `{has_fulltext_index, has_title_index}`: whether full-text search and title suggestions will work against this archive (*added in v2.1*).
@@ -256,7 +258,7 @@ zim_links(
 
 | Direction | Behavior |
 |-----------|----------|
-| `"outbound"` (default) | Links extracted from the article body — **one `kind` per call** (`"internal"` default; pass `kind="external"` or `kind="media"` for the other buckets; `category_totals` in the response counts all three). Drops non-navigable schemes (`javascript:`, `mailto:`, `tel:`, `data:`, `blob:`, `vbscript:`) |
+| `"outbound"` (default) | Links extracted from the article body — **one `kind` per call** (`"internal"` default; pass `kind="external"` or `kind="media"` for the other buckets; `category_totals` in the response counts four buckets — those three plus `anchor`, which no `kind` can fetch). Drops non-navigable schemes (`javascript:`, `mailto:`, `tel:`, `data:`, `blob:`, `vbscript:`) |
 | `"inbound"` | Pages that link TO this entry, ranked by linker importance. Requires a pre-built link-graph sidecar (see below) |
 | `"related"` | Outbound link-graph neighbors with deduplication |
 
@@ -268,7 +270,9 @@ zim_links(
 
 Relative hrefs are resolved against the source entry's directory; redirects are followed to resolved paths; the content namespace is identified correctly on domain-scheme archives; self-referential refs are rejected.
 
-**Returns:** a paginated `{results, next_cursor, total, done, page_info, …}` envelope for every direction. Outbound entries carry `url`/`text`/`title` (plus `domain` for external, `alt` for media) with `kind` and `category_totals` alongside; inbound entries are `{path, title, inbound_degree}`; related entries are `{path, title, …}` rows.
+**Returns:** a paginated `{results, next_cursor, total, done, page_info, …}` envelope for every direction, with `kind` and `category_totals` alongside.
+
+Outbound entries carry `url`/`text`/`title` (plus `domain` for external, `alt` for media). **`url` is the raw href as written in the article** — it does not necessarily round-trip into `zim_get`. Internal rows additionally carry `path`, the resolved entry path, and that is the one to pass to `zim_get`. Inbound entries are `{path, title, inbound_degree, anchor_text}`; related entries are `{path, title, …}` rows.
 
 ---
 
@@ -378,7 +382,7 @@ If a prompt is invoked without required args (or args reduce to empty after sani
 
 ## MCP resources
 
-Three URI templates. See [openzim_mcp/tools/resource_tools.py](https://github.com/cameronrye/openzim-mcp/blob/main/openzim_mcp/tools/resource_tools.py).
+One concrete resource (`zim://files`, listed by `resources/list`) plus two URI templates (listed by `resources/templates/list`). See [openzim_mcp/tools/resource_tools.py](https://github.com/cameronrye/openzim-mcp/blob/main/openzim_mcp/tools/resource_tools.py).
 
 ### `zim://files`
 
@@ -495,7 +499,7 @@ The full mechanical mapping. Every v1 tool name in this table is intentional —
 | `get_search_suggestions(path, prefix)` | `zim_search(prefix, zim_file_path=path, mode="suggest")` | autocomplete-style prefix |
 | `get_zim_entry(path, entry_path)` | `zim_get(path, entry_path=entry_path)` | smart-retrieval fallback on miss |
 | `get_zim_entries(path, entries)` | `zim_get(path, entry_paths=entries)` | up to 50 per call; per-entry cost |
-| `get_binary_entry(path, entry_path)` | `zim_get(path, entry_path=entry_path, binary=True)` | base64 wire payload, 10 MiB default cap |
+| `get_binary_entry(path, entry_path)` | `zim_get(path, entry_path=entry_path, binary=True)` | base64 wire payload, 10,000,000-byte default cap |
 | `get_entry_summary(path, entry_path)` | `zim_get(path, entry_path=entry_path, view="summary")` | one of four view modes |
 | `get_table_of_contents(path, entry_path)` | `zim_get(path, entry_path=entry_path, view="toc")` | one of four view modes |
 | `get_article_structure(path, entry_path)` | `zim_get(path, entry_path=entry_path, view="structure")` | one of four view modes |

@@ -37,7 +37,7 @@ export OPENZIM_MCP_CACHE__PERSISTENCE_ENABLED=true    # cache survives restarts
 | Memory-constrained (RPi, small VPS) | `MAX_SIZE=25-50`, `TTL_SECONDS=900-1800` |
 | Volatile content (frequent ZIM swaps) | shorter TTL or rely on subscriptions to invalidate downstream |
 
-Cache stats surface in `zim_health().health.cache_performance` (`enabled`, `size`, `max_size`, `ttl_seconds`, `hits`, `misses`, `hit_rate`). There are no `warm_cache` / `cache_stats` / `cache_clear` tools — restart to flush.
+Cache stats surface in `zim_health().health.cache_performance`, which always carries 13 fields: `enabled`, `size`, `max_size`, `ancillary_entries`, `total_entries`, `size_bytes`, `max_bytes`, `ttl_seconds`, `hits`, `misses`, `hit_rate`, `background_cleanup`, `persistence_enabled` (plus `persistence_path` and `persistence_file_exists` when persistence is on). `size` counts only what `max_size` bounds; `total_entries` also counts per-item fragments, which are capped by `max_bytes` (64 MiB default) instead. There are no `warm_cache` / `cache_stats` / `cache_clear` tools. Restarting flushes the cache only when `CACHE__PERSISTENCE_ENABLED` is off; with persistence on it is saved at exit and reloaded at start.
 
 **Persistence path:** defaults to `~/.cache/openzim-mcp` (resolved to absolute). For containerized deployments, mount a volume there or override `OPENZIM_MCP_CACHE__PERSISTENCE_PATH`.
 

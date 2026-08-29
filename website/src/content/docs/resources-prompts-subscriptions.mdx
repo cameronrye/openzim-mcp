@@ -31,10 +31,13 @@ JSON list of every ZIM file in the allowed directories.
     "directory": "/srv/zim",
     "size": "119.07 MB",
     "size_bytes": 124857600,
-    "modified": "2026-02-15T10:30:00"
+    "modified": "2026-02-15T10:30:00",
+    "readable": true
   }
 ]
 ```
+
+`readable` is always present: the listing globs `*.zim` by name, then probes each file's ZIM signature, so a file that is named right but is not an archive stays in the list marked `"readable": false` rather than disappearing. Unreadable rows additionally carry a `warning` string saying whether the file was denied or simply lacks the signature.
 
 Same shape as the `loaded_archives` field returned by the `zim_health` tool.
 
@@ -294,7 +297,7 @@ Every result carries the 2026-07-28 `ttlMs`/`cacheScope` fields, so a client kno
 
 | URI | TTL | Why |
 |-----|-----|-----|
-| `zim://{name}` | `OPENZIM_MCP_RESOURCE_CACHE_TTL_SECONDS` (default 1h) | a ZIM file is sealed — a replacement publishes `resources/updated` for exactly this URI, so subscribed clients never go stale |
+| `zim://{name}` | `OPENZIM_MCP_RESOURCE_CACHE_TTL_SECONDS` (default 1h) — but an **error** body for this URI drops to the watcher interval | a ZIM file is sealed, and a replacement publishes `resources/updated` for exactly this URI, so subscribed clients never go stale. A failed read is not sealed, so it is not promised for an hour |
 | `zim://{name}/entry/{path}` | `OPENZIM_MCP_WATCH_INTERVAL_SECONDS` (default 5s) | no `resources/updated` is ever published for an entry URI, so a longer promise could not be invalidated |
 | `zim://files` | `OPENZIM_MCP_WATCH_INTERVAL_SECONDS` (default 5s) | a live directory scan; never staler than the server's own detection latency |
 

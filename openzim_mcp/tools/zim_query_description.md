@@ -65,6 +65,7 @@ Args:
     offset: Pagination offset (default: 0). Not honoured by
         `suggestions for <prefix>` or `find article titled
         <name>` (neither backend pages); raise `limit` there.
+    cursor: Opaque handle from a prior `next_cursor`.
     max_content_length: Article body cap (default: 4000).
     content_offset: Character offset to start reading the
         article body from (default: 0). The truncation footer

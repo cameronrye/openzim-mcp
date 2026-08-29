@@ -205,7 +205,7 @@ class RerankerConfig(BaseModel):
         description=(
             "FastEmbed model identifier. Default targets English-first "
             "archives. Multilingual archives can override via "
-            "OPENZIM_RERANKER_MODEL env var (e.g., jina-reranker-v3)."
+            "OPENZIM_MCP_ML__RERANKER__MODEL_ID (e.g., jina-reranker-v3)."
         ),
     )
     final_top_k: int = Field(
@@ -250,9 +250,10 @@ class RerankerConfig(BaseModel):
     cache_dir: Path | None = Field(
         default=None,
         description=(
-            "Override the FastEmbed model cache directory. None → "
-            "$OPENZIM_MODEL_CACHE_DIR/fastembed, fallback "
-            "~/.cache/openzim-mcp/models/fastembed."
+            "Override the FastEmbed model cache directory, via "
+            "OPENZIM_MCP_ML__RERANKER__CACHE_DIR. None (the default) passes "
+            "no cache_dir to FastEmbed at all, so its own default location "
+            "is used — this server defines no fallback path of its own."
         ),
     )
     # Defaults to False to keep the shipped MCP `instructions` honest and to
