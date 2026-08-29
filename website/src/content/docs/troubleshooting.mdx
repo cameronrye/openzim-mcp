@@ -47,18 +47,47 @@ The envelope itself is defined in [openzim_mcp/responses.py](https://github.com/
 
 ## Quick diagnostics
 
-### Health check command
+### First diagnostic
 
-First, run the server health check to identify issues:
+Which check you can run depends on the tool surface you are running, and the **default install is the narrow one** — simple mode registers `zim_query` and nothing else, so `zim_health` is not there to call.
+
+**Every install — confirm which binary is answering:**
 
 ```bash
-# In your MCP client, ask:
-"Check the server health and configuration"
+openzim-mcp --version
+# openzim-mcp 3.2.3
 ```
 
-This will run `zim_health`, which returns combined health, configuration, and loaded-archives data in one response (consolidating three separate v1 tools into a single call).
+A version older than you expect is the single most common cause of "the docs describe a parameter my server rejects". A `command not found` here, when your MCP client reports the server failing to start, means the client's PATH does not include the install location.
 
-If the server is running over HTTP, you can also probe `/healthz` and `/readyz` directly without a token — both are auth-exempt.
+**Simple mode (the default) — ask for the file list:**
+
+```text
+"list available ZIM files"
+```
+
+This is the one server-level operation `zim_query` dispatches without needing an archive, and it exercises directory resolution, permissions and archive readability in a single call. The response names each archive with its path, size, modification time and a `readable` flag; an archive missing from it is an allowed-directories or file-permission problem, not a server fault.
+
+Do **not** ask "check the server health and configuration" on a default install. There is no health intent in simple mode, so the phrase is parsed as a *topic* and searched inside the archive — what comes back is `No search results found for "check the server health and configuration"`, which reads like a broken server and is not one.
+
+**Advanced mode — call `zim_health`:**
+
+```text
+zim_health()
+```
+
+Available once the surface is advanced (`--mode advanced`, `OPENZIM_MCP_TOOL_MODE=advanced`, or the published Docker image, which bakes it in). Returns combined health, resolved configuration and loaded-archives data in one response, consolidating three separate v1 tools into a single call.
+
+**Over HTTP — probe the endpoints directly:**
+
+```bash
+curl -fsS http://localhost:8000/healthz
+# {"status":"ok"}
+curl -fsS http://localhost:8000/readyz
+# {"status":"ready"}
+```
+
+Both are auth-exempt, so they work with no token and regardless of tool mode.
 
 ## Installation issues
 
@@ -281,10 +310,10 @@ If the server is running over HTTP, you can also probe `/healthz` and `/readyz` 
 
 **Issue**: Poor cache performance or cache misses
 
-**Diagnostics**: cache stats live inside `zim_health` under `.health.cache_performance`:
+**Diagnostics**: cache stats live inside `zim_health` under `.health.cache_performance`, so this needs the advanced surface:
 
 ```text
-"Get server health and show cache performance"
+zim_health()
 ```
 
 The `cache_performance` block always has 13 fields — `enabled`, `size`, `max_size`, `ancillary_entries`, `total_entries`, `size_bytes`, `max_bytes`, `ttl_seconds`, `hits`, `misses`, `hit_rate`, `background_cleanup`, `persistence_enabled` — plus `persistence_path` and `persistence_file_exists` when persistence is on.

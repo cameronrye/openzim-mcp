@@ -29,27 +29,40 @@ Make sure you have completed the [Installation](/openzim-mcp/docs/installation/)
 
 ## Step 1: Get a test ZIM file
 
-### Option A: download a small test file
+### Option A: one command (recommended)
+
+A real 13.6 MB extract of English Wikipedia on climate change, from the openZIM project's own testing suite, at a stable URL. Nothing to install and no account:
 
 ```bash
-# Create a directory for ZIM files
-mkdir ~/zim-files
-cd ~/zim-files
-
-# Download a small Wikipedia subset (recommended for testing)
-# Visit: https://browse.library.kiwix.org/
-# Search for "Wikipedia English Top 100" (~300MB)
-# Download and save to ~/zim-files/
+mkdir -p ~/zim-files
+curl -fsSL -o ~/zim-files/wikipedia_en_climate_change_mini_2024-06.zim \
+  https://raw.githubusercontent.com/openzim/zim-testing-suite/main/data/withns/wikipedia_en_climate_change_mini_2024-06.zim
 ```
 
-### Option B: use the project test data (development)
+Windows PowerShell:
+
+```powershell
+New-Item -ItemType Directory -Force -Path "$HOME\zim-files" | Out-Null
+Invoke-WebRequest -Uri "https://raw.githubusercontent.com/openzim/zim-testing-suite/main/data/withns/wikipedia_en_climate_change_mini_2024-06.zim" -OutFile "$HOME\zim-files\wikipedia_en_climate_change_mini_2024-06.zim"
+```
+
+You should get 14,239,035 bytes, SHA-256 `72db7ae7708d3a4cff918495078901ec027b14b427433a2328286ec130d1c43b` (`shasum -a 256 <file>` on macOS, `sha256sum` on Linux, `Get-FileHash` on Windows).
+
+This archive uses the older namespace scheme, so its entry paths read `A/Climate_change` rather than `C/Climate_change`. Both appear in these docs; see [ZIM concepts](/openzim-mcp/docs/zim-concepts/) for why.
+
+### Option B: a bigger archive from the Kiwix library
+
+For anything past a first run, browse [browse.library.kiwix.org](https://browse.library.kiwix.org/) — Wikipedia, Wiktionary, Stack Exchange and more — and save the `.zim` into the same `~/zim-files` directory. "Wikipedia English Top 100" (~300 MB) is a reasonable second archive.
+
+### Option C: the project's test corpus (development)
 
 ```bash
-# From your openzim-mcp directory (if installed from source)
-make download-test-data
-
-# This downloads small test ZIM files to test_data/zim-testing-suite/
+# From your openzim-mcp source checkout
+make download-test-data       # the two priority-1 fixtures (79 KB + 41 KB)
+make download-test-data-all   # the whole suite, malformed archives included
 ```
+
+Both write into `test_data/zim-testing-suite/`. The default target fetches only `withns/small.zim` and `nons/small.zim` — enough for the test suite, too small to explore, which is why Option A exists. Either target leaves more than one `.zim` in the directory, which changes how archive auto-selection behaves; see the note at the end of Step 4.
 
 ## Step 2: Start the server (simple mode)
 

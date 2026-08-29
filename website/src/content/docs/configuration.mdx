@@ -266,52 +266,91 @@ Further nested groups exist for specialized tuning — `search.*` (e.g. `OPENZIM
 
 ## Profiles
 
+These are the canonical deployment profiles; [Performance optimization](/openzim-mcp/docs/performance-optimization/) explains *which* knob to move for a given symptom and links back here for the recipes. Every value below is an environment variable, so each block works unchanged in a shell, a systemd `EnvironmentFile`, or a container's `environment:`. Comments name the code default so you can see what each line is actually changing.
+
 ### Local development (stdio)
 
 ```bash
 export OPENZIM_MCP_LOGGING__LEVEL=DEBUG
-export OPENZIM_MCP_CACHE__MAX_SIZE=50
-export OPENZIM_MCP_CACHE__TTL_SECONDS=1800
+export OPENZIM_MCP_CACHE__MAX_SIZE=50                 # default 100
+export OPENZIM_MCP_CACHE__TTL_SECONDS=1800            # default 3600
 openzim-mcp ~/zim-files
 ```
 
-### Production stdio (e.g. behind a desktop MCP host)
+### Single-user desktop (stdio, e.g. Claude Desktop)
+
+The defaults are already sized for this — one client, one archive set, a cache that does not need to outlive the session. Change something only if you have a reason:
 
 ```bash
-export OPENZIM_MCP_LOGGING__LEVEL=INFO
-export OPENZIM_MCP_CACHE__MAX_SIZE=500
-export OPENZIM_MCP_CACHE__TTL_SECONDS=14400
-export OPENZIM_MCP_CACHE__PERSISTENCE_ENABLED=true
-export OPENZIM_MCP_CONTENT__MAX_CONTENT_LENGTH=200000
+export OPENZIM_MCP_CACHE__MAX_SIZE=500                # default 100
+export OPENZIM_MCP_CACHE__TTL_SECONDS=14400           # default 3600
+export OPENZIM_MCP_CACHE__PERSISTENCE_ENABLED=true    # default false; survives restarts
+export OPENZIM_MCP_CONTENT__MAX_CONTENT_LENGTH=200000 # default 100000
 openzim-mcp /srv/zim
 ```
 
 ### Production HTTP service
 
 ```bash
-export OPENZIM_MCP_TRANSPORT=http
-export OPENZIM_MCP_HOST=127.0.0.1
-export OPENZIM_MCP_PORT=8000
+export OPENZIM_MCP_TRANSPORT=http                     # default stdio
+export OPENZIM_MCP_HOST=127.0.0.1                     # default 127.0.0.1
+export OPENZIM_MCP_PORT=8000                          # default 8000
 export OPENZIM_MCP_AUTH_TOKEN="$(openssl rand -hex 32)"
 export OPENZIM_MCP_CORS_ORIGINS='["https://app.example.com"]'
+
+# The code default is simple mode, which exposes zim_query alone. A service
+# whose clients call zim_get / zim_search / zim_health directly needs the
+# advanced surface. (The published Docker image already sets this.)
+export OPENZIM_MCP_TOOL_MODE=advanced
+
 export OPENZIM_MCP_LOGGING__LEVEL=INFO
-export OPENZIM_MCP_CACHE__MAX_SIZE=500
+export OPENZIM_MCP_CACHE__MAX_SIZE=1000               # default 100
+export OPENZIM_MCP_CACHE__TTL_SECONDS=14400           # default 3600
 export OPENZIM_MCP_CACHE__PERSISTENCE_ENABLED=true
+# Set this explicitly. Left unset, the server appends a config fingerprint and
+# a .json suffix to the default path, so the file lands at
+# ~/.cache/openzim-mcp-<12 hex>.json — a sibling of ~/.cache/openzim-mcp, not a
+# file inside it, and a volume mounted at that directory captures nothing.
+export OPENZIM_MCP_CACHE__PERSISTENCE_PATH=/var/lib/openzim-mcp/cache.json
+export OPENZIM_MCP_CONTENT__MAX_CONTENT_LENGTH=200000 # default 100000
+
+# Defaults are 20/s with a burst of 40. Raise them for a multi-client service —
+# but note every request carrying the bearer token shares one bucket, because
+# the limiter keys on a hash of the token before falling back to peer IP.
 export OPENZIM_MCP_RATE_LIMIT__REQUESTS_PER_SECOND=40
 export OPENZIM_MCP_RATE_LIMIT__BURST_SIZE=80
-openzim-mcp --transport http /srv/zim
+
+# Subscriptions stay on, polled less often for less I/O churn (default 5).
+export OPENZIM_MCP_WATCH_INTERVAL_SECONDS=15
+
+openzim-mcp /srv/zim
 ```
 
 Front it with a TLS-terminating reverse proxy (Caddy, nginx, traefik) — there is no built-in TLS.
 
+### Read-heavy single archive
+
+One large archive, mostly repeat reads. Spend the memory on cache residency:
+
+```bash
+export OPENZIM_MCP_CACHE__MAX_SIZE=2000               # default 100
+export OPENZIM_MCP_CACHE__TTL_SECONDS=28800           # default 3600 (8 h)
+export OPENZIM_MCP_CACHE__PERSISTENCE_ENABLED=true
+export OPENZIM_MCP_CONTENT__DEFAULT_SEARCH_LIMIT=20   # default 10
+openzim-mcp /srv/zim
+```
+
+`MAX_SIZE` counts entries, not bytes, and `OPENZIM_MCP_CACHE__MAX_BYTES` (64 MiB) bounds the store independently — on an archive of long articles the byte cap is what binds, so raising `MAX_SIZE` alone buys less than the number suggests.
+
 ### Memory-constrained (e.g. small VPS, RPi)
 
 ```bash
-export OPENZIM_MCP_CACHE__MAX_SIZE=25
-export OPENZIM_MCP_CACHE__TTL_SECONDS=900
-export OPENZIM_MCP_CONTENT__MAX_CONTENT_LENGTH=50000
-export OPENZIM_MCP_CONTENT__SNIPPET_LENGTH=500
-export OPENZIM_MCP_WATCH_INTERVAL_SECONDS=30
+export OPENZIM_MCP_CACHE__MAX_SIZE=25                 # default 100
+export OPENZIM_MCP_CACHE__TTL_SECONDS=900             # default 3600
+export OPENZIM_MCP_CONTENT__MAX_CONTENT_LENGTH=50000  # default 100000
+export OPENZIM_MCP_CONTENT__SNIPPET_LENGTH=500        # default 3000
+export OPENZIM_MCP_WATCH_INTERVAL_SECONDS=30          # default 5
+export OPENZIM_MCP_SUBSCRIPTIONS_ENABLED=false        # default true
 openzim-mcp ~/zim-files
 ```
 
@@ -320,13 +359,15 @@ openzim-mcp ~/zim-files
 There is no offline `--validate` flag. Two options:
 
 1. **Start the server with stdio.** Bad config raises `OpenZimMcpConfigurationError` immediately. The error message names the offending field.
-2. **Call `zim_health` from your MCP client.** Returns combined health + resolved configuration + loaded archives in one response.
+2. **Call `zim_health` — but only on the advanced surface.** It is not registered in simple mode, which is the default, so this needs `--mode advanced`, `OPENZIM_MCP_TOOL_MODE=advanced`, or the published Docker image.
 
 ```text
-"Show the current server health and configuration"
+zim_health()
 ```
 
-The response includes (abbreviated):
+On a default simple-mode install the nearest equivalent is asking `zim_query` for `"list available ZIM files"`, which confirms the allowed directories resolved and each archive is readable but reports no configuration. Phrasing it as a request for health or configuration does *not* reach `zim_health`: there is no health intent in simple mode, so the words are treated as a search topic.
+
+The `zim_health()` response includes (abbreviated):
 
 - `.health` — server status, uptime, cache performance, health checks, warnings, recommendations
 - `.configuration` — resolved values (no secrets; `server_pid` and directory paths redacted over HTTP/SSE, shown on local stdio)

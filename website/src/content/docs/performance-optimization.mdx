@@ -1,6 +1,6 @@
 ---
 title: Performance optimization
-summary: Cache tuning, rate limiting, batching, and deployment-profile guidance for OpenZIM MCP — including HTTP transport, monitoring endpoints, and latency targets.
+summary: Cache tuning, rate limiting, batching, and symptom-to-knob guidance for OpenZIM MCP — including HTTP transport, monitoring endpoints, and latency targets.
 group: Guides
 sidebar_order: 4
 ---
@@ -268,60 +268,19 @@ For very large allowed-dir sets, consider:
 
 ## Profiles
 
-### Single-user desktop
+Copy-pasteable deployment profiles — local development, single-user desktop, production HTTP, read-heavy, memory-constrained — live in [Configuration → Profiles](/openzim-mcp/docs/configuration/#profiles), which is the single home for them.
 
-Defaults (`MAX_SIZE=100`, `TTL=3600`, persistence off). Smart retrieval covers most "I guessed wrong" cases without intervention.
+What belongs here is the other half: which knob to reach for when something is slow.
 
-### Production HTTP service
-
-```bash
-export OPENZIM_MCP_TRANSPORT=http
-export OPENZIM_MCP_HOST=127.0.0.1
-export OPENZIM_MCP_AUTH_TOKEN="$(openssl rand -hex 32)"
-export OPENZIM_MCP_CORS_ORIGINS='["https://app.example.com"]'
-
-# This page's examples call zim_get / zim_search / zim_health directly, so the
-# profile needs the advanced surface. The code default is simple mode, which
-# exposes zim_query only. (The published Docker image already sets this.)
-export OPENZIM_MCP_TOOL_MODE=advanced
-
-export OPENZIM_MCP_CACHE__MAX_SIZE=1000
-export OPENZIM_MCP_CACHE__TTL_SECONDS=14400
-export OPENZIM_MCP_CACHE__PERSISTENCE_ENABLED=true
-# Persistence writes ~/.cache/openzim-mcp-<fingerprint>.json unless this is set.
-export OPENZIM_MCP_CACHE__PERSISTENCE_PATH=/var/lib/openzim-mcp/cache.json
-export OPENZIM_MCP_CONTENT__MAX_CONTENT_LENGTH=200000
-
-export OPENZIM_MCP_RATE_LIMIT__REQUESTS_PER_SECOND=20
-export OPENZIM_MCP_RATE_LIMIT__BURST_SIZE=40
-
-# Subscriptions on, but slower poll for less I/O churn
-export OPENZIM_MCP_WATCH_INTERVAL_SECONDS=15
-
-openzim-mcp /srv/zim
-```
-
-### Memory-constrained
-
-```bash
-export OPENZIM_MCP_CACHE__MAX_SIZE=25
-export OPENZIM_MCP_CACHE__TTL_SECONDS=900
-export OPENZIM_MCP_CONTENT__MAX_CONTENT_LENGTH=50000
-export OPENZIM_MCP_CONTENT__SNIPPET_LENGTH=500
-export OPENZIM_MCP_WATCH_INTERVAL_SECONDS=30
-export OPENZIM_MCP_SUBSCRIPTIONS_ENABLED=false
-openzim-mcp ~/zim-files
-```
-
-### Read-heavy single archive
-
-```bash
-export OPENZIM_MCP_CACHE__MAX_SIZE=2000
-export OPENZIM_MCP_CACHE__TTL_SECONDS=28800   # 8h
-export OPENZIM_MCP_CACHE__PERSISTENCE_ENABLED=true
-export OPENZIM_MCP_CONTENT__DEFAULT_SEARCH_LIMIT=20
-openzim-mcp /srv/zim
-```
+| Symptom | Reach for |
+|---------|-----------|
+| Repeat reads of the same articles are still slow | `CACHE__MAX_SIZE`, then `CACHE__MAX_BYTES` — the byte cap binds first on long articles |
+| The cache is cold after every restart | `CACHE__PERSISTENCE_ENABLED` plus an explicit `CACHE__PERSISTENCE_PATH` |
+| Clients see `rate_limited` under normal load | `RATE_LIMIT__BURST_SIZE` before `REQUESTS_PER_SECOND` — bursts are what a batching client produces |
+| Responses are large and slow to render | `CONTENT__MAX_CONTENT_LENGTH`, or ask for `compact` output and page with `content_offset` |
+| Many small round-trips | `zim_get(entry_paths=[...])` batching, not a config change |
+| Memory pressure on a small host | `CACHE__MAX_SIZE` and `CONTENT__SNIPPET_LENGTH` down; `SUBSCRIPTIONS_ENABLED=false` if you do not swap archives |
+| First read of a large archive is slow | Nothing to tune — that is libzim cold I/O; the archive cache amortises it |
 
 ## Targets
 

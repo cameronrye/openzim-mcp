@@ -113,23 +113,33 @@ pip install -e .
 
 ### Download ZIM Files
 
-1. **Visit the Kiwix Library**: [browse.library.kiwix.org](https://browse.library.kiwix.org/)
-2. **Choose content**: Wikipedia, Wiktionary, Stack Overflow, etc.
-3. **Download ZIM files** to a dedicated directory
+**One command, one real archive.** A 13.6 MB extract of English Wikipedia on climate change, from the openZIM project's own testing suite. Use it to confirm the install works before you commit to a multi-gigabyte download:
 
 ```bash
-# Create ZIM files directory
-mkdir ~/zim-files
-
-# Example: Download a small Wikipedia subset
-# (Download from Kiwix Library and place in ~/zim-files/)
+mkdir -p ~/zim-files
+curl -fsSL -o ~/zim-files/wikipedia_en_climate_change_mini_2024-06.zim \
+  https://raw.githubusercontent.com/openzim/zim-testing-suite/main/data/withns/wikipedia_en_climate_change_mini_2024-06.zim
 ```
+
+```powershell
+New-Item -ItemType Directory -Force -Path "$HOME\zim-files" | Out-Null
+Invoke-WebRequest -Uri "https://raw.githubusercontent.com/openzim/zim-testing-suite/main/data/withns/wikipedia_en_climate_change_mini_2024-06.zim" -OutFile "$HOME\zim-files\wikipedia_en_climate_change_mini_2024-06.zim"
+```
+
+Expect 14,239,035 bytes, SHA-256 `72db7ae7708d3a4cff918495078901ec027b14b427433a2328286ec130d1c43b`. It is an old-scheme archive, so its entry paths read `A/Climate_change`.
+
+**For real content — the Kiwix Library:**
+
+1. **Visit** [browse.library.kiwix.org](https://browse.library.kiwix.org/)
+2. **Choose content**: Wikipedia, Wiktionary, Stack Exchange, and more
+3. **Save the `.zim`** into the same dedicated directory — the server takes directories, not individual files
 
 ### Recommended ZIM Files for Testing
 
+- **Wikipedia climate-change mini**: 13.6MB - the one-command download above
+- **Simple English Wikipedia**: ~200MB - Lightweight option
 - **Wikipedia (English, Top 100)**: ~300MB - Good for testing
 - **Wikipedia (English, Top 1000)**: ~2GB - Comprehensive testing
-- **Simple English Wikipedia**: ~200MB - Lightweight option
 
 ## Platform-Specific Installation
 
