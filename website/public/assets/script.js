@@ -433,6 +433,10 @@
   }
 
   document.addEventListener('DOMContentLoaded', () => {
+    // Tells the head script this bundle arrived. Without it the head script's
+    // `load` handler strips `.js` and every [data-reveal] section falls back
+    // to plain, always-visible rendering.
+    document.documentElement.classList.add('js-ready');
     initTheme();
     initNav();
     animateConstellation();

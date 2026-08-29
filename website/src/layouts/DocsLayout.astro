@@ -77,6 +77,23 @@ const breadcrumbLd = {
       })();
     </script>
 
+    <!-- Progressive-enhancement flag. `styles.css` hides `[data-reveal]`
+         sections only under `.js`, so anything this script cannot reach renders
+         them plainly. Gated on IntersectionObserver because that is what the
+         reveal actually needs, and removed again on `load` if script.js never
+         announced itself — a 404 or a CSP block on the deferred bundle would
+         otherwise leave the page's content permanently at `opacity: 0`. -->
+    <script is:inline>
+      (function () {
+        if (!('IntersectionObserver' in window)) return;
+        var root = document.documentElement;
+        root.classList.add('js');
+        addEventListener('load', function () {
+          if (!root.classList.contains('js-ready')) root.classList.remove('js');
+        });
+      })();
+    </script>
+
     <link rel="stylesheet" href={`${base}/assets/styles.css`} />
   </head>
   <body>

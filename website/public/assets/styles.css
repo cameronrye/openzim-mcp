@@ -635,12 +635,18 @@ main:focus-visible { outline: 2px solid var(--signal); outline-offset: -4px; }
 .toast.is-visible { opacity: 1; transform: translateX(-50%) translateY(0); }
 
 /* ============= MOTION ============= */
-[data-reveal] {
+/* Scoped to `.js`, which the layouts' head script adds only when scripting is
+   on and IntersectionObserver exists — and which the same script removes again
+   on `load` if script.js never ran. Unscoped, `opacity: 0` is the final word
+   for anyone the reveal script cannot reach: four of the landing page's five
+   sections rendered blank with JS off, and blank again whenever script.js
+   failed to load. The animation is decoration; the content is not. */
+.js [data-reveal] {
   opacity: 0;
   transform: translateY(8px);
   transition: opacity var(--dur-base) var(--ease-out), transform var(--dur-base) var(--ease-out);
 }
-[data-reveal].revealed { opacity: 1; transform: none; }
+.js [data-reveal].revealed { opacity: 1; transform: none; }
 
 /* ============= REDUCED MOTION ============= */
 @media (prefers-reduced-motion: reduce) {
@@ -650,7 +656,9 @@ main:focus-visible { outline: 2px solid var(--signal); outline-offset: -4px; }
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
   }
-  [data-reveal] { opacity: 1; transform: none; }
+  /* `.js`-scoped to match the block above: a bare `[data-reveal]` selector
+     here (0,1,0) loses to `.js [data-reveal]` (0,2,0) and never applies. */
+  .js [data-reveal] { opacity: 1; transform: none; }
 }
 
 /* ===== Docs shell (added for /docs/* route) ===== */
