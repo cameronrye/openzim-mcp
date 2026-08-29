@@ -23,6 +23,8 @@ Functionally nothing was removed; the surface area just shrank. See the [migrati
 
 ### What changed in v3.0.0?
 
+*(For the step-by-step version, see [Upgrading](/openzim-mcp/docs/upgrading/).)*
+
 v3.0.0 ports the server to MCP Python SDK v2 and the 2026-07-28 ("stateless") protocol revision. The tool surface is untouched — all 8 tools, 3 resources, and 3 prompts behave as before — and clients that connect with the legacy `initialize` handshake keep working for tools, resources, and prompts with no changes.
 
 Two things break. **`resources/subscribe` and `resources/unsubscribe` are no longer served**: a legacy client gets `-32601` and can no longer receive change notifications; live updates now mean negotiating 2026-07-28 and opening a `subscriptions/listen` stream. Subscriptions have always been HTTP-only here, so no stdio client is affected. Relatedly, `zim://files` is no longer a subscription target — archives appearing or disappearing arrive as `resources/list_changed` (opt in with `resourcesListChanged: true`), while in-place replacements arrive as `resources/updated` for `zim://{name}`. And **link-graph sidecars built by 2.x are rejected after upgrade** (sidecar schema v3): rebuild each with `openzim-mcp build link-graph --force <archive>.zim`, or `zim_links(direction="inbound")` returns `inbound_sidecar_unavailable` until you do.

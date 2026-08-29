@@ -371,7 +371,7 @@ zim_browse(
 
 | Parameter | Range | Notes |
 |-----------|-------|-------|
-| `namespace` | | `C`, `M`, `W`, `X`, `A`, `I` for legacy schemes; domain-style names for modern archives |
+| `namespace` | | `C`, `M`, `W`, `X` on modern archives; `A`, `I`, `-` on legacy ones. Which you get depends on the archive — see [ZIM concepts](/openzim-mcp/docs/zim-concepts/) and read the real breakdown from `zim_metadata` |
 | `limit` | 1–200 (`page`) / 1–500 (`walk`) | Default 50 (`page`) / 200 (`walk`). `page` rejects anything above 200 |
 | `cursor`, `offset` | | Both modes emit and accept a `cursor`. `offset` is the page-only parameter |
 | `include_assets` | | Browses of C-namespace pages on domain-scheme archives hide css/js/font assets by default in **both** modes; pass `True` to include them. Only the `page_info.assets_filtered` flag is `mode="page"`-only |

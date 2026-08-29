@@ -13,7 +13,7 @@ How OpenZIM MCP resolves entry paths when direct access fails — and how to deb
 
 ## What it is
 
-ZIM entry paths aren't always predictable. Wikipedia's "Photosynthesis" might live at `A/Photosynthesis`, `C/Photosynthesis`, `Photosynthesis`, or under a slug variant. Smart retrieval is the fallback path that turns "I have a guess at the path" into "here's the article" without forcing the LLM to do trial-and-error.
+ZIM entry paths aren't always predictable. (New to namespaces and entry paths? Start with [ZIM concepts](/openzim-mcp/docs/zim-concepts/).) Wikipedia's "Photosynthesis" might live at `A/Photosynthesis`, `C/Photosynthesis`, `Photosynthesis`, or under a slug variant. Smart retrieval is the fallback path that turns "I have a guess at the path" into "here's the article" without forcing the LLM to do trial-and-error.
 
 The fallback runs automatically whenever `zim_get` is called with an `entry_path` that doesn't match directly — on the default `view="full"` body path and on `view="summary"`.
 
