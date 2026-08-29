@@ -153,7 +153,7 @@ it looks — the traps are called out below the table.
 | Browse a namespace | "browse namespace C with limit 10" | A sampled page of entries |
 | Walk a namespace | "walk namespace M", "enumerate namespace C" | Deterministic cursor-paginated iteration |
 | Batch fetch | "get articles Ant, Bee, Wasp" | Several entries in one call |
-| Binary content | "get the image Logo.png", "raw content for File.pdf" | Base64 payload with its native MIME type |
+| Binary content | "get image Logo.png", "download pdf Manual.pdf", "raw content for File.pdf" | Base64 payload with its native MIME type |
 
 **Three phrasings that trip people up:**
 
@@ -167,6 +167,9 @@ it looks — the traps are called out below the table.
 - **"related" is overloaded.** "links in X" gives outbound links from the
   body; "articles related to X" gives link-graph neighbours. "related to X"
   alone lands on the latter.
+- **The binary verb must sit next to the noun.** "get image Logo.png" works;
+  "get **the** image Logo.png" does not — the article breaks the pattern and
+  the query falls through to full-text search.
 
 Pagination differs per intent: `suggestions for` and `find article titled` do
 not page at all — raise `limit` rather than passing `offset`.

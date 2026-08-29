@@ -457,3 +457,79 @@ def test_tools_without_their_own_cost_entry_are_described_as_default() -> None:
             "charging the default cost under its own tool name. Update "
             "api-reference.mdx and performance-optimization.mdx together."
         )
+
+
+# --------------------------------------------------------------------------
+# 7. Every phrasing in the simple-mode phrasebook must actually dispatch.
+# --------------------------------------------------------------------------
+
+# In simple mode `zim_query` is the entire tool surface, so a documented
+# phrasing that does not route is not a doc defect — it is a dead end with no
+# workaround. This gate exists because the first version of the phrasebook
+# shipped "get the image Logo.png", which falls through to full-text search:
+# the binary pattern requires the verb adjacent to the noun, and the article
+# breaks it.
+#
+# The check is that every example in a row agrees with the others in that row.
+# That needs no label-to-intent mapping and catches the real failure shape —
+# one row's examples splitting across two intents.
+
+_PHRASEBOOK_ROW = re.compile(r"^\|\s*([^|]+?)\s*\|\s*((?:\"[^\"]+\"\s*,?\s*)+)\|", re.M)
+
+
+def _phrasebook_rows() -> list[tuple[str, list[str]]]:
+    text = _API_REFERENCE.read_text(encoding="utf-8")
+    start = text.index("### Recognized phrasings")
+    end = text.index("Three phrasings that trip people up", start)
+    return [
+        (m.group(1), re.findall(r'"([^"]+)"', m.group(2)))
+        for m in _PHRASEBOOK_ROW.finditer(text[start:end])
+    ]
+
+
+def test_phrasebook_has_rows() -> None:
+    rows = _phrasebook_rows()
+    assert len(rows) >= 15, f"only parsed {len(rows)} phrasebook rows — regex drifted?"
+
+
+def test_every_documented_phrasing_dispatches_consistently() -> None:
+    """All examples in one row must route to the same intent."""
+    from openzim_mcp.intent_parser import IntentParser
+
+    parser = IntentParser()
+    broken: list[str] = []
+    for label, examples in _phrasebook_rows():
+        if len(examples) < 2:
+            continue
+        seen = {ex: parser.parse_intent(ex)[0] for ex in examples}
+        if len(set(seen.values())) > 1:
+            detail = ", ".join(f"{ex!r} -> {i}" for ex, i in seen.items())
+            broken.append(f"{label}: {detail}")
+    assert not broken, (
+        "phrasebook rows whose examples do not all reach the same intent — a "
+        "documented phrasing that misroutes is a dead end for simple-mode "
+        "callers:\n  " + "\n  ".join(broken)
+    )
+
+
+def test_no_documented_phrasing_falls_through_to_bare_search() -> None:
+    """A row that is not about search must not route to ``search``.
+
+    ``search`` is the lowest-specificity pattern, so it is where a phrasing
+    that matches nothing else lands. A non-search row reaching it means the
+    example is wrong.
+    """
+    from openzim_mcp.intent_parser import IntentParser
+
+    parser = IntentParser()
+    fell_through: list[str] = []
+    for label, examples in _phrasebook_rows():
+        if "search" in label.lower():
+            continue
+        for ex in examples:
+            if parser.parse_intent(ex)[0] == "search":
+                fell_through.append(f"{label}: {ex!r} falls through to `search`")
+    assert not fell_through, (
+        "documented phrasings that silently become a full-text search:\n  "
+        + "\n  ".join(fell_through)
+    )
