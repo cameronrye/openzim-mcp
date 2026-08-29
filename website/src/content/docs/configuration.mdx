@@ -117,7 +117,7 @@ export OPENZIM_MCP_CACHE__LIBZIM_DIRENT_CACHE_MAX_COUNT=512             # defaul
 
 These last two are independent of the response cache above: they size **libzim's own reader caches**. Leave them unset to keep libzim's defaults. The cluster cache is sized in bytes and is process-global; the dirent cache is a count of directory entries applied per opened archive. See [Performance optimization](/openzim-mcp/docs/performance-optimization/) for tuning guidance.
 
-Cache stats surface inside `zim_health` under `.health.cache_performance` — there are no explicit `warm_cache`/`cache_stats`/`cache_clear` tools (restart the server to flush).
+Cache stats surface inside `zim_health` under `.health.cache_performance` — there are no explicit `warm_cache`/`cache_stats`/`cache_clear` tools. Restarting flushes the cache only when `CACHE__PERSISTENCE_ENABLED` is off; with persistence on it is saved at exit and reloaded at start.
 
 > **Persistence note:** when `persistence_enabled=true`, `cache.set()` validates that the value is JSON-serializable at write time and raises `OpenZimMcpValidationError` if not (no silent `str()` coercion). Internal callers always pass JSON-safe values (strings, dicts, lists, numbers, bools), so this only matters if you've patched in a custom caller that stashes a `Path`, `datetime`, or other non-JSON object. Pure in-memory caches (persistence off) still accept arbitrary Python objects.
 

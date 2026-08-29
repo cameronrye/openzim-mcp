@@ -19,7 +19,7 @@ this server's behaviour follows from that:
 - **Caching is safe and aggressive.** Content cannot change underneath a
   cached response, so the `zim://{name}` overview resource is promised for an
   hour rather than seconds.
-- **Cache keys carry a stat token.** The archive's `mtime_ns:size` is part of
+- **Cache keys carry a stat token.** The archive's `mtime_ns:size:<render_epoch>` token is part of
   every path-mapping key, so replacing a file in place invalidates everything
   derived from the old one instead of serving paths that no longer exist.
 - **"Updating" is replacement**, which the directory watcher notices: a
@@ -82,7 +82,7 @@ runs a five-step [smart-retrieval](/openzim-mcp/docs/smart-retrieval/) ladder â€
 metadata routing, cached mappings, alternate spellings, then search. When it
 resolves somewhere other than what you asked for, the response carries a
 `requested_path` key alongside `path`. Not every tool has that safety net:
-`view="toc"`, `view="structure"` and `zim_links` do a single exact lookup, so
+`view="toc"`, `view="structure"` and `zim_links` in its `outbound` and `related` directions do a single exact lookup, so
 resolve the path first and pass the resolved one.
 
 ## Archive identity

@@ -326,7 +326,7 @@ The subscription watcher is started on app startup via a `lifespan_context` wrap
 ## What was removed before v2.0.0
 
 - **`instance_tracker.py`** (removed in v1.0) — multi-instance conflict tracking, along with its tools `diagnose_server_state` and `resolve_server_conflicts`. HTTP server instances now coexist freely.
-- **Cache management tools** (removed in v1.0) — `warm_cache`, `cache_stats`, `cache_clear`. The cache itself remains; restart the server to flush.
+- **Cache management tools** (removed in v1.0) — `warm_cache`, `cache_stats`, `cache_clear`. The cache itself remains; a restart flushes it only when `CACHE__PERSISTENCE_ENABLED` is off (see the cache notes above).
 - **`get_random_entry`** (removed in v1.0) — exploratory helper that didn't pull its weight.
 
 v2.0.0 then collapsed the remaining 22 advanced tools into 8 consolidated tools without removing functionality — every v1 call site maps to a v2 call with a `mode` / `view` parameter.
