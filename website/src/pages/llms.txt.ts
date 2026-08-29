@@ -6,8 +6,8 @@ import { GROUP_ORDER, sortDocsForNav } from '../lib/docs-order';
  * `/llms.txt` — the machine-readable index, generated at build time.
  *
  * This used to be a hand-maintained file in `public/`. It drifted the way
- * every hand-maintained copy in this repo drifts: it was still advertising the
- * v2.0.0 tool consolidation as news on a v3.2.3 release, and its only link
+ * every hand-maintained copy in this repo drifts: two majors on, it was still
+ * advertising the v2.0.0 tool consolidation as news, and its only link
  * section listed six URLs, not one of which was a documentation page — so an
  * agent that fetched it got a decent API summary and no route into the docs.
  *

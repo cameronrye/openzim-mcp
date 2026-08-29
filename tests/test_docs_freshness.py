@@ -882,3 +882,38 @@ def test_reveal_animation_does_not_hide_content_without_js() -> None:
         "`load` fallback is what keeps a failed script.js from leaving the page "
         "permanently at `opacity: 0`."
     )
+
+
+def test_no_unstamped_doc_names_the_current_version() -> None:
+    """A current-version literal on a line nobody stamps is rot with a fuse.
+
+    ``test_version_declarations_are_stamped_or_current`` only sees the
+    ``Version: X.Y.Z`` *declaration* shape. It does not see a version sitting
+    anywhere else — sample command output, a pinned ``uvx pkg@X.Y.Z``, a code
+    comment — and every one of those is wrong the moment the next release
+    ships. This sweep introduced one itself (``# openzim-mcp 3.2.3`` under a
+    ``--version`` example on the troubleshooting page) and the declaration
+    gate did not notice.
+
+    So: the current version may appear only on a line release-please stamps.
+    Anywhere else, derive it, or write the sentence without it. Past versions
+    are untouched — a claim about what v2.3.0 did stays true.
+    """
+    pattern = re.compile(r"(?<![\w.])v?" + re.escape(__version__) + r"(?![\w.])")
+    offenders: list[str] = []
+    for path in _doc_files():
+        for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            if "x-release-please" in line:
+                continue  # release-please rewrites this line every release
+            if pattern.search(line):
+                rel = path.relative_to(REPO)
+                offenders.append(f"{rel}:{lineno}: {line.strip()[:100]}")
+
+    assert not offenders, (
+        f"the current version ({__version__}) appears on lines nothing stamps, "
+        "so each becomes wrong at the next release:\n  "
+        + "\n  ".join(offenders)
+        + "\nAdd an `x-release-please-version` annotation AND register the file "
+        "in release-please-config.json's extra-files, derive the value, or "
+        "reword so the version is not named."
+    )
