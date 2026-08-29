@@ -100,7 +100,7 @@ def test_server_json_versions_match_package(server_json: dict) -> None:
 # annotation is present AND it carried the current version.
 _VERSION_ANNOTATED_DOCS = {
     "README.md": 1,
-    "website/public/llms.txt": 1,
+    "website/src/pages/llms.txt.ts": 1,
     "website/src/content/docs/index.mdx": 2,
     "website/src/content/docs/http-and-docker-deployment.mdx": 5,
     "website/src/pages/index.astro": 2,  # + 1 date-only annotation, not counted

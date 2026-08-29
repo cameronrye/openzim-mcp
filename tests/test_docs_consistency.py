@@ -66,7 +66,7 @@ def _support_policy_surfaces() -> list[pathlib.Path]:
         *(_DOCS_ROOT / "docs").glob("*.md"),
         *(site / "content" / "docs").glob("*.mdx"),
         site / "pages" / "index.astro",
-        _DOCS_ROOT / "website" / "public" / "llms.txt",
+        site / "pages" / "llms.txt.ts",
     ]
 
 

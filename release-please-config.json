@@ -68,7 +68,7 @@
       "extra-files": [
         {
           "type": "generic",
-          "path": "website/public/llms.txt",
+          "path": "website/src/pages/llms.txt.ts",
           "glob": false
         },
         {

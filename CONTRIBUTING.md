@@ -548,7 +548,7 @@ Breaking changes: append `!` to the type (`feat!:`) or include a `BREAKING CHANG
 ### Automatic release flow
 
 1. Land conventional commits on `main` via squash-merge.
-2. `release-please.yml` opens a release PR (updates `CHANGELOG.md`, `pyproject.toml`, `.release-please-manifest.json`, `website/public/llms.txt`, `server.json`, `packaging/mcpb/manifest.json`, and the `x-release-please-version`-annotated docs; a follow-up `sync-uv-lock` job keeps `uv.lock` in step). `openzim_mcp/__init__.py` needs no stamp — it derives `__version__` via `importlib.metadata`.
+2. `release-please.yml` opens a release PR (updates `CHANGELOG.md`, `pyproject.toml`, `.release-please-manifest.json`, `website/src/pages/llms.txt.ts`, `server.json`, `packaging/mcpb/manifest.json`, and the `x-release-please-version`-annotated docs; a follow-up `sync-uv-lock` job keeps `uv.lock` in step). `openzim_mcp/__init__.py` needs no stamp — it derives `__version__` via `importlib.metadata`.
 3. Review and merge the release PR.
 4. `release-please` pushes the `v<X.Y.Z>` tag and creates the GitHub Release. `release-please-config.json` sets `"draft": false`, so the release is **published immediately** — briefly with no assets attached.
 5. `release-please.yml`'s `trigger-release` job dispatches `release.yml`: full `make check` gate → wheel + sdist + `.mcpb` bundle build → PyPI upload (Trusted Publishing, no token) → assets uploaded to the existing release (notes come from `CHANGELOG.md`). `release.yml` also runs a `publish-registry` job that publishes to the official MCP Registry via OIDC; it is deliberately *not* a dependency of `create-release`, so a registry hiccup cannot hold up the GitHub release.
