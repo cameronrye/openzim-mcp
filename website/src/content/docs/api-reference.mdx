@@ -264,6 +264,47 @@ than answered with markdown guidance.
 
 ---
 
+## Query rewriting
+
+Before intent matching, `zim_query` rewrites the text you sent. The rewrite is silent — nothing in
+the response says it happened — so it is worth knowing what it changes.
+
+Three normalisations always run, and are **not** covered by the kill switch below: whitespace is
+collapsed, a leaked `limit=10` / `offset=5` fragment is stripped out of the prose, and trailing
+politeness (`please`, `thanks`) is removed.
+
+Then four rules run in order:
+
+| Rule | What it does |
+|------|--------------|
+| Lowercase | The whole query is lowercased. This is why topics come back lowercased, and it emits no telemetry at all |
+| Misspelling map | Token-wise substitution from a bundled 40-entry map, retried after stripping surrounding punctuation and a possessive `'s`. It is probe-gated: a token that resolves to a real title in the archive is left alone |
+| Stopword strip | Removes one leading `the`, `a`, `an` or `of`. Also probe-gated — the article is kept when the full query resolves to a real title |
+| `X of Y` decomposition | `<attr> of <entity>` and `<entity>'s <attr>` are split so the entity drives the lookup |
+
+The misspelling rule changes which article you get, with no note in the response: on a Wikipedia
+archive, `photosythesis` retrieves the artificial-photosynthesis article and the reply contains
+no trace of the original spelling. The probe gate is archive-scoped, so the same query can rewrite
+differently depending on how many archives are loaded — with two loaded and none pinned, the probe
+cannot run and the rule fires unconditionally.
+
+Three configuration fields control it, under `OPENZIM_MCP_QUERY_REWRITE__`:
+
+| Field | Default | Notes |
+|-------|---------|-------|
+| `enabled` | `true` | `false` turns off all four rules on the `zim_query` path, lowercasing included |
+| `misspelling_map_path` | unset | **Replaces** the bundled map rather than extending it — a one-line file disables all 40 built-in substitutions |
+| `misspelling_exclusion_path` | unset | Tokens never substituted. The bundled list is empty |
+
+Either path pointing at a missing file fails at startup with a pydantic validation error naming
+the resolved path, rather than falling back silently.
+
+**One gap to know about:** `enabled=false` does not reach `zim_search(mode="title")`, which calls
+the misspelling and stopword rules directly without consulting the configuration. Title-mode
+search always rewrites, applies only those two rules, and never probes first — though it does echo
+the rewritten string back in the response's `query` field, so the change is at least observable
+there.
+
 ## Advanced tools (8)
 
 ### `zim_search`
