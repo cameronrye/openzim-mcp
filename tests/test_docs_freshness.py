@@ -1334,3 +1334,73 @@ def test_cursor_precedence_is_documented_the_way_it_behaves() -> None:
         "`zim_browse(mode='walk')` now honours `offset` — the Cursors section "
         "warns that it does not and that walk must be driven by its cursor"
     )
+
+
+# --------------------------------------------------------------------------
+# 10. The published rate-limit costs must be the costs that are charged.
+# --------------------------------------------------------------------------
+
+# | `zim_get(binary=True)` | `"get_binary_entry"` | 3 |
+_COST_ROW_RE = re.compile(
+    r'^\|[^|]*\|\s*`"([a-z_]+)"`[^|]*\|\s*(\d+)\s*\|', re.MULTILINE
+)
+
+
+def test_published_rate_limit_costs_match_the_table_in_code() -> None:
+    """Every documented cost must equal `RATE_LIMIT_COSTS`.
+
+    The cost model is written out on five pages and has contradicted itself
+    before. Rather than delete the copies — a reference page has a fair claim
+    to carrying it — every copy is checked against `defaults.py`, so a stale
+    one fails instead of quietly disagreeing with its neighbours.
+    """
+    from openzim_mcp.defaults import RATE_LIMIT_COSTS
+
+    pages = [
+        REPO / "website/src/content/docs/configuration.mdx",
+        REPO / "website/src/content/docs/api-reference.mdx",
+        REPO / "website/src/content/docs/performance-optimization.mdx",
+    ]
+    wrong: list[str] = []
+    checked = 0
+    for path in pages:
+        if not path.is_file():
+            continue
+        for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            for op, cost in _COST_ROW_RE.findall(line):
+                if op not in RATE_LIMIT_COSTS:
+                    # The three wire-keyed tools have no entry on purpose and
+                    # charge the `default` cost.
+                    expected = RATE_LIMIT_COSTS["default"]
+                else:
+                    expected = RATE_LIMIT_COSTS[op]
+                checked += 1
+                if int(cost) != expected:
+                    wrong.append(
+                        f"{path.relative_to(REPO)}:{lineno}: {op!r} documented "
+                        f"as {cost}, charged {expected}"
+                    )
+    assert checked >= 12, (
+        f"only {checked} cost rows parsed across the doc pages — the table "
+        "shape changed and this gate has gone nearly vacuous"
+    )
+    assert (
+        not wrong
+    ), "documented rate-limit costs that are not charged:\n  " + "\n  ".join(wrong)
+
+
+def test_every_charged_operation_is_documented_somewhere() -> None:
+    """A cost in the code with no row is a limit an operator cannot tune."""
+    from openzim_mcp.defaults import RATE_LIMIT_COSTS
+
+    text = (REPO / "website/src/content/docs/configuration.mdx").read_text(
+        encoding="utf-8"
+    )
+    missing = [
+        op for op in RATE_LIMIT_COSTS if op != "default" and f'`"{op}"`' not in text
+    ]
+    assert not missing, (
+        f"these operations are charged but the Configuration cost table does "
+        f"not list them: {sorted(missing)} — a `per_operation_limits` override "
+        "cannot be written without the literal key"
+    )

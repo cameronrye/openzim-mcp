@@ -162,7 +162,7 @@ Per-internal-operation cost defaults are defined in [defaults.RATE_LIMIT_COSTS](
 |--------------|----------------------------------|------|
 | `zim_search(mode="fulltext")` | `"search"` | 2 |
 | `zim_search(mode="title")` | `"find_entry_by_title"` | 2 |
-| `zim_search` with namespace/content_type filters | `"search_with_filters"` | 2 |
+| `zim_search(mode="fulltext")` **with** `namespace`/`content_type` | `"search_with_filters"` | 2 |
 | `zim_search(mode="suggest")` | `"suggestions"` | 1 |
 | `zim_get(entry_path=...)` | `"get_entry"` | 1 |
 | `zim_get(entry_paths=[...])` | `"get_zim_entries"` (×N per-entry) | 1 |
@@ -175,7 +175,19 @@ Per-internal-operation cost defaults are defined in [defaults.RATE_LIMIT_COSTS](
 | `zim_links(direction="related")` | `"get_related_articles"` | 2 |
 | `zim_health` / `zim_get_section` / `zim_query` | `"zim_health"` / `"zim_get_section"` / `"zim_query"` (bucket keyed on the tool name; the cost falls back to the `default` cost) | 1 |
 
-`zim_get(entry_paths=[...])` charges per-entry cost so a batch of 50 doesn't trivially bypass per-second limits.
+`zim_get(entry_paths=[...])` charges per-entry so a batch does not trivially bypass the per-second limit. The charge is `min(len(entry_paths), 50)` units — `MAX_BATCH_SIZE` is 50 — taken as two debits: one unit up front, before validation, and the remainder after, clamped to the bucket's capacity. An over-size batch is rejected after the first unit, so it costs 1 rather than a full bucket.
+
+`mode` wins over the filter arguments when the bucket key is resolved: `zim_search(mode="title", namespace=...)` keys on `"find_entry_by_title"`, not `"search_with_filters"`. Rejected calls are charged before they are rejected, deliberately — malformed input is never free.
+
+### How the limiter identifies a client
+
+Buckets are keyed per client, derived in this order: a hash of the presented bearer token, then the peer IP, then the literal `"default"`.
+
+**Only one token value is ever accepted** — `OPENZIM_MCP_AUTH_TOKEN` is a single credential, not a list — so on the deployment this page recommends, *every authenticated client shares one bucket*. Per-client isolation is real but it separates tokens, and there is only one. Size the limits for your total expected load, not per consumer. Issuing a token per consumer would need a change to the server.
+
+There is no `X-Forwarded-For` handling in this project. Unauthenticated callers are separated by peer IP, which behind a reverse proxy on another host or container is the proxy's address — again one bucket. (Uvicorn trusts `X-Forwarded-For` only when the immediate peer is `127.0.0.1`; its `FORWARDED_ALLOW_IPS` environment variable is the only lever, and this project exposes no setting for it.)
+
+stdio callers, and the deprecated `sse` transport, all get `"default"`. The client table is LRU-bounded at 10,000 entries, which is not configurable; an evicted client returns to a fresh bucket at full burst.
 
 Per-operation overrides use the literal key strings shown in the right column. To throttle binary fetches:
 

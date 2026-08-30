@@ -132,7 +132,7 @@ Token-bucket limiter (`rate_limiter.py`):
 - Global rate: `OPENZIM_MCP_RATE_LIMIT__REQUESTS_PER_SECOND` (default 20) and `__BURST_SIZE` (default 40, max 1000). Both count **work units**, not requests — a search costs 2 units and a binary fetch 3, so size overrides against the operation's cost.
 - Per-operation overrides via `OPENZIM_MCP_RATE_LIMIT__PER_OPERATION_LIMITS` (nested JSON).
 - Global + per-operation acquire is **atomic** — single pass over both buckets, no transient over-consumption.
-- Per-client buckets with LRU eviction (10k cap) — client identity scopes the limit so one noisy client can't drain the global bucket.
+- Per-client buckets with LRU eviction (10k cap). Note what "client" means: the key is a hash of the bearer token, and only one token value is accepted — so on a token-authenticated deployment every caller shares one bucket. See [how the limiter identifies a client](/openzim-mcp/docs/configuration/#how-the-limiter-identifies-a-client).
 - `zim_get(entry_paths=[...])` charges per-entry to prevent batch bypass.
 
 When the limit is exceeded, the tool returns the standard error envelope — `{"error": true, "operation": "rate_limited", "message": ..., "context": ...}` — serialized as JSON in the response's text block, and the `CallToolResult` is flagged `isError: true`. It does not raise. Both limiter paths (global and per-operation) always attach `context`, and the retry delay is carried as prose inside `message` ("Please wait 3.42 seconds before retrying") and `context` (`wait_time=3.42s`) — there is no machine-readable `retry_after` field.
