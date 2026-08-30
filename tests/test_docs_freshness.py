@@ -1054,3 +1054,102 @@ def test_no_contributor_surface_sends_people_to_discussions() -> None:
         "disabled on this repository (has_discussions=false, /discussions 404s):"
         "\n  " + "\n  ".join(offenders)
     )
+
+
+# Row label -> the intent `IntentParser` must emit for that row's examples.
+#
+# The three gates above check the phrasebook against *itself* — rows are
+# internally consistent, and no non-search row falls through to search. Neither
+# notices a row whose examples agree with each other and reach the wrong
+# handler: "show article X" and "list article X" both dispatch to `browse`
+# consistently, and both are wrong. This map is what turns a consistency check
+# into a correctness one.
+_PHRASEBOOK_LABEL_TO_INTENT = {
+    "List archives": "list_files",
+    "Main page": "main_page",
+    "List namespaces": "list_namespaces",
+    "Archive metadata": "metadata",
+    "Fetch an article": "get_article",
+    "Topic lookup": "tell_me_about",
+    "Full-text search": "search",
+    "Cross-archive search": "search_all",
+    "Filtered search": "filtered_search",
+    "Title lookup": "find_by_title",
+    "Autocomplete": "suggestions",
+    "Section outline": "structure",
+    "Table of contents": "toc",
+    "Summary": "summary",
+    "One section": "get_section",
+    "Outbound links": "links",
+    "Related articles": "related",
+    "Browse a namespace": "browse",
+    "Walk a namespace": "walk_namespace",
+    "Batch fetch": "get_zim_entries",
+    "Binary content": "binary",
+}
+
+
+def test_phrasebook_covers_every_dispatched_intent() -> None:
+    """The table must be the whole surface, not a sample.
+
+    Simple mode is the default and registers one tool, so an intent missing
+    from this table is a capability with no discoverable phrasing. The mapping
+    below is also asserted against the live handler map, so a new intent fails
+    here rather than shipping undocumented.
+    """
+    from openzim_mcp.simple_tools import SimpleToolsHandler
+
+    # `list_files` and `search_all` dispatch from bypasses ahead of the map.
+    dispatched = set(SimpleToolsHandler._INTENT_HANDLERS) | {"list_files"}
+    mapped = set(_PHRASEBOOK_LABEL_TO_INTENT.values())
+
+    assert mapped == dispatched, (
+        "the phrasebook's intent coverage no longer matches the dispatch "
+        f"surface.\n  missing from the page: {sorted(dispatched - mapped)}"
+        f"\n  documented but not dispatched: {sorted(mapped - dispatched)}"
+    )
+
+    labels = {label for label, _ in _phrasebook_rows()}
+    unmapped = labels - set(_PHRASEBOOK_LABEL_TO_INTENT)
+    assert not unmapped, (
+        f"phrasebook rows with no intent mapping: {sorted(unmapped)} — add "
+        "them to _PHRASEBOOK_LABEL_TO_INTENT so their examples get checked"
+    )
+    missing_rows = set(_PHRASEBOOK_LABEL_TO_INTENT) - labels
+    assert (
+        not missing_rows
+    ), f"these rows were removed from the published table: {sorted(missing_rows)}"
+
+
+def test_every_documented_phrasing_reaches_its_own_intent() -> None:
+    """Each example must reach the intent its row is about.
+
+    Consistency is not correctness. "show article Evolution" and "list article
+    Evolution" both dispatch to `browse` — agreeing with each other, agreeing
+    with nothing the reader wanted, and answering **Missing or Invalid
+    Namespace**. Running each example against the parser is the only check that
+    catches that.
+    """
+    from openzim_mcp.intent_parser import IntentParser
+
+    parser = IntentParser()
+    rows = _phrasebook_rows()
+    assert len(rows) >= 20, f"only {len(rows)} rows parsed — the regex drifted"
+
+    wrong: list[str] = []
+    for label, examples in rows:
+        expected = _PHRASEBOOK_LABEL_TO_INTENT.get(label)
+        if expected is None:
+            continue  # the coverage test above owns this failure
+        for example in examples:
+            got, _params, confidence = parser.parse_intent(example)
+            if got != expected:
+                wrong.append(
+                    f"{label}: {example!r} should reach {expected!r} but "
+                    f"dispatches to {got!r} (confidence {confidence})"
+                )
+
+    assert not wrong, (
+        "documented phrasings that reach the wrong handler — a reader copying "
+        "one gets a plausible-looking wrong answer:\n  " + "\n  ".join(wrong)
+    )

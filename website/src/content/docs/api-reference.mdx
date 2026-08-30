@@ -145,29 +145,29 @@ recognizes **are** the API. There are 21 of them. The parser scores every
 pattern and dispatches the most specific match, so wording matters more than
 it looks — the traps are called out below the table.
 
-| Intent | Say something like | You get back |
-|---|---|---|
-| List archives | "list available ZIM files", "show archives" | Every loaded archive, as JSON embedded in the string |
-| Main page | "show main page", "home page" | The archive's front page |
-| List namespaces | "list namespaces", "what namespaces" | The archive's namespace breakdown |
-| Archive metadata | "metadata for wikipedia.zim", "details about this archive" | Title, language, creator, index capabilities, counts |
-| Fetch an article | "get article Evolution", "show the page Photosynthesis" | The rendered article body |
-| Topic lookup | "tell me about photosynthesis", "everything about ants" | Auto-fetches on a strong title match, otherwise searches |
-| Full-text search | "search for biology", "find quantum entanglement" | Ranked hits |
-| Cross-archive search | "search all files for python", "search everywhere for ants" | One result block per archive |
-| Filtered search | "search protein in namespace C" | Hits restricted to a namespace or content type |
-| Title lookup | "find article titled Photosynthesis", "what's the path for Ant" | The resolved entry path |
-| Autocomplete | "suggestions for photo", "autocomplete diab" | Title-prefix completions |
-| Section outline | "show structure of Biology", "outline of Protein" | Headings and section anchors |
-| Table of contents | "table of contents for Evolution", "toc of Ant" | The hierarchical TOC |
-| Summary | "summary of Quantum_mechanics", "summarize Protein" | Opening-paragraph summary |
-| One section | "the Biochemistry section of Protein", "section Synthesis of Protein" | That section's body |
-| Outbound links | "links in Ant", "references from Protein" | Links extracted from the body |
-| Related articles | "articles related to Climate_Change", "what links to Ant" | Link-graph neighbours |
-| Browse a namespace | "browse namespace C with limit 10" | A sampled page of entries |
-| Walk a namespace | "walk namespace M", "enumerate namespace C" | Deterministic cursor-paginated iteration |
-| Batch fetch | "get articles C/Ant, C/Bee" | Several entries in one call. The values must be **path-shaped** — bare titles reach the intent but extract nothing and return "Missing Entry Paths" |
-| Binary content | "get image Logo.png", "download pdf Manual.pdf", "raw content for File.pdf" | Base64 payload with its native MIME type |
+| Intent | Say something like | You get back | Default `limit` |
+|---|---|---|---|
+| List archives | "list available ZIM files", "show archives" | Every loaded archive, as JSON embedded in the string | — |
+| Main page | "show main page", "home page" | The archive's front page | — |
+| List namespaces | "list namespaces", "what namespaces" | The archive's namespace breakdown | — |
+| Archive metadata | "metadata for wikipedia.zim", "details about this archive" | Title, language, creator, index capabilities, counts | — |
+| Fetch an article | "get article Evolution", "show the page Photosynthesis" | The rendered article body | — |
+| Topic lookup | "tell me about photosynthesis", "everything about ants" | Auto-fetches on a strong title match, otherwise searches | 3 (a cap, not a default) |
+| Full-text search | "search for biology", "find quantum entanglement" | Ranked hits | 10 |
+| Cross-archive search | "search all files for python", "search everywhere for ants" | One result block per archive | 5 per archive |
+| Filtered search | "search protein in namespace C" | Hits restricted to a namespace or content type | 10 |
+| Title lookup | "find article titled Photosynthesis", "what's the path for Ant" | The resolved entry path | 10 |
+| Autocomplete | "suggestions for photo", "autocomplete diab" | Title-prefix completions | 10 (hard max 50) |
+| Section outline | "show structure of Biology", "outline of Protein" | Headings and section anchors | — |
+| Table of contents | "table of contents for Evolution", "toc of Ant" | The hierarchical TOC | — |
+| Summary | "summary of Quantum_mechanics", "summarize Protein" | Opening-paragraph summary | — |
+| One section | "the Biochemistry section of Protein", "section Synthesis of Protein" | That section's body | — |
+| Outbound links | "links in Ant", "references from Protein" | Links extracted from the body | 25 per bucket (100 if `compact=False`) |
+| Related articles | "articles related to Climate_Change", "what links to Ant" | Link-graph neighbours | 10 |
+| Browse a namespace | "browse namespace C with limit 10" | A sampled page of entries | 50 |
+| Walk a namespace | "walk namespace M", "enumerate namespace C" | Deterministic cursor-paginated iteration | 200 |
+| Batch fetch | "get articles C/Ant, C/Bee" | Several entries in one call. The values must be **path-shaped** — bare titles reach the intent but extract nothing and return "Missing Entry Paths" | — |
+| Binary content | "get image Logo.png", "download pdf Manual.pdf", "raw content for File.pdf" | Base64 payload with its native MIME type | — |
 
 **Phrasings that trip people up:**
 
@@ -183,10 +183,37 @@ it looks — the traps are called out below the table.
   alone lands on the latter.
 - **The binary verb must sit next to the noun.** "get image Logo.png" works;
   "get **the** image Logo.png" does not — the article breaks the pattern and
-  the query falls through to full-text search.
+  the query falls through to full-text search. That adjacency rule is not
+  special to binary: a determiner or quantifier between verb and noun drops
+  most patterns to a literal search at confidence 0.50. "list **all** zim
+  files", "list **the** namespaces", "walk **the** namespace A", "browse
+  **the** A namespace" and "show homepage" (one word) all search for their own
+  wording.
+- **Two patterns outrank the one you meant.** Browsing scores 0.85 and article
+  fetch 0.80, so "show article Evolution" becomes a namespace browse, discards
+  the title, and answers **Missing or Invalid Namespace**. Separately, the bare
+  word "contents" is a table-of-contents trigger, so "show contents of
+  namespace C" becomes a TOC lookup for an article called "namespace c".
+- **Only two phrasings read an archive name out of the query**: `metadata for
+  <file>.zim` and `search <name> for <terms>` (a unique basename prefix, three
+  characters minimum, and the name must come *before* `for`). Every other form
+  discards it silently — "walk namespace M in wikipedia.zim" parses as a walk
+  of `M` with the filename dropped, which auto-selection hides while one
+  archive is loaded and which fails with **No ZIM File Specified** once two
+  are. Pass `zim_file_path` as an argument instead of naming it in the
+  sentence.
+- **Chain detection is driven by a verb list, not by the word "then".**
+  "search for X, then get article Y" returns **Chained Operations Detected**
+  guidance; "then **fetch** Y" is not recognised and runs as one literal
+  search. `and` is not a connector at all: "search for climate and get article
+  Climate crisis" runs the fetch and drops the search.
 
-Pagination differs per intent: `suggestions for` and `find article titled` do
-not page at all — raise `limit` rather than passing `offset`.
+Pagination differs per intent: `suggestions for`, `find article titled` and
+`articles related to` do not page at all — raise `limit` rather than passing
+`offset`. Every response also ends with `<!-- intent=<name> cert=<0.NN> -->`,
+which is the quickest way to see what a surprising answer actually dispatched
+to; a `cert` of `0.50` almost always means no pattern matched and your wording
+was searched literally.
 
 **Returns:** intent-specific output — a markdown list for searches, a rendered article for retrievals, a `SynthesizeResponse` when `synthesize=True`. On the default (non-synthesize) path, the *guidance* failures — no archive specified, empty query, meta-only query, chained query — come back as markdown rather than an error envelope, so they carry `isError: false`. A `zim_file_path` that matches no loaded archive is **not** one of them: it returns a `zim_path_not_found` envelope, and any other exception the catch-all absorbs returns a `zim_query` envelope. Both set `isError: true`. The `synthesize=True` path instead refuses bad paths, meta-only queries, and chained queries with a `ToolErrorPayload`, so those do set `isError: true`.
 

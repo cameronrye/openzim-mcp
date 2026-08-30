@@ -87,7 +87,7 @@ TOTAL_CAP = 25 * 1024
 # allocation is deliberately not that number any more, so it is recorded here —
 # otherwise the table stops telling a reader what the surface actually costs.
 ALLOCATION = {
-    "zim_query": 5_550,  # 6,243B
+    "zim_query": 5_550,  # 6,266B
     "zim_search": 3_620,  # 3,937B
     "zim_get": 3_650,  # 3,913B
     "zim_get_section": 1_840,  # 1,863B

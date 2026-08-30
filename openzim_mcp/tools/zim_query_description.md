@@ -62,8 +62,9 @@ Args:
         of <name>`. Setting it there has no effect; omit
         it on those calls.
     offset: Pagination offset (default: 0). Not honoured by
-        `suggestions for <prefix>` or `find article titled
-        <name>` (neither backend pages); raise `limit` there.
+        `suggestions for <prefix>`, `find article titled
+        <name>` or `articles related to <name>`; raise
+        `limit` there instead.
     cursor: Opaque handle from a prior `next_cursor`.
     max_content_length: Article body cap (default: 4000).
     content_offset: Character offset to start reading the
