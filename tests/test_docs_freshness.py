@@ -1007,3 +1007,50 @@ def test_documented_preset_fields_match_the_models() -> None:
         "the confidence gate is what decides whether a type preset applies at "
         "all — the section must still explain it"
     )
+
+
+def test_no_contributor_surface_sends_people_to_discussions() -> None:
+    """GitHub Discussions is disabled on this repository.
+
+    `has_discussions` is false and `/discussions` returns 404, so every
+    instruction to "search discussions" or "ask in Discussions" sends a
+    contributor to a 404 before they have written a word. An earlier pass
+    cleared this out of the FAQ and the Code of Conduct and missed the issue
+    templates, which is the surface a contributor actually hits first.
+
+    The check is deliberately narrow — the security template legitimately uses
+    "general security discussion" to name a *kind of issue*, which is not a
+    pointer at the disabled feature.
+    """
+    surfaces = [
+        *sorted((REPO / ".github" / "ISSUE_TEMPLATE").glob("*.yml")),
+        *(p for p in (REPO / ".github" / "PULL_REQUEST_TEMPLATE.md",) if p.is_file()),
+        REPO / "CONTRIBUTING.md",
+        REPO / "CODE_OF_CONDUCT.md",
+        REPO / "README.md",
+        REPO / "SECURITY.md",
+        *sorted((REPO / "website" / "src" / "content" / "docs").glob("*.mdx")),
+    ]
+    # "search ... discussions", "in Discussions", "/discussions", "GitHub Discussions"
+    pointer = re.compile(
+        r"github\.com/[\w-]+/[\w-]+/discussions"
+        r"|GitHub Discussions"
+        r"|issues and discussions"
+        r"|(?:search|ask|post|check)[^.\n]{0,40}\bdiscussions\b",
+        re.IGNORECASE,
+    )
+    offenders = []
+    for path in surfaces:
+        if not path.is_file():
+            continue
+        for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            if pointer.search(line):
+                offenders.append(
+                    f"{path.relative_to(REPO)}:{lineno}: {line.strip()[:90]}"
+                )
+
+    assert not offenders, (
+        "these lines point a contributor at GitHub Discussions, which is "
+        "disabled on this repository (has_discussions=false, /discussions 404s):"
+        "\n  " + "\n  ".join(offenders)
+    )
