@@ -232,7 +232,7 @@ Sorted alphabetically by field name within each grouping.
 | `meta.tokenizer_encoding` | `OPENZIM_MCP_META__TOKENIZER_ENCODING` | `cl100k_base` | **Declared but not wired.** `meta.py` hard-codes `cl100k_base`; setting this has no effect today |
 | `logging.level` | `OPENZIM_MCP_LOGGING__LEVEL` | `INFO` | DEBUG/INFO/WARNING/ERROR/CRITICAL |
 | `port` | `OPENZIM_MCP_PORT` | `8000` | 1-65535 |
-| `presets_override_path` | `OPENZIM_MCP_PRESETS_OVERRIDE_PATH` | unset | TOML file deep-merged over the bundled archive-type presets |
+| `presets_override_path` | `OPENZIM_MCP_PRESETS_OVERRIDE_PATH` | unset | TOML file deep-merged over the bundled archive-type presets — [format and the confidence gate](/openzim-mcp/docs/configuration/#archive-type-presets) |
 | `rate_limit.burst_size` | `OPENZIM_MCP_RATE_LIMIT__BURST_SIZE` | `40` | 1-1000 (work units) |
 | `rate_limit.enabled` | `OPENZIM_MCP_RATE_LIMIT__ENABLED` | `true` | bool |
 | `rate_limit.per_operation_limits` | `OPENZIM_MCP_RATE_LIMIT__PER_OPERATION_LIMITS` | `{}` | nested JSON dict |
@@ -263,6 +263,57 @@ configurable — sharing the I/O pool let repeated probes against a wedged mount
 burn workers that every MCP tool call also needs.
 
 Further nested groups exist for specialized tuning — `search.*` (e.g. `OPENZIM_MCP_SEARCH__SEARCH_ALL_TOTAL_TIMEOUT_SECONDS`), `query_rewrite.*`, `synthesize.*`, `meta.*`, and `ml.reranker.*` (documented on [Search reranking](/openzim-mcp/docs/search-reranking/)). Their fields and defaults live in [`openzim_mcp/config.py`](https://github.com/cameronrye/openzim-mcp/blob/main/openzim_mcp/config.py).
+
+## Archive-type presets
+
+The server classifies each archive — `wikipedia`, `wiktionary`, `stackexchange`, `ted` or
+`generic` — and tunes retrieval for it. `OPENZIM_MCP_PRESETS_OVERRIDE_PATH` points at a TOML file
+that is **deep-merged over** the bundled presets, per key, so you override one value without
+restating the rest. The bundled file ships presets for `wikipedia` and `stackexchange` only.
+
+```toml
+# Adjust a bundled preset — the other keys stay as shipped.
+[preset.wikipedia]
+snippet_length = 1200
+
+# Add one for a type that has none.
+[preset.ted]
+summary_style = "first_section"
+max_paragraphs = 2
+
+# Pin one specific archive. The table key is the archive's M/Name metadata
+# value, NOT its filename.
+[archive.wikipedia_en_climate_change]
+type = "stackexchange"
+snippet_length = 900
+```
+
+Three fields, all optional; a missing one inherits the global default:
+
+| Field | Type | Constraint |
+|-------|------|------------|
+| `snippet_length` | integer | ≥ 100 |
+| `max_paragraphs` | integer | ≥ 1 |
+| `summary_style` | string | `"first_section"` or `"q_and_a"` — those two only |
+
+`[archive.*]` tables take those three plus `type`, which forces a classification.
+
+**The load-bearing rule is the confidence gate.** Detection returns a confidence of `high`,
+`medium` or `none`. A **type** preset applies only at `high`; at `medium` or `none` the archive
+gets generic behaviour, however well the type matched. A **per-archive pin applies at every
+confidence level** — so pinning is how you force behaviour onto an archive the classifier will
+not commit to. A pin also merges *over* its type's preset rather than replacing it.
+
+Two things to know before you write one:
+
+- **The pin key is `M/Name`, not the filename.** For
+  `wikipedia_en_climate_change_mini_2024-06.zim` the key is `wikipedia_en_climate_change`. A table
+  keyed on the filename matches nothing and fails silently — you get the type preset, and no
+  warning. Read the value back with `zim_metadata`, under `metadata_entries.Name`.
+- **A broken override never stops the server.** An unreadable file, invalid TOML, or an unknown
+  key logs a warning and falls back to the bundled defaults. That is deliberate — a typo in an
+  operator file must not take the server down — but it does mean a silently ineffective override
+  looks exactly like a working one. Check the startup log.
 
 ## Profiles
 

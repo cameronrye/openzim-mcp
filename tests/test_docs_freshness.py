@@ -960,3 +960,50 @@ def test_llms_index_advertises_the_routes_that_exist() -> None:
             f"{path.relative_to(REPO)} no longer reads the content collection; "
             "a hand-maintained page list is exactly the drift these routes replaced"
         )
+
+
+def test_documented_preset_fields_match_the_models() -> None:
+    """The preset override format is operator-authored TOML with `extra=forbid`.
+
+    A field named in the docs that the model does not accept produces a file
+    the server drops with a warning and no other signal — the operator sees
+    generic behaviour and no error. So the documented field list has to be the
+    model's field list, and the documented `summary_style` values have to be
+    the literal's values.
+    """
+    import typing
+
+    from openzim_mcp import preset_data
+
+    page = (REPO / "website/src/content/docs/configuration.mdx").read_text(
+        encoding="utf-8"
+    )
+    section = page.split("## Archive-type presets", 1)[1].split("\n## ", 1)[0]
+
+    preset_fields = set(preset_data.ArchivePreset.model_fields)
+    pin_only = set(preset_data.ArchivePin.model_fields) - preset_fields
+    assert pin_only == {"type"}, f"ArchivePin gained/lost a field: {pin_only}"
+
+    for field in preset_fields | pin_only:
+        assert f"`{field}`" in section, (
+            f"`{field}` is accepted in a preset override but the Configuration "
+            "page's Archive-type presets section does not document it"
+        )
+
+    styles = set(typing.get_args(preset_data.SummaryStyle))
+    for style in styles:
+        assert (
+            f'"{style}"' in section
+        ), f'summary_style accepts "{style}" but the section does not list it'
+    # And nothing invented: every quoted style in the section must be real.
+    quoted = set(re.findall(r'`"([a-z_]+)"`', section))
+    invented = quoted - styles
+    assert (
+        not invented
+    ), f"the section offers summary_style values the model rejects: {invented}"
+
+    # The confidence gate is the rule an operator gets wrong; keep it named.
+    assert "high" in section and "medium" in section, (
+        "the confidence gate is what decides whether a type preset applies at "
+        "all — the section must still explain it"
+    )
