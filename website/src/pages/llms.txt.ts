@@ -27,7 +27,10 @@ import { GROUP_ORDER, sortDocsForNav } from '../lib/docs-order';
 
 const SITE = 'https://cameronrye.github.io/openzim-mcp';
 
-const VERSION = '3.2.3'; // x-release-please-version
+// The one stamped version literal on the site's generated text routes.
+// `llms-full.txt.ts` imports it rather than restating it, so
+// release-please-config.json still has exactly one file to update.
+export const VERSION = '3.2.3'; // x-release-please-version
 
 /** The eight advanced-mode tools, in registration order. Gated in Python. */
 const TOOLS: Array<[name: string, blurb: string]> = [
@@ -101,6 +104,9 @@ export const GET: APIRoute = async () => {
 - Repository: https://github.com/cameronrye/openzim-mcp
 - Documentation: ${SITE}/
 - PyPI: https://pypi.org/project/openzim-mcp/
+
+Every page below is also served as plain Markdown without the site shell, at
+\`${SITE}/docs/<slug>.md\`. The whole corpus in one file: ${SITE}/llms-full.txt
 
 ## Documentation
 

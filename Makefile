@@ -1,6 +1,6 @@
 # OpenZIM MCP Development Makefile
 
-.PHONY: help install install-dev install-hooks setup-dev check-tools test test-cov test-with-zim-data test-integration test-live test-live-docker benchmark lint format type-check security download-test-data download-test-data-all list-test-data clean clean-test-data build publish publish-test run check ci
+.PHONY: help install install-dev install-hooks setup-dev check-tools test test-cov test-with-zim-data test-integration test-live test-live-docker benchmark lint format type-check security download-test-data download-test-data-all list-test-data clean clean-test-data site-install site-dev site-check site-build check-links build publish publish-test run check ci
 
 help:  ## Show this help message
 	@uv run python scripts/generate_help.py
@@ -44,6 +44,19 @@ benchmark:  ## Run performance benchmarks (selects tests marked/named "benchmark
 	@echo "Running performance benchmarks..."
 	uv run pytest -k "benchmark" -v --benchmark-only
 	@echo "Benchmark completed. Results saved to .benchmarks/"
+
+site-install:  ## Install the docs site's Node dependencies (website/node_modules)
+	cd website && npm ci --ignore-scripts
+
+site-dev:  ## Serve the docs site with live reload at http://localhost:4321/openzim-mcp/
+	@test -d website/node_modules || $(MAKE) site-install
+	@echo "The site is served under its base path — http://localhost:4321/openzim-mcp/"
+	@echo "The bare root returns 404. Stop with: cd website && npx astro dev stop"
+	cd website && npm run dev
+
+site-check:  ## Type-check the docs site without building it
+	@test -d website/node_modules || $(MAKE) site-install
+	cd website && npm exec --no-install -- astro check
 
 site-build:  ## Build the documentation site (website/dist)
 	cd website && npm ci --ignore-scripts && npm exec --no-install -- astro check && npm run build

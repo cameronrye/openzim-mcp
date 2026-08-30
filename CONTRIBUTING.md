@@ -309,10 +309,19 @@ Node 22+. It is **not** built by `make check` — its gate is the `Website CI`
 workflow, which runs on any PR that touches `website/`.
 
 ```bash
-make site-build              # npm ci + astro check + astro build
+make site-install            # npm ci (once; site-dev and site-check do it for you)
+make site-dev                # live-reload preview — see the note below
+make site-check              # astro check only, no build
+make site-build              # npm ci + astro check + astro build (what CI runs)
 make check-links             # internal links and heading anchors
 make check-links EXTERNAL=1  # also probe every external URL
 ```
+
+`make site-dev` serves the site **under its base path**: open
+<http://localhost:4321/openzim-mcp/>, not the bare root, which returns 404
+because `base: '/openzim-mcp'` is set for GitHub Pages. Astro's dev server
+detaches, so stop it with `cd website && npx astro dev stop` rather than
+Ctrl-C alone.
 
 Each page under `website/src/content/docs/` needs four frontmatter fields:
 `title`, `summary`, `group` (one of `Get started`, `Reference`, `Guides`,
