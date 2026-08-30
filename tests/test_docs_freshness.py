@@ -1477,3 +1477,118 @@ def test_fence_still_neutralises_forged_delimiters() -> None:
         assert (
             "‹" in out and "›" in out
         ), f"{forged!r} was not rewritten to the safe delimiters: {out!r}"
+
+
+# --------------------------------------------------------------------------
+# 12. Site-quality invariants that are easy to lose and silent when lost.
+# --------------------------------------------------------------------------
+
+_WEBSITE = REPO / "website"
+
+
+def test_doc_summaries_fit_a_meta_description() -> None:
+    """`summary` is the meta description, both og/twitter ones, and llms.txt.
+
+    Ten of nineteen were over 160 characters and truncated in search results.
+    Because one string feeds four surfaces, the limit is worth holding.
+    """
+    over = []
+    for path in sorted((_WEBSITE / "src/content/docs").glob("*.mdx")):
+        match = re.search(r"^summary: (.+)$", path.read_text(encoding="utf-8"), re.M)
+        assert match, f"{path.name} has no summary frontmatter"
+        summary = match.group(1)
+        if len(summary) > 160:
+            over.append(f"{path.name}: {len(summary)} chars")
+        # Unquoted YAML plain scalars: ": " would start a mapping and " #" a
+        # comment, either of which changes the parsed value silently.
+        assert ": " not in summary, f"{path.name}: summary contains ': '"
+        assert " #" not in summary, f"{path.name}: summary contains ' #'"
+    assert (
+        not over
+    ), "summaries too long to survive as a meta description:\n  " + "\n  ".join(over)
+
+
+def test_404_page_uses_base_absolute_asset_urls() -> None:
+    """`404.html` is served for arbitrary deep paths, so relative URLs break.
+
+    The landing page's relative `assets/styles.css` resolves fine from one
+    known location. The same href on the 404 page resolves against whatever
+    the visitor mistyped, so the error page 404s its own stylesheet.
+    """
+    page = _WEBSITE / "src/pages/404.astro"
+    assert (
+        page.is_file()
+    ), "the 404 page is gone; unknown paths fall back to GitHub's generic one"
+    text = page.read_text(encoding="utf-8")
+    relative = re.findall(r'(?:href|src)="(assets/[^"]+)"', text)
+    assert not relative, (
+        f"404.astro uses relative asset URLs {relative} — they resolve against "
+        "the mistyped path, not the site root. Use `${base}/assets/...`."
+    )
+    assert "href={`${base}/assets/styles.css`}" in text, (
+        "404.astro must link the stylesheet itself — LandingLayout contributes "
+        "none, so without it the page renders unstyled"
+    )
+
+
+def test_heading_anchors_stay_out_of_the_search_index() -> None:
+    """The anchor's visible text is a `#`, and Pagefind indexes it.
+
+    Without `data-pagefind-ignore` every page fragment picks up tokens like
+    "Resources#". Verified by building both ways: the indexed word count is
+    identical with and without the plugin.
+    """
+    config = (_WEBSITE / "astro.config.mjs").read_text(encoding="utf-8")
+    assert "rehypeHeadingAnchors" in config, "the heading-anchor plugin is gone"
+    block = config.split("function rehypeHeadingAnchors", 1)[1].split("\nfunction ", 1)[
+        0
+    ]
+    assert "'data-pagefind-ignore': true" in block, (
+        "the heading anchor no longer sets data-pagefind-ignore — every page "
+        "fragment will pick up '#'-suffixed tokens"
+    )
+    # rehypeHeadingIds must run FIRST: Astro applies it after user plugins, so
+    # without the explicit re-run no heading has an id yet and the anchor
+    # plugin silently adds nothing at all.
+    plugins = re.search(r"rehypePlugins: \[([^\]]+)\]", config)
+    assert plugins, "rehypePlugins list not found"
+    names = [n.strip() for n in plugins.group(1).split(",") if n.strip()]
+    assert names[0] == "rehypeHeadingIds", (
+        f"rehypeHeadingIds must be the first rehype plugin (got {names}) — "
+        "Astro adds heading ids after user plugins, so the anchor plugin would "
+        "find none and add nothing"
+    )
+    assert names.index("rehypeHeadingAnchors") > names.index("rehypeHeadingIds")
+
+
+def test_theme_toggle_exposes_its_pressed_state() -> None:
+    """A toggle button needs `aria-pressed`, and a name that does not change.
+
+    The markup ships `aria-pressed="true"` to match the hard-coded
+    `data-theme="dark"`, but the inline head script can pick light before
+    script.js runs — so the handler has to sync on init, not only on click.
+    """
+    header = (_WEBSITE / "src/components/SiteHeader.astro").read_text(encoding="utf-8")
+    script = (_WEBSITE / "public/assets/script.js").read_text(encoding="utf-8")
+
+    assert (
+        'aria-pressed="true"' in header
+    ), "the theme toggle ships no aria-pressed state"
+    assert 'aria-label="Toggle theme"' not in header, (
+        "a toggle button's accessible name must not change with its state; use "
+        "a stable noun phrase and let aria-pressed carry the state"
+    )
+    init = script.split("function initTheme()", 1)[1].split("\n  function ", 1)[0]
+    assert init.count("aria-pressed") >= 1, "initTheme never updates aria-pressed"
+    # The state must be synced once BEFORE the click handler is registered, not
+    # only inside it. Checking merely that `sync()` appears somewhere passed a
+    # mutation that deleted the init call and kept the one in the handler.
+    listener_at = init.index("addEventListener")
+    assert "sync();" in init[:listener_at], (
+        "initTheme must sync aria-pressed on init, before wiring the click "
+        "handler — the inline head script may already have selected light, so "
+        "syncing only on click leaves the first render's state wrong"
+    )
+    assert (
+        "sync();" in init[listener_at:]
+    ), "initTheme must also sync aria-pressed after a click"

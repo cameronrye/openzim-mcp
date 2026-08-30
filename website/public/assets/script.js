@@ -15,10 +15,23 @@
   function initTheme() {
     const toggle = document.getElementById('theme-toggle');
     if (!toggle) return;
+    // The button is a toggle, so its accessible name stays constant ("Dark
+    // mode") and `aria-pressed` carries the state — same shape as the mobile
+    // nav button's aria-expanded. The markup ships aria-pressed="true" to
+    // match the hard-coded data-theme="dark", but the inline head script may
+    // already have chosen light before this runs, so sync once on init.
+    const sync = () => {
+      toggle.setAttribute(
+        'aria-pressed',
+        String(document.documentElement.dataset.theme === 'dark'),
+      );
+    };
+    sync();
     toggle.addEventListener('click', () => {
       const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
       document.documentElement.dataset.theme = next;
       safeStorage('set', 'theme', next);
+      sync();
     });
   }
 

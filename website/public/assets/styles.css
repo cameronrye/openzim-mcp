@@ -997,3 +997,45 @@ html[data-theme="dark"] .astro-code span {
   background: var(--bg); padding: 1px 6px; border-radius: 3px;
   font-size: 0.92em; color: var(--signal);
 }
+
+/* ===== 404 ===== */
+.notfound {
+  max-width: 44rem;
+  margin: 0 auto;
+  padding: clamp(3rem, 10vh, 7rem) var(--space-5) 6rem;
+}
+.notfound__code {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  color: var(--secondary);
+  margin: 0 0 var(--space-2);
+}
+.notfound h1 { margin: 0 0 var(--space-4); }
+.notfound__lead { color: var(--secondary); margin: 0 0 var(--space-6); }
+.notfound__links { list-style: none; padding: 0; margin: 0 0 var(--space-6); }
+.notfound__links li {
+  padding: var(--space-3) 0;
+  border-bottom: 1px solid var(--border-color);
+  color: var(--secondary);
+}
+.notfound__links li:first-child { border-top: 1px solid var(--border-color); }
+.notfound__links a { font-weight: 600; }
+.notfound__foot { color: var(--secondary); font-size: var(--text-sm); margin: 0; }
+
+/* ===== Heading anchors ===== */
+.docs-article .heading-linked { position: relative; }
+.docs-article .heading-anchor {
+  margin-left: 0.4em;
+  color: var(--border-color);
+  text-decoration: none;
+  font-weight: 400;
+  opacity: 0;
+  transition: opacity var(--dur-fast, 120ms) ease, color var(--dur-fast, 120ms) ease;
+}
+.docs-article .heading-linked:hover .heading-anchor,
+.docs-article .heading-anchor:focus-visible { opacity: 1; color: var(--accent, var(--secondary)); }
+/* Keyboard and touch users get no hover, so never hide it from them entirely. */
+@media (hover: none) {
+  .docs-article .heading-anchor { opacity: 0.5; }
+}
