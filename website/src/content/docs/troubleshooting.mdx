@@ -36,7 +36,11 @@ Check for it with `isinstance(result, dict) and result.get("error") is True`. Si
 - `missing_archive` — `zim_search` could not resolve an archive for `mode="suggest"`, `mode="title"`, or single-archive fulltext
 - `invalid_query` — `zim_query` got a query over the 4096-character cap
 - `rate_limited` — the token bucket for the internal operation was exhausted
-- `cursor_decode` / `cursor_mismatch` / `cursor_context_mismatch` / `cursor_unsupported` — a malformed, wrong-tool, wrong-context, or unsupported `cursor`
+- `cursor_decode` — the `cursor` is malformed, truncated, or carries an unsupported version; on `zim_query` it is also the catch-all for *every* cursor fault, including one over the 2048-character cap. Drop it and restart the sequence
+- `cursor_mismatch` — the cursor was issued by a different tool. Advanced surface only; cursors are not portable across operations
+- `cursor_context_mismatch` — right tool, different target: another namespace, another entry, another link `kind`, or a changed `include_assets`. A cursor cannot be retargeted — start over for the new target
+- `cursor_unsupported` — only `zim_links(direction="related")`, which returns one ranked set and does not paginate. Omit `cursor`
+- See [Cursors](/openzim-mcp/docs/api-reference/#cursors) for which tools issue them, and for the two places where the usual "drop the cursor and pass `offset`" recovery does *not* work
 - `file_not_found` / `entry_not_found` / `section_not_found` / `invalid_max_chars` — data-layer failures surfaced by `zim_get_section`. `section_not_found` is the one envelope that carries extra keys: `available_section_ids`, `available_section_ids_truncated`, `available_section_ids_total`, and `closest_match` when a near match exists.
 - `inbound_sidecar_unavailable` — `zim_links(direction="inbound")` against an archive with no link-graph sidecar
 - the tool's own wire name — `zim_get`, `zim_search`, `zim_query`, `zim_browse`, `zim_links`, `zim_metadata`, `zim_health`, `zim_get_section` — when an unexpected exception escapes the tool body (archive read error, smart-retrieval miss). There is no `get_entry` or `search` operation value: those are internal rate-limiter bucket names, never envelope operations.

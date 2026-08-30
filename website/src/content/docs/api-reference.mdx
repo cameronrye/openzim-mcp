@@ -636,6 +636,50 @@ When the limit is exceeded the tool returns a `ToolErrorPayload` with `operation
 
 ---
 
+## Cursors
+
+A `next_cursor` is an opaque resume handle. "Opaque" is the contract — do not parse it — but four
+properties govern whether a call using one will work.
+
+**Who issues and who accepts them.** Three tools emit a cursor: `zim_browse` (both modes),
+`zim_links` with `direction="outbound"`, and `zim_query` for its browse and walk intents. Four
+accept one: those three plus `zim_search`, which accepts the *parameter* and rejects every
+non-empty value with `invalid_combination` — it never emits one either, and nulls any the data
+layer mints. Paginate search with `offset`.
+
+**A cursor is bound to a tool, an archive and a context.** It carries the issuing tool's name, a
+hash of the archive's *validated path* (not its contents, so two identical copies at different
+paths have different identities), and the context fields its tool needs — namespace and
+`include_assets` for browse, entry path and link kind for links. Change any of those and the call
+is refused rather than silently answering about something else. Cursors *are* interchangeable in
+one direction: between `zim_query` and the advanced tool implementing the same operation, which
+mint identical cursors.
+
+**Precedence is not symmetric.** An explicit `limit` wins over the page size the cursor encodes —
+the encoded size is only a fallback when you omit `limit`. An explicit `offset`, by contrast,
+*loses*: when a cursor is present its offset is used and yours is ignored. So pass a cursor or an
+offset, never both.
+
+**There is a length cap, on one surface.** `zim_query` rejects a cursor over 2048 characters with
+a `cursor_decode` envelope. The advanced tools have no length check.
+
+### When a cursor is refused
+
+| `operation` | Cause | Recovery |
+|-------------|-------|----------|
+| `cursor_decode` | Malformed, truncated, wrong version, or over `zim_query`'s 2048-character cap. Also `zim_query`'s catch-all — it reports every cursor fault under this one code | Drop the cursor and start the sequence again |
+| `cursor_mismatch` | Issued by a different tool. Advanced surface only | Drop it; a cursor is not portable across operations |
+| `cursor_context_mismatch` | Right tool, different target — another namespace, entry, link kind, or `include_assets` setting | Drop it and start over for the new target; a cursor cannot be retargeted |
+| `cursor_unsupported` | `zim_links(direction="related")`, which returns one ranked set and does not paginate | Omit `cursor` entirely |
+| `invalid_combination` | Any non-empty cursor on `zim_search` | Use `offset` — single-archive `mode="fulltext"` only |
+
+**"Drop the cursor and pass `offset`" is the usual recovery, but it does not work everywhere.**
+`zim_search` accepts `offset` only for single-archive `mode="fulltext"`; `title`, `suggest` and
+`cross_file=True` reject it and have no pagination at all. And `zim_browse(mode="walk")` ignores
+`offset` on the advanced surface — you get page one back while believing you advanced — so walk
+iteration must be driven by its cursor. Where the substitution does work, the cursor page and the
+equivalent `offset` page are the same rows.
+
 ## Error responses
 
 Every tool wraps exceptions and returns a structured `ToolErrorPayload` — except `zim_query`'s default path, which returns markdown guidance for handler-side failures — delivered as JSON text in the response's `content` — never in `structuredContent`, since no tool advertises an `outputSchema` — with `isError: true` set on the `CallToolResult`. `error` (always `true`), `operation`, and `message` are always present; `context` is added only when the tool supplies one. Three paths merge operation-specific self-correction keys: the `section_not_found` envelope returned by `zim_get_section` also carries `available_section_ids` (capped at 50), `available_section_ids_truncated`, and `available_section_ids_total`, plus `closest_match` when a near-miss section ID is found; an `unknown_argument` envelope carries `unknown_arguments` and `accepted_arguments`, plus `closest_matches` when a stray name is close to a real one; and an `invalid_argument` envelope carries `invalid_arguments`:

@@ -1153,3 +1153,184 @@ def test_every_documented_phrasing_reaches_its_own_intent() -> None:
         "documented phrasings that reach the wrong handler — a reader copying "
         "one gets a plausible-looking wrong answer:\n  " + "\n  ".join(wrong)
     )
+
+
+# --------------------------------------------------------------------------
+# 9. The documented cursor failures must be the ones the code produces.
+# --------------------------------------------------------------------------
+
+_TEST_ARCHIVE = (
+    REPO
+    / "test_data/zim-testing-suite/withns/wikipedia_en_climate_change_mini_2024-06.zim"
+)
+
+
+def _cursor_table_operations() -> set[str]:
+    """The `operation` values the API reference's cursor table promises.
+
+    Body rows only. The header cell is itself ``\u0060operation\u0060``, so a
+    naive row regex captures it and the set never matches what the code emits.
+    """
+    page = _API_REFERENCE.read_text(encoding="utf-8")
+    table = page.split("### When a cursor is refused", 1)[1].split("\n**", 1)[0]
+    body = table.split("|---", 1)[1]
+    return set(re.findall(r"^\|\s*`([a-z_]+)`\s*\|", body, re.MULTILINE))
+
+
+@pytest.mark.skipif(
+    not _TEST_ARCHIVE.is_file(),
+    reason="needs the zim-testing-suite fixture (make download-test-data-all)",
+)
+def test_documented_cursor_failures_are_the_ones_produced() -> None:
+    """Each refusal in the table is produced for real and compared.
+
+    Cursor errors are the one place a client cannot recover by guessing: the
+    envelope names what to do, and every one of these codes carries different
+    advice. Two of the four rules this section was written from turned out to
+    be backwards when run — an explicit `limit` beats the cursor's encoded page
+    size, not the other way round — so the table is checked by producing the
+    failures rather than by reading the raising code.
+    """
+    import asyncio
+
+    cfg = OpenZimMcpConfig(
+        allowed_directories=[str(_TEST_ARCHIVE.parent)], tool_mode="advanced"
+    )
+    cfg.rate_limit.enabled = False
+    tools = OpenZimMcpServer(cfg).mcp._tool_manager._tools
+
+    def call(name: str, **kwargs: object) -> dict:
+        fn = tools[name].fn
+        out = (
+            asyncio.run(fn(**kwargs))
+            if asyncio.iscoroutinefunction(fn)
+            else fn(**kwargs)
+        )
+        return out if isinstance(out, dict) else {}
+
+    archive = str(_TEST_ARCHIVE)
+    first = call(
+        "zim_browse", zim_file_path=archive, namespace="A", mode="page", limit=5
+    )
+    cursor = first.get("next_cursor")
+    assert (
+        cursor
+    ), "browse page mode stopped issuing a cursor; the table's premise is gone"
+
+    produced = {
+        # a cursor from another tool
+        call(
+            "zim_links",
+            zim_file_path=archive,
+            entry_path="A/Climate_change",
+            direction="outbound",
+            cursor=cursor,
+        ).get("operation"),
+        # a direction that does not paginate
+        call(
+            "zim_links",
+            zim_file_path=archive,
+            entry_path="A/Climate_change",
+            direction="related",
+            cursor=cursor,
+        ).get("operation"),
+        # the tool that refuses every cursor
+        call("zim_search", zim_file_path=archive, query="climate", cursor=cursor).get(
+            "operation"
+        ),
+        # garbage
+        call(
+            "zim_browse",
+            zim_file_path=archive,
+            namespace="A",
+            mode="page",
+            cursor="not-a-cursor",
+        ).get("operation"),
+        # right tool, different namespace
+        call(
+            "zim_browse",
+            zim_file_path=archive,
+            namespace="M",
+            mode="page",
+            cursor=cursor,
+        ).get("operation"),
+    }
+    produced.discard(None)
+
+    documented = _cursor_table_operations()
+    undocumented = produced - documented
+    assert not undocumented, (
+        f"these cursor refusals are produced but the table does not list them: "
+        f"{sorted(undocumented)}"
+    )
+    # Every documented code must still be reachable; a stale row is advice for
+    # an envelope no client will ever see.
+    assert produced == documented, (
+        f"the cursor table lists codes nothing produced here: "
+        f"{sorted(documented - produced)} (produced: {sorted(produced)})"
+    )
+
+
+@pytest.mark.skipif(
+    not _TEST_ARCHIVE.is_file(),
+    reason="needs the zim-testing-suite fixture (make download-test-data-all)",
+)
+def test_cursor_precedence_is_documented_the_way_it_behaves() -> None:
+    """`limit` beats the cursor's page size; the cursor's offset beats `offset`.
+
+    This is the asymmetry the section exists to state, and the one both the
+    original research and my own first assumption got backwards.
+    """
+    import asyncio
+
+    cfg = OpenZimMcpConfig(
+        allowed_directories=[str(_TEST_ARCHIVE.parent)], tool_mode="advanced"
+    )
+    cfg.rate_limit.enabled = False
+    tools = OpenZimMcpServer(cfg).mcp._tool_manager._tools
+
+    def call(name: str, **kwargs: object) -> dict:
+        fn = tools[name].fn
+        out = (
+            asyncio.run(fn(**kwargs))
+            if asyncio.iscoroutinefunction(fn)
+            else fn(**kwargs)
+        )
+        return out if isinstance(out, dict) else {}
+
+    archive = str(_TEST_ARCHIVE)
+    first = call(
+        "zim_browse", zim_file_path=archive, namespace="A", mode="page", limit=5
+    )
+    cursor = first["next_cursor"]
+    resumed = call(
+        "zim_browse",
+        zim_file_path=archive,
+        namespace="A",
+        mode="page",
+        cursor=cursor,
+        limit=2,
+    )
+    assert len(resumed["results"]) == 2, (
+        "an explicit `limit` no longer overrides the cursor's encoded page size "
+        f"(got {len(resumed['results'])} rows for limit=2) — the API reference's "
+        "Cursors section states that it does"
+    )
+
+    walk = call(
+        "zim_browse", zim_file_path=archive, namespace="A", mode="walk", limit=3
+    )
+    walked = call(
+        "zim_browse",
+        zim_file_path=archive,
+        namespace="A",
+        mode="walk",
+        limit=3,
+        offset=3,
+    )
+    assert [r["path"] for r in walk["results"]] == [
+        r["path"] for r in walked["results"]
+    ], (
+        "`zim_browse(mode='walk')` now honours `offset` — the Cursors section "
+        "warns that it does not and that walk must be driven by its cursor"
+    )
