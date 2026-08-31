@@ -344,7 +344,7 @@ def test_api_reference_enum_values_match() -> None:
 
 
 # --------------------------------------------------------------------------
-# 4. The sidebar's group list must cover the schema's group enum.
+# 4. The docs ordering surface: group lists, and sidebar_order within them.
 # --------------------------------------------------------------------------
 
 _CONTENT_CONFIG = REPO / "website/src/content.config.ts"
@@ -395,6 +395,82 @@ def test_every_doc_group_is_renderable() -> None:
         elif match.group(1).strip().strip("\"'") not in nav_groups:
             bad.append(f"{page.name}: group {match.group(1).strip()!r}")
     assert not bad, f"pages with a group the sidebar cannot render: {bad}"
+
+
+# `sidebar_order` had no gate at all: `grep -rl sidebar_order tests/ scripts/
+# .github/` returned nothing. It is the one field in the ordering surface that
+# a renumber touches on every page it moves, which makes a collision cheap to
+# introduce and invisible once introduced.
+def _sidebar_orders_by_group() -> dict[str, list[tuple[int, str]]]:
+    """Map each frontmatter ``group`` to its ``(sidebar_order, filename)`` pairs."""
+    by_group: dict[str, list[tuple[int, str]]] = {}
+    unparsed: list[str] = []
+    for page in sorted((REPO / "website/src/content/docs").glob("*.mdx")):
+        text = page.read_text(encoding="utf-8")
+        group = re.search(r"^group:\s*(.+)$", text, re.M)
+        order = re.search(r"^sidebar_order:\s*(-?\d+)\s*$", text, re.M)
+        if group is None or order is None:
+            unparsed.append(page.name)
+            continue
+        key = group.group(1).strip().strip("\"'")
+        by_group.setdefault(key, []).append((int(order.group(1)), page.name))
+    assert not unparsed, (
+        f"pages with no group or no integer sidebar_order: {unparsed}. "
+        "Every .mdx under content/docs carries both; a page this helper "
+        "cannot read is a page the gate below would have skipped."
+    )
+    return by_group
+
+
+def test_sidebar_order_is_unique_and_dense_within_each_group() -> None:
+    """Each group's ``sidebar_order`` values must be exactly 1..n.
+
+    This reads the numbers out of frontmatter and compares them to
+    ``range(1, n + 1)``. It says nothing about whether that sequence is the
+    intended reading order — only that it is a permutation of 1..n.
+
+    ``sortDocsForNav`` is the field's only reader and ``content.config.ts``
+    types it as a bare ``z.number()``, so two pages in one group sharing a
+    number is valid frontmatter. It builds clean with no warning, and because
+    the sort is stable the tie falls through to whatever order the content
+    loader emitted — an order nobody authored. ``docs-order.ts`` calls
+    ``sortDocsForNav`` "the single sort every navigation surface uses", and it
+    means every one: the sidebar, the prev/next chain, and the ``llms.txt``
+    and ``llms-full.txt`` endpoints all ship the tie. They agree with each
+    other, since all apply the same stable sort to the same collection. What
+    is lost is the author's intent, silently, while the frontmatter claims
+    otherwise.
+
+    A hole in a group's sequence renders identically to a dense one, so it is
+    not itself a rendering bug. It is gated because it is the visible trace of
+    a half-applied renumber, and a half-applied renumber is what leaves the
+    duplicate behind.
+    """
+    offenders: list[str] = []
+    for group, pages in sorted(_sidebar_orders_by_group().items()):
+        orders = sorted(order for order, _ in pages)
+        expected = list(range(1, len(pages) + 1))
+        if orders == expected:
+            continue
+        duplicated = sorted({o for o in orders if orders.count(o) > 1})
+        holes = sorted(set(expected) - set(orders))
+        detail = f"{group!r}: {len(pages)} pages numbered {orders}, expected {expected}"
+        if duplicated:
+            detail += f"; duplicated: {duplicated}"
+        if holes:
+            detail += f"; missing: {holes}"
+        listing = ", ".join(f"{order}={name}" for order, name in sorted(pages))
+        offenders.append(f"{detail}\n      {listing}")
+    assert not offenders, (
+        "sidebar_order must be a permutation of 1..n within each group.\n  "
+        + "\n  ".join(offenders)
+        + "\n  Neither shape errors the build. On a duplicate the sort is "
+        "stable, so tied pages fall back to the content loader's own emission "
+        "order on every navigation surface sortDocsForNav feeds and ship in an "
+        "order nobody wrote. A hole is a renumber that missed a page: the sort "
+        "still resolves, so the group silently stops saying what its author "
+        "meant. Both stay green."
+    )
 
 
 # --------------------------------------------------------------------------
