@@ -1,7 +1,7 @@
 import type { APIRoute } from 'astro';
 import { getCollection } from 'astro:content';
 import { sortDocsForNav } from '../lib/docs-order';
-import { VERSION } from './llms.txt';
+import { RELEASED, VERSION } from './llms.txt';
 
 /**
  * `/llms-full.txt` — the whole documentation corpus as one plain-text file.
@@ -14,11 +14,16 @@ import { VERSION } from './llms.txt';
  * module the sidebar uses, so neither can fall behind a page that was added,
  * renamed, or moved between groups.
  *
- * `VERSION` is imported rather than restated: it carries the
- * `x-release-please-version` marker in `llms.txt.ts`, which is the file
+ * `VERSION` and `RELEASED` are imported rather than restated: they carry the
+ * release-please line annotations in `llms.txt.ts`, which is the file
  * registered in `release-please-config.json`. A second stamped literal here
  * would be a second thing to keep in step, which is the failure this whole
  * sweep has been about.
+ *
+ * Both are printed here because this is a machine surface. The human doc
+ * layout deliberately prints the version alone — see the long note above
+ * `RELEASED` in `llms.txt.ts` for why, and for the four per-page-date designs
+ * that were rejected.
  */
 
 const SITE = 'https://cameronrye.github.io/openzim-mcp';
@@ -49,6 +54,7 @@ ${doc.body ?? ''}`;
 > Stack Exchange dumps — with no internet connection.
 
 Version: ${VERSION}
+Released: ${RELEASED} (the release this corpus describes; not a per-page edit date)
 Documentation: ${SITE}/
 Index (links only): ${SITE}/llms.txt
 Source: https://github.com/cameronrye/openzim-mcp

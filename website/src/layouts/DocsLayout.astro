@@ -5,6 +5,7 @@ import TableOfContents from '../components/TableOfContents.astro';
 import PrevNext from '../components/PrevNext.astro';
 import SiteHeader from '../components/SiteHeader.astro';
 import SiteFooter from '../components/SiteFooter.astro';
+import { VERSION } from '../pages/llms.txt';
 
 export interface Props {
   title: string;
@@ -15,6 +16,19 @@ export interface Props {
 }
 const { title, description, group, slug, headings } = Astro.props;
 const repoEditUrl = `https://github.com/cameronrye/openzim-mcp/blob/main/website/src/content/docs/${slug === 'index' ? 'index' : slug}.mdx`;
+// Version, and deliberately no date. `VERSION` comes from `pages/llms.txt.ts`,
+// which release-please stamps at each release, so this cannot drift on its own.
+//
+// The generated text routes (`llms.txt`, `llms-full.txt`, `docs/<slug>.md`)
+// print the release DATE beside the version; this page does not, and that
+// split is the decision, not an oversight. A date rendered under an article
+// reads as that article's date. Every doc page would print the same one, so
+// `faq` and `troubleshooting` would make identical freshness claims whether
+// one was rewritten yesterday or had gone untouched for six months. A version
+// makes no per-page claim and so cannot mislead. The long note above
+// `RELEASED` in `pages/llms.txt.ts` records the four per-page-date designs
+// that were rejected, and the measurement to re-run before re-opening them.
+const releaseUrl = `https://github.com/cameronrye/openzim-mcp/releases/tag/v${VERSION}`;
 const base = import.meta.env.BASE_URL.replace(/\/$/, '');
 const canonicalUrl = `https://cameronrye.github.io${base}/docs/${slug === 'index' ? '' : slug + '/'}`;
 const pageTitle = `${title} — OpenZIM MCP docs`;
@@ -108,7 +122,11 @@ const breadcrumbLd = {
           <slot />
         </article>
         <PrevNext currentSlug={slug} />
-        <p class="docs-edit"><a href={repoEditUrl} target="_blank" rel="noopener">Edit this page on GitHub ↗</a></p>
+        <!-- One line on purpose: the Astro compiler trims the leading
+             whitespace of a text node that starts a line, so wrapping the
+             `· ` separator onto its own line closed the gap up against the
+             preceding link — no space between the version and the bullet. -->
+        <p class="docs-edit">Documentation for <a href={releaseUrl} target="_blank" rel="noopener">v{VERSION}</a> · <a href={repoEditUrl} target="_blank" rel="noopener">Edit this page on GitHub ↗</a></p>
       </main>
       <TableOfContents headings={headings} />
     </div>

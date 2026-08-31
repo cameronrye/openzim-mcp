@@ -1,5 +1,6 @@
 import type { APIRoute, GetStaticPaths } from 'astro';
 import { getCollection } from 'astro:content';
+import { RELEASED, VERSION } from '../llms.txt';
 
 /**
  * `/docs/<slug>.md` — one page's Markdown source, without the site shell.
@@ -12,6 +13,15 @@ import { getCollection } from 'astro:content';
  *
  * The body is the collection entry's own source, so it cannot drift from the
  * rendered page — there is no second copy to keep in step.
+ *
+ * The header block carries the release stamp as well as the title, summary and
+ * canonical URL. Without it an agent that fetches this route has nothing to
+ * invalidate against — no way to tell a page pulled today from one pulled six
+ * releases ago. `VERSION` and `RELEASED` are imported from `llms.txt.ts`,
+ * which release-please stamps at each release; the stamp describes the RELEASE, not this
+ * page, which is why the line says so out loud. The human HTML route beside
+ * this one prints the version and no date at all — the note above `RELEASED`
+ * in `llms.txt.ts` has the reasoning and the four rejected alternatives.
  */
 
 export const getStaticPaths: GetStaticPaths = async () => {
@@ -29,6 +39,8 @@ export const GET: APIRoute = ({ props }) => {
 > ${doc.data.summary}
 
 Source: ${canonical}
+Version: ${VERSION}
+Released: ${RELEASED} (the release this documentation describes; not this page's edit date)
 
 ---
 
