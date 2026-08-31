@@ -748,7 +748,10 @@ def test_published_rate_limit_costs_match_the_table_in_code() -> None:
     # record coverage; rows elsewhere are not coverage of anything, but a wrong
     # number in them is still a wrong number a reader will believe.
     for path in _doc_files():
-        rel = str(path.relative_to(REPO))
+        # as_posix(): _RATE_LIMIT_PAGES is keyed with forward slashes, and
+        # relative_to() yields backslashes on Windows — str() there made
+        # every page read as unlisted and reddened both gates.
+        rel = path.relative_to(REPO).as_posix()
         for lineno, _line, claimed, row_ops in _priced_operation_rows(
             _visible_prose(path.read_text(encoding="utf-8"))
         ):
@@ -921,7 +924,10 @@ def test_every_published_rate_limit_cost_is_registered() -> None:
     unlisted: list[str] = []
     unregistered: list[str] = []
     for path in _doc_files():
-        rel = str(path.relative_to(REPO))
+        # as_posix(): _RATE_LIMIT_PAGES is keyed with forward slashes, and
+        # relative_to() yields backslashes on Windows — str() there made
+        # every page read as unlisted and reddened both gates.
+        rel = path.relative_to(REPO).as_posix()
         listed = rel in _RATE_LIMIT_PAGES
         text = _visible_prose(path.read_text(encoding="utf-8"))
 
@@ -1012,7 +1018,10 @@ def test_tools_without_their_own_cost_entry_are_described_as_default() -> None:
 # That needs no label-to-intent mapping and catches the real failure shape —
 # one row's examples splitting across two intents.
 
-_PHRASEBOOK_ROW = re.compile(r"^\|\s*([^|]+?)\s*\|\s*((?:\"[^\"]+\"\s*,?\s*)+)\|", re.M)
+# The separator is one character class rather than `\s*,?\s*`: that form
+# can split a run of whitespace many ways, and inside the `+` a failing
+# match backtracks exponentially (CodeQL py/redos, high).
+_PHRASEBOOK_ROW = re.compile(r'^\|\s*([^|]+?)\s*\|\s*((?:"[^"]+"[\s,]*)+)\|', re.M)
 
 
 def _phrasebook_rows() -> list[tuple[str, list[str]]]:
