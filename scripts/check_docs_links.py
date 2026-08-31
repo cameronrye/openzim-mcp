@@ -130,6 +130,17 @@ EDIT_LINK_PREFIX = "https://github.com/cameronrye/openzim-mcp/blob/main/"
 # Skipped rather than silently passed, and reported in the summary.
 EXTERNAL_SKIP_HOSTS = ("badge.fury.io", "img.shields.io", "codecov.io")
 
+# The docs footer links its version at this release tag. release-please bumps
+# the version in the release PR, and the tag is created by MERGING that PR, so
+# on exactly the commit that most needs to pass, the tag is a 404 that becomes
+# valid minutes later. Probing it asks "has this release happened yet", which
+# is the same wrong question `SITE_BASE` and `EDIT_LINK_PREFIX` above already
+# decline to ask. The URL is correct by construction: `DocsLayout.astro` builds
+# it from `VERSION`, which release-please stamps, and a test pins that it is
+# derived rather than written by hand — so there is no hand-typed tag here for
+# a probe to catch.
+RELEASE_TAG_PREFIX = "https://github.com/cameronrye/openzim-mcp/releases/tag/v"
+
 USER_AGENT = (
     "openzim-mcp-docs-linkcheck/1.0 (+https://github.com/cameronrye/openzim-mcp)"
 )
@@ -434,6 +445,9 @@ def check_external(
                         f"{url} (no heading anchor #{frag} in {rel}; "
                         f"referenced by {sorted(sources)[0]})"
                     )
+            continue
+        if url.startswith(RELEASE_TAG_PREFIX):
+            skipped.append(f"{url} (release tag — created by merging the release PR)")
             continue
         if any(host in url for host in EXTERNAL_SKIP_HOSTS):
             skipped.append(url)
