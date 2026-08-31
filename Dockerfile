@@ -7,7 +7,7 @@
 # do not re-add the directive without adding a feature that needs it.
 
 # ---- builder stage ----
-FROM python:3.13-slim@sha256:ffb752e139c0a19692a43af8d8523b274222dd68eebad5d583b45c2201c6e30a AS builder
+FROM python:3.13-slim@sha256:7ce4b6dfe35e55397b7cda544f8a13f191b7ae28dc5aad71fe664dbc9bc2623f AS builder
 
 # Install uv (fast Python package manager). Pinned by digest, not tag, so the
 # image is reproducible — a floating tag changes the binary out from under us
@@ -42,7 +42,7 @@ RUN uv sync --frozen --no-dev
 RUN chmod -R a-w /app/.venv /app/openzim_mcp
 
 # ---- final stage ----
-FROM python:3.13-slim@sha256:ffb752e139c0a19692a43af8d8523b274222dd68eebad5d583b45c2201c6e30a
+FROM python:3.13-slim@sha256:7ce4b6dfe35e55397b7cda544f8a13f191b7ae28dc5aad71fe664dbc9bc2623f
 
 # Create the non-root runtime user. No extra apt packages are needed —
 # the image defaults to stdio transport (see ENTRYPOINT note below), so
