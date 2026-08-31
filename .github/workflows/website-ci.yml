@@ -5,12 +5,24 @@ name: Website CI
 # unclosed MDX tag, or a link to a page that no longer exists merged green and
 # reddened the deploy instead. This runs the same build on the PR, plus the
 # link check the deploy path has no reason to run.
+#
+# The repo markdown paths below are here because the link check reads them too:
+# it resolves the site URLs in them against the build it just made. On a
+# website/**-only trigger this job does not run for a PR that edits only
+# README.md, so a link from there to a docs page that does not exist would
+# reach main without the one job that can see it ever starting. Keep this list
+# in step with MARKDOWN_ROOT_FILES / MARKDOWN_GLOBS in the script.
 on:
   pull_request:
     paths:
       - "website/**"
       - "scripts/check_docs_links.py"
       - ".github/workflows/website-ci.yml"
+      - "README.md"
+      - "CONTRIBUTING.md"
+      - "SECURITY.md"
+      - "CODE_OF_CONDUCT.md"
+      - "docs/*.md"
   workflow_dispatch:
 
 # PR builds are throwaway; superseding one is fine. Deliberately NOT the
@@ -56,8 +68,8 @@ jobs:
       # internal pass is offline and deterministic, so a failure there is
       # unambiguously this repo's fault, while the external pass depends on
       # remote hosts. Splitting them means the Actions UI says which kind of
-      # breakage happened without anyone reading the log. The internal pass is
-      # ~1s for 900+ links, so the repeat costs nothing.
+      # breakage happened without anyone reading the log. The internal pass
+      # resolves ~1,700 links in under 0.1s, so the repeat costs nothing.
       # The script is stdlib-only, so no Python setup step is needed.
       - name: Check internal links and anchors
         run: python3 scripts/check_docs_links.py
