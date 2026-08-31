@@ -1,8 +1,8 @@
 ---
 title: HTTP and Docker deployment
 summary: Run OpenZIM MCP as a networked service — streamable HTTP transport, bearer-token auth, CORS, health probes, the Docker image and LAN, Tailscale and TLS recipes
-group: Guides
-sidebar_order: 3
+group: Operate
+sidebar_order: 1
 ---
 
 How to run OpenZIM MCP as a long-running networked service. Covers the streamable HTTP transport, the published Docker image, operational concerns (TLS, reverse proxy, health probes, systemd), and end-to-end deployment recipes for LAN, Tailscale tailnet, and public VPS topologies.
@@ -54,6 +54,8 @@ The published image:
 - Entrypoint: `python -m openzim_mcp /data` (mount your ZIM directory at `/data`)
 
 Binding a non-loopback host (`0.0.0.0`) requires `OPENZIM_MCP_AUTH_TOKEN` as a safe default; the bind is refused without it.
+
+For an end-to-end deployment rather than a one-off `docker run` — Compose files, TLS, client wiring — see [Deployment patterns](#deployment-patterns) at the foot of this page.
 
 > **Tool surface.** The image sets `OPENZIM_MCP_TOOL_MODE=advanced`, so it registers all 8 tools. That matches the `.mcpb` bundle and the MCP Registry entry, and it is what directory listings show. The code default elsewhere (a bare `uvx openzim-mcp`) is still `simple`, the single `zim_query` entry point. Add `-e OPENZIM_MCP_TOOL_MODE=simple` to get that narrower surface in a container.
 
@@ -311,7 +313,13 @@ spec:
 
 Each replica has its own in-memory cache. Persistent cache on shared storage is *not* recommended unless you handle concurrent-writer issues at the storage layer (the on-disk cache uses simple file rewrites).
 
-Clients reaching the pods through a Service/Ingress hostname should have that hostname in `OPENZIM_MCP_ALLOWED_HOSTS`. Note what the Deployment above does *without* it: because it binds `0.0.0.0` with an empty allow-list, `Host` validation is switched off and the bearer token is the only control — add the hostname to turn DNS-rebinding protection back on. And with `replicas: 2`, session affinity is required — see [Scaling considerations](#scaling-considerations).
+Clients reaching the pods through a Service/Ingress hostname should have that hostname in `OPENZIM_MCP_ALLOWED_HOSTS`. Note what the Deployment above does *without* it: because it binds `0.0.0.0` with an empty allow-list, `Host` validation is switched off and the bearer token is the only control — add the hostname to turn DNS-rebinding protection back on.
+
+### Scaling considerations
+
+Horizontal scaling works — add replicas and front them with any L7 load balancer that supports HTTP/1.1 keep-alive and forwards `Authorization` unchanged. A 2026-07-28 client is stateless, so any replica can answer any request; a long-lived `subscriptions/listen` stream is naturally pinned to the replica holding it, and each replica runs its own watcher over the same directories, so it publishes to its own listeners.
+
+Handshake-era clients still need session-stickiness: their session state lives in the process that issued it, and a replica that doesn't recognize the presented `Mcp-Session-Id` returns `404 Session not found`. If any of your clients still use `initialize`, forward `Mcp-Session-Id` unchanged and use cookie- or header-based affinity (e.g. hash on `Mcp-Session-Id`), or run one replica.
 
 ## Hardening checklist
 
@@ -337,6 +345,21 @@ Common failure modes:
 - **Browser clients get 403 / CORS errors.** Either `OPENZIM_MCP_CORS_ORIGINS` is unset (and a browser is calling) or the client's origin isn't in the allow-list. The browser console shows the offending origin; add it.
 - **`/readyz` returns 503.** None of the configured ZIM directories are readable from inside the container. (With multiple allowed directories, one bad mount is fine — readiness flips only when *all* of them fail.) Check the volume mount path (host side and `/data` side) and that the mount isn't empty. Permissions: the in-container user is UID 10001; the host directory needs to be world-readable or owned by UID 10001.
 - **Subscriptions stop firing.** Confirm `OPENZIM_MCP_SUBSCRIPTIONS_ENABLED` isn't set to `false` — a disabled server refuses `subscriptions/listen` with method-not-found, so that misconfiguration is loud. If the listen was acknowledged but nothing arrives, check the acknowledgement's echoed filter: a client that asked for `zim://files` under `resourceSubscriptions` gets an ack and silence, because directory-membership changes are published as `notifications/resources/list_changed` (opt in with `resourcesListChanged`).
+
+{/*
+  Deliberately one page, not two. Commit 2beed02 (PR #206) merged docs/deployment.md
+  into this file and deleted the standalone file; the recipes and Operations sections
+  below descend from it, demoted one heading level and revised since (the "Deployment
+  patterns" wrapper heading is new). Splitting them back out was proposed and declined:
+  api-reference.mdx is both longer and more linked-to than this page (measured at a36b2d2 — 783 lines
+  and 18 inbound links from 13 docs pages, against 624 lines and 15 links from 9
+  here; this file has grown since, which is the point: length alone was never the
+  trigger), so page length on its own is not the trigger.
+
+  Reopen the question when a PR adds a third topology recipe — a `### Recipe 3`
+  heading in this file. Two recipes plus the reference above fit one page; three
+  is the point to re-measure.
+*/}
 
 ---
 
@@ -585,7 +608,6 @@ curl -sf -X POST https://zim.example.com/mcp \
 #### Production hardening checklist (per-recipe)
 
 - **Token rotation.** Generate a new token, update `.env`, run `docker compose up -d` to pick up the change. Distribute the new token to clients out-of-band.
-- **CORS.** Set `OPENZIM_MCP_CORS_ORIGINS` to the exact origins of any browser clients that connect directly. Skip if no browser clients connect.
 - **Non-root.** The published image already runs as `appuser` (UID 10001). Confirm with `docker compose exec openzim-mcp id` — output should be `uid=10001(appuser)`.
 - **Log review.** `docker compose logs -f openzim-mcp` shows auth failures (the attempted token is *not* logged, but the request and outcome are). A burst of 401s from one client usually means a stale token.
 - **Read-only ZIM mount.** Already in the compose (`:ro`). Don't remove it.
@@ -610,12 +632,6 @@ docker compose logs -f openzim-mcp
 ```
 
 A clean startup logs the bind host/port and the configured allowed directory. An auth failure logs the route, status, and client IP — *not* the attempted token. Subscription updates are delivered silently; the SDK logs a warning when it ends a listen stream whose client stopped reading and overran its event backlog.
-
-#### Scaling considerations
-
-Each replica has its own in-memory cache; persistent cache on shared storage isn't recommended (see the Kubernetes section above). Horizontal scaling works — add replicas and front them with any L7 load balancer that supports HTTP/1.1 keep-alive and forwards `Authorization` unchanged. A 2026-07-28 client is stateless, so any replica can answer any request; a long-lived `subscriptions/listen` stream is naturally pinned to the replica holding it, and each replica runs its own watcher over the same directories, so it publishes to its own listeners.
-
-Handshake-era clients still need session-stickiness: their session state lives in the process that issued it, and a replica that doesn't recognize the presented `Mcp-Session-Id` returns `404 Session not found`. If any of your clients still use `initialize`, forward `Mcp-Session-Id` unchanged and use cookie- or header-based affinity (e.g. hash on `Mcp-Session-Id`), or run one replica.
 
 ---
 

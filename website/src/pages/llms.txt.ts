@@ -27,10 +27,68 @@ import { GROUP_ORDER, sortDocsForNav } from '../lib/docs-order';
 
 const SITE = 'https://cameronrye.github.io/openzim-mcp';
 
-// The one stamped version literal on the site's generated text routes.
-// `llms-full.txt.ts` imports it rather than restating it, so
-// release-please-config.json still has exactly one file to update.
+// The stamped version literal for the site's generated text routes.
+// `llms-full.txt.ts`, `docs/[...slug].md.ts` and `layouts/DocsLayout.astro`
+// import it rather than restating it, so release-please-config.json still has
+// exactly one file to update — this one, already registered there as a
+// `generic` extra-file.
 export const VERSION = '3.2.3'; // x-release-please-version
+
+// The date that release went out, stamped by the same release-please generic
+// updater under the `date` scope. The annotation is not theoretical: `git log
+// -L 129,129:website/src/pages/index.astro` — line 129 being that file's
+// `dateModified` when this was written — shows the bot rewriting it from
+// 2026-08-26 to 2026-08-28 across a release, replacing only the `YYYY-MM-DD`
+// run on the annotated line and nothing else.
+//
+// This is a CORPUS stamp, not a page stamp — every surface that prints it
+// prints the same value on every page — and which surfaces print it is split
+// on purpose. The machine routes (this file, `llms-full.txt.ts`, and
+// `docs/[...slug].md.ts`) carry the version AND this date, because an agent
+// fetching `/docs/configuration.md` otherwise gets title, summary and
+// canonical URL with no token to invalidate against. The human layout
+// (`layouts/DocsLayout.astro`) carries the version ONLY: a date rendered on a
+// page reads as *that page's* date, and `faq` and `troubleshooting` would both
+// claim this one whether one was rewritten yesterday or had gone untouched for
+// six months. A version cannot be misread that way.
+//
+// Four routes to real per-page dates were considered for the docs sweep and
+// all four were rejected:
+//
+//   1. An `updated:` field in each page's frontmatter — hand-maintained, and
+//      hand-maintained copies in this repo have a perfect record of rotting.
+//   2. Dates derived from git history at build time — and therefore also no
+//      `fetch-depth: 0` on the checkout in `.github/workflows/deploy-website.yml`,
+//      which is the only thing that would have needed it.
+//   3. `lastmod` in the sitemap, fed from either of the above.
+//   4. TechArticle JSON-LD (`datePublished` / `dateModified`) on doc pages.
+//      The landing page keeps the TechArticle block it already has; doc pages
+//      get none, and `DocsLayout.astro` emits BreadcrumbList only.
+//
+// All four rest on one measurement — that a per-page date would not
+// discriminate between pages. Re-run it before re-opening any of them:
+//
+//   for f in website/src/content/docs/*.mdx; do git log -1 --format=%cs -- "$f"; done | sort | uniq -c
+//
+// Run on 2026-08-31 it printed one line, `19 2026-08-31`: the 135-defect
+// sweep had just rewritten every page in one commit, so all nineteen pages
+// would have shown the same date. Run against the commit before that sweep it
+// printed five distinct dates over nine days, and two of the fifteen pages the
+// collection held at that commit were dated by a `chore: release` commit — a
+// release-please bump, which changed nothing but a version literal on either
+// page. Publishing either shape as "last updated"
+// would have been a fresh falsehood in the release that removed 135 of them.
+// Six or more distinct dates spread over a month would mean per-page dates had
+// become meaningful, and this decision should be re-opened.
+//
+// Hazard for whoever implements option 2 anyway: in a `--depth 1` clone,
+// `git log -1 --format=%cs -- <file>` returns HEAD's date for every file and
+// exits 0. Verified by cloning this repo at `--depth 1` and running it against
+// `faq.mdx` and `api-reference.mdx`: both answered 2026-08-31, HEAD's date,
+// rc=0. There is no error and no empty result to branch on, so a git-derived
+// scheme fails silently — every page stamped with the date of the last deploy
+// — rather than loudly. The website deploy checks out shallow.
+export const RELEASED = '2026-08-28'; // x-release-please-date
 
 /** The eight advanced-mode tools, in registration order. Gated in Python. */
 const TOOLS: Array<[name: string, blurb: string]> = [
@@ -99,6 +157,7 @@ export const GET: APIRoute = async () => {
 > and never writes to them.
 
 - Version: ${VERSION}
+- Released: ${RELEASED} (the release this documentation describes; not a per-page edit date)
 - License: MIT
 - Python: 3.12+
 - Repository: https://github.com/cameronrye/openzim-mcp

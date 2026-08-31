@@ -324,10 +324,11 @@ detaches, so stop it with `cd website && npx astro dev stop` rather than
 Ctrl-C alone.
 
 Each page under `website/src/content/docs/` needs four frontmatter fields:
-`title`, `summary`, `group` (one of `Get started`, `Reference`, `Guides`,
-`Operations` — the enum is pinned in `src/content.config.ts`, and a value
-outside it fails the build) and `sidebar_order` (numbered **per group**, not
-globally). Internal links use the full base path, e.g.
+`title`, `summary`, `group` (the allowed values are the `z.enum` in
+`src/content.config.ts` — that enum is the source of truth, and a value outside
+it fails the build) and `sidebar_order` (numbered **per group**, not globally;
+`tests/test_docs_freshness.py` requires each group's numbers to be exactly
+1..n). Internal links use the full base path, e.g.
 `/openzim-mcp/docs/api-reference/`, with a trailing slash.
 
 Some doc facts are gated by tests rather than review — see
@@ -443,12 +444,46 @@ Include:
 - **Error messages**: Full stack traces
 - **ZIM files**: Information about test files used
 
+## Project scope
+
+The feature-request template requires you to confirm that a proposal "aligns
+with the project's goals and scope". This section is what that checkbox
+points at.
+
+OpenZIM MCP is a retrieval server over ZIM archives held on the machine it
+runs on. The list below is the standing set of non-goals — things deliberately
+not built, rather than things not built yet. A proposal that lands in one of
+them is not necessarily a bad idea; it belongs in a layer above this server,
+or in a different project.
+
+- **No network-fetching tools.** Every answer comes out of a local archive.
+  Tools that reach the live web are out of scope.
+- **No built-in summarization LLM.** `zim_query`'s `synthesize=True` mode runs
+  search, fusion, passage extraction, section attribution and citation
+  rendering — retrieval and assembly, not generation. Writing prose over the
+  passages is the calling model's job.
+- **No HyDE** (hypothetical document expansion). Rejected as a non-goal during
+  the v2 work; see `docs/roadmap.md` for that record.
+- **The advanced tool surface is 8 tools** — `zim_query`, `zim_search`,
+  `zim_get`, `zim_get_section`, `zim_browse`, `zim_metadata`, `zim_links`,
+  `zim_health`. Adding or removing one breaks every client that enumerates
+  tools, so the count changes only at a major version. New capability goes on
+  an existing tool as a mode, a view or an argument.
+- **No federated search beyond the archives this server is configured with.**
+  Cross-archive search is `zim_search(cross_file=True)`, which fans out over
+  the configured archives. Querying remote OpenZIM MCP instances or
+  third-party indexes is out of scope.
+- **libzim stays the reader.** Swapping it for another ZIM implementation is
+  out of scope.
+
+Something not on this list is fair game — open a feature request.
+
 ## Feature Requests
 
 ### Before Requesting
 
 1. **Check existing issues**
-2. **Consider scope**: Does it fit the project goals?
+2. **Consider scope**: Does it fit the project goals? See [Project scope](#project-scope) for the standing non-goals.
 3. **Think about implementation**: How might it work?
 
 ### Feature Request Template
