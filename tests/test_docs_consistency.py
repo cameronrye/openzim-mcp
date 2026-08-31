@@ -95,12 +95,29 @@ def test_no_doc_pins_the_support_policy_to_a_hardcoded_series() -> None:
 
 
 def test_security_policy_supports_the_current_major() -> None:
-    """SECURITY.md's supported row names the major the package actually is.
+    """SECURITY.md's table names one supported major and defines the word.
 
-    The table said 2.6.x while 3.0.0 was the shipped release; it drifts
-    because SECURITY.md is hand-maintained. The row now carries an
-    x-release-please-major marker so release-please bumps it, and this test
-    fails if either the marker or the sync is ever lost.
+    Three separate failures, one test:
+
+    * **The row goes stale.** The table said 2.6.x while 3.0.0 was the shipped
+      release, because SECURITY.md is hand-maintained. The row now carries an
+      x-release-please-major marker so release-please bumps it; the first
+      assertion fails if either the marker or the sync is lost.
+    * **The definition gets dropped.** "Supported" is ambiguous between "any
+      release on that major line" and "the newest patch on it"; the prose says
+      the latter. Nothing else in the repo states it, so an editing pass that
+      trims the paragraph would silently un-define the policy.
+    * **A second supported line creeps back.** 3c03dbf added a
+      "Yes (through <date> or until vX ships)" row for the previous major on
+      v2.0.0 GA day; it named the wrong series, produced no release, and was
+      removed by dbcd3f7. release-please's updater bumps exactly one row and
+      does no date arithmetic, so any second Yes is hand-maintained prose in
+      the one file automated because hand-maintenance drifted. Exactly one
+      Yes cell is the invariant.
+
+    This checks the table's shape and the definition sentence. It does not
+    check that the No rows describe real releases, or that any of the policy
+    is honoured in practice.
     """
     import openzim_mcp
 
@@ -109,3 +126,24 @@ def test_security_policy_supports_the_current_major() -> None:
     assert re.search(
         rf"\|\s*{major}\.x[^|]*\|\s*Yes", security
     ), f"SECURITY.md must list {major}.x as supported"
+
+    # The section, not the whole file: SECURITY.md carries other tables
+    # (the response-timeline one) whose cells must not be counted here.
+    section = security.split("## Supported Versions", 1)[1].split("\n## ", 1)[0]
+
+    assert "the latest patch release of that major line" in section, (
+        "SECURITY.md's Supported Versions section must keep defining "
+        '"supported" as the latest patch release of the major line'
+    )
+
+    cells = [
+        cell.strip()
+        for line in section.splitlines()
+        if line.strip().startswith("|")
+        for cell in line.strip().strip("|").split("|")
+    ]
+    supported = [cell for cell in cells if cell.startswith("Yes")]
+    assert len(supported) == 1, (
+        "SECURITY.md's supported-versions table must have exactly one Yes "
+        f"cell (one supported major line); found {supported}"
+    )

@@ -10,7 +10,9 @@ We actively support the following versions of OpenZIM MCP with security updates:
 | older majors                         | No (upgrade to the latest release)                          |
 | < 2.0                                | No (the v1.x window closed when v2.5.0 shipped, 2026-06-18) |
 
-The supported row tracks the current major automatically (release-please bumps it), so a major release never leaves this table pointing at a retired line.
+The supported row tracks the current major automatically (release-please bumps it), so a major release never leaves this table pointing at a retired line. "Supported" means the latest patch release of that major line: earlier patches on the line are not separately maintained, and a fix ships forward in a new patch release rather than being reissued against an older one. Upgrading to the newest patch is therefore how you receive one.
+
+Individual features are retired on their own schedule, independent of the table above. The [Deprecations in flight](https://cameronrye.github.io/openzim-mcp/docs/upgrading/#deprecations-in-flight) table lists each feature that still works but is scheduled for removal, the release that removes it, and its replacement.
 
 ## Reporting a Vulnerability
 
@@ -233,7 +235,7 @@ When security updates are released:
 
 1. **Immediate**: Critical vulnerabilities require immediate updates
 2. **Scheduled**: Lower severity issues may be bundled with regular releases
-3. **Backports**: Security fixes are backported to supported versions
+3. **Backports**: A fix ships in the next patch release of the current major. There is no scheduled backport program; issuing a fix on a superseded major line is at the maintainer's discretion, decided per report.
 
 ## Bug Bounty Program
 

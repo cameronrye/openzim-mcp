@@ -25,6 +25,7 @@ a test rather than a review habit:
 
 from __future__ import annotations
 
+import datetime as dt
 import json
 import re
 import tempfile
@@ -2286,4 +2287,220 @@ def test_every_doc_page_carries_the_support_policy_footer() -> None:
         "blocks not counting — so the exemption is buying nothing. Put it back "
         "in the hero blockquote or give the page the footer every other page "
         "has."
+    )
+
+
+# --------------------------------------------------------------------------
+# 14. The release stamp: both halves on the machine routes, version alone on
+#     the human page.
+# --------------------------------------------------------------------------
+
+# `website/src/pages/llms.txt.ts` holds the two stamped literals the whole site
+# derives its release stamp from — `VERSION`, carrying an
+# `x-release-please-version` annotation, and `RELEASED`, carrying an
+# `x-release-please-date` one. The file is registered in
+# release-please-config.json's extra-files as a `generic` entry, which is what
+# makes both annotations live.
+#
+# Everything else imports them. That is the whole point of this gate: a second
+# stamped literal anywhere would be a second thing to keep in step, and the
+# stamped-literal-that-nobody-stamps is the defect this module was opened for
+# (see the module docstring, item 2).
+_LLMS_FULL_SRC = REPO / "website" / "src" / "pages" / "llms-full.txt.ts"
+_MD_ROUTE_SRC = REPO / "website" / "src" / "pages" / "docs" / "[...slug].md.ts"
+_DOCS_LAYOUT_SRC = REPO / "website" / "src" / "layouts" / "DocsLayout.astro"
+
+# `export const NAME = 'value'; // x-release-please-<scope>`
+_STAMP_DECL_RE = re.compile(
+    r"^export const (VERSION|RELEASED) = '([^']*)'; // (x-release-please-\w+)$",
+    re.MULTILINE,
+)
+
+# A bare `YYYY-MM-DD`, to prove the human layout carries none.
+_ISO_DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
+
+# Comments in an `.astro` file: a line whose first non-space characters are
+# `//` (inside the frontmatter fence), and `<!-- ... -->` blocks in the markup.
+# Both are stripped before the layout is checked for a date or a `RELEASED`
+# reference, because the layout *explains* the no-date decision in prose and
+# that prose is not a rendered date.
+#
+# Known limits, stated rather than implied: only line-leading `//` is
+# recognised — a trailing `// RELEASED` comment would still trip the check, and
+# `//` inside a string (every URL in the file) is deliberately left alone. The
+# failure direction is a false alarm with a message naming the line, not a
+# silent pass.
+#
+# The two alternations carry their own flags rather than sharing `re.DOTALL`.
+# Written as `re.compile(r"(?m)^\s*//.*$|<!--.*?-->", re.DOTALL)` the `.*` in
+# the line-comment branch ran past its newline and swallowed the entire rest of
+# the file from the first `//` comment onwards — which in this layout is the
+# comment above `releaseUrl`, i.e. everything the checks below actually read. A
+# mutation that inserted a literal date into the rendered markup passed.
+_ASTRO_COMMENT_RE = re.compile(r"(?m:^[ \t]*//[^\n]*)|(?s:<!--.*?-->)")
+
+
+def _stamp_constants() -> dict[str, tuple[str, str]]:
+    """The two stamped literals, as ``{name: (value, annotation)}``."""
+    src = _LLMS_TXT_SRC.read_text(encoding="utf-8")
+    found = {
+        name: (value, marker) for name, value, marker in _STAMP_DECL_RE.findall(src)
+    }
+    # Guard the guard: if the declarations are reformatted out of the regex's
+    # reach, every check below would pass on an empty dict.
+    assert set(found) == {"VERSION", "RELEASED"}, (
+        f"{_LLMS_TXT_SRC.relative_to(REPO)} no longer declares both stamped "
+        f"literals in the form this gate reads "
+        f"(`export const NAME = '...'; // x-release-please-<scope>`); found "
+        f"{sorted(found)}. Update _STAMP_DECL_RE and this test together."
+    )
+    return found
+
+
+def _emitted_body(path: Path) -> str:
+    """The template literal a text route returns, as written in its source.
+
+    Not the built file: pytest does not run the Astro build, so what is
+    checked here is the template that produces the response, not bytes under
+    `website/dist`. A build that dropped an interpolation is therefore out of
+    scope — the interpolations are plain `${...}` in a template literal, with
+    no conditional around them.
+    """
+    src = path.read_text(encoding="utf-8")
+    marker = "const body = `"
+    assert marker in src, (
+        f"{path.relative_to(REPO)}: no `{marker}` — this gate reads the "
+        "response template by that marker and would otherwise check nothing."
+    )
+    body = src.split(marker, 1)[1].split("\n`;", 1)[0]
+    assert body.strip(), f"{path.relative_to(REPO)}: response template is empty"
+    return body
+
+
+def test_release_stamp_is_derived_and_split_by_surface() -> None:
+    """Version and date on the machine routes; version only on doc pages.
+
+    The doc corpus carries no per-page date and deliberately never has — the
+    reasoning, the four rejected designs and the measurement to re-run before
+    re-opening them are recorded above ``RELEASED`` in
+    ``website/src/pages/llms.txt.ts``. What is stamped instead is the release,
+    once, and this gate pins the two halves of that decision:
+
+    * the three machine surfaces — ``llms.txt``, ``llms-full.txt`` and the
+      per-page ``docs/<slug>.md`` route — interpolate BOTH constants into the
+      text they return;
+    * ``DocsLayout.astro``, the HTML every doc page is rendered into, shows the
+      version and no date at all. A date under an article reads as that
+      article's date, and all nineteen pages would print the same one.
+
+    Both constants must be derived from the single stamped pair, so the check
+    is for the interpolation, not for the value: a file that copied the version
+    or the date out as its own literal would satisfy a value comparison today
+    and rot at the next release, which is the failure this module exists for.
+    Copied literals are rejected explicitly for that reason.
+
+    What this does NOT cover: it reads the route sources, not ``website/dist``
+    — pytest does not run the Astro build. It also does not verify that
+    release-please actually rewrites the annotated lines. That contract is
+    evidenced in git rather than here: ``git log -L 129,129:website/src/pages/
+    index.astro`` (line 129 being that file's ``dateModified`` when this test
+    was written) shows the bot moving a date from one release to the next. The
+    version half is additionally pinned by
+    ``test_doc_version_annotations_are_current`` in
+    ``tests/test_mcpb_distribution.py``; nothing but a real release exercises
+    the date half.
+    """
+    stamps = _stamp_constants()
+    version, version_marker = stamps["VERSION"]
+    released, released_marker = stamps["RELEASED"]
+
+    assert version_marker == "x-release-please-version", (
+        f"VERSION carries {version_marker!r}; release-please stamps the "
+        "version scope only under `x-release-please-version`."
+    )
+    assert version == __version__, (
+        f"llms.txt.ts stamps version {version} but the package is "
+        f"{__version__} — release-please did not update the annotated line."
+    )
+
+    assert released_marker == "x-release-please-date", (
+        f"RELEASED carries {released_marker!r}; the generic updater rewrites a "
+        "date only under the `date` scope, so any other annotation leaves this "
+        "constant frozen at whatever it was last set to by hand."
+    )
+    # Parse *and* round-trip: release-please replaces a `YYYY-MM-DD` run, so a
+    # value it cannot recognise (`2026-8-28`) would silently never be updated.
+    try:
+        parsed = dt.date.fromisoformat(released)
+    except ValueError as exc:  # pragma: no cover - the assert reports it
+        raise AssertionError(
+            f"RELEASED = {released!r} is not an ISO date: {exc}"
+        ) from exc
+    assert parsed.isoformat() == released, (
+        f"RELEASED = {released!r} parses but is not canonical `YYYY-MM-DD` "
+        f"({parsed.isoformat()}). release-please rewrites a zero-padded "
+        "`YYYY-MM-DD` run, so a non-canonical spelling is never stamped."
+    )
+
+    # --- machine surfaces: both halves, interpolated, never restated --------
+    missing: list[str] = []
+    restated: list[str] = []
+    for path in (_LLMS_TXT_SRC, _LLMS_FULL_SRC, _MD_ROUTE_SRC):
+        body = _emitted_body(path)
+        rel = path.relative_to(REPO)
+        for token in ("${VERSION}", "${RELEASED}"):
+            if token not in body:
+                missing.append(f"{rel}: emits no {token}")
+        if path is _LLMS_TXT_SRC:
+            continue  # the declarations themselves live here
+        source = path.read_text(encoding="utf-8")
+        for name, literal in (("VERSION", version), ("RELEASED", released)):
+            if f"'{literal}'" in source or f'"{literal}"' in source:
+                restated.append(f"{rel}: restates {name} as a literal {literal!r}")
+
+    assert not missing, (
+        "machine surfaces must carry BOTH the version and the release date in "
+        "the header block they emit — an agent fetching /docs/<slug>.md "
+        "otherwise gets title, summary and canonical URL with no token to "
+        "invalidate against:\n  " + "\n  ".join(missing)
+    )
+    assert not restated, (
+        "these files must import VERSION/RELEASED from "
+        "website/src/pages/llms.txt.ts, which release-please stamps:\n  "
+        + "\n  ".join(restated)
+    )
+
+    for path in (_LLMS_FULL_SRC, _MD_ROUTE_SRC):
+        source = path.read_text(encoding="utf-8")
+        assert re.search(r"import \{[^}]*\} from '\.{1,2}/llms\.txt';", source), (
+            f"{path.relative_to(REPO)}: no import from llms.txt — the two "
+            "constants must come from the stamped file, not from a copy."
+        )
+
+    # --- human surface: the version, and provably no date -------------------
+    layout = _DOCS_LAYOUT_SRC.read_text(encoding="utf-8")
+    assert (
+        "import { VERSION } from '../pages/llms.txt';" in layout
+    ), "DocsLayout.astro must import VERSION from website/src/pages/llms.txt.ts"
+    assert "Documentation for" in layout and "{VERSION}" in layout, (
+        "DocsLayout.astro no longer renders the 'Documentation for v<version>' "
+        "stamp; doc pages would carry no release signal at all."
+    )
+    assert "releases/tag/v${VERSION}" in layout, (
+        "the rendered version must link to its GitHub release tag, built from "
+        "VERSION rather than written out."
+    )
+    code = _ASTRO_COMMENT_RE.sub("", layout)
+    assert "RELEASED" not in code, (
+        "DocsLayout.astro references RELEASED. Doc pages carry the version and "
+        "NO date on purpose: the date is a corpus-wide release stamp, but "
+        "rendered under an article it reads as that article's date, so faq and "
+        "troubleshooting would make identical freshness claims whether one was "
+        "rewritten yesterday or untouched for six months. See the note above "
+        "RELEASED in website/src/pages/llms.txt.ts."
+    )
+    dates = _ISO_DATE_RE.findall(code)
+    assert not dates, (
+        f"DocsLayout.astro contains date literals {dates} — doc pages are "
+        "date-free by decision, and a hand-written date is also unstamped."
     )
