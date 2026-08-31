@@ -1238,7 +1238,9 @@ def test_deployment_profiles_have_exactly_one_home() -> None:
     """
     heading = "### Production HTTP service"
     homes = [
-        str(p.relative_to(REPO))
+        # as_posix(): compared against a forward-slash literal below, and
+        # relative_to() is backslash-separated on Windows.
+        p.relative_to(REPO).as_posix()
         for p in _DOC_PAGES
         if heading in p.read_text(encoding="utf-8")
     ]
