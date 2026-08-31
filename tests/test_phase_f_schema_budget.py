@@ -10,6 +10,7 @@ constants in this commit; the decision JSON ships only under ``tests/``.
 
 import json
 import pathlib
+import re
 import tempfile
 
 from openzim_mcp.config import OpenZimMcpConfig
@@ -72,22 +73,27 @@ _ALLOWED_DIR = tempfile.mkdtemp(prefix="openzim_mcp_schema_budget_")
 # description budget, and for a wider ``zim_search`` input schema should #395
 # adopt the oneOf variant. Re-deriving now would hand them straight back and
 # make spending a single byte of them a table edit. The property the rebalance
-# was protecting still holds meanwhile: every ceiling sits 186–438B above its
-# tool's measurement, all of them under the 1,789B the total now has left, so a
-# single tool's drift still trips its own named assertion first. Re-derive at
-# ``(measured + ~130) / 1.2`` once the headroom is actually spent.
+# was protecting still holds meanwhile: every ceiling sits above its tool's
+# measurement by less than the total still has free, so a single tool's drift
+# trips its own named assertion before the aggregate one. That is no longer
+# stated as a pair of hand-copied numbers — it is asserted by
+# ``test_per_tool_headroom_stays_under_the_total_headroom``, and the trailing
+# comments above are asserted by ``test_allocation_comments_state_the_measured
+# _bytes``. Both of those went stale here before they were tests: three of the
+# eight comments drifted a release behind the surface they annotate.
+# Re-derive at ``(measured + ~130) / 1.2`` once the headroom is actually spent.
 TOTAL_CAP = 25 * 1024
 # Trailing comments are the wire bytes measured after the schema trim. The
 # allocation is deliberately not that number any more, so it is recorded here —
 # otherwise the table stops telling a reader what the surface actually costs.
 ALLOCATION = {
-    "zim_query": 5_550,  # 6,222B
+    "zim_query": 5_550,  # 6,266B
     "zim_search": 3_620,  # 3,937B
-    "zim_get": 3_650,  # 3,946B
+    "zim_get": 3_650,  # 3,913B
     "zim_get_section": 1_840,  # 1,863B
     "zim_browse": 2_080,  # 2,170B
     "zim_metadata": 1_310,  # 1,386B
-    "zim_links": 2_700,  # 2,920B
+    "zim_links": 2_700,  # 2,985B
     "zim_health": 1_300,  # 1,367B
 }
 
@@ -264,3 +270,81 @@ def test_gate_decision_scope_limitations_documented():
             f"scope_limitations missing required '{prefix}' entry. "
             f"Got: {limitations}. See spec §scope_limitations field."
         )
+
+
+# --------------------------------------------------------------------------
+# The two properties the ALLOCATION table's prose asserts about itself.
+# Both were comments before they were tests, and both had gone stale.
+# --------------------------------------------------------------------------
+
+# ``"zim_query": 5_550,  # 6,243B`` -> ("zim_query", "6,277")
+_ALLOCATION_COMMENT_RE = re.compile(
+    r'^\s*"(zim_[a-z_]+)":\s*[\d_]+,\s*#\s*([\d,]+)B\s*$', re.MULTILINE
+)
+
+
+def _allocation_comments() -> dict[str, int]:
+    """The measured byte figure each ALLOCATION row records in its comment."""
+    source = pathlib.Path(__file__).read_text(encoding="utf-8")
+    table = source.split("ALLOCATION = {", 1)[1].split("}", 1)[0]
+    return {
+        name: int(figure.replace(",", ""))
+        for name, figure in _ALLOCATION_COMMENT_RE.findall(table)
+    }
+
+
+def test_allocation_comments_state_the_measured_bytes():
+    """Each row's trailing comment must be that tool's real wire footprint.
+
+    The allocation column is a budget decision and deliberately floats away
+    from the measurement; the comment is the only place the table says what a
+    tool actually costs. Three of the eight drifted a release behind before
+    this test existed (zim_query 6,222 -> 6,277, zim_get 3,946 -> 3,913,
+    zim_links 2,920 -> 2,985), so the table was quietly describing a surface
+    that no longer shipped.
+    """
+    documented = _allocation_comments()
+    assert set(documented) == set(ALLOCATION), (
+        "every ALLOCATION row must carry a `# <n>B` comment; parsed "
+        f"{sorted(documented)} against {sorted(ALLOCATION)}"
+    )
+    measured = _measure_tools("advanced")
+    stale = [
+        f"{name}: comment says {documented[name]:,}B, measures {measured[name]:,}B"
+        for name in ALLOCATION
+        if documented[name] != measured[name]
+    ]
+    assert not stale, (
+        "ALLOCATION trailing comments no longer match the shipped surface:\n  "
+        + "\n  ".join(stale)
+    )
+
+
+def test_per_tool_headroom_stays_under_the_total_headroom():
+    """A single tool's drift must trip its own named assertion first.
+
+    That is the whole point of the per-tool split: "the advanced surface is
+    130 bytes over" names no culprit, "zim_health exceeds its ceiling" does.
+    The property that makes it hold is arithmetic — every tool's remaining
+    room (``alloc * 1.2 - measured``) has to be smaller than the room the
+    aggregate cap still has (``TOTAL_CAP - total``). Otherwise a tool could
+    grow past the total while still sitting under its own ceiling, and
+    ``test_advanced_total_under_cap`` would fire first with nothing to name.
+
+    Raising an allocation without checking this is how the guarantee gets
+    lost, so it is asserted rather than described.
+    """
+    measured = _measure_tools("advanced")
+    total_headroom = TOTAL_CAP - sum(measured.values())
+    assert total_headroom > 0, "aggregate cap already exceeded"
+    offenders = [
+        f"{name}: ceiling leaves {int(alloc * 1.2) - measured[name]}B, "
+        f"total leaves {total_headroom}B"
+        for name, alloc in ALLOCATION.items()
+        if int(alloc * 1.2) - measured[name] >= total_headroom
+    ]
+    assert not offenders, (
+        "a per-tool ceiling has more room than the aggregate cap does, so "
+        "that tool's growth would trip the unnamed total assertion first:\n  "
+        + "\n  ".join(offenders)
+    )

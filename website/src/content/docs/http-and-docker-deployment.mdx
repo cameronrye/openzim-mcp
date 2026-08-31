@@ -1,6 +1,6 @@
 ---
 title: HTTP and Docker deployment
-summary: Run OpenZIM MCP as a long-running networked service — streamable HTTP transport, bearer-token auth, CORS, health probes, the published Docker image, and end-to-end deployment recipes (LAN, Tailscale, VPS with TLS).
+summary: Run OpenZIM MCP as a networked service — streamable HTTP transport, bearer-token auth, CORS, health probes, the Docker image and LAN, Tailscale and TLS recipes
 group: Guides
 sidebar_order: 3
 ---
@@ -109,6 +109,8 @@ If no browser client connects (you're hitting the endpoint from another server, 
 
 Required when openzim-mcp sits behind a reverse proxy (Caddy, nginx) or Tailscale serve and the public hostname differs from the bind interface. The MCP SDK applies DNS rebinding protection by validating the `Host` header against an allow-list — loopback values (`127.0.0.1`, `localhost`, `[::1]`) are always permitted, but anything else needs to be listed explicitly:
 
+> **`Host` validation is off on a bind-all host with no allow-list.** If `OPENZIM_MCP_HOST` is `0.0.0.0`, `::` or `[::]` **and** `OPENZIM_MCP_ALLOWED_HOSTS` is empty, the server disables DNS-rebinding `Host` validation entirely and logs a warning saying so — because the client-facing `Host` varies by reachable IP, so any allow-list would reject every request with 421. In that configuration the **bearer token is the only access control**. Setting `OPENZIM_MCP_ALLOWED_HOSTS` re-enables validation. A bind to a *specific* non-loopback interface keeps validation on and auto-allows that address.
+
 ```bash
 export OPENZIM_MCP_ALLOWED_HOSTS='["mcp.example.com"]'
 ```
@@ -125,10 +127,10 @@ Entries can include the `:*` wildcard-port suffix (`mcp.example.com:*`) when the
 |-----------|------|-------|--------|
 | `http` | loopback (`127.0.0.1`/`::1`/resolved `localhost`) | unset | OK |
 | `http` | loopback | set | OK |
-| `http` | non-loopback | unset | **REFUSE** |
+| `http` | non-loopback | unset | **REFUSE** — unless `OPENZIM_MCP_INSECURE_DISABLE_AUTH=1`, which starts anyway with an `INSECURE:` warning |
 | `http` | non-loopback | set | OK |
 | `sse` | loopback | (any) | OK |
-| `sse` | non-loopback | (any) | **REFUSE** (no auth middleware in SSE path) |
+| `sse` | non-loopback | (any) | **REFUSE** (no auth middleware in SSE path; `INSECURE_DISABLE_AUTH` does not apply) |
 
 If `host=localhost` and `/etc/hosts` maps `localhost` away from `127.0.0.1`, the server emits a `UserWarning` and treats the host as public — which then triggers the safe-default refusal.
 
@@ -309,7 +311,7 @@ spec:
 
 Each replica has its own in-memory cache. Persistent cache on shared storage is *not* recommended unless you handle concurrent-writer issues at the storage layer (the on-disk cache uses simple file rewrites).
 
-Clients reaching the pods through a Service/Ingress hostname need that hostname in `OPENZIM_MCP_ALLOWED_HOSTS` — only loopback `Host` values are accepted by default. And with `replicas: 2`, session affinity is required — see [Scaling considerations](#scaling-considerations).
+Clients reaching the pods through a Service/Ingress hostname should have that hostname in `OPENZIM_MCP_ALLOWED_HOSTS`. Note what the Deployment above does *without* it: because it binds `0.0.0.0` with an empty allow-list, `Host` validation is switched off and the bearer token is the only control — add the hostname to turn DNS-rebinding protection back on. And with `replicas: 2`, session affinity is required — see [Scaling considerations](#scaling-considerations).
 
 ## Hardening checklist
 
@@ -329,7 +331,7 @@ For a full security review of the model behind these recommendations, see [Secur
 
 Common failure modes:
 
-- **Container exits immediately on start.** Almost always one of three startup checks: HTTP transport bound to a non-loopback host without `OPENZIM_MCP_AUTH_TOKEN`, or `OPENZIM_MCP_CORS_ORIGINS` / `OPENZIM_MCP_ALLOWED_HOSTS` set to a value containing `*`. The startup error message identifies which.
+- **Container exits immediately on start.** Almost always one of three startup checks: HTTP transport bound to a non-loopback host without `OPENZIM_MCP_AUTH_TOKEN`, or `OPENZIM_MCP_CORS_ORIGINS` / `OPENZIM_MCP_ALLOWED_HOSTS` containing an entry that is exactly `*` (a `:*` port suffix such as `mcp.example.com:*` is fine — only the bare wildcard is rejected). The startup error message identifies which.
 - **Clients get 421 Misdirected Request / `Invalid Host header`.** The proxied `Host` header (e.g. `zim.example.com`) isn't in `OPENZIM_MCP_ALLOWED_HOSTS`. Add it. Loopback (`127.0.0.1`, `localhost`, `[::1]`) is always allowed without configuration; everything else needs an explicit entry.
 - **Clients get 401 Unauthorized.** Token mismatch. Verify with `curl -H "Authorization: Bearer $TOKEN" http://host/mcp/...`. Don't paste the token into chat or tickets.
 - **Browser clients get 403 / CORS errors.** Either `OPENZIM_MCP_CORS_ORIGINS` is unset (and a browser is calling) or the client's origin isn't in the allow-list. The browser console shows the offending origin; add it.

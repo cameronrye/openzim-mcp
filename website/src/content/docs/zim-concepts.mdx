@@ -1,0 +1,109 @@
+---
+title: ZIM concepts
+summary: The four ideas the rest of the docs assume — sealed archives, the two namespace schemes, entry paths as archive-relative identifiers, and archive identity.
+group: Get started
+sidebar_order: 4
+---
+
+Four ideas the rest of the documentation takes for granted. `namespace` is a
+required parameter on `zim_browse`, and entry paths are the currency of nearly
+every tool, so it is worth ten minutes here before the [API
+reference](/openzim-mcp/docs/api-reference/).
+
+## An archive is a sealed file
+
+A `.zim` file is immutable. It is built once, compressed, indexed, and then
+never modified — updates ship as an entirely new file. Almost everything about
+this server's behaviour follows from that:
+
+- **Caching is safe and aggressive.** Content cannot change underneath a
+  cached response, so the `zim://{name}` overview resource is promised for an
+  hour rather than seconds.
+- **Cache keys carry a stat token.** The archive's `mtime_ns:size:<render_epoch>` token is part of
+  every path-mapping key, so replacing a file in place invalidates everything
+  derived from the old one instead of serving paths that no longer exist.
+- **"Updating" is replacement**, which the directory watcher notices: a
+  replaced archive publishes `resources/updated` for its URI, and an added or
+  removed one publishes `resources/list_changed`.
+- **Nothing here writes to an archive.** Every tool is read-only. The only file that ever lands beside an archive is the link-graph sidecar, and the `openzim-mcp build link-graph` CLI writes it, not the running server. The server's own writes are limited to its cache file, and only when `cache.persistence_enabled` is turned on.
+
+## Namespaces, and the two schemes
+
+Every entry lives under a single-letter namespace. Which letters you will see
+depends on when the archive was built, and the two schemes are different
+enough that a path from one is meaningless in the other.
+
+| Letter | Contents |
+|---|---|
+| `C` | User content — articles and their resources. The bulk of a modern archive |
+| `M` | Archive metadata: title, description, language, creator |
+| `W` | Well-known entries — the main page, the favicon, navigation |
+| `X` | Search indexes, including the Xapian full-text index |
+| `A` | **Legacy** content namespace, in older archives only |
+| `I` | **Legacy** images and media |
+| `-` | **Legacy** layout and template files |
+
+**New-scheme archives** put essentially everything in `C`. Metadata and
+well-known entries still exist, but they are not part of the iterable entry
+surface — they are reached through dedicated libzim APIs. This server papers
+over the difference: `zim_metadata` enumerates `M` through `metadata_keys`,
+and `W` is surfaced by probing the canonical paths (`W/mainPage`,
+`W/favicon`). So `zim_browse(namespace="M")` works on a modern archive even
+though a naive iteration would report `M` as empty.
+
+**Old-scheme archives** spread content across `A`, `I` and `-`, with `C`
+sparse or absent.
+
+Do not guess which one you have. `zim_metadata` reports the real namespace breakdown under `namespaces` — one row per letter, with its entry total and sample paths — and those samples are the reliable way to know whether to ask for `A/Photosynthesis` or the bare `Photosynthesis` a new-scheme archive actually serves. A
+wrong namespace returns a `bad_namespace` reason rather than an empty list.
+
+Modern ZIMIT-style archives store domain-shaped entry *paths* (`example.com/page.html`), but those are paths inside `C`, not namespaces of their own. `zim_metadata` files them under `C`, and `zim_browse` accepts only the single-letter namespaces — anything else comes back with a `bad_namespace` reason.
+
+## Entry paths are archive-relative identifiers
+
+An entry path — `C/Photosynthesis` — is an identifier **inside one archive**.
+It is not a URL, not a file path, and not portable to another archive.
+
+**Tool arguments take plain UTF-8.** Pass `C/Ada Lovelace` with a real space.
+Do not percent-encode; do not add a leading slash; do not prefix a scheme.
+
+**The one exception is the resource URI.** In
+`zim://{name}/entry/{path}` the `/` inside `{path}` **must** be percent-encoded
+as `%2F`, because the template cannot otherwise tell where the path begins:
+
+```text
+zim://wikipedia_en/entry/C%2FClimate_change
+```
+
+That rule applies only to the resource template. Tool arguments never want it.
+
+**A guessed path usually still works.** If a direct lookup misses, `zim_get`
+runs a five-step [smart-retrieval](/openzim-mcp/docs/smart-retrieval/) ladder —
+metadata routing, cached mappings, alternate spellings, then search. When it
+resolves somewhere other than what you asked for, the response carries a
+`requested_path` key alongside `path`. Not every tool has that safety net:
+`view="toc"`, `view="structure"` and `zim_links` in its `outbound` and `related` directions do a single exact lookup, so
+resolve the path first and pass the resolved one.
+
+## Archive identity
+
+Each archive carries a UUID, reported by `zim_metadata` under
+`archive_identity` along with `is_multipart`. It is what makes staleness
+detectable: the link-graph sidecar records the UUID at build time, and refuses
+to load if the archive it sits beside no longer matches — which is how a
+rebuilt or replaced archive produces `inbound_sidecar_unavailable` instead of
+silently wrong "what links here" answers.
+
+`zim_metadata` also reports `index_capabilities`
+(`{has_fulltext_index, has_title_index}`). Check it before assuming search
+will work: an archive built without a Xapian index cannot do full-text search
+at all, and says so with a `no_xapian_index` reason rather than returning
+nothing. Title lookup and namespace browsing still work.
+
+## Where to go next
+
+- [Quick start](/openzim-mcp/docs/quick-start/) — get an archive and make a first call
+- [API reference](/openzim-mcp/docs/api-reference/) — every tool and parameter
+- [Smart retrieval](/openzim-mcp/docs/smart-retrieval/) — what happens when a path misses
+
+*Nothing on this page is version-specific: namespaces, entry paths and archive identity are properties of the ZIM format itself. For the server that reads them, only the current major line is supported — see [SECURITY.md](https://github.com/cameronrye/openzim-mcp/blob/main/SECURITY.md) for the policy.*

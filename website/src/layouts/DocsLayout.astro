@@ -39,6 +39,9 @@ const breadcrumbLd = {
     <meta name="color-scheme" content="dark light">
     <link rel="icon" type="image/svg+xml" href={`${base}/assets/favicon.svg`}>
     <link rel="canonical" href={canonicalUrl}>
+    <!-- robots.txt is inert on a Pages project site (crawlers read the origin
+         root, which this repo does not own), so the sitemap is advertised here. -->
+    <link rel="sitemap" type="application/xml" href={`${base}/sitemap-index.xml`}>
 
     <!-- Open Graph -->
     <meta property="og:type" content="article">
@@ -46,8 +49,10 @@ const breadcrumbLd = {
     <meta property="og:url" content={canonicalUrl}>
     <meta property="og:title" content={pageTitle}>
     <meta property="og:description" content={description}>
-    <meta property="og:image" content="https://cameronrye.github.io/openzim-mcp/assets/og-image.svg">
+    <meta property="og:image" content="https://cameronrye.github.io/openzim-mcp/assets/og-image.png">
     <meta property="og:image:alt" content="OpenZIM MCP — Knowledge that works offline">
+    <meta property="og:image:width" content="1200">
+    <meta property="og:image:height" content="630">
     <meta property="og:locale" content="en_US">
     <meta property="article:section" content={group}>
 
@@ -56,7 +61,7 @@ const breadcrumbLd = {
     <meta name="twitter:url" content={canonicalUrl}>
     <meta name="twitter:title" content={pageTitle}>
     <meta name="twitter:description" content={description}>
-    <meta name="twitter:image" content="https://cameronrye.github.io/openzim-mcp/assets/og-image.svg">
+    <meta name="twitter:image" content="https://cameronrye.github.io/openzim-mcp/assets/og-image.png">
     <meta name="twitter:image:alt" content="OpenZIM MCP — Knowledge that works offline">
 
     <script type="application/ld+json" is:inline set:html={JSON.stringify(breadcrumbLd)} />
@@ -72,6 +77,23 @@ const breadcrumbLd = {
       })();
     </script>
 
+    <!-- Progressive-enhancement flag. `styles.css` hides `[data-reveal]`
+         sections only under `.js`, so anything this script cannot reach renders
+         them plainly. Gated on IntersectionObserver because that is what the
+         reveal actually needs, and removed again on `load` if script.js never
+         announced itself — a 404 or a CSP block on the deferred bundle would
+         otherwise leave the page's content permanently at `opacity: 0`. -->
+    <script is:inline>
+      (function () {
+        if (!('IntersectionObserver' in window)) return;
+        var root = document.documentElement;
+        root.classList.add('js');
+        addEventListener('load', function () {
+          if (!root.classList.contains('js-ready')) root.classList.remove('js');
+        });
+      })();
+    </script>
+
     <link rel="stylesheet" href={`${base}/assets/styles.css`} />
   </head>
   <body>
@@ -81,7 +103,7 @@ const breadcrumbLd = {
       <Sidebar currentSlug={slug} />
       <main class="docs-main" id="docs-main" tabindex="-1">
         <Breadcrumbs group={group} title={title} />
-        <article class="docs-article">
+        <article class="docs-article" data-pagefind-body>
           <h1>{title}</h1>
           <slot />
         </article>

@@ -1,6 +1,6 @@
 ---
 title: Troubleshooting
-summary: Common failure modes for OpenZIM MCP — installation, ZIM file access, MCP client config, search/content issues, HTTP transport, cache, subscriptions, and the structured error payload shape.
+summary: Common failure modes — installation, ZIM file access, client config, search and content issues, HTTP transport, cache, subscriptions and the error envelope
 group: Operations
 sidebar_order: 1
 ---
@@ -11,7 +11,7 @@ Common issues, error messages, and solutions for OpenZIM MCP.
 
 ## Error response shape
 
-Before diving into specific failure modes — v2 changed how errors come back from tools. Every tool catches exceptions and returns a structured `ToolErrorPayload` instead of raising — except `zim_query`, whose handler-side failures (no archive specified, `zim_file_path` not found, an empty query/topic/search term, and any other exception raised while handling the query) return markdown guidance and still carry `isError: false`:
+Before diving into specific failure modes — v2 changed how errors come back from tools. Every tool catches exceptions and returns a structured `ToolErrorPayload` instead of raising — except `zim_query`, whose *guidance* failures (no archive specified, an empty query/topic/search term, a meta-only or chained query) return markdown guidance and still carry `isError: false`:
 
 ```json
 {
@@ -24,9 +24,9 @@ Before diving into specific failure modes — v2 changed how errors come back fr
 Check for it with `isinstance(result, dict) and result.get("error") is True`. Since v2.6 the server also sets the MCP `isError` flag on these — `EnvelopeAwareMCPServer.call_tool` recognises the envelope on the way out and returns a `CallToolResult` with `isError=True` — so a client that branches on `isError` works too. No tool advertises an `outputSchema`, so nothing arrives in `structuredContent`; the envelope is JSON in the response's text `content` block. Common error `operation` values you'll see in this guide:
 
 - `invalid_path_combination` — `zim_get` got an impossible branch: `entry_path` + `entry_paths`, `entry_paths` + a non-`full` `view`, `entry_paths` + `content_offset`, `binary` + `entry_paths`/`main_page`/a non-`full` `view`, `binary` without `entry_path`, `main_page` + a path or a non-`full` `view`, or no selector at all
-- `invalid_view` — `zim_get` got a `view` outside `{full, summary, toc, structure}`
-- `invalid_mode` — `zim_browse` got a `mode` outside `{page, walk}`, or `zim_search` a `mode` outside `{fulltext, title, suggest}`
-- `invalid_direction` / `invalid_kind` — `zim_links` got a `direction` outside `{outbound, inbound, related}`, or (on `direction="outbound"`) a `kind` outside `{internal, external, media}`. `zim_links` never emits `invalid_mode`.
+- `invalid_mode` — `zim_browse` got a `mode` outside `{page, walk}`. This is the **only** enum rejection that reaches you under its own name, because `zim_browse.mode` is deliberately typed `str` with the enum attached as schema metadata so the handler gets to answer.
+- `invalid_argument` — every *other* out-of-range enum value. `zim_get.view`, `zim_search.mode`, and `zim_links.direction` / `kind` are `Literal`-typed, so pydantic rejects the call before the tool body runs and you get `operation="invalid_argument"` with an `invalid_arguments` key naming the field. The names `invalid_view`, `invalid_direction` and `invalid_kind` exist in the source but are unreachable over MCP — do not branch on them.
+- `unknown_argument` — an argument *name* the tool does not declare (a typo, or a parameter from a different tool). The envelope carries `unknown_arguments`, `accepted_arguments`, and `closest_matches` when something is near enough to suggest, so it is usually self-correcting. Emitted for every tool since v3.1.0.
 - `invalid_section` — `zim_get_section` got an empty/missing `section_id`
 - `invalid_content_offset` — `zim_get` / `zim_query` got a negative `content_offset`
 - `invalid_limit` — `zim_search` / `zim_query` got a `limit` below 1, or above the cap (50 for `mode="title"` / `mode="suggest"` and for `cross_file=True`; 100 for `fulltext` with `namespace`/`content_type` filters; 1000 for plain single-archive `fulltext`)
@@ -36,29 +36,61 @@ Check for it with `isinstance(result, dict) and result.get("error") is True`. Si
 - `missing_archive` — `zim_search` could not resolve an archive for `mode="suggest"`, `mode="title"`, or single-archive fulltext
 - `invalid_query` — `zim_query` got a query over the 4096-character cap
 - `rate_limited` — the token bucket for the internal operation was exhausted
-- `cursor_decode` / `cursor_mismatch` / `cursor_context_mismatch` / `cursor_unsupported` — a malformed, wrong-tool, wrong-context, or unsupported `cursor`
+- `cursor_decode` — the `cursor` is malformed, truncated, or carries an unsupported version; on `zim_query` it is also the catch-all for *every* cursor fault, including one over the 2048-character cap. Drop it and restart the sequence
+- `cursor_mismatch` — the cursor was issued by a different tool. Advanced surface only; cursors are not portable across operations
+- `cursor_context_mismatch` — right tool, different target: another namespace, another entry, another link `kind`, or a changed `include_assets`. A cursor cannot be retargeted — start over for the new target
+- `cursor_unsupported` — only `zim_links(direction="related")`, which returns one ranked set and does not paginate. Omit `cursor`
+- See [Cursors](/openzim-mcp/docs/api-reference/#cursors) for which tools issue them, and for the two places where the usual "drop the cursor and pass `offset`" recovery does *not* work
 - `file_not_found` / `entry_not_found` / `section_not_found` / `invalid_max_chars` — data-layer failures surfaced by `zim_get_section`. `section_not_found` is the one envelope that carries extra keys: `available_section_ids`, `available_section_ids_truncated`, `available_section_ids_total`, and `closest_match` when a near match exists.
 - `inbound_sidecar_unavailable` — `zim_links(direction="inbound")` against an archive with no link-graph sidecar
 - the tool's own wire name — `zim_get`, `zim_search`, `zim_query`, `zim_browse`, `zim_links`, `zim_metadata`, `zim_health`, `zim_get_section` — when an unexpected exception escapes the tool body (archive read error, smart-retrieval miss). There is no `get_entry` or `search` operation value: those are internal rate-limiter bucket names, never envelope operations.
 - `get server health` / `get server configuration` — the only two `operation` values that are not snake_case, and the only two that never appear at the top level of a response. The no-argument `zim_health()` builds `.health`, `.configuration` and `.loaded_archives` independently, and each of the first two catches its own exceptions — so a failure inside one replaces that block alone with an envelope while the rest of the response still comes back. The top-level dict stays an ordinary success payload, so `isError` is `false`: test `.health` and `.configuration` for an `error` key rather than assuming the whole call succeeded. This partial case is the only unflagged one — a failure in the `loaded_archives` scan, or anywhere in the `zim_health(zim_file_path=...)` validation branch, surfaces as a normal top-level `operation="zim_health"` envelope with `isError: true`.
-- `zim_query`'s `synthesize=True` path adds `synthesize_pipeline_error`, `synthesize_not_applicable`, `no_archives_available`, `meta_only_guidance`, `chained_intent_rejected`, `topic_required`, `search_terms_required`, `multi_entity_chain_rejected`, and `invalid_path`. These — plus the `cursor_decode` envelope a malformed or mismatched `cursor` produces — are the only `zim_query` handler failures that produce an envelope at all; on the default path the other conditions come back as markdown guidance with `isError: false`.
+- `zim_query`'s `synthesize=True` path adds `synthesize_pipeline_error`, `synthesize_not_applicable`, `no_archives_available`, `meta_only_guidance`, `chained_intent_rejected`, `topic_required`, `search_terms_required`, `multi_entity_chain_rejected`, and `invalid_path`. The default path also produces `zim_path_not_found` (a `zim_file_path` matching no loaded archive) and `zim_query` (any other exception the catch-all absorbs), plus the `cursor_decode` envelope a malformed or mismatched `cursor` produces. Only the *guidance* conditions — no archive specified, empty query, meta-only query, chained query — come back as markdown with `isError: false`.
 
 The envelope itself is defined in [openzim_mcp/responses.py](https://github.com/cameronrye/openzim-mcp/blob/main/openzim_mcp/responses.py) — the `ToolErrorPayload` TypedDict and the `tool_error()` builder every failure path must go through — and the `isError` mapping in [openzim_mcp/mcp_envelope.py](https://github.com/cameronrye/openzim-mcp/blob/main/openzim_mcp/mcp_envelope.py). The underlying exception hierarchy in [openzim_mcp/exceptions.py](https://github.com/cameronrye/openzim-mcp/blob/main/openzim_mcp/exceptions.py) is what the broad-`except` paths wrap; it shapes the `message` text but not the envelope's keys — `error_code` is never emitted.
 
 ## Quick diagnostics
 
-### Health check command
+### First diagnostic
 
-First, run the server health check to identify issues:
+Which check you can run depends on the tool surface you are running, and the **default install is the narrow one** — simple mode registers `zim_query` and nothing else, so `zim_health` is not there to call.
+
+**Every install — confirm which binary is answering:**
 
 ```bash
-# In your MCP client, ask:
-"Check the server health and configuration"
+openzim-mcp --version
 ```
 
-This will run `zim_health`, which returns combined health, configuration, and loaded-archives data in one response (consolidating three separate v1 tools into a single call).
+It prints `openzim-mcp` followed by the installed version. A version older than you expect is the single most common cause of "the docs describe a parameter my server rejects". A `command not found` here, when your MCP client reports the server failing to start, means the client's PATH does not include the install location.
 
-If the server is running over HTTP, you can also probe `/healthz` and `/readyz` directly without a token — both are auth-exempt.
+**Simple mode (the default) — ask for the file list:**
+
+```text
+"list available ZIM files"
+```
+
+This is the only intent that reports on the *server* rather than reading an archive, and it exercises directory resolution, permissions and archive readability in a single call. The response names each archive with its path, size, modification time and a `readable` flag; an archive missing from it is an allowed-directories or file-permission problem, not a server fault.
+
+Do **not** ask "check the server health and configuration" on a default install. There is no health intent in simple mode, so the phrase is parsed as a *topic* and searched inside the archive — what comes back is `No search results found for "check the server health and configuration"`, which reads like a broken server and is not one.
+
+**Advanced mode — call `zim_health`:**
+
+```text
+zim_health()
+```
+
+Available once the surface is advanced (`--mode advanced`, `OPENZIM_MCP_TOOL_MODE=advanced`, or the published Docker image, which bakes it in). Returns combined health, resolved configuration and loaded-archives data in one response, consolidating three separate v1 tools into a single call.
+
+**Over HTTP — probe the endpoints directly:**
+
+```bash
+curl -fsS http://localhost:8000/healthz
+# {"status":"ok"}
+curl -fsS http://localhost:8000/readyz
+# {"status":"ready"}
+```
+
+Both are auth-exempt, so they work with no token and regardless of tool mode.
 
 ## Installation issues
 
@@ -108,7 +140,7 @@ If the server is running over HTTP, you can also probe `/healthz` and `/readyz` 
 
 ### No ZIM files found
 
-**Error**: `No ZIM files found in directory`
+**Error**: `No ZIM files found in allowed directories` from the file listing, or the `No ZIM files found in any directory` warning inside `zim_health`
 
 **Symptoms**:
 
@@ -135,7 +167,7 @@ If the server is running over HTTP, you can also probe `/healthz` and `/readyz` 
 
 ### Corrupted ZIM files
 
-**Error**: `Failed to open ZIM file` or `Invalid ZIM format`
+**Error**: `Failed to open ZIM archive: ...file.zim` (a corrupt or truncated archive) or `File is not a ZIM file: ...file.txt` (wrong extension)
 
 **Symptoms**:
 
@@ -205,7 +237,7 @@ If the server is running over HTTP, you can also probe `/healthz` and `/readyz` 
 
 ### `zim_search` returns 0 results
 
-**Error**: `No matches found` or empty search results
+**Error**: none — a miss comes back as a success payload with `"results": []` and `"total": 0` (`isError: false`); simple-mode `zim_query` renders the same miss as `No search results found for "<query>"`.
 
 **Possible causes**:
 
@@ -281,26 +313,26 @@ If the server is running over HTTP, you can also probe `/healthz` and `/readyz` 
 
 **Issue**: Poor cache performance or cache misses
 
-**Diagnostics**: cache stats live inside `zim_health` under `.health.cache_performance`:
+**Diagnostics**: cache stats live inside `zim_health` under `.health.cache_performance`, so this needs the advanced surface:
 
 ```text
-"Get server health and show cache performance"
+zim_health()
 ```
 
-The `cache_performance` block has `enabled, size, max_size, ttl_seconds, hits, misses, hit_rate`.
+The `cache_performance` block always has 13 fields — `enabled`, `size`, `max_size`, `ancillary_entries`, `total_entries`, `size_bytes`, `max_bytes`, `ttl_seconds`, `hits`, `misses`, `hit_rate`, `background_cleanup`, `persistence_enabled` — plus `persistence_path` and `persistence_file_exists` when persistence is on.
 
 **Solutions**:
 
 1. **Increase cache size**: Raise `OPENZIM_MCP_CACHE__MAX_SIZE`.
 2. **Increase TTL**: Raise `OPENZIM_MCP_CACHE__TTL_SECONDS`.
-3. **Flush the cache**: There are no `cache_clear` / `cache_stats` / `warm_cache` tools — restart the server to flush. (For pre-warming after restart, call `zim_get(entry_path=...)` on your high-value entries from your client.)
+3. **Flush the cache**: There are no `cache_clear` / `cache_stats` / `warm_cache` tools — restart the server to flush. If `persistence_enabled` is true that is not enough on its own: the shutdown writes every unexpired entry back out and the next start reloads them, so stop the server, delete the file named by `.health.cache_performance.persistence_path`, then start it again. (For pre-warming after restart, call `zim_get(entry_path=...)` on your high-value entries from your client.)
 4. **Aim for >70% hit rate** for read-heavy workloads.
 
 ## Security issues
 
 ### Path traversal warnings
 
-**Error**: `Path traversal attempt detected`
+**Error**: `Path contains suspicious pattern: ...file.zim` or `Access denied - Path is outside allowed directories: ...file.zim` — both arrive as the `**Technical Details**` line of a `**Security Validation Error**` envelope.
 
 **Cause**: Attempting to access files outside allowed directories
 
@@ -433,9 +465,8 @@ Look for error patterns in server output:
 
 ### Where to get help
 
-1. **GitHub Issues**: [Report bugs](https://github.com/cameronrye/openzim-mcp/issues)
-2. **GitHub Discussions**: [Ask questions](https://github.com/cameronrye/openzim-mcp/discussions)
-3. **Documentation**: Check other docs pages — [FAQ](/openzim-mcp/docs/faq/), [Architecture overview](/openzim-mcp/docs/architecture-overview/)
+1. **GitHub Issues**: [Report bugs or ask questions](https://github.com/cameronrye/openzim-mcp/issues)
+2. **Documentation**: Check other docs pages — [FAQ](/openzim-mcp/docs/faq/), [Architecture overview](/openzim-mcp/docs/architecture-overview/)
 
 ### Information to include
 

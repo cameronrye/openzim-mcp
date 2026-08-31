@@ -15,10 +15,23 @@
   function initTheme() {
     const toggle = document.getElementById('theme-toggle');
     if (!toggle) return;
+    // The button is a toggle, so its accessible name stays constant ("Dark
+    // mode") and `aria-pressed` carries the state — same shape as the mobile
+    // nav button's aria-expanded. The markup ships aria-pressed="true" to
+    // match the hard-coded data-theme="dark", but the inline head script may
+    // already have chosen light before this runs, so sync once on init.
+    const sync = () => {
+      toggle.setAttribute(
+        'aria-pressed',
+        String(document.documentElement.dataset.theme === 'dark'),
+      );
+    };
+    sync();
     toggle.addEventListener('click', () => {
       const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
       document.documentElement.dataset.theme = next;
       safeStorage('set', 'theme', next);
+      sync();
     });
   }
 
@@ -272,7 +285,171 @@
     }
   }
 
+
+  /**
+   * Docs search, backed by the Pagefind index built into /pagefind/.
+   *
+   * The index and its WASM are ~200KB, so nothing is fetched until the reader
+   * shows intent — first focus or first keystroke. Before that the field is an
+   * inert text input, and if the import fails the field simply says so rather
+   * than swallowing the query.
+   *
+   * Keyboard: "/" focuses the field from anywhere, ArrowUp/ArrowDown move
+   * through results, Enter opens the active one, Escape closes and restores.
+   */
+  function initDocsSearch() {
+    const input = document.getElementById('docs-search');
+    const panel = document.getElementById('docs-search-results');
+    const status = document.getElementById('docs-search-status');
+    if (!input || !panel || !status) return;
+
+    // Stamped by SiteHeader.astro from Astro's BASE_URL. Deriving it from
+    // another element's href would break silently if that element moved.
+    const base = input.dataset.pagefindBase || '';
+    let pagefind = null;
+    let loading = null;
+    let active = -1;
+    let token = 0;
+
+    function load() {
+      if (pagefind) return Promise.resolve(pagefind);
+      if (loading) return loading;
+      loading = import(`${base}/pagefind/pagefind.js`)
+        .then(async (mod) => {
+          await mod.options({ baseUrl: `${base}/` });
+          pagefind = mod;
+          return mod;
+        })
+        .catch(() => null);
+      return loading;
+    }
+
+    function close() {
+      panel.hidden = true;
+      panel.innerHTML = '';
+      input.setAttribute('aria-expanded', 'false');
+      input.removeAttribute('aria-activedescendant');
+      active = -1;
+    }
+
+    function items() {
+      return Array.from(panel.querySelectorAll('.nav__search-result'));
+    }
+
+    function setActive(next) {
+      const list = items();
+      if (!list.length) return;
+      if (active >= 0 && list[active]) list[active].setAttribute('aria-selected', 'false');
+      active = (next + list.length) % list.length;
+      const el = list[active];
+      el.setAttribute('aria-selected', 'true');
+      input.setAttribute('aria-activedescendant', el.id);
+      el.scrollIntoView({ block: 'nearest' });
+    }
+
+    function render(results, query) {
+      panel.innerHTML = '';
+      active = -1;
+      if (!results.length) {
+        const p = document.createElement('p');
+        p.className = 'nav__search-empty';
+        p.textContent = `No matches for "${query}".`;
+        panel.appendChild(p);
+        status.textContent = `No results for ${query}.`;
+      } else {
+        results.forEach((r, i) => {
+          const a = document.createElement('a');
+          a.className = 'nav__search-result';
+          a.id = `docs-search-result-${i}`;
+          a.href = r.url;
+          a.setAttribute('role', 'option');
+          a.setAttribute('aria-selected', 'false');
+          const title = document.createElement('strong');
+          title.textContent = r.meta?.title || r.url;
+          const excerpt = document.createElement('span');
+          // Pagefind's excerpt carries <mark> around the matched terms, and the
+          // highlight is the point of the excerpt, so this has to be markup.
+          // Pagefind does escape the surrounding text today, but that is its
+          // invariant to change, not ours — so re-escape everything and put
+          // back only <mark>. An innerHTML sink should not depend on a
+          // third-party escaping guarantee.
+          // Ampersands are deliberately NOT re-escaped: Pagefind has already
+          // escaped them, so a second pass would render "&amp;" as literal
+          // text. Only the angle brackets are neutralised and <mark> restored,
+          // which is a no-op on well-formed output and a net on anything else.
+          excerpt.innerHTML = String(r.excerpt || '')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/&lt;mark&gt;/g, '<mark>')
+            .replace(/&lt;\/mark&gt;/g, '</mark>');
+          a.append(title, excerpt);
+          panel.appendChild(a);
+        });
+        status.textContent = `${results.length} result${results.length === 1 ? '' : 's'} for ${query}.`;
+      }
+      panel.hidden = false;
+      input.setAttribute('aria-expanded', 'true');
+    }
+
+    async function run(query) {
+      const mine = ++token;
+      const mod = await load();
+      if (mine !== token) return;
+      if (!mod) {
+        panel.innerHTML = '<p class="nav__search-empty">Search is unavailable right now.</p>';
+        panel.hidden = false;
+        input.setAttribute('aria-expanded', 'true');
+        return;
+      }
+      const search = await mod.search(query);
+      if (mine !== token) return;
+      const results = await Promise.all(search.results.slice(0, 8).map((r) => r.data()));
+      if (mine !== token) return;
+      render(results, query);
+    }
+
+    let debounce;
+    input.addEventListener('input', () => {
+      const query = input.value.trim();
+      clearTimeout(debounce);
+      if (query.length < 2) {
+        token++;
+        close();
+        return;
+      }
+      debounce = setTimeout(() => run(query), 150);
+    });
+
+    input.addEventListener('focus', load, { once: true });
+
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'ArrowDown') { e.preventDefault(); setActive(active + 1); }
+      else if (e.key === 'ArrowUp') { e.preventDefault(); setActive(active - 1); }
+      else if (e.key === 'Enter') {
+        const el = items()[active];
+        if (el) { e.preventDefault(); el.click(); }
+      } else if (e.key === 'Escape') { close(); input.blur(); }
+    });
+
+    document.addEventListener('click', (e) => {
+      if (!panel.hidden && !panel.contains(e.target) && e.target !== input) close();
+    });
+
+    document.addEventListener('keydown', (e) => {
+      const tag = document.activeElement?.tagName;
+      const typing = tag === 'INPUT' || tag === 'TEXTAREA' || document.activeElement?.isContentEditable;
+      if (e.key === '/' && !typing && !e.metaKey && !e.ctrlKey) {
+        e.preventDefault();
+        input.focus();
+      }
+    });
+  }
+
   document.addEventListener('DOMContentLoaded', () => {
+    // Tells the head script this bundle arrived. Without it the head script's
+    // `load` handler strips `.js` and every [data-reveal] section falls back
+    // to plain, always-visible rendering.
+    document.documentElement.classList.add('js-ready');
     initTheme();
     initNav();
     animateConstellation();
@@ -280,6 +457,7 @@
     initCopyButtons();
     initTabs();
     initSidebarToggle();
+    initDocsSearch();
     redirectLegacyAnchors();
   });
 })();

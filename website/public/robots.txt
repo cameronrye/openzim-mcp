@@ -1,11 +1,16 @@
+# NOTE: this file is currently INERT.
+# The site is a GitHub Pages *project* site, so this file is published at
+# https://cameronrye.github.io/openzim-mcp/robots.txt — but crawlers only ever
+# read /robots.txt at the origin root, which this repository does not own.
+# Every directive below therefore has no effect today. It is kept so the policy
+# is ready if the docs ever move to their own origin (or a custom domain).
+# The sitemap is still discoverable: it is linked from every page's <head>.
+
 User-agent: *
 Allow: /
 
 # Sitemap
 Sitemap: https://cameronrye.github.io/openzim-mcp/sitemap-index.xml
-
-# Well-known URIs
-Allow: /.well-known/
 
 # Crawl-delay for respectful crawling
 Crawl-delay: 1

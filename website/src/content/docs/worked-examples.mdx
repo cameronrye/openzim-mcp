@@ -1,6 +1,6 @@
 ---
 title: Worked examples
-summary: Five end-to-end case studies showing the OpenZIM MCP 8-tool advanced surface in action — search, get, summarize, browse namespaces, and follow related links across a Wikipedia ZIM archive.
+summary: Five end-to-end case studies of the advanced 8-tool surface — search, get, summarize, browse namespaces and follow related links in a Wikipedia archive.
 group: Guides
 sidebar_order: 6
 ---
@@ -112,26 +112,19 @@ zim_get(
 )
 ```
 
-Response (truncated):
+Response (truncated) — `zim_get` returns an `EntryResponse` dict, and the article body is the `content` value:
 
-```plain
-# Protein
-
-Path: Protein
-Type: text/html
-## Content
-
-#  Protein
-
-A representation of the 3D structure of the protein myoglobin showing turquoise α-helices.
-This protein was the first to have its structure solved by X-ray crystallography ...
-
-**Proteins** are large biomolecules and macromolecules that comprise one or more long chains
-of amino acid residues. Proteins perform a vast array of functions within organisms, including
-catalysing metabolic reactions, DNA replication, responding to stimuli ...
-
-... [Content truncated, total of 156,202 chars, only showing first 100,000] ...
+```json
+{
+  "path": "Protein",
+  "title": "Protein",
+  "content_type": "text/html",
+  "content": "#  Protein\n\nA representation of the 3D structure of the protein myoglobin showing turquoise α-helices. This protein was the first to have its structure solved by X-ray crystallography ...\n\n**Proteins** are large biomolecules and macromolecules that comprise one or more long chains of amino acid residues ...\n\n... [Content truncated, total of 156,202 characters of body content, only showing first 100,000. Pass `content_offset=100000` to read the next page.] ...",
+  "_meta": { "chars": 101504, "truncated": true, "tokens_est": 23811, "more_at_offset": 100000, "total_chars": 156202 }
+}
 ```
+
+The truncation footer is part of the `content` string, and the `content_offset` it names is the value to pass back to read the next page.
 
 For an LLM-sized summary instead of the full body, switch to `view="summary"`:
 
@@ -151,7 +144,7 @@ Response:
   "path": "C/Protein",
   "content_type": "text/html",
   "summary": "Proteins are large biomolecules comprising one or more long chains of amino acid residues. They perform a vast array of functions within organisms, including catalysing metabolic reactions, DNA replication, responding to stimuli, providing structure to cells and organisms, and transporting molecules ...",
-  "word_count": 100,
+  "word_count": 200,
   "is_truncated": true
 }
 ```
@@ -228,19 +221,21 @@ Response (truncated — one `kind` per call, `"internal"` by default):
 ```json
 {
   "results": [
-    { "url": "C/Taxonomy_(biology)", "text": "Scientific classification", "type": "internal" },
-    { "url": "C/Animal", "text": "Animalia", "type": "internal" },
-    { "url": "C/Arthropod", "text": "Arthropoda", "type": "internal" },
-    { "url": "C/Insect", "text": "Insecta", "type": "internal" }
+    { "url": "Taxonomy_(biology)", "path": "C/Taxonomy_(biology)", "text": "Scientific classification", "type": "internal" },
+    { "url": "Animal", "path": "C/Animal", "text": "Animalia", "type": "internal" },
+    { "url": "Arthropod", "path": "C/Arthropod", "text": "Arthropoda", "type": "internal" },
+    { "url": "Insect", "path": "C/Insect", "text": "Insecta", "type": "internal" }
   ],
   "kind": "internal",
-  "category_totals": { "internal": 187, "external": 23, "media": 12 },
-  "next_cursor": null,
-  "done": true
+  "category_totals": { "internal": 187, "external": 23, "media": 12, "anchor": 9 },
+  "next_cursor": "eyJ2IjoyLCJ0IjoiZXh0cmFjdF9hcnRpY2xlX2xpbmtzIiwicyI6ey4uLg",
+  "done": false
 }
 ```
 
-Pass `kind="external"` or `kind="media"` to fetch the other buckets; `category_totals` counts all three either way.
+`url` is the **raw href** as written in the article — it is not necessarily fetchable. Internal rows also carry `path`, the resolved entry path, and that is what you pass to `zim_get`.
+
+Pass `kind="external"` or `kind="media"` to fetch the other buckets. `category_totals` reports four counts either way: the three fetchable buckets plus `anchor` (same-page `#fragment` links), which is excluded from `internal` and which no `kind` can retrieve.
 
 For semantically related articles (not just inline links), flip the direction:
 
@@ -262,7 +257,7 @@ Response:
     { "path": "C/Wasp", "title": "Wasp", "mention_count": 3 },
     { "path": "C/Hymenoptera", "title": "Hymenoptera", "mention_count": 3 },
     { "path": "C/Eusociality", "title": "Eusociality", "mention_count": 2 },
-    { "path": "C/Termite", "title": "Termite" }
+    { "path": "C/Termite", "title": "Termite", "mention_count": 1 }
   ]
 }
 ```
@@ -408,7 +403,7 @@ Response (truncated):
     }
   ],
   "total": 80000,
-  "next_cursor": null,
+  "next_cursor": "eyJ2IjoyLCJ0IjoiYnJvd3NlX25hbWVzcGFjZSIsInMiOnsuLi4",
   "done": false,
   "page_info": { "offset": 0, "limit": 5 }
 }
@@ -466,15 +461,14 @@ Response:
     {
       "title": "Protein",
       "level": 1,
-      "content_preview": "Proteins are large biomolecules ...",
-      "word_count": 150
+      "content_preview": "Proteins are large biomolecules ..."
     }
   ],
   "word_count": 5000
 }
 ```
 
-`view="structure"` is the lighter sibling of `view="toc"` — flatter, with per-section word counts, optimized for "how big is this article and where do I start reading?" decisions.
+`view="structure"` is the lighter sibling of `view="toc"` — flatter, with a short preview per section, optimized for "how big is this article and where do I start reading?" decisions. Note that `word_count` is a **document-level** figure: section objects carry exactly `title`, `level` and `content_preview`, with no per-section count.
 
 **Takeaway:** the metadata, browse, and filtered-search trio is the right opening pattern when you don't know the archive's shape yet. Once you do, jump straight to `zim_search` + `zim_get`.
 
@@ -482,7 +476,7 @@ Response:
 
 ## Smart retrieval in action
 
-Every `zim_get` call goes through smart retrieval if the direct lookup fails. Asking for a path with a space when the canonical form uses an underscore:
+A `zim_get` call for the `full` or `summary` view goes through smart retrieval if the direct lookup fails; the `toc` and `structure` views resolve the path directly and return a not-found error instead. Asking for a path with a space when the canonical form uses an underscore:
 
 ```python
 zim_get(
@@ -491,24 +485,17 @@ zim_get(
 )
 ```
 
-Response (showing the resolved path):
+Response (showing the resolved path) — the `requested_path` key appears only when the fallback landed somewhere other than what you asked for:
 
-```plain
-# Test Article
-
-Requested Path: C/Test Article
-Actual Path: C/Test_Article
-Type: text/html
-
-## Content
-
-# Test Article
-
-This article demonstrates the smart retrieval system automatically handling
-path encoding differences. The system tried "C/Test Article" directly,
-then automatically searched and found "C/Test_Article".
-
-... [Content continues] ...
+```json
+{
+  "path": "C/Test_Article",
+  "requested_path": "C/Test Article",
+  "title": "Test Article",
+  "content_type": "text/html",
+  "content": "# Test Article\n\nThis article demonstrates the smart retrieval system automatically handling path encoding differences. The system tried \"C/Test Article\" directly, then automatically searched and found \"C/Test_Article\". ...",
+  "_meta": { "chars": 359, "truncated": false, "tokens_est": 85 }
+}
 ```
 
 The resolved path is cached for subsequent calls within the same archive, so the fallback search runs once per unique guess. See [Smart retrieval](/openzim-mcp/docs/smart-retrieval/) for the full algorithm.
@@ -531,7 +518,7 @@ Simple mode is the default (one tool exposed) and is the right choice when your 
 **Next steps:**
 
 - **[API reference](/openzim-mcp/docs/api-reference/)** — full tool signatures and argument shapes.
-- **[Smart retrieval](/openzim-mcp/docs/smart-retrieval/)** — the four-step fallback inside `zim_get`.
+- **[Smart retrieval](/openzim-mcp/docs/smart-retrieval/)** — the five-step fallback inside `zim_get`.
 - **[LLM integration patterns](/openzim-mcp/docs/llm-integration-patterns/)** — simple vs advanced mode, progressive discovery, batching, error handling.
 
 *The v1.x maintenance window closed when v2.5.0 shipped (2026-06-18); only the current major line is supported — see [SECURITY.md](https://github.com/cameronrye/openzim-mcp/blob/main/SECURITY.md) for the policy. The [CHANGELOG](https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md) carries the v1 → v2 migration table and the v3.0.0 breaking-changes entry.*

@@ -1,12 +1,15 @@
 ---
 import { getCollection } from 'astro:content';
+import { GROUP_ORDER, sortDocsForNav } from '../lib/docs-order';
 
-const allDocs = await getCollection('docs');
+// Same sort as PrevNext, from the same module, so the sidebar's reading order
+// and the footer's prev/next chain cannot drift apart again.
+const allDocs = sortDocsForNav(await getCollection('docs'));
 const groups: Record<string, typeof allDocs> = {};
-for (const doc of allDocs.sort((a, b) => a.data.sidebar_order - b.data.sidebar_order)) {
+for (const doc of allDocs) {
   (groups[doc.data.group] ??= []).push(doc);
 }
-const orderedGroups = ['Get started', 'Reference', 'Guides', 'Operations'] as const;
+const orderedGroups = GROUP_ORDER;
 const { currentSlug } = Astro.props as { currentSlug: string };
 const base = import.meta.env.BASE_URL.replace(/\/$/, '');
 ---

@@ -1,0 +1,63 @@
+---
+import LandingLayout from '../layouts/LandingLayout.astro';
+import SiteHeader from '../components/SiteHeader.astro';
+import SiteFooter from '../components/SiteFooter.astro';
+
+/**
+ * The 404 page, emitted as `dist/404.html` at the artifact root.
+ *
+ * GitHub Pages serves a project site's own `404.html` for unknown paths under
+ * the project subpath, so this really is the page a mistyped
+ * `/openzim-mcp/docs/…` URL lands on. Until now that was GitHub's generic
+ * "Page not found", which offers a reader no way back into the docs.
+ *
+ * Asset URLs here MUST be base-absolute. The landing page uses relative ones
+ * (`assets/styles.css`), which resolve fine from one known path — but this
+ * file is served for arbitrary deep paths, so a relative href would resolve
+ * against whatever the visitor mistyped and 404 a second time. `LandingLayout`
+ * also contributes no stylesheet or favicon of its own (they arrive through
+ * its `head` slot), so this page supplies both.
+ *
+ * `@astrojs/sitemap` excludes this route without configuration, and Pagefind
+ * does not index it — it carries no `data-pagefind-body`.
+ */
+
+const base = import.meta.env.BASE_URL.replace(/\/$/, '');
+const title = 'Page not found — OpenZIM MCP';
+const description = 'That page does not exist. Start from the documentation index or the quick start.';
+---
+<LandingLayout title={title} description={description}>
+  <Fragment slot="head">
+    <meta name="robots" content="noindex, follow">
+    <link rel="icon" type="image/svg+xml" href={`${base}/assets/favicon.svg`}>
+    <link rel="stylesheet" href={`${base}/assets/styles.css`}>
+  </Fragment>
+
+  <SiteHeader context="docs" />
+
+  <main class="notfound" id="main">
+    <p class="notfound__code">404</p>
+    <h1>That page does not exist</h1>
+    <p class="notfound__lead">
+      The link may be out of date, or the page may have moved. These are the
+      places most people are looking for.
+    </p>
+
+    <ul class="notfound__links">
+      <li><a href={`${base}/docs/`}>Documentation index</a> — every page, grouped</li>
+      <li><a href={`${base}/docs/quick-start/`}>Quick start</a> — running in five minutes</li>
+      <li><a href={`${base}/docs/api-reference/`}>API reference</a> — tools, prompts and resources</li>
+      <li><a href={`${base}/docs/troubleshooting/`}>Troubleshooting</a> — when something is not working</li>
+      <li><a href={`${base}/`}>Home</a></li>
+    </ul>
+
+    <p class="notfound__foot">
+      If a link on this site brought you here, please
+      <a href="https://github.com/cameronrye/openzim-mcp/issues">open an issue</a>.
+    </p>
+  </main>
+
+  <SiteFooter context="docs" />
+
+  <script src={`${base}/assets/script.js`} defer></script>
+</LandingLayout>

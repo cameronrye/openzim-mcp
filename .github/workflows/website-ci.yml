@@ -1,0 +1,66 @@
+name: Website CI
+
+# The deploy workflow only runs on push-to-main, so `astro check` — the site's
+# single build gate — never ran before a merge. A bad frontmatter `group`, an
+# unclosed MDX tag, or a link to a page that no longer exists merged green and
+# reddened the deploy instead. This runs the same build on the PR, plus the
+# link check the deploy path has no reason to run.
+on:
+  pull_request:
+    paths:
+      - "website/**"
+      - "scripts/check_docs_links.py"
+      - ".github/workflows/website-ci.yml"
+  workflow_dispatch:
+
+# PR builds are throwaway; superseding one is fine. Deliberately NOT the
+# "pages" group used by deploy-website.yml — a PR check must never queue
+# behind, or cancel, a production deployment.
+concurrency:
+  group: website-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build and check links
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: website/package-lock.json
+
+      - name: Install deps
+        working-directory: website
+        run: npm ci --ignore-scripts
+
+      - name: Type-check
+        working-directory: website
+        run: npm exec --no-install -- astro check
+
+      - name: Build Astro site
+        working-directory: website
+        run: npm run build
+
+      # Two steps on purpose, even though the second repeats the first: the
+      # internal pass is offline and deterministic, so a failure there is
+      # unambiguously this repo's fault, while the external pass depends on
+      # remote hosts. Splitting them means the Actions UI says which kind of
+      # breakage happened without anyone reading the log. The internal pass is
+      # ~1s for 900+ links, so the repeat costs nothing.
+      # The script is stdlib-only, so no Python setup step is needed.
+      - name: Check internal links and anchors
+        run: python3 scripts/check_docs_links.py
+
+      - name: Check external links
+        run: python3 scripts/check_docs_links.py --external

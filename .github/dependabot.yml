@@ -143,3 +143,55 @@ updates:
         update-types:
           - "version-update:semver-major"
           - "version-update:semver-minor"
+
+  # The documentation site (website/package.json + package-lock.json). Astro,
+  # Vite and Pagefind ship the site's entire build toolchain and were the one
+  # dependency surface nothing watched — the Python tree, the actions and the
+  # base image each had an ecosystem here, and ~220 lockfile lines of JavaScript
+  # did not.
+  #
+  # ``ci``, not ``deps``: ``deps`` is ``"hidden": false`` in
+  # release-please-config.json, so a lone dependency bump to a static site would
+  # cut a patch release of the Python package and publish a wheel to PyPI whose
+  # only change is a devDependency the wheel does not contain. ``ci`` is hidden,
+  # which is what a website-only change should be. (The pip ecosystem above
+  # keeps ``deps`` on purpose — those bumps do ship inside the wheel.)
+  #
+  # These PRs are gated: website-ci.yml triggers on ``website/**``, so every one
+  # runs ``npm ci --ignore-scripts``, ``astro check``, the Pagefind-inclusive
+  # build, and both link passes before it can merge.
+  - package-ecosystem: "npm"
+    directory: "/website"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "10:00"
+      timezone: "Etc/UTC"
+    open-pull-requests-limit: 5
+    assignees:
+      - "cameronrye"
+    labels:
+      - "dependencies"
+      - "javascript"
+    commit-message:
+      prefix: "ci"
+      include: "scope"
+    groups:
+      # One PR per week for the routine movement. Astro, its integrations and
+      # Vite advance together; splitting them produces PRs that each fail until
+      # the others land.
+      website-minor-patch:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+    ignore:
+      # The ``overrides`` block in website/package.json pins esbuild and yaml
+      # above the versions Astro's tree resolves, to clear advisories in
+      # transitive dependencies. Dependabot cannot advance an override — it
+      # edits ``dependencies``/``devDependencies`` — so a PR naming either of
+      # these is a PR that changes nothing while looking like it did. Raising
+      # the floor is a hand edit to the overrides block.
+      - dependency-name: "esbuild"
+      - dependency-name: "yaml"

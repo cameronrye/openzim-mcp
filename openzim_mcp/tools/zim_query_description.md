@@ -55,7 +55,6 @@ Args:
         browse 50, walk 200, links 25, search-all 5/archive);
         pass a value to override. Ignored for atomic intents
         that return a single item or a fixed-shape payload —
-        `tell me about <topic>`,
         `get article <name>`, `show structure of <name>`,
         `show main page`, `list namespaces`, `metadata for
         <file>`, `list available ZIM files`, `summary of
@@ -63,8 +62,10 @@ Args:
         of <name>`. Setting it there has no effect; omit
         it on those calls.
     offset: Pagination offset (default: 0). Not honoured by
-        `suggestions for <prefix>` or `find article titled
-        <name>` (neither backend pages); raise `limit` there.
+        `suggestions for <prefix>`, `find article titled
+        <name>` or `articles related to <name>`; raise
+        `limit` there instead.
+    cursor: Opaque handle from a prior `next_cursor`.
     max_content_length: Article body cap (default: 4000).
     content_offset: Character offset to start reading the
         article body from (default: 0). The truncation footer

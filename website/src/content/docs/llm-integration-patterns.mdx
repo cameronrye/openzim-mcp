@@ -1,6 +1,6 @@
 ---
 title: LLM integration patterns
-summary: Proven patterns for wiring OpenZIM MCP into LLM applications — simple-mode dispatch, advanced-mode 8-tool composition, progressive discovery, batching, and error handling.
+summary: Patterns for wiring OpenZIM MCP into LLM apps — simple-mode dispatch, advanced-mode 8-tool composition, progressive discovery, batching and error handling
 group: Guides
 sidebar_order: 1
 ---
@@ -74,10 +74,10 @@ zim_query(query="search every ZIM for climate change")
 zim_query(query="list available ZIM files")
 
 # Walk a namespace
-zim_query(query="walk namespace M in wikipedia.zim")
+zim_query(query="walk namespace M", zim_file_path=zim_path)  # naming the file inside the query only works for metadata/search phrasings
 ```
 
-The intent parser recognises summarise / search / get / browse / structure / TOC / list-files / related-articles / find-by-title phrasings (server health and cache stats require the advanced-mode `zim_health` tool). The response text ends with a telemetry comment — `<!-- intent=<operation> cert=<confidence> -->` — describing which underlying operation the parser picked, useful for diagnosing surprises.
+The intent parser recognises summarise / search / get / browse / structure / TOC / list-files / related-articles / find-by-title phrasings (server health and cache stats require the advanced-mode `zim_health` tool). The response text carries a telemetry comment — `<!-- intent=<operation> cert=<confidence> -->` — describing which underlying operation the parser picked, useful for diagnosing surprises. Search for the comment rather than reading the last line: a `<!-- reranker=... -->` marker, a closing content fence and a token-count footer can follow it.
 
 For everything that follows on this page, switch to advanced mode for fine-grained control.
 
@@ -216,7 +216,7 @@ related = zim_links(
 )
 ```
 
-`direction="inbound"` lands in v2.5 with the link-graph sidecar — not available in v2.0.
+`direction="inbound"` shipped in v2.3.0. What gates it is not the version but the sidecar: build it with `openzim-mcp build link-graph <archive>.zim`, or the call returns `inbound_sidecar_unavailable`. v3.0.0 invalidated every sidecar built by 2.x — rebuild those with `--force`.
 
 ## User experience patterns
 
@@ -294,7 +294,7 @@ batch = zim_get(
 hits = [r for r in batch.results if r.success]
 ```
 
-Rate limiting is charged **per-entry**, not per batch — a 50-entry batch costs 50 slots.
+Rate limiting is charged **per-entry**, not per batch — but the total is clamped to the bucket's capacity (`burst_size`, default 40), so a 50-entry batch costs 40 slots rather than 50. The clamp exists so one batch can never cost more than a full bucket.
 
 ### Cache-friendly patterns
 
@@ -479,7 +479,7 @@ if cache_hit_rate < 0.7:
     pass
 ```
 
-Note `.health.cache_performance` (not `cache`); fields are `enabled, size, max_size, ttl_seconds, hits, misses, hit_rate`. `process_id` / `server_pid` are the real PID over local stdio (`[REDACTED]` over HTTP/SSE).
+Note `.health.cache_performance` (not `cache`). It always carries 13 fields — `enabled, size, max_size, ancillary_entries, total_entries, size_bytes, max_bytes, ttl_seconds, hits, misses, hit_rate, background_cleanup, persistence_enabled` — plus `persistence_path` and `persistence_file_exists` when persistence is on. `size` counts only what `max_size` bounds; `total_entries` includes per-item fragments, which are bounded by `max_bytes` (64 MiB default) instead. `process_id` / `server_pid` are the real PID over local stdio (`[REDACTED]` over HTTP/SSE).
 
 ### Usage analytics
 
@@ -551,7 +551,7 @@ If your client supports MCP prompts, surface these as slash commands rather than
 
 ### MCP resources
 
-Three URI templates, also available in advanced mode:
+Three resource URIs, also available in advanced mode — `zim://files` is a concrete resource listed by `resources/list`, the other two are URI templates listed by `resources/templates/list`:
 
 - `zim://files` — JSON list of every ZIM file.
 - `zim://{name}` — overview of one ZIM (metadata, namespace summary, main-page preview).
@@ -565,7 +565,7 @@ Over the HTTP transport, open a `subscriptions/listen` stream to be told when ar
 
 In simple mode (the default) only `zim_query` is exposed — pass a natural-language request and the server's intent parser routes to the right underlying operation. If your host LLM is small or struggles with large tool catalogues, prefer simple mode and let the parser do the routing. For LLMs that handle the full 8-tool surface, switch to advanced mode (`OPENZIM_MCP_TOOL_MODE=advanced`) for fine-grained control.
 
-**The 8-tool advanced surface fits comfortably below the [MCP Tax](https://www.mmntm.net/articles/mcp-context-tax) pain band (~24.8KB vs the 25–50KB band)** — most 7-8B class open-weights models dispatch reliably against it. The 22-tool v1 surface (~36KB) sat squarely inside the band; if you saw dispatch confusion on v1 with a small model, v2 should be substantially better.
+**The 8-tool advanced surface fits comfortably below the [MCP Tax](https://www.mmntm.net/articles/mcp-context-tax) pain band (~23.3KB vs the 25–50KB band)** — most 7-8B class open-weights models dispatch reliably against it. The 22-tool v1 surface (~36KB) sat squarely inside the band; if you saw dispatch confusion on v1 with a small model, v2 should be substantially better.
 
 ### Contextual content assembly
 

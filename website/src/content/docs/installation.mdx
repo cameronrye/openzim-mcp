@@ -61,12 +61,33 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 git clone https://github.com/cameronrye/openzim-mcp.git
 cd openzim-mcp
 
-# Install dependencies
+# Install dependencies, including the dev group
+# (`dev` is a PEP 735 dependency group, so plain `uv sync` installs it —
+#  this is what `make install-dev` runs)
 uv sync
 
-# Install development dependencies
-uv sync --dev
+# Runtime dependencies only, without the dev group
+uv sync --no-dev
 ```
+
+### Optional extras
+
+One extra ships: `[reranker]`, which adds cross-encoder relevance reranking
+over Xapian's results.
+
+```bash
+uv tool install "openzim-mcp[reranker]"    # or: pip install "openzim-mcp[reranker]"
+openzim-mcp download-models                 # required second step — see below
+```
+
+**Installing it is not enough.** The server never downloads the model
+(`allow_model_download` defaults to `false`, deliberately — an unannounced
+1.1 GB fetch to HuggingFace would contradict what this server promises about
+reading only local archives). Without the second command, the first
+rerank-eligible query falls back to Xapian-only ranking and logs a warning.
+
+Full details, including which platforms have wheels and how to turn rerank
+off without uninstalling, on [Search reranking](/openzim-mcp/docs/search-reranking/).
 
 ### Option 2: Using pip (development)
 
@@ -92,23 +113,33 @@ pip install -e .
 
 ### Download ZIM Files
 
-1. **Visit the Kiwix Library**: [browse.library.kiwix.org](https://browse.library.kiwix.org/)
-2. **Choose content**: Wikipedia, Wiktionary, Stack Overflow, etc.
-3. **Download ZIM files** to a dedicated directory
+**One command, one real archive.** A 13.6 MB extract of English Wikipedia on climate change, from the openZIM project's own testing suite. Use it to confirm the install works before you commit to a multi-gigabyte download:
 
 ```bash
-# Create ZIM files directory
-mkdir ~/zim-files
-
-# Example: Download a small Wikipedia subset
-# (Download from Kiwix Library and place in ~/zim-files/)
+mkdir -p ~/zim-files
+curl -fsSL -o ~/zim-files/wikipedia_en_climate_change_mini_2024-06.zim \
+  https://raw.githubusercontent.com/openzim/zim-testing-suite/main/data/withns/wikipedia_en_climate_change_mini_2024-06.zim
 ```
+
+```powershell
+New-Item -ItemType Directory -Force -Path "$HOME\zim-files" | Out-Null
+Invoke-WebRequest -Uri "https://raw.githubusercontent.com/openzim/zim-testing-suite/main/data/withns/wikipedia_en_climate_change_mini_2024-06.zim" -OutFile "$HOME\zim-files\wikipedia_en_climate_change_mini_2024-06.zim"
+```
+
+Expect 14,239,035 bytes, SHA-256 `72db7ae7708d3a4cff918495078901ec027b14b427433a2328286ec130d1c43b`. It is an old-scheme archive, so its entry paths read `A/Climate_change`.
+
+**For real content — the Kiwix Library:**
+
+1. **Visit** [browse.library.kiwix.org](https://browse.library.kiwix.org/)
+2. **Choose content**: Wikipedia, Wiktionary, Stack Exchange, and more
+3. **Save the `.zim`** into the same dedicated directory — the server takes directories, not individual files
 
 ### Recommended ZIM Files for Testing
 
+- **Wikipedia climate-change mini**: 13.6MB - the one-command download above
+- **Simple English Wikipedia**: ~200MB - Lightweight option
 - **Wikipedia (English, Top 100)**: ~300MB - Good for testing
 - **Wikipedia (English, Top 1000)**: ~2GB - Comprehensive testing
-- **Simple English Wikipedia**: ~200MB - Lightweight option
 
 ## Platform-Specific Installation
 
@@ -118,6 +149,10 @@ mkdir ~/zim-files
 
 ```powershell
 # Install Python 3.12+ from python.org
+
+# Install uv (the Linux/macOS installer on this page is POSIX-only)
+irm https://astral.sh/uv/install.ps1 | iex
+
 # Then install OpenZIM MCP
 uv tool install openzim-mcp
 # Or, with pip:
@@ -302,7 +337,69 @@ make test
 
 Default mode is **Simple** (one natural-language tool). For all 8 tools (`zim_query`, `zim_search`, `zim_get`, `zim_get_section`, `zim_browse`, `zim_metadata`, `zim_links`, `zim_health`), pass `--mode advanced`.
 
+**The packaged distributions are the exception.** The Docker image bakes `OPENZIM_MCP_TOOL_MODE=advanced` into the image, and the `.mcpb` extension's manifest and the MCP Registry `server.json` set the same variable, so all three register all 8 tools with no flag. Pass `-e OPENZIM_MCP_TOOL_MODE=simple` if you want simple mode there.
+
 ## MCP Client Configuration
+
+Almost every stdio MCP client takes the same shape — a server name, a
+`command`, and an `args` array. Only the file it lives in differs.
+
+### Start from this
+
+```json
+{
+  "mcpServers": {
+    "openzim-mcp": {
+      "command": "uvx",
+      "args": ["openzim-mcp", "/path/to/zim/files"]
+    }
+  }
+}
+```
+
+**Why `uvx` rather than `openzim-mcp` directly.** A GUI-launched client does
+not inherit your shell's `PATH`, so a bare `"command": "openzim-mcp"` often
+fails with *no such file or directory* even though the command works fine in
+your terminal. `uvx` is usually on the system `PATH` because uv's installer
+puts it there, and it resolves the package itself. This is what the project's
+own [`server.json`](https://github.com/cameronrye/openzim-mcp/blob/main/server.json)
+and the `.mcpb` bundle use.
+
+If `uvx` is not found either, give the absolute path — `which openzim-mcp` (or
+`which uvx`) prints it.
+
+Add `"--mode", "advanced"` before the directory to expose all 8 tools instead
+of just `zim_query`. Repeat the directory argument for multiple archive
+folders.
+
+### Where each client keeps that config
+
+| Client | Location |
+|---|---|
+| **Claude Desktop** | `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS), `%APPDATA%\Claude\claude_desktop_config.json` (Windows), `~/.config/claude/claude_desktop_config.json` (Linux) |
+| **Claude Code** | `claude mcp add openzim-mcp -- uvx openzim-mcp /path/to/zim/files` — no file editing |
+| **VS Code / Cursor / Windsurf** | An `mcp.json` (or the MCP section of settings) in the workspace or user profile; the object shape above is unchanged |
+| **Continue** | `~/.continue/config.json`, under its MCP servers block |
+| **Zed** | `settings.json`, under `context_servers` |
+| **Any other stdio client** | It needs a command line, not JSON: `uvx openzim-mcp /path/to/zim/files` |
+
+Client config schemas move faster than this page can track — if a client
+rejects the block above, check its own MCP documentation for the wrapper key
+and keep the `command`/`args` pair as-is.
+
+### One-click and registry installs
+
+Two routes skip configuration entirely:
+
+- **Claude Desktop extension** — download the `openzim-mcp-<version>.mcpb`
+  asset from the [latest release](https://github.com/cameronrye/openzim-mcp/releases/latest)
+  and double-click it. It prompts for your ZIM directory and pins the version.
+  Requires [uv](https://docs.astral.sh/uv/) on the host.
+- **Smithery** — `npx @smithery/cli mcp add rye/openzim-mcp --client claude`.
+
+OpenZIM MCP is also listed on the [official MCP Registry](https://registry.modelcontextprotocol.io)
+as `io.github.cameronrye/openzim-mcp`, so any client that reads the registry
+can install it by name.
 
 ### Claude Desktop
 
@@ -318,12 +415,16 @@ Add to your Claude Desktop configuration file:
 {
   "mcpServers": {
     "openzim-mcp": {
-      "command": "openzim-mcp",
-      "args": ["/path/to/zim/files"]
+      "command": "uvx",
+      "args": ["openzim-mcp", "/path/to/zim/files"]
     }
   }
 }
 ```
+
+Claude Desktop is GUI-launched, so it does not inherit your shell's `PATH` —
+a bare `"command": "openzim-mcp"` is the most common cause of "server failed
+to start" here even when the command works in a terminal.
 
 **Alternative (using Python module):**
 
@@ -408,7 +509,7 @@ Permission denied: '/path/to/zim/files'
 **ZIM Files Not Found**
 
 ```
-No ZIM files found in directory
+No ZIM files found in allowed directories
 ```
 
 **Solution**: Download ZIM files from [Kiwix Library](https://browse.library.kiwix.org/) and place them in the specified directory
@@ -417,7 +518,6 @@ No ZIM files found in directory
 
 - **Check the [Troubleshooting Guide](/openzim-mcp/docs/troubleshooting/)** for detailed solutions
 - **Open an issue** on [GitHub](https://github.com/cameronrye/openzim-mcp/issues)
-- **Join discussions** on [GitHub Discussions](https://github.com/cameronrye/openzim-mcp/discussions)
 
 ## Next Steps
 

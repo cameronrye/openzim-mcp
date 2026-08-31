@@ -42,10 +42,10 @@ PARAMETERS:
   content_offset       Char offset into the body for view="full"
                        (default 0). Used with the truncation footer's
                        `pass content_offset=N` hint. Single-entry only.
-  compact              Default **False** (v2.0). Set True for
-                       small-LLM compaction. v2.5 revisits the default.
-  compact_budget       Inert in zim_get at v2.x (honored by `zim_query`,
-                       not here) — does not cap the response.
+  compact              Default **False**. Set True for small-LLM
+                       compaction. (`zim_query` defaults it True.)
+  compact_budget       Inert here — never forwarded. Only `zim_query`
+                       honors it.
 
 RESPONSE:
   Branch-dependent dict — EntryResponse / BatchEntryResponse /

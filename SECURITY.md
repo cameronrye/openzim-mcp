@@ -27,14 +27,13 @@ Instead, please report them privately using GitHub Private Vulnerability Reporti
 3. Fill out the vulnerability report form
 4. Submit the report
 
-GitHub's private advisories support encrypted communication, attachments, and coordinated disclosure with maintainers — there is no separate email or PGP channel.
+GitHub's private advisories support encrypted communication, attachments, and coordinated disclosure with maintainers, and are the preferred channel. If you cannot use them, email the maintainer at <c@meron.io>. There is no PGP channel.
 
 ### For Non-Sensitive Security Issues
 
 For general security improvements, hardening suggestions, or non-exploitable security-related issues, you can:
 
 - Open a public GitHub issue using the "Security Vulnerability Report" template
-- Start a discussion in GitHub Discussions
 
 ## What to Include in Your Report
 
@@ -173,11 +172,16 @@ OpenZIM MCP implements several security measures:
 The HTTP transport (`--transport http`) is the only network-exposed surface.
 Its authentication is controlled by two environment variables:
 
-- **`OPENZIM_MCP_AUTH_TOKEN`** — the Bearer token required on every request.
-  Set this whenever the server binds a non-loopback host. An **empty or
-  whitespace-only** value is rejected at startup (an empty token would
-  authenticate every request); unset the variable entirely to run
-  localhost-only without auth.
+- **`OPENZIM_MCP_AUTH_TOKEN`** — the Bearer token required on every request to
+  the MCP endpoint. Set this whenever the server binds a non-loopback host. An
+  **empty or whitespace-only** value is rejected at startup (an empty token
+  would authenticate every request); unset the variable entirely to run
+  localhost-only without auth. Two paths are deliberately not token-gated:
+  the `/healthz` and `/readyz` probes are public (they expose no archive
+  data), and a genuine CORS preflight from an allow-listed origin is answered
+  by the outer CORS layer before auth runs, because browsers never attach
+  `Authorization` to a preflight. A bare `OPTIONS` with no preflight headers
+  still gets a 401, and neither path mints a session.
 - **`OPENZIM_MCP_INSECURE_DISABLE_AUTH=1`** — an explicit, operator-acknowledged
   escape hatch that allows a non-loopback bind **without** a token. Use it
   **only** on closed networks (Docker bridge, Tailscale-only, isolated LAN)
@@ -254,8 +258,7 @@ We recognize security contributors through:
 
 For non-sensitive security questions or discussions:
 
-- [GitHub Discussions](https://github.com/cameronrye/openzim-mcp/discussions) — use the Security category
-- [GitHub Issues](https://github.com/cameronrye/openzim-mcp/issues) — for non-exploitable hardening suggestions
+- [GitHub Issues](https://github.com/cameronrye/openzim-mcp/issues) — for non-exploitable hardening suggestions and general security questions
 
 ## Legal
 

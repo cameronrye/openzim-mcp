@@ -31,6 +31,26 @@ const docsHref = `${base}/docs/`;
       </svg>
       <span class="nav__wordmark">OpenZIM&nbsp;MCP</span>
     </a>
+    {context === 'docs' && (
+      <div class="nav__search">
+        <label class="visually-hidden" for="docs-search">Search the documentation</label>
+        <input
+          type="search"
+          id="docs-search"
+          class="nav__search-input"
+          placeholder="Search docs…"
+          autocomplete="off"
+          role="combobox"
+          aria-expanded="false"
+          aria-controls="docs-search-results"
+          aria-autocomplete="list"
+          data-search-hint="/"
+          data-pagefind-base={base}
+        />
+        <div class="nav__search-panel" id="docs-search-results" role="listbox" aria-label="Search results" hidden></div>
+        <p class="visually-hidden" id="docs-search-status" role="status" aria-live="polite"></p>
+      </div>
+    )}
     <nav class="nav__menu" id="nav-menu" aria-label="Primary">
       <a href={landingHref('#what')} class="nav__link">What is this</a>
       <a href={docsHref} class="nav__link" aria-current={context === 'docs' ? 'page' : undefined}>Docs</a>
@@ -38,7 +58,7 @@ const docsHref = `${base}/docs/`;
       <a href={landingHref('#try')} class="nav__link">Try it</a>
       <a href={landingHref('#deeper')} class="nav__link">Deeper</a>
       <a href="https://github.com/cameronrye/openzim-mcp" class="nav__link" target="_blank" rel="noopener">GitHub ↗</a>
-      <button class="nav__theme" id="theme-toggle" aria-label="Toggle theme" type="button">
+      <button class="nav__theme" id="theme-toggle" aria-label="Dark mode" aria-pressed="true" type="button">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
           <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
         </svg>

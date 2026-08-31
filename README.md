@@ -88,8 +88,8 @@ Wire it into your MCP client. Example for Claude Desktop's `claude_desktop_confi
 {
   "mcpServers": {
     "openzim-mcp": {
-      "command": "openzim-mcp",
-      "args": ["/path/to/zim/files"]
+      "command": "uvx",
+      "args": ["openzim-mcp", "/path/to/zim/files"]
     }
   }
 }
@@ -103,8 +103,8 @@ For full control, run in Advanced mode to expose all 8 specialized tools:
 {
   "mcpServers": {
     "openzim-mcp-advanced": {
-      "command": "openzim-mcp",
-      "args": ["--mode", "advanced", "/path/to/zim/files"]
+      "command": "uvx",
+      "args": ["openzim-mcp", "--mode", "advanced", "/path/to/zim/files"]
     }
   }
 }
@@ -114,7 +114,7 @@ For HTTP transport (long-running service with bearer auth, CORS, and health endp
 
 ## Highlights
 
-- **8-tool advanced surface** — `zim_query`, `zim_search`, `zim_get`, `zim_get_section`, `zim_browse`, `zim_metadata`, `zim_links`, `zim_health`. Down from 22; advanced-mode schema drops from ~36KB to ~24.8KB, clearing the [MCP Tax](https://www.mmntm.net/articles/mcp-context-tax) pain band. [API reference →](https://cameronrye.github.io/openzim-mcp/docs/api-reference/)
+- **8-tool advanced surface** — `zim_query`, `zim_search`, `zim_get`, `zim_get_section`, `zim_browse`, `zim_metadata`, `zim_links`, `zim_health`. Down from 22; advanced-mode schema drops from ~36KB to ~23.3KB, clearing the [MCP Tax](https://www.mmntm.net/articles/mcp-context-tax) pain band. [API reference →](https://cameronrye.github.io/openzim-mcp/docs/api-reference/)
 - **Streamable HTTP transport** — bearer-token auth, CORS, health endpoints, multi-arch Docker image. [HTTP & Docker deployment →](https://cameronrye.github.io/openzim-mcp/docs/http-and-docker-deployment/)
 - **Per-entry MCP resources + subscriptions** — `zim://{name}/entry/{path}` with native MIME types; clients open a `subscriptions/listen` stream and get `resources/list_changed` when a ZIM appears or disappears, `resources/updated` when one is replaced. [Resources, prompts & subscriptions →](https://cameronrye.github.io/openzim-mcp/docs/resources-prompts-subscriptions/)
 - **Simple-mode `zim_query`** — one natural-language tool that dispatches to the right operation, tuned for small-model deployment targets. [Quick start →](https://cameronrye.github.io/openzim-mcp/docs/quick-start/)
@@ -138,15 +138,15 @@ Full documentation lives at **<https://cameronrye.github.io/openzim-mcp/docs/>**
 
 | Group | Pages |
 | --- | --- |
-| [Get started](https://cameronrye.github.io/openzim-mcp/docs/) | Introduction · Installation · Quick start |
-| [Reference](https://cameronrye.github.io/openzim-mcp/docs/api-reference/) | API reference · Configuration · Resources, prompts & subscriptions |
-| [Guides](https://cameronrye.github.io/openzim-mcp/docs/llm-integration-patterns/) | LLM integration patterns · Smart retrieval · HTTP & Docker deployment · Performance optimization · Security best practices · Worked examples |
-| [Operations](https://cameronrye.github.io/openzim-mcp/docs/troubleshooting/) | Troubleshooting · FAQ · Architecture overview |
+| [Get started](https://cameronrye.github.io/openzim-mcp/docs/) | Introduction · Installation · Quick start · ZIM concepts |
+| [Reference](https://cameronrye.github.io/openzim-mcp/docs/api-reference/) | API reference · Configuration · Resources, prompts & subscriptions · CLI reference |
+| [Guides](https://cameronrye.github.io/openzim-mcp/docs/llm-integration-patterns/) | LLM integration patterns · Smart retrieval · HTTP & Docker deployment · Performance optimization · Security best practices · Worked examples · Search reranking |
+| [Operations](https://cameronrye.github.io/openzim-mcp/docs/troubleshooting/) | Troubleshooting · FAQ · Architecture overview · Upgrading |
 
 ## Project status
 
 **v3.2.3** is the current release (2026-08-28). <!-- x-release-please-version-date -->
-v2.0.0 GA shipped 2026-05-27. Per the published support policy — v1.x fixes accepted "until v2.5.0 ships, whichever comes first" — the v1.x maintenance window closed when v2.5.0 shipped (2026-06-18); all active development is on the current major line ([SECURITY.md](SECURITY.md) states the policy). **v3.0.0 is a breaking release for HTTP subscription clients**: `resources/subscribe`/`unsubscribe` are no longer served — live updates ride `subscriptions/listen` on the 2026-07-28 protocol revision — and link-graph sidecars built by 2.x must be rebuilt. Tools, resources, and prompts are unchanged, and legacy-handshake clients keep working. Details in [CHANGELOG.md](CHANGELOG.md).
+v2.0.0 GA shipped 2026-05-27. Per [SECURITY.md](SECURITY.md), the v1.x maintenance window closed when v2.5.0 shipped (2026-06-18); all active development is on the current major line. **v3.0.0 is a breaking release for HTTP subscription clients**: `resources/subscribe`/`unsubscribe` are no longer served — live updates ride `subscriptions/listen` on the 2026-07-28 protocol revision — and link-graph sidecars built by 2.x must be rebuilt. Tools, resources, and prompts are unchanged, and legacy-handshake clients keep working. Details in [CHANGELOG.md](CHANGELOG.md), and step-by-step instructions in the [upgrade guide](https://cameronrye.github.io/openzim-mcp/docs/upgrading/).
 
 ## Contributing
 

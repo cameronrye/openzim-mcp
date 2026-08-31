@@ -1,9 +1,11 @@
 ---
 import { getCollection } from 'astro:content';
+import { sortDocsForNav } from '../lib/docs-order';
 
-const allDocs = (await getCollection('docs')).sort(
-  (a, b) => a.data.sidebar_order - b.data.sidebar_order,
-);
+// Reading order must match the sidebar exactly: group first, then
+// sidebar_order within the group. Sorting by sidebar_order alone interleaved
+// groups, because that field restarts at 1 in each one.
+const allDocs = sortDocsForNav(await getCollection('docs'));
 const { currentSlug } = Astro.props as { currentSlug: string };
 const idx = allDocs.findIndex((d) => d.id === currentSlug);
 const prev = idx > 0 ? allDocs[idx - 1] : null;
@@ -14,6 +16,6 @@ function hrefFor(slug: string) {
 }
 ---
 <nav class="docs-prevnext" aria-label="Page navigation">
-  {prev && <a class="prev" href={hrefFor(prev.id)}>← {prev.data.title}</a>}
-  {next && <a class="next" href={hrefFor(next.id)}>{next.data.title} →</a>}
+  {prev && <a class="prev" href={hrefFor(prev.id)} rel="prev">← {prev.data.title}</a>}
+  {next && <a class="next" href={hrefFor(next.id)} rel="next">{next.data.title} →</a>}
 </nav>

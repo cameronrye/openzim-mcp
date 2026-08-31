@@ -1,0 +1,106 @@
+---
+title: Upgrading
+summary: What breaks between major versions and what to do about it — v2 to v3 for subscription clients and link-graph sidecars, plus a pointer to the v1 to v2 mapping.
+group: Operations
+sidebar_order: 4
+---
+
+Newest first. The sections below concern crossing a major boundary, but a minor release can still change behaviour without breaking a call — v3.1.0 stopped the reranker downloading its own model and moved caller-error logs from ERROR to WARNING — so read the `Upgrade notes` block of any release you move to.
+
+## v2 → v3
+
+Two things break. Neither touches the tool surface — tools, resources and
+prompts are unchanged, and 2025-era clients keep working for all three from
+the same endpoint. The first affects anyone doing inbound link lookups, on
+**any** transport including stdio; the second affects HTTP clients only.
+
+### 1. Link-graph sidecars must be rebuilt
+
+**Who is affected:** anyone using `zim_links(direction="inbound")`.
+
+v3.0.0 bumped the sidecar schema. Edge targets are now stored under the path
+the archive can actually serve, rather than the raw percent-encoded href, so
+a sidecar built by 2.x is rejected on load. Until you rebuild, inbound
+lookups return an `inbound_sidecar_unavailable` envelope. No other direction
+is affected, and nothing else about the archive changes.
+
+```bash
+# Rebuild every sidecar. --force is required: the 2.x file is still there.
+for z in /srv/zim/*.zim; do
+  openzim-mcp build link-graph --force --quiet "$z" || echo "FAILED: $z"
+done
+```
+
+Confirm it worked by asking for inbound links on any article and checking you
+do **not** get `inbound_sidecar_unavailable`:
+
+```python
+zim_links(zim_file_path="/srv/zim/wikipedia_en.zim",
+          entry_path="C/Ant", direction="inbound", limit=1)
+```
+
+Budget for it: the build walks every entry, and peak memory scales with
+article count — GB-scale on a full Wikipedia archive. See the
+[CLI reference](/openzim-mcp/docs/cli-reference/#openzim-mcp-build-link-graph--the-inbound-links-sidecar).
+
+### 2. `resources/subscribe` is no longer served
+
+**Who is affected:** HTTP clients that subscribed to resource changes.
+Subscriptions have always been HTTP-only here, so **no stdio client is
+affected**.
+
+v3.0.0 adopts the 2026-07-28 protocol revision and drops the per-session
+subscriber registry. A legacy client calling `resources/subscribe` now gets
+`-32601` (method not found). This is a deliberate choice rather than an SDK
+limitation — restoring the method would mean restoring the registry.
+
+`zim://files` is also no longer a valid subscription target: an archive
+appearing or disappearing is published as `resources/list_changed`, which
+carries no URI.
+
+The replacement is `subscriptions/listen`:
+
+- ask for `resourcesListChanged` to hear about archives appearing or disappearing
+- list `zim://{name}` under `resourceSubscriptions` to hear about in-place replacements
+
+Full details on [Resources, prompts & subscriptions](/openzim-mcp/docs/resources-prompts-subscriptions/).
+
+### Everything else
+
+The server requires MCP Python SDK v2 (`mcp>=2.0.0,<2.1`) — relevant only if
+you embed it as a library rather than running the binary. `sse` transport
+still works but is **deprecated** and will be removed in 4.0.0; move to
+`--transport http`.
+
+## v1 → v2
+
+v2.0.0 collapsed a 22-tool advanced surface into 8 consolidated tools.
+Functionally nothing was removed — each old tool became a mode, view or
+argument on a new one.
+
+The full mechanical mapping lives on the
+[API reference](/openzim-mcp/docs/api-reference/#v1--v2-migration), which is
+the canonical place to look up "what does my old call become?". It stays there
+rather than moving here, because several pages link straight to that anchor.
+
+## Deprecations in flight
+
+| Deprecated | Removed in | Replacement |
+|---|---|---|
+| `--transport sse` / `OPENZIM_MCP_TRANSPORT=sse` | 4.0.0 | `--transport http` (streamable HTTP). It warns on every start |
+
+## How to upgrade
+
+```bash
+uv tool upgrade openzim-mcp      # or: pip install --upgrade openzim-mcp
+openzim-mcp --version
+```
+
+Docker users pull a new tag; the image is published as
+`ghcr.io/cameronrye/openzim-mcp:<version>` and `:latest`.
+
+Read [CHANGELOG.md](https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md)
+for the release you are moving to. Any release that breaks something carries a
+`⚠ BREAKING CHANGES` block.
+
+*The v1.x maintenance window closed when v2.5.0 shipped (2026-06-18); only the current major line is supported — see [SECURITY.md](https://github.com/cameronrye/openzim-mcp/blob/main/SECURITY.md) for the policy. The [CHANGELOG](https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md) carries the v1 → v2 migration table and the v3.0.0 breaking-changes entry.*

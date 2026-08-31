@@ -24,20 +24,21 @@
     Pydantic (Data validation)
 
     ## Frontend
+    Astro (static site generator, MDX content collection)
     HTML5
     CSS3 (Custom properties, Grid, Flexbox)
     Vanilla JavaScript (ES6+)
     SVG Graphics
 
     ## Fonts
-    Geist (Google Fonts)
-    JetBrains Mono (Google Fonts)
-    Fraunces (Google Fonts)
+    System font stack only — no webfonts are loaded, so no
+    request leaks to a third-party font host.
 
     ## Build & Deploy
+    Astro
     GitHub Actions
     GitHub Pages
-    Python validation scripts
+    release-please
 
     ## Development Tools
     uv (Python package manager)
@@ -50,7 +51,6 @@
     Schema.org (Structured data)
     Open Graph Protocol (Social media)
     Twitter Cards (Social media)
-    RFC 9116 (security.txt)
     WCAG 2.1 (Accessibility)
 
     ## SEO & Analytics
@@ -60,8 +60,7 @@
 
 # SITE
 
-    Last update: 2026-06-02
     Language: English
     Doctype: HTML5
     IDE: Various (VS Code, Vim, etc.)
-    Version: 2.1.7
+    Version: 3.2.3 <!-- x-release-please-version -->

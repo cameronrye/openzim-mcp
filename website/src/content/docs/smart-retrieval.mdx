@@ -1,6 +1,6 @@
 ---
 title: Smart retrieval
-summary: How OpenZIM MCP resolves entry paths when direct access fails — the four-step fallback inside zim_get, the path-mapping cache, and how to debug resolutions.
+summary: How OpenZIM MCP resolves entry paths when direct access fails — the five-step fallback inside zim_get, the path-mapping cache, and how to debug resolutions.
 group: Guides
 sidebar_order: 2
 ---
@@ -13,45 +13,57 @@ How OpenZIM MCP resolves entry paths when direct access fails — and how to deb
 
 ## What it is
 
-ZIM entry paths aren't always predictable. Wikipedia's "Photosynthesis" might live at `A/Photosynthesis`, `C/Photosynthesis`, `Photosynthesis`, or under a slug variant. Smart retrieval is the fallback path that turns "I have a guess at the path" into "here's the article" without forcing the LLM to do trial-and-error.
+ZIM entry paths aren't always predictable. (New to namespaces and entry paths? Start with [ZIM concepts](/openzim-mcp/docs/zim-concepts/).) Wikipedia's "Photosynthesis" might live at `A/Photosynthesis`, `C/Photosynthesis`, `Photosynthesis`, or under a slug variant. Smart retrieval is the fallback path that turns "I have a guess at the path" into "here's the article" without forcing the LLM to do trial-and-error.
 
-The fallback is consolidated into `zim_get` — it runs automatically whenever `zim_get` is called with an `entry_path` that doesn't match directly. It applies to every view mode of `zim_get` (`view="full"` default, `view="summary"`, `view="toc"`, `view="structure"`), the binary form (`zim_get(binary=True, ...)`), and to `zim_links` (which resolves the source entry before extracting links).
+The fallback runs automatically whenever `zim_get` is called with an `entry_path` that doesn't match directly — on the default `view="full"` body path and on the batch `entry_paths` form. `view="summary"` resolves through a shorter helper of its own (`_resolve_entry_with_fallback`): direct lookup, then the search step, with no `M/` routing, no cached path mapping and no alternate-spelling probes.
 
-Internally these all share `_resolve_entry_with_fallback` in `zim/structure.py`.
+It does **not** cover every surface. `view="toc"`, `view="structure"` and `zim_links` in its `outbound` and `related` directions resolve the entry through the shared bundle helper's single exact `get_entry_by_path` lookup, so a near-miss path there is reported as not-found rather than repaired (`related` reports it in an `outbound_error` field rather than an error envelope). `direction="inbound"` skips the bundle entirely, probing the raw then the percent-decoded spelling before it queries the link-graph sidecar — so a percent-encoded near-miss is repaired there. If you have only a guessed path, resolve it once with a plain `zim_get` (or `zim_search(mode="title")`) and pass the `path` you get back to those tools.
 
 ## How it works
 
-The `_get_entry_content` flow is four steps. There is no scoring, no confidence value, no "pattern learning" — just direct then search-derived terms then cache the resolved path.
+The `_smart_retrieve_entry` ladder is five steps. There is no scoring, no confidence value, no "pattern learning" — the order is the contract: raw spelling before decoded, exact probes before search.
 
 ```
-1. Cache check
-   ─────────────
-   Look up `path_mapping:{archive}:{requested_path}` in the global cache.
-   If present, try the cached resolved path directly. If the cached lookup
-   fails (cached path now stale), drop the cache entry and continue.
+1. M/<key> routing
+   ────────────────
+   On a new-scheme archive, an `M/<key>` path is routed straight to the
+   metadata API instead of the entry API. Archive metadata is not an
+   entry, so without this the lookup would fail and fall through to a
+   pointless search.
 
-2. Direct access
+2. Cached path mapping
+   ────────────────────
+   Look up the path-mapping key in the global cache. If present, try the
+   cached resolved path. If that lookup now fails (the mapping went
+   stale), drop the entry and continue.
+
+3. Direct access
    ──────────────
    Try `archive.get_entry_by_path(requested_path)`. Follow redirect chains
    up to MAX_REDIRECT_DEPTH (10) — cycles raise OpenZimMcpArchiveError and
-   propagate (we do not search for cycles).
+   propagate (we do not search for cycles). Cache the resolved path on
+   success.
 
-3. Search-derived term retrieval
+4. Alternate-spelling exact probes
+   ────────────────────────────────
+   Cheap exact lookups of the same path spelled differently —
+   percent-decoded, and un-rooted (a leading slash stripped, not the namespace).
+   Still exact `get_entry_by_path` calls, not search. Cache on success.
+
+5. Search-derived term retrieval
    ─────────────────────────────
-   Generate candidate search terms via `_extract_search_terms_from_path`:
+   Only now does it search. Candidate terms come from
+   `_extract_search_terms_from_path`:
      - the path with the leading namespace stripped (`A/Photosynthesis` → `Photosynthesis`)
      - the full path string
      - underscore ↔ space variants
      - URL-decoded variant
    Query libzim's Searcher with each term in order. The first result that
    passes `_is_path_match` wins. (No fuzzy matching, no scoring.)
-
-4. Cache the resolved path
-   ───────────────────────
-   On success, write `cache.set("path_mapping:{archive}:{requested}", resolved)`.
-   The TTL is the global cache TTL — there is no per-entry TTL or
-   confidence-tiered expiration.
+   Cache the resolved path on success.
 ```
+
+The cached mapping stores the resolved path, not the body, and both the string and structured surfaces share it — so a hit on one speeds up the other. The TTL is the global cache TTL; there is no per-entry TTL or confidence-tiered expiration.
 
 The `resolved` path stored in the cache may differ from both the requested path *and* the path that initially matched in step 3, if redirect-following took us further. Subsequent requests for the same `requested_path` skip the redirect chain entirely.
 
@@ -60,52 +72,52 @@ The `resolved` path stored in the cache may differ from both the requested path 
 The smart-retrieval cache shares the global `OpenZimMcpCache` (LRU + TTL). Path-mapping entries use the key prefix `path_mapping:` and store the resolved path string as the value:
 
 ```
-key:   "path_mapping:/srv/zim/wikipedia.zim:A/Photosynthesis"
+key:   "path_mapping:/srv/zim/wikipedia.zim:<mtime_ns>:<size>:<render_epoch>:A/Photosynthesis"
 value: "C/Photosynthesis"
 ```
 
-The archive path is part of the key so identical entry names in different ZIM files don't collide. There is no separate `OPENZIM_MCP_SMART_RETRIEVAL__*` config namespace — tune via the global `OPENZIM_MCP_CACHE__*` settings (see [Configuration](/openzim-mcp/docs/configuration/)).
+The archive path is part of the key so identical entry names in different ZIM files don't collide, and the archive's stat token (`mtime_ns:size:<render_epoch>`) is part of it too — so replacing the `.zim` file in place invalidates every mapping derived from the old one instead of serving paths that no longer exist, and bumping the render epoch on an upgrade invalidates them all. There is no separate `OPENZIM_MCP_SMART_RETRIEVAL__*` config namespace — tune via the global `OPENZIM_MCP_CACHE__*` settings (see [Configuration](/openzim-mcp/docs/configuration/)).
 
 ## What you see in the response
 
-When direct access succeeds, `zim_get(entry_path="C/Photosynthesis")` returns a rendered string:
+When direct access succeeds, `zim_get(entry_path="C/Photosynthesis")` returns an `EntryResponse` dict:
 
-```
-# Photosynthesis
-
-Path: C/Photosynthesis
-Type: text/html
-
-## Content
-...
-```
-
-When smart-retrieval fallback resolves to a different path, the response shows both:
-
-```
-# Photosynthesis
-
-Requested Path: A/Photosynthesis
-Actual Path: C/Photosynthesis
-Type: text/html
-
-## Content
-...
+```json
+{
+  "path": "C/Photosynthesis",
+  "title": "Photosynthesis",
+  "content_type": "text/html",
+  "content": "...",
+  "_meta": {}
+}
 ```
 
-Use this to check whether your guessed paths are accurate or you're relying on the fallback.
+When smart-retrieval resolves to a different path, a `requested_path` key appears alongside `path`:
+
+```json
+{
+  "path": "C/Photosynthesis",
+  "requested_path": "A/Photosynthesis",
+  "title": "Photosynthesis",
+  "content_type": "text/html",
+  "content": "...",
+  "_meta": {}
+}
+```
+
+Test for `requested_path` to tell whether the path you asked for is the path you got: it is present whenever the two differ, including when direct access succeeded and only a redirect moved you, so it flags a stale guess rather than proving the fallback ran. (`zim_query` renders the same payload as a string, with `Requested Path:` and `Actual Path:` lines — that string form is specific to `zim_query`.)
 
 ## Errors that bypass fallback
 
 Some failures are *not* candidates for search-based retrieval — searching would either return the same broken path or a misleading match. These propagate unchanged:
 
-- **Redirect cycles** — `OpenZimMcpArchiveError: Redirect cycle detected`
-- **Redirect chain exceeded `MAX_REDIRECT_DEPTH=10`** — `OpenZimMcpArchiveError: Maximum redirect depth exceeded`
-- **Transient libzim content errors** — these do not poison the cache (failed reads do not write to the path-mapping cache).
+- **Redirect cycles** — `OpenZimMcpArchiveError: Redirect cycle detected at <path>`
+- **Redirect chain exceeded `MAX_REDIRECT_DEPTH=10`** — `OpenZimMcpArchiveError: Redirect chain too deep (>10) <context>`
+- **Transient libzim content errors** — the *response* cache is not written, so a broken body is never served from cache. The path mapping **is** still written: the path resolved correctly, only the body raised, so there is nothing wrong with remembering where it lives.
 
 If you see a redirect-cycle error, the ZIM file's data is broken; smart retrieval cannot fix it.
 
-*Propagate unchanged* describes the retrieval layer, not the wire. For the two redirect failures above, the ladder in [openzim_mcp/zim/content.py](https://github.com/cameronrye/openzim-mcp/blob/main/openzim_mcp/zim/content.py) re-raises the `OpenZimMcpArchiveError` instead of retrying the search fallback or writing a path mapping — but the exception never reaches your client as a raise. The tool wrapper's catch-all (`except Exception` → `tool_error_response` in [openzim_mcp/tools/_common.py](https://github.com/cameronrye/openzim-mcp/blob/main/openzim_mcp/tools/_common.py)) converts it into the standard error envelope — `{"error": true, "operation": "zim_get", "message": ..., "context": ...}`, delivered with `isError: true` — with the original text (`Redirect cycle detected at ...`) preserved under **Technical Details** inside `message`.
+*Propagate unchanged* describes the retrieval layer, not the wire. For the two redirect failures above, the ladder in [openzim_mcp/zim/content.py](https://github.com/cameronrye/openzim-mcp/blob/main/openzim_mcp/zim/content.py) re-raises the `OpenZimMcpArchiveError` instead of retrying the search fallback or writing a path mapping — but the exception never reaches your client as a raise. The tool wrapper's catch-all (`except Exception` → `tool_error_response` in [openzim_mcp/tools/_common.py](https://github.com/cameronrye/openzim-mcp/blob/main/openzim_mcp/tools/_common.py)) converts it into the standard error envelope — `{"error": true, "operation": "zim_get", "message": ..., "context": ...}`, delivered with `isError: true` — with the original text (`Redirect cycle detected at <path>`) preserved under **Technical Details** inside `message`.
 
 ## Tuning
 
@@ -135,21 +147,21 @@ When something resolves "wrong":
 
 1. Get the right path with `zim_search(zim_file_path=..., query="Photosynthesis", mode="title")` — title-indexed lookup, doesn't go through smart retrieval.
 2. Or browse the namespace: `zim_browse(zim_file_path=..., namespace="C", mode="page", limit=20)`.
-3. Restart the server to flush the cache (there's no `cache_clear` tool).
+3. Restart the server to flush the cache (there's no `cache_clear` tool) — **but only if `OPENZIM_MCP_CACHE__PERSISTENCE_ENABLED` is off**. With persistence on, the cache is reloaded from disk on start and a restart flushes nothing; delete the persistence file, or wait out `TTL_SECONDS`. Replacing the `.zim` file itself always invalidates its mappings, because the archive's stat token is part of every key.
 
 ## Troubleshooting
 
 | Symptom | Likely cause | Fix |
 |---------|--------------|-----|
 | "Entry not found" after a successful search | The search term derivation didn't match | Use `zim_search(mode="title")` first, then call `zim_get` with the resolved path |
-| Stale article body returned | Path-mapping cache pointing at old redirect target | Restart the server; consider a shorter `OPENZIM_MCP_CACHE__TTL_SECONDS` |
+| Stale article body returned | Path-mapping cache pointing at old redirect target | Restart the server — or delete the persistence file if `CACHE__PERSISTENCE_ENABLED` is on, since a restart reloads it. Consider a shorter `OPENZIM_MCP_CACHE__TTL_SECONDS` |
 | Repeated direct-access failures even though the path looks right | Namespace mismatch (e.g. modern domain-scheme archive) | Use `zim_metadata` to see the real namespace inventory |
 | Redirect-cycle error | The ZIM data is broken; smart retrieval can't fix it | Fall back to a different ZIM build, or report to the producer |
 | Slow first-call performance, fast subsequent | Cold cache; first call ran the full search-derivation loop | Normal — pre-warm by calling key entries on startup if needed |
 
 ## Related
 
-- [API reference → `zim_get`](/openzim-mcp/docs/api-reference/) — the `Requested Path` / `Actual Path` response shape.
+- [API reference → `zim_get`](/openzim-mcp/docs/api-reference/) — the `EntryResponse` dict, and when `requested_path` joins `path`.
 - [Configuration](/openzim-mcp/docs/configuration/) — the only knobs that affect smart retrieval.
 - [Performance optimization](/openzim-mcp/docs/performance-optimization/) — cache tuning patterns.
 - [Architecture overview](/openzim-mcp/docs/architecture-overview/) — where the smart-retrieval code lives.

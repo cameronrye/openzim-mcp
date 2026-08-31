@@ -73,3 +73,6 @@ yarn.lock
 website/node_modules/
 website/dist/
 website/.astro/
+
+# Internal planning notes; not part of the published docs.
+docs/superpowers/

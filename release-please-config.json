@@ -68,7 +68,7 @@
       "extra-files": [
         {
           "type": "generic",
-          "path": "website/public/llms.txt",
+          "path": "website/src/pages/llms.txt.ts",
           "glob": false
         },
         {
@@ -97,6 +97,11 @@
           "glob": false
         },
         {
+          "type": "generic",
+          "path": "website/public/humans.txt",
+          "glob": false
+        },
+        {
           "type": "json",
           "path": "server.json",
           "jsonpath": "$.version"
@@ -120,7 +125,7 @@
       "include-component-in-tag": false,
       "include-v-in-tag": true,
       "pull-request-title-pattern": "chore: release ${version}",
-      "pull-request-header": "🤖 **Automated Release**\n\nThis PR was created automatically by release-please based on conventional commits since the last release.\n\n**Changes included:**",
+      "pull-request-header": "\ud83e\udd16 **Automated Release**\n\nThis PR was created automatically by release-please based on conventional commits since the last release.\n\n**Changes included:**",
       "separate-pull-requests": false,
       "tag-separator": "-",
       "skip-github-release": false,
