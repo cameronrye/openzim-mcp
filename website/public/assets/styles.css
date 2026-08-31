@@ -705,8 +705,8 @@ main:focus-visible { outline: 2px solid var(--signal); outline-offset: -4px; }
   position: sticky;
   top: 2rem;
   align-self: start;
-  /* Without these, a long page's table of contents (the API reference has
-     53 entries) runs past the bottom of the viewport with no way to reach
+  /* Without these, a long page's table of contents (the FAQ's is the longest
+     at 53 entries) runs past the bottom of the viewport with no way to reach
      the tail — the element is stuck to the top and the page scrolls under it. */
   max-height: calc(100vh - 84px - var(--space-6));
   overflow-y: auto;
@@ -715,6 +715,10 @@ main:focus-visible { outline: 2px solid var(--signal); outline-offset: -4px; }
 
 .docs-toc .toc-h3 {
   padding-left: 1rem;
+}
+
+.docs-toc .toc-h4 {
+  padding-left: 2rem;
 }
 
 .docs-breadcrumbs {
