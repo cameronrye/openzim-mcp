@@ -63,4 +63,4 @@
     Language: English
     Doctype: HTML5
     IDE: Various (VS Code, Vim, etc.)
-    Version: 3.2.3 <!-- x-release-please-version -->
+    Version: 3.2.4 <!-- x-release-please-version -->

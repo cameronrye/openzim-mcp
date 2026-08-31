@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.2.4](https://github.com/cameronrye/openzim-mcp/compare/v3.2.3...v3.2.4) (2026-08-31)
+
+
+### Fixed
+
+* **ci:** check the site links nothing was checking, and gate sidebar_order ([#406](https://github.com/cameronrye/openzim-mcp/issues/406)) ([aa07813](https://github.com/cameronrye/openzim-mcp/commit/aa0781304941bf05224346f5ee10c4499c6d92e8))
+* **ci:** unblock the release and dependency PRs ([#409](https://github.com/cameronrye/openzim-mcp/issues/409)) ([cfd9b70](https://github.com/cameronrye/openzim-mcp/commit/cfd9b70a898e8f433d4de60d656d57cceb0bcd79))
+
+
+### Documentation
+
+* correct 135 claims the code stopped doing, and gate them against source ([#402](https://github.com/cameronrye/openzim-mcp/issues/402)) ([a36b2d2](https://github.com/cameronrye/openzim-mcp/commit/a36b2d2b1cc189c2d1fcbfbeb17d7d4e18c33737))
+* ship the three deferred judgement calls, in their decided form ([#407](https://github.com/cameronrye/openzim-mcp/issues/407)) ([b8e3699](https://github.com/cameronrye/openzim-mcp/commit/b8e3699c7eee1373844d071d92fffa04df8a9ec5))
+* **website:** regroup the sidebar into four groups ([#408](https://github.com/cameronrye/openzim-mcp/issues/408)) ([9b128a4](https://github.com/cameronrye/openzim-mcp/commit/9b128a471d32b740573743776625c0cbedc29cc3))
+
 ## [3.2.3](https://github.com/cameronrye/openzim-mcp/compare/v3.2.2...v3.2.3) (2026-08-28)
 
 
