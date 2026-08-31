@@ -66,6 +66,56 @@ def test_doc_corpus_is_non_empty() -> None:
     assert len(files) >= 20, f"doc corpus collapsed to {len(files)} files: {files}"
 
 
+# The text a reader actually sees, with the regions that only *look* like prose
+# blanked out: fenced code blocks (delimiters included) and `{/* ... */}` MDX
+# comments. Blanked, not deleted — every non-newline character becomes a space
+# — so line numbers and character offsets survive the strip. Both callers
+# report `path:lineno`, and section 6 maps regex spans onto this same string.
+#
+# Sections 6 and 13 both used to match raw file text, and raw text cannot tell
+# a published claim from one that has been commented out or demoted into a code
+# fence. Both shapes were proven, on the real corpus, to buy a page silent
+# credit for a claim it had stopped making:
+#
+#   * replacing security-best-practices' live cost sentence with
+#     `{/* a search costs 2 units and a binary fetch 3 */}`, and moving
+#     worked-examples' `zim_links` cost sentence into a ```text fence, each left
+#     section 6 reporting the page as covered while the page published nothing;
+#   * `> only the current major line is supported` inside a fence at the bottom
+#     of index.mdx satisfied section 13's "opening blockquote" carve-out.
+#
+# One helper rather than a guard per gate, so the two sections cannot drift
+# back into holding different standards for what "published" means.
+#
+# Known limits, deliberately not chased further, and stated as limits because
+# the point of this helper is that a comment must not promise more than it
+# does. Only a fence opened by ``` at column 0 is recognised. There are no ~~~
+# fences in the corpus, but there are four indented ``` ones — three inside
+# CONTRIBUTING.md's numbered list, one in troubleshooting.mdx — and neither
+# shape is blanked. So demoting a live claim into either one is still a way to
+# keep silent credit for a claim the page has stopped publishing: wrapping
+# security-best-practices' cost sentence in a ~~~ fence, or in a three-space-
+# indented ``` fence, leaves the whole suite green. That residue is accepted
+# rather than chased: no claim or support clause sits in either shape today,
+# and the same move done to a *table row* is caught anyway, because a row that
+# stops starting at column 0 also stops satisfying its page's required
+# operation set. HTML `<!-- ... -->` comments are left alone too — the pages
+# that carry a registered cost claim or the support footer are all MDX, which
+# cannot use them, so a `<!-- -->`-commented claim on a .md file would still be
+# read as live text.
+_FENCED_BLOCK_RE = re.compile(r"^```[^\n]*\n.*?(?:^```[^\n]*$|\Z)", re.M | re.S)
+_MDX_COMMENT_RE = re.compile(r"\{/\*.*?\*/\}", re.S)
+
+
+def _blank_out(match: re.Match[str]) -> str:
+    return re.sub(r"[^\n]", " ", match.group(0))
+
+
+def _visible_prose(text: str) -> str:
+    """``text`` with fenced blocks and MDX comments blanked, offsets intact."""
+    return _MDX_COMMENT_RE.sub(_blank_out, _FENCED_BLOCK_RE.sub(_blank_out, text))
+
+
 # --------------------------------------------------------------------------
 # 1. The advertised schema footprint must match the measured one.
 # --------------------------------------------------------------------------
@@ -402,74 +452,531 @@ def test_social_preview_image_states_no_version() -> None:
 # 6. Documented rate-limit costs must match RATE_LIMIT_COSTS.
 # --------------------------------------------------------------------------
 
-# Four pages describe the rate limiter, each for a different audience: the API
+# Five pages publish the cost model, each for a different audience: the API
 # reference maps tool call -> internal operation -> cost, Configuration lists
-# the knobs, Performance gives tuning advice, and Security covers atomicity
-# and per-client buckets. Consolidating them would make each page worse, so
-# they stay — but the *numbers* they share are pinned here instead, which is
-# what actually drifted (the three tool-name-keyed exceptions were documented
-# two different ways at once).
-
-# Page -> the minimum number of operation-keyed rows the gate must still see.
-# The floor is what stops a page from silently contributing nothing:
-# configuration.mdx writes its keys as `"get_binary_entry"` (quotes inside the
-# backticks), which the first version of this gate did not match, so 13 of its
-# 14 rows went unverified while the test happily passed.
+# the literal `per_operation_limits` keys, Performance gives tuning advice,
+# Security covers atomicity and per-client buckets, and Worked examples
+# explains why the three `zim_links` directions are not priced alike.
+# Consolidating them would make each page worse, so they stay — but the
+# *numbers* they share are pinned here instead, which is what actually drifted
+# (the three tool-name-keyed exceptions were documented two different ways at
+# once).
 #
-# performance-optimization.mdx keys its cost table by tool call, and
-# security-best-practices.mdx states costs in prose — neither can be scanned by
-# operation name, so neither is listed rather than being listed and silently
-# contributing zero.
-_RATE_LIMIT_PAGES = {
-    "website/src/content/docs/api-reference.mdx": 10,
-    "website/src/content/docs/configuration.mdx": 10,
+# This gate used to be two, written nine commits apart by people who did not
+# see each other's work. The second one's docstring claimed all five pages
+# were covered; its row pattern required a quoted key (`"get_binary_entry"`),
+# which only Configuration writes, so all 14 rows it parsed came from that one
+# page and its single global `>= 12` floor was cleared by that page alone —
+# the other two pages in its list could have been deleted without failing it,
+# and a wrong cost on either was invisible. Hence one gate, held **per page**.
+#
+# Two shapes carry the numbers:
+#
+#   * an *operation table* (api-reference, configuration) gives one internal
+#     operation per row, so rows are found by scanning for the operation name
+#     in backticks. Configuration quotes its keys (`"get_binary_entry"`)
+#     because they are literal JSON keys for `per_operation_limits` and
+#     api-reference does not, so both styles are read — the first version of
+#     this scan matched only the bare style and left 13 of Configuration's 14
+#     rows unverified while passing happily.
+#   * *named claims* — performance-optimization keys its table by tool call,
+#     and security-best-practices and worked-examples state costs in prose, so
+#     none of the three names an operation and none can be scanned. Each claim
+#     is pinned below by a pattern capturing the published number plus the
+#     operations that number is claiming a cost for, so a rewrite that drops
+#     the claim stops matching and is reported rather than silently
+#     contributing nothing. **Every** occurrence of a claim pattern is checked,
+#     not just the first: this scan used `pattern.search`, and a second
+#     sentence restating a search's cost as 9 immediately after the correct one
+#     — and a duplicated `zim_get(binary=True, ...)` table row priced at 9 —
+#     both passed, because the first (correct) match was the only one read.
+#
+# Both shapes are read out of `_visible_prose`, never out of raw file text: a
+# claim inside a fence or an MDX comment is not published, so it must not count
+# as coverage. See the comment on that helper for the two mutations that proved
+# it.
+#
+# The row scan runs over the *whole doc corpus*, not just the five pages. Rows
+# elsewhere are not coverage — no page outside the five is required to price
+# anything — but a cost table is the likeliest way a number gets restated, and
+# `faq.mdx` growing "| `zim_search` | `search` | 9 |" used to be invisible to
+# everything here. Value-checking every priced row wherever it lives costs one
+# loop; the companion test below is what then insists the page be registered.
+
+# Page -> the internal operations whose cost this gate must still verify from
+# that page's operation table. A **set of operation names**, not a row count:
+# the first version of this rewrite used an integer floor, and an integer can
+# be paid back. Rewriting api-reference's binary row key as unbackticked text
+# (so it stopped being scanned) while adding a backticked `get_metadata` to a
+# row that had contributed nothing kept the count at 11, cleared the floor,
+# and left `get_binary_entry`'s cost on that page unverified. A set cannot be
+# compensated: the operation that stopped being priced is named in the
+# failure.
+#
+# The sets are what is published today with no slack — a row that legitimately
+# goes away should arrive here as a deliberate edit, not as a quiet loss of
+# coverage. api-reference prices twelve operations; its
+# `zim_get(entry_paths=[...])` row states the cost as `N` rather than a number,
+# so `get_zim_entries` is verified on Configuration only. Configuration prices
+# all fourteen, `default` included. The other three carry no *priced row* at
+# all — performance-optimization's table is keyed by tool call, and the other
+# two state their costs in prose — so no rows are required of them, and their
+# coverage is the named claims below, each of which must match at least once.
+# (They do mention operation names in passing: security-best-practices
+# backticks `search`, `get_zim_entries` and `suggestions` in its intent list
+# and performance-optimization backticks `default`. None of those sits in a
+# table row whose last cell is a number, which is what `_priced_operation_rows`
+# reads, so none of them is coverage of anything.) api-reference and Configuration also state the
+# model in a summary sentence above their table; those sentences are registered
+# claims too, because a listed page's prose is now scanned like every other
+# page's and an unregistered cost sentence on one of them fails.
+_RATE_LIMIT_PAGES: dict[str, frozenset[str]] = {
+    "website/src/content/docs/api-reference.mdx": frozenset(
+        {
+            "search",
+            "search_with_filters",
+            "find_entry_by_title",
+            "suggestions",
+            "get_entry",
+            "get_binary_entry",
+            "get_structure",
+            "browse_namespace",
+            "get_metadata",
+            "extract_article_links",
+            "get_inbound_links",
+            "get_related_articles",
+        }
+    ),
+    "website/src/content/docs/configuration.mdx": frozenset(
+        {
+            "search",
+            "search_with_filters",
+            "find_entry_by_title",
+            "suggestions",
+            "get_entry",
+            "get_zim_entries",
+            "get_binary_entry",
+            "get_structure",
+            "browse_namespace",
+            "get_metadata",
+            "extract_article_links",
+            "get_inbound_links",
+            "get_related_articles",
+            "default",
+        }
+    ),
+    "website/src/content/docs/performance-optimization.mdx": frozenset(),
+    "website/src/content/docs/security-best-practices.mdx": frozenset(),
+    "website/src/content/docs/worked-examples.mdx": frozenset(),
+}
+
+# Sentinel for a catch-all claim: performance-optimization's last row prices
+# "All others" at 1, which is a claim about every operation the rest of that
+# page does not name — including any future RATE_LIMIT_COSTS entry, which is
+# the point. Resolved against the code at check time.
+_ALL_OTHER_OPERATIONS = ("<all others>",)
+
+# Page -> (label, pattern capturing the published cost, operations claimed).
+#
+# This is also the register that `test_every_published_rate_limit_cost_is_
+# registered` checks a listed page's prose against: a cost-shaped sentence on
+# one of the five that is not inside a claim match here, and not on a row the
+# scan above value-checked, fails as unregistered. Configuration's summary
+# sentence is here for exactly that reason — it was live prose that no pattern
+# read, so "In practice a search costs 9 units and a binary fetch costs 9
+# units." passed the whole suite on the page that defines the keys.
+_RATE_LIMIT_CLAIMS = {
+    "website/src/content/docs/api-reference.mdx": (
+        (
+            "intro sentence (searches)",
+            re.compile(r"searches (\d+), binary fetches"),
+            ("search",),
+        ),
+        (
+            "intro sentence (binary fetches)",
+            re.compile(r"binary fetches (\d+)\b"),
+            ("get_binary_entry",),
+        ),
+    ),
+    "website/src/content/docs/configuration.mdx": (
+        (
+            "work-units summary (searches)",
+            re.compile(r"searches cost (\d+)\b"),
+            ("search",),
+        ),
+        (
+            "work-units summary (binary fetch)",
+            re.compile(r"a binary fetch costs (\d+)\b"),
+            ("get_binary_entry",),
+        ),
+    ),
+    "website/src/content/docs/performance-optimization.mdx": (
+        (
+            "cost table (binary fetch)",
+            re.compile(r"^\| *`zim_get\(binary=True.*?\| *(\d+) *\| *$", re.M),
+            ("get_binary_entry",),
+        ),
+        (
+            "cost table (searches and link walks)",
+            re.compile(
+                r"^\| *`zim_search` \(fulltext/title/filtered\).*?\| *(\d+) *\| *$",
+                re.M,
+            ),
+            (
+                "search",
+                "find_entry_by_title",
+                "search_with_filters",
+                "extract_article_links",
+                "get_related_articles",
+            ),
+        ),
+        (
+            "cost table (all others)",
+            re.compile(r"^\| *All others.*?\| *(\d+) *\| *$", re.M),
+            _ALL_OTHER_OPERATIONS,
+        ),
+    ),
+    "website/src/content/docs/security-best-practices.mdx": (
+        (
+            "rate-limiting prose (search)",
+            re.compile(r"a search costs (\d+) units?\b"),
+            ("search",),
+        ),
+        (
+            "rate-limiting prose (binary fetch)",
+            re.compile(r"a binary fetch (\d+)\b"),
+            ("get_binary_entry",),
+        ),
+    ),
+    "website/src/content/docs/worked-examples.mdx": (
+        (
+            "zim_links prose (outbound and related)",
+            re.compile(r"carry a rate-limit cost of (\d+)\b"),
+            ("extract_article_links", "get_related_articles"),
+        ),
+        (
+            "zim_links prose (inbound)",
+            re.compile(r"\(inbound costs (\d+)\)"),
+            ("get_inbound_links",),
+        ),
+    ),
 }
 
 
-def test_documented_rate_limit_costs_match_code() -> None:
-    """Every `| <operation> | ... | <cost> |` row must match the real cost."""
+def _priced_operation_rows(text: str) -> list[tuple[int, str, int, list[str]]]:
+    """Markdown rows that price a named ``RATE_LIMIT_COSTS`` operation.
+
+    Returns ``(lineno, line, claimed_cost, operations)`` for every row that
+    *starts at column 0*, whose last cell is a bare number, and which names at
+    least one internal operation in backticks.
+
+    The column-0 rule is a known limit, and it cuts both ways. GFM still
+    renders a row indented up to three spaces, so an indented row publishes a
+    number this parser never reads — but the same rule is why indenting a row
+    on one of the five listed pages fails loudly instead of quietly: the row
+    stops being scanned, so its operation drops out of the page's required set.
+
+    Both `get_entry` and `"get_entry"` are read: Configuration quotes its keys
+    because they are literal JSON keys for `per_operation_limits` and
+    api-reference does not, and the first version of this scan matched only the
+    bare style, leaving 13 of Configuration's 14 rows unverified while passing
+    happily.
+
+    One parser, two callers — the value check below and the registration check
+    after it — so the two cannot disagree about which rows are being read.
+    Pass it ``_visible_prose(...)``: a row inside a fence is illustration, and
+    a row inside an MDX comment is deleted text.
+    """
+    from openzim_mcp.defaults import RATE_LIMIT_COSTS
+
+    rows: list[tuple[int, str, int, list[str]]] = []
+    for lineno, line in enumerate(text.splitlines(), 1):
+        if not line.startswith("|"):
+            continue
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if len(cells) < 2 or not cells[-1].isdigit():
+            continue
+        ops = [
+            op for op in RATE_LIMIT_COSTS if f"`{op}`" in line or f'`"{op}"`' in line
+        ]
+        if ops:
+            rows.append((lineno, line, int(cells[-1]), ops))
+    return rows
+
+
+def test_published_rate_limit_costs_match_the_table_in_code() -> None:
+    """Every cost this gate can read must equal the real cost.
+
+    The cost model is written out on the five pages in ``_RATE_LIMIT_PAGES``
+    and has contradicted itself before. Rather than delete the copies — a
+    reference page has a fair claim to carrying it — they are checked against
+    ``RATE_LIMIT_COSTS``: operation tables row by row, and the tool-call table
+    and the prose sentences by the named claims above. Every occurrence of
+    every claim pattern is compared, not only the first, and the row scan runs
+    over the whole doc corpus rather than the five pages, so a cost table that
+    turns up on a sixth page is value-checked the moment it lands.
+
+    Only ``_visible_prose`` is matched, so a row or sentence that has been
+    commented out or moved into a code fence stops matching and is reported as
+    lost coverage instead of standing in for a claim the page no longer makes.
+
+    Coverage is then held per page in two ways, so a copy that stops matching
+    fails loudly instead of verifying nothing: each page must still price the
+    exact set of operations recorded for it in ``_RATE_LIMIT_PAGES``, and each
+    named claim must match at least once.
+
+    What this test does **not** do: it reads two shapes and no others — a table
+    row whose last cell is a number and which backticks an operation name, and
+    the exact claim patterns registered above. A cost written any third way is
+    not value-checked here; catching *that* is
+    ``test_every_published_rate_limit_cost_is_registered``'s job, and it can
+    only demand registration for the sentence shape its own regex knows.
+    """
     from openzim_mcp.defaults import RATE_LIMIT_COSTS
 
     wrong: list[str] = []
-    checked: dict[str, int] = {}
+    unmatched: list[str] = []
+    # Per page, the operations whose cost an operation-table row actually
+    # priced. A set rather than a tally: see the comment on _RATE_LIMIT_PAGES.
+    priced: dict[str, set[str]] = {rel: set() for rel in _RATE_LIMIT_PAGES}
+
+    for rel in _RATE_LIMIT_PAGES:
+        if not (REPO / rel).is_file():
+            wrong.append(f"{rel}: missing")
+
+    # Value-check every priced row in the corpus. Rows on the five pages also
+    # record coverage; rows elsewhere are not coverage of anything, but a wrong
+    # number in them is still a wrong number a reader will believe.
+    for path in _doc_files():
+        rel = str(path.relative_to(REPO))
+        for lineno, _line, claimed, row_ops in _priced_operation_rows(
+            _visible_prose(path.read_text(encoding="utf-8"))
+        ):
+            if rel in priced:
+                priced[rel].update(row_ops)
+            for op in row_ops:
+                if claimed != RATE_LIMIT_COSTS[op]:
+                    wrong.append(
+                        f"{rel}:{lineno}: says {op} costs {claimed}, "
+                        f"code says {RATE_LIMIT_COSTS[op]}"
+                    )
+
     for rel in _RATE_LIMIT_PAGES:
         path = REPO / rel
-        checked[rel] = 0
         if not path.is_file():
-            wrong.append(f"{rel}: missing")
             continue
-        for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-            if not line.startswith("|"):
+        text = _visible_prose(path.read_text(encoding="utf-8"))
+
+        claims = _RATE_LIMIT_CLAIMS.get(rel, ())
+        named = {
+            op for _, _, ops in claims if ops is not _ALL_OTHER_OPERATIONS for op in ops
+        }
+        for label, pattern, ops in claims:
+            matches = list(pattern.finditer(text))
+            if not matches:
+                unmatched.append(
+                    f"{rel}: the {label} claim no longer matches — it was "
+                    "reworded or removed, so its number goes unchecked"
+                )
                 continue
-            cells = [c.strip() for c in line.strip().strip("|").split("|")]
-            if len(cells) < 2:
-                continue
-            tail = cells[-1]
-            if not tail.isdigit():
-                continue
-            claimed = int(tail)
-            for op, real in RATE_LIMIT_COSTS.items():
-                # Both `get_entry` and `"get_entry"` appear in the corpus.
-                if f"`{op}`" not in line and f'`"{op}"`' not in line:
-                    continue
-                checked[rel] += 1
-                if claimed != real:
-                    wrong.append(
-                        f"{rel}:{lineno}: says {op} costs {claimed}, code says {real}"
-                    )
+            if ops is _ALL_OTHER_OPERATIONS:
+                claimed_ops = tuple(op for op in RATE_LIMIT_COSTS if op not in named)
+            else:
+                claimed_ops = tuple(ops)
+            # Every occurrence. A duplicated row or a restating sentence is the
+            # copy most likely to be wrong, and it was the copy never read.
+            for match in matches:
+                claimed = int(match.group(1))
+                lineno = text.count("\n", 0, match.start()) + 1
+                for op in claimed_ops:
+                    if claimed != RATE_LIMIT_COSTS[op]:
+                        wrong.append(
+                            f"{rel}:{lineno}: the {label} claim says {op} costs "
+                            f"{claimed}, code says {RATE_LIMIT_COSTS[op]}"
+                        )
+
     assert (
         not wrong
     ), "documented rate-limit costs disagree with code:\n  " + "\n  ".join(wrong)
 
-    thin = [
-        f"{rel}: only {n} rows checked, expected >= {_RATE_LIMIT_PAGES[rel]}"
-        for rel, n in checked.items()
-        if n < _RATE_LIMIT_PAGES[rel]
+    thin = unmatched + [
+        f"{rel}: the operation table no longer prices "
+        f"{sorted(required - priced[rel])} — the row was reformatted, its key "
+        "lost its backticks, or it was deleted"
+        for rel, required in _RATE_LIMIT_PAGES.items()
+        if required - priced[rel]
     ]
     assert not thin, (
-        "the rate-limit gate stopped seeing rows it used to check — the table "
-        "moved, was reformatted, or the key style changed, so the assertions "
-        "above are now vacuous:\n  " + "\n  ".join(thin)
+        "the rate-limit gate stopped seeing claims it used to check — a table "
+        "moved, was reformatted, a key style changed or a sentence was "
+        "rewritten, so its page is no longer covered:\n  " + "\n  ".join(thin)
+    )
+
+    # Guard the guard. Every charged operation must be pinned to a page here,
+    # or a new `RATE_LIMIT_COSTS` entry could be documented wrong on every page
+    # and this gate would require nothing of any of them.
+    covered = set().union(*_RATE_LIMIT_PAGES.values())
+    assert set(RATE_LIMIT_COSTS) <= covered, (
+        f"these operations are charged but no page in _RATE_LIMIT_PAGES is "
+        f"required to price them: {sorted(set(RATE_LIMIT_COSTS) - covered)}. "
+        "Document the cost and add the operation to the page's set."
+    )
+
+
+# `_RATE_LIMIT_PAGES` is an allowlist, and the gate above reads only what it
+# has been told to read. Two ways a published number escapes it:
+#
+#   * a cost on a sixth page. Prepending "A binary fetch costs 9 work units and
+#     a search costs 9." to llm-integration-patterns passed. Nothing outside
+#     the five states a per-operation number today, so this was latent — but a
+#     new page quietly restating the cost model is exactly how this corpus
+#     rotted the first time.
+#   * a cost on one of the five that no claim pattern happens to match. This
+#     scan used to `continue` past every listed page, so the five pages most
+#     likely to restate a cost were the five where an unregistered restatement
+#     was checked by nothing at all. All five of these passed the full suite:
+#     configuration "In practice a search costs 9 units and a binary fetch
+#     costs 9 units.", security-best-practices "- Note: a binary fetch is 9
+#     work units, and searches cost 9 units each.", api-reference "Remember
+#     that a binary fetch costs 9 units.", performance-optimization "A search
+#     costs 9 units and a binary fetch costs 9 units.", worked-examples "A
+#     binary fetch costs 9 units, so batch reads instead."
+#
+# So the scan runs on every doc file, listed pages included, and a match is
+# legal only where the gate above actually read it: inside a registered claim's
+# match span, or on a row that `_priced_operation_rows` value-checked. Anything
+# else fails — "register the page" off the five, "register this claim or fix
+# the number" on them.
+#
+# The shape is a cost verb, a bare number, and either a unit noun or a clause
+# boundary — "costs 2 units", "a rate-limit cost of 2", "inbound costs 1)". A
+# number that continues into some other noun is not a per-operation cost:
+# llm-integration-patterns' "a 50-entry batch costs 40 slots rather than 50" is
+# a statement about the burst clamp, not a price, and it must stay legal.
+_PUBLISHED_COST_RE = re.compile(r"""(?ix)
+    \bcosts?\s+(?:of\s+)?(\d+)      # "costs 2", "cost of 2"
+    (?:
+        \s+(?:work\s+)?units?\b     # ... "units" / "work units"
+      | (?=\s*[,.;:)—])           # ... or the clause ends here
+    )
+    """)
+# A hedge is not a published cost: "most operations cost 1 unit" tells a reader
+# the shape of the model without pinning any *named* operation, so it cannot go
+# stale the way "a search costs 2 units" can, and it must not red this gate.
+# api-reference and Configuration both introduce their cost table with one
+# ("most operations cost 1"), which is why the exemption exists at all.
+#
+# The exemption is grammatical, not proximity. It was "a hedge word within 24
+# characters before the number", which is a bypass rather than a hedge: "Most
+# importantly, a search costs 9 units." and "Typically a search costs 9 units,
+# so budget accordingly." both pin a named operation at a wrong number, and
+# both passed the full suite. So the hedge must *determine the subject the cost
+# verb attaches to* — a hedging quantifier, immediately followed by the generic
+# plural it quantifies, immediately followed by the cost verb. "Most
+# importantly, a search " does not end in a quantified generic plural; neither
+# does "Typically a search ".
+#
+# Known limit, deliberately not chased: only this one word order is exempt. A
+# hedge worn as an adverb ("operations typically cost 1 unit") or a subject
+# outside the noun list now fails as unregistered. That is the safe direction —
+# reword it or register it — but it *is* a false positive, not a hole.
+_COST_HEDGE_RE = re.compile(r"""(?ix)
+    \b(?:most|many|some|all|all\s+other|the\s+other|every\s+other)\s+
+    (?:other\s+)?
+    (?:operations?|calls?|tools?|requests?|others)
+    \s+$                            # ... and then the cost verb itself
+    """)
+
+
+def test_every_published_rate_limit_cost_is_registered() -> None:
+    """A cost-shaped sentence nothing above reads is itself the failure.
+
+    The gate above verifies the claims and rows it has been told about; this
+    one holds the other direction over the whole corpus, the five listed pages
+    included. Every cost-shaped sentence, and every priced operation row, must
+    be one the gate above actually reads: inside a registered claim's span, or
+    on a value-checked row. Off the five that means "register the page"; on
+    them it means "register this claim or fix the number".
+
+    Both directions were bypasses, not theory — see the comment above for the
+    six mutations that used to pass, one of them on every listed page.
+
+    Scope, stated exactly, because two earlier versions of this docstring
+    claimed more than the code did. This is a regex over prose and it knows one
+    sentence shape: a cost verb, a bare number, and a unit noun or a clause
+    boundary. A cost expressed any other way — "searches are billed double", a
+    number carried in an image or a diagram, a table whose cost column is not
+    last, or a table row indented off column 0 (see ``_priced_operation_rows``)
+    — is invisible to it, and no regex over English will ever see all of them.
+    What the two tests together promise is narrower than "every published cost
+    is checked": every cost *in that shape*, in visible prose, is either
+    value-checked against ``RATE_LIMIT_COSTS`` or reported here. Three known
+    gaps in that promise, left open on purpose: the hedged summary sentences
+    ("most operations cost 1") are exempt by design and so are checked by
+    nothing — the number in them is 1, the ``default`` cost; a sentence sharing
+    a line with a value-checked table row is credited to that row rather than
+    registered on its own; and the hedge exemption is granted per line, so a
+    cost claim hard-wrapped across two lines is judged without its opening.
+    """
+    unlisted: list[str] = []
+    unregistered: list[str] = []
+    for path in _doc_files():
+        rel = str(path.relative_to(REPO))
+        listed = rel in _RATE_LIMIT_PAGES
+        text = _visible_prose(path.read_text(encoding="utf-8"))
+
+        # The spans the gate above actually value-checked on this page.
+        checked_spans = [
+            match.span()
+            for _label, pattern, _ops in _RATE_LIMIT_CLAIMS.get(rel, ())
+            for match in pattern.finditer(text)
+        ]
+        checked_rows = set()
+        for lineno, line, _claimed, _ops in _priced_operation_rows(text):
+            if listed:
+                checked_rows.add(lineno)
+            else:
+                unlisted.append(f"{rel}:{lineno}: {line.strip()[:72]!r}")
+
+        for match in _PUBLISHED_COST_RE.finditer(text):
+            bol = text.rfind("\n", 0, match.start()) + 1
+            # The hedge must sit on the same line, immediately before the
+            # cost verb; a claim wrapped across two lines is not exempted.
+            # Much of this corpus *does* hard-wrap — api-reference.mdx,
+            # search-reranking.mdx, zim-concepts.mdx, CONTRIBUTING.md and
+            # docs/*.md all do — so this is a live gap, not a theoretical one.
+            # It is left open because the direction is the safe one: a hedge
+            # split across a line break reds the gate as unregistered, which
+            # is a false positive an author fixes by rewrapping or
+            # registering, never a wrong number slipping through.
+            if _COST_HEDGE_RE.search(text[bol : match.start()]):
+                continue
+            lineno = text.count("\n", 0, match.start()) + 1
+            found = f"{rel}:{lineno}: {match.group(0).strip()!r}"
+            if not listed:
+                unlisted.append(found)
+            elif lineno in checked_rows or any(
+                start <= match.start() and match.end() <= end
+                for start, end in checked_spans
+            ):
+                continue
+            else:
+                unregistered.append(found)
+
+    assert not unlisted, (
+        "this page publishes a rate-limit cost and is not in "
+        "_RATE_LIMIT_PAGES — add it there with the operations it must verify "
+        "(and a claim pattern in _RATE_LIMIT_CLAIMS if the number is in "
+        "prose), or drop the number and link to Configuration instead. Until "
+        "then nothing checks it against `RATE_LIMIT_COSTS`:\n  " + "\n  ".join(unlisted)
+    )
+    assert not unregistered, (
+        "this page is in _RATE_LIMIT_PAGES, but this cost is outside every "
+        "claim pattern and every value-checked table row, so no test compares "
+        "it to `RATE_LIMIT_COSTS` — being on a listed page buys a number "
+        "nothing. Add a pattern for it to _RATE_LIMIT_CLAIMS with the "
+        "operations it prices, or delete the restatement:\n  "
+        + "\n  ".join(unregistered)
     )
 
 
@@ -1337,56 +1844,15 @@ def test_cursor_precedence_is_documented_the_way_it_behaves() -> None:
 
 
 # --------------------------------------------------------------------------
-# 10. The published rate-limit costs must be the costs that are charged.
+# 10. Every charged operation must be tunable from the docs.
 # --------------------------------------------------------------------------
 
-# | `zim_get(binary=True)` | `"get_binary_entry"` | 3 |
-_COST_ROW_RE = re.compile(
-    r'^\|[^|]*\|\s*`"([a-z_]+)"`[^|]*\|\s*(\d+)\s*\|', re.MULTILINE
-)
-
-
-def test_published_rate_limit_costs_match_the_table_in_code() -> None:
-    """Every documented cost must equal `RATE_LIMIT_COSTS`.
-
-    The cost model is written out on five pages and has contradicted itself
-    before. Rather than delete the copies — a reference page has a fair claim
-    to carrying it — every copy is checked against `defaults.py`, so a stale
-    one fails instead of quietly disagreeing with its neighbours.
-    """
-    from openzim_mcp.defaults import RATE_LIMIT_COSTS
-
-    pages = [
-        REPO / "website/src/content/docs/configuration.mdx",
-        REPO / "website/src/content/docs/api-reference.mdx",
-        REPO / "website/src/content/docs/performance-optimization.mdx",
-    ]
-    wrong: list[str] = []
-    checked = 0
-    for path in pages:
-        if not path.is_file():
-            continue
-        for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-            for op, cost in _COST_ROW_RE.findall(line):
-                if op not in RATE_LIMIT_COSTS:
-                    # The three wire-keyed tools have no entry on purpose and
-                    # charge the `default` cost.
-                    expected = RATE_LIMIT_COSTS["default"]
-                else:
-                    expected = RATE_LIMIT_COSTS[op]
-                checked += 1
-                if int(cost) != expected:
-                    wrong.append(
-                        f"{path.relative_to(REPO)}:{lineno}: {op!r} documented "
-                        f"as {cost}, charged {expected}"
-                    )
-    assert checked >= 12, (
-        f"only {checked} cost rows parsed across the doc pages — the table "
-        "shape changed and this gate has gone nearly vacuous"
-    )
-    assert (
-        not wrong
-    ), "documented rate-limit costs that are not charged:\n  " + "\n  ".join(wrong)
+# Section 6 checks the numbers the docs publish against the code. This is the
+# other direction: an operation that gains a cost in `defaults.py` but never
+# reaches the Configuration table is a limit an operator has no key to write
+# an override for. A second, near-duplicate value-checking gate used to sit
+# here as well; it claimed to cover five pages while parsing rows from one, so
+# it is folded into section 6 rather than kept alongside it.
 
 
 def test_every_charged_operation_is_documented_somewhere() -> None:
@@ -1592,3 +2058,145 @@ def test_theme_toggle_exposes_its_pressed_state() -> None:
     assert (
         "sync();" in init[listener_at:]
     ), "initTheme must also sync aria-pressed after a click"
+
+
+# --------------------------------------------------------------------------
+# 13. The support-policy footer must be present, not merely correct.
+# --------------------------------------------------------------------------
+
+_SUPPORT_CLAUSE = "only the current major line is supported"
+_SECURITY_URL = "https://github.com/cameronrye/openzim-mcp/blob/main/SECURITY.md"
+# The landing page states the policy in its opening blockquote, immediately
+# after the v1.x note it qualifies, instead of as a closing footer: it is the
+# one page a reader arrives at without having read anything else, so the claim
+# belongs above the fold there. Every other page is reached mid-journey and
+# ends with the footer. The clause is still required on it, just not last.
+_LANDING_PAGE = "index.mdx"
+
+
+def _opening_blockquote(text: str) -> str:
+    """The page's opening blockquote: the first `>` run before the first `##`.
+
+    Pass ``_visible_prose(...)``, so a `> ` line inside a fenced block is
+    already gone before this looks at anything.
+
+    "Above the fold" was implemented as "some line in the file starts with
+    `>`", over raw text, which is neither above nor a fold: `index.mdx` passed
+    with the hero clause reworded and
+    ```text\\n> only the current major line is supported\\n``` appended at the
+    bottom, and would equally have passed on a "> Footnote: ..." under the last
+    heading. The run ends at the first line that is not a blockquote line, so a
+    second, later blockquote is not the opening one.
+    """
+    run: list[str] = []
+    for line in text.splitlines():
+        stripped = line.lstrip()
+        if stripped.startswith("##"):
+            break
+        if stripped.startswith(">"):
+            run.append(stripped)
+        elif run:
+            break
+    return "\n".join(run)
+
+
+def test_every_doc_page_carries_the_support_policy_footer() -> None:
+    """Every docs page states the policy; all but the landing page end with it.
+
+    Fifteen of nineteen pages ended with the italic support footer and four did
+    not — `cli-reference`, `search-reranking`, `upgrading` and `zim-concepts`,
+    which is exactly the set of pages added in one branch. A 15/15 convention
+    became a 15/19 inconsistency because nothing checked for presence:
+    ``test_no_doc_pins_the_support_policy_to_a_hardcoded_series`` in
+    ``tests/test_docs_consistency.py`` only rejects a policy statement that
+    names a series, so a page stating no policy at all sails through it. The
+    omission mattered most on `upgrading`, the page SECURITY.md sends readers
+    to for deprecations, which said nothing about what is still supported.
+
+    ``index.mdx`` is the one exception to *ends with*, and it is checked
+    against what the exception actually promises: the clause in the page's
+    *opening* blockquote — the first `>` run before the first `##` — not on any
+    line anywhere that happens to start with `>`. See ``_opening_blockquote``
+    for the two placements that used to satisfy it.
+
+    Every check here reads ``_visible_prose``, so a clause parked in a code
+    fence or an MDX comment counts as absent, which is what it is to a reader.
+
+    The clause is asserted verbatim rather than by regex on purpose: it is the
+    string every one of these footers is grepped by, so a page that reworded it
+    would be invisible to the next sweep even though it read correctly.
+
+    What this test does **not** cover: only ``website/src/content/docs/*.mdx``
+    is in scope — the README, `docs/*.md` and the policy files carry no footer
+    and are not asked to. It checks that the footer is present, italic, last,
+    and links SECURITY.md; it does not check that SECURITY.md agrees with it
+    (``tests/test_docs_consistency.py`` holds the no-hardcoded-series rule),
+    and "above the fold" on the landing page means "in the opening blockquote",
+    which a long enough hero could still push out of a real viewport.
+    """
+    pages = sorted((_WEBSITE / "src/content/docs").glob("*.mdx"))
+    # Guard the guard: a bad glob would make every check below vacuous. The
+    # floor is the corpus as it stands — it was left at the pre-fix 15 against
+    # a 19-page corpus, so the four pages this gate was written for could all
+    # have vanished underneath it.
+    #
+    # This floor is compensable — delete a page, add a page — and unlike the
+    # integer row-count floor condemned in section 6 that is harmless here: the
+    # count is not standing in for the check. Every page that survives is still
+    # checked individually, and a page that is deleted cannot ship a missing
+    # footer. The floor guards one failure mode only, a glob that matches
+    # nothing, and a compensated count still can't make it match nothing.
+    assert len(pages) >= 19, f"docs corpus collapsed to {len(pages)} pages"
+
+    missing_clause = []
+    missing_footer = []
+    misplaced_landing = []
+    for path in pages:
+        text = _visible_prose(path.read_text(encoding="utf-8"))
+        if _SUPPORT_CLAUSE not in text:
+            missing_clause.append(path.name)
+            continue
+        if path.name == _LANDING_PAGE:
+            # Above the fold means the *opening* blockquote — anywhere else on
+            # the page is not the carve-out the comment above _LANDING_PAGE
+            # describes, and a fenced `> ` line is not a blockquote at all.
+            if _SUPPORT_CLAUSE not in _opening_blockquote(text):
+                misplaced_landing.append(path.name)
+            continue
+        last = next(
+            line.strip() for line in reversed(text.splitlines()) if line.strip()
+        )
+        # An *italic* one-line paragraph, carrying both the policy clause and
+        # the link to the policy itself. A page that mentions the clause
+        # somewhere in its body but does not close with it still fails: the
+        # footer's job is to be in the same place on every page. `**bold**`
+        # both starts and ends with `*`, so the emphasis markers are counted —
+        # re-marking a footer as bold used to satisfy an assertion whose
+        # message says italic.
+        italic = (
+            last.startswith("*")
+            and not last.startswith("**")
+            and last.endswith("*")
+            and not last.endswith("**")
+        )
+        if not (italic and _SUPPORT_CLAUSE in last and _SECURITY_URL in last):
+            missing_footer.append(f"{path.name}: ends with {last[:60]!r}")
+
+    assert not missing_clause, (
+        "docs pages that state no support policy at all — add the italic "
+        f"footer carrying {_SUPPORT_CLAUSE!r}: {missing_clause}"
+    )
+    assert not missing_footer, (
+        "docs pages whose last line is not the italic support footer (it must "
+        f"be a single `*...*` paragraph containing {_SUPPORT_CLAUSE!r} and "
+        "linking SECURITY.md):\n  " + "\n  ".join(missing_footer)
+    )
+    assert not misplaced_landing, (
+        f"{misplaced_landing}: the landing page is exempt from the closing "
+        f"footer because it states {_SUPPORT_CLAUSE!r} in its opening "
+        "blockquote instead, above the fold. The clause is no longer in that "
+        "opening blockquote — the first `>` run before the first `##`, fenced "
+        "blocks not counting — so the exemption is buying nothing. Put it back "
+        "in the hero blockquote or give the page the footer every other page "
+        "has."
+    )
