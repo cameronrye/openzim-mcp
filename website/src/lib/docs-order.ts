@@ -3,23 +3,26 @@ import type { CollectionEntry } from 'astro:content';
 /**
  * The sidebar's group order, and the single sort every navigation surface uses.
  *
- * This lives in its own module because two components need the same answer and
- * had drifted apart: `Sidebar.astro` bucketed pages by group and rendered the
- * buckets in a fixed order, while `PrevNext.astro` sorted the whole collection
- * by `sidebar_order` alone. `sidebar_order` restarts at 1 in every group, so
- * the footer chain interleaved groups — "Quick start" was followed by "API
- * reference" in the sidebar but by whichever other page also happened to carry
- * `sidebar_order: 1`.
+ * `GROUP_ORDER` must list exactly the values of the `group` enum in
+ * `src/content.config.ts`, and the two failure modes differ by surface.
+ * `Sidebar.astro` and `llms.txt.ts` iterate this list and filter the
+ * collection to it, so a page whose group the schema accepts but this list
+ * omits is dropped from them entirely. `PrevNext.astro` and `llms-full.txt.ts`
+ * order the whole collection through `sortDocsForNav`, where `docsGroupIndex`
+ * returns `GROUP_ORDER.length` for an unknown group, so the same page merely
+ * sorts to the end. Vanishing from two surfaces while trailing on two others
+ * is not something a build error will tell you about, which is why the set
+ * equality is checked by `test_sidebar_group_order_covers_the_schema_enum` in
+ * `tests/test_docs_freshness.py`. The order of the list is an editorial choice
+ * no test makes for you.
  *
- * Keep `GROUP_ORDER` in step with the `group` enum in `src/content.config.ts`:
- * a value in the schema but missing here is silently dropped from the sidebar,
- * and `docsOrderIndex` sorts it to the end.
+ * All four surfaces read from this module, so a change here moves all four.
  */
 export const GROUP_ORDER = [
   'Get started',
+  'Concepts',
   'Reference',
-  'Guides',
-  'Operations',
+  'Operate',
 ] as const;
 
 export type DocGroup = (typeof GROUP_ORDER)[number];

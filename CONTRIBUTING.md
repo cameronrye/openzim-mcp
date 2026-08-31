@@ -324,10 +324,11 @@ detaches, so stop it with `cd website && npx astro dev stop` rather than
 Ctrl-C alone.
 
 Each page under `website/src/content/docs/` needs four frontmatter fields:
-`title`, `summary`, `group` (one of `Get started`, `Reference`, `Guides`,
-`Operations` — the enum is pinned in `src/content.config.ts`, and a value
-outside it fails the build) and `sidebar_order` (numbered **per group**, not
-globally). Internal links use the full base path, e.g.
+`title`, `summary`, `group` (the allowed values are the `z.enum` in
+`src/content.config.ts` — that enum is the source of truth, and a value outside
+it fails the build) and `sidebar_order` (numbered **per group**, not globally;
+`tests/test_docs_freshness.py` requires each group's numbers to be exactly
+1..n). Internal links use the full base path, e.g.
 `/openzim-mcp/docs/api-reference/`, with a trailing slash.
 
 Some doc facts are gated by tests rather than review — see
