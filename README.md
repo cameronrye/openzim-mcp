@@ -145,7 +145,7 @@ Full documentation lives at **<https://cameronrye.github.io/openzim-mcp/docs/>**
 
 ## Project status
 
-**v3.2.4** is the current release (2026-08-31). <!-- x-release-please-version-date -->
+**v3.2.5** is the current release (2026-09-02). <!-- x-release-please-version-date -->
 v2.0.0 GA shipped 2026-05-27. Per [SECURITY.md](SECURITY.md), the v1.x maintenance window closed when v2.5.0 shipped (2026-06-18); all active development is on the current major line. **v3.0.0 is a breaking release for HTTP subscription clients**: `resources/subscribe`/`unsubscribe` are no longer served — live updates ride `subscriptions/listen` on the 2026-07-28 protocol revision — and link-graph sidecars built by 2.x must be rebuilt. Tools, resources, and prompts are unchanged, and legacy-handshake clients keep working. Details in [CHANGELOG.md](CHANGELOG.md), and step-by-step instructions in the [upgrade guide](https://cameronrye.github.io/openzim-mcp/docs/upgrading/).
 
 ## Contributing
