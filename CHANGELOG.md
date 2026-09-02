@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.2.5](https://github.com/cameronrye/openzim-mcp/compare/v3.2.4...v3.2.5) (2026-09-02)
+
+
+### Dependencies
+
+* **website:** take @astrojs/mdx 8.0.0 ([#413](https://github.com/cameronrye/openzim-mcp/issues/413)) ([6209901](https://github.com/cameronrye/openzim-mcp/commit/620990181879dfe83395a38b120e202f759d3746))
+
 ## [3.2.4](https://github.com/cameronrye/openzim-mcp/compare/v3.2.3...v3.2.4) (2026-08-31)
 
 
