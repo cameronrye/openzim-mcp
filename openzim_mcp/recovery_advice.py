@@ -70,7 +70,7 @@ def verify_archive(tool_mode: str) -> str:
     return (
         "Try using zim_health() to verify the archive is loaded and readable."
         if tool_mode == ADVANCED
-        else "Ask for `list available ZIM files` to check the archive loaded."
+        else "Ask for `list available ZIM files` to see which archives loaded."
     )
 
 
