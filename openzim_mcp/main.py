@@ -221,7 +221,7 @@ def main() -> None:
         # Through the logger, never ``print``: stdout is the JSON-RPC stream
         # under the default stdio transport, and prose written there corrupts
         # the frame for every stdio client.
-        if not onboarding.count_zim_files(config.allowed_directories):
+        if not onboarding.has_zim_files(config.allowed_directories):
             logger.warning(
                 "%s", onboarding.no_archives_log_message(config.allowed_directories)
             )

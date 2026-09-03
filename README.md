@@ -32,7 +32,7 @@
 
 > ✨ **Highlights.** A lean **8-tool advanced surface** (`zim_query`, `zim_search`, `zim_get`, `zim_get_section`, `zim_browse`, `zim_metadata`, `zim_links`, `zim_health`) with a schema small enough for small-model dispatch — or one-tool **Simple mode** for natural-language queries. **Archive-type presets** auto-tune retrieval per source (Wikipedia, Stack Exchange, …), **inbound link discovery** answers "what links here," and **native libzim introspection** validates and inspects any archive. Available on [Smithery](https://smithery.ai/servers/rye/openzim-mcp) and the [official MCP Registry](https://registry.modelcontextprotocol.io). [Release notes →](CHANGELOG.md) [Docs →](https://cameronrye.github.io/openzim-mcp/docs/)
 
-**OpenZIM MCP** is a modern, secure, high-performance [Model Context Protocol](https://modelcontextprotocol.io/) server that gives AI models structured, offline access to [ZIM format](https://en.wikipedia.org/wiki/ZIM_(file_format)) knowledge archives — Wikipedia, Wiktionary, Stack Exchange, and the rest of the [Kiwix Library](https://library.kiwix.org/).
+**OpenZIM MCP** is a modern, secure, high-performance [Model Context Protocol](https://modelcontextprotocol.io/) server that gives AI models structured, offline access to [ZIM format](https://en.wikipedia.org/wiki/ZIM_(file_format)) knowledge archives — Wikipedia, Wiktionary, Stack Exchange, and the rest of the [Kiwix Library](https://browse.library.kiwix.org/).
 
 Built for research assistants, knowledge chatbots, and content-analysis systems that need *intelligent* access to vast knowledge repositories — not just a raw text dump. Smart navigation by namespace (articles, metadata, media), structure-aware retrieval (sections, tables of contents, related articles), full-text search with suggestions and multi-archive search, and link-graph extraction to map content relationships. Cached, paginated operations keep things responsive across massive archives; comprehensive input validation and path-traversal protection keep things safe.
 
@@ -49,7 +49,7 @@ pip install openzim-mcp
 
 # Docker (multi-arch image, ghcr.io) — runs as a local stdio MCP server
 docker pull ghcr.io/cameronrye/openzim-mcp
-docker run -i --rm -v /path/to/zim/files:/data ghcr.io/cameronrye/openzim-mcp
+docker run -i --rm -v ~/zim-files:/data ghcr.io/cameronrye/openzim-mcp
 ```
 
 The container defaults to **stdio** transport, so `docker run -i` speaks MCP over stdin/stdout — wire it into an MCP client the same way as the binary (see [Quick start](#quick-start)). For the long-running **HTTP** service (bearer auth, CORS, health endpoints), opt in at runtime with `-e OPENZIM_MCP_TRANSPORT=http -e OPENZIM_MCP_HOST=0.0.0.0 -e OPENZIM_MCP_AUTH_TOKEN=… -p 8000:8000`; see [HTTP & Docker deployment](https://cameronrye.github.io/openzim-mcp/docs/http-and-docker-deployment/).
@@ -70,7 +70,7 @@ curl -fsSL -o ~/zim-files/wikipedia_en_climate_change_mini_2024-06.zim \
   https://raw.githubusercontent.com/openzim/zim-testing-suite/main/data/withns/wikipedia_en_climate_change_mini_2024-06.zim
 ```
 
-That is the directory you point the server at below. For full archives — Wikipedia, Wiktionary, Stack Exchange and the rest, ranging from a few hundred MB to tens of GB — browse [browse.library.kiwix.org](https://browse.library.kiwix.org/) and save the `.zim` into the same directory. More detail, including checksums and a Windows PowerShell equivalent: [Quick start](https://cameronrye.github.io/openzim-mcp/docs/quick-start/).
+`~/zim-files` is the directory every example below points the server at — the server expands `~` itself, so it works from a shell and from a client config file alike. For full archives — Wikipedia, Wiktionary, Stack Exchange and the rest, ranging from a few hundred MB to tens of GB — browse [browse.library.kiwix.org](https://browse.library.kiwix.org/) and save the `.zim` into the same directory. More detail, including checksums and a Windows PowerShell equivalent: [Quick start](https://cameronrye.github.io/openzim-mcp/docs/quick-start/).
 
 ### Smithery & one-click install
 
@@ -89,7 +89,7 @@ For a one-click **Claude Desktop extension**, download the `openzim-mcp-<version
 Run the server in Simple mode (default — exposes one natural-language tool, `zim_query`):
 
 ```bash
-openzim-mcp /path/to/zim/files
+openzim-mcp ~/zim-files
 ```
 
 Wire it into your MCP client. Example for Claude Desktop's `claude_desktop_config.json` (any MCP client that speaks stdio works the same way):
@@ -99,7 +99,7 @@ Wire it into your MCP client. Example for Claude Desktop's `claude_desktop_confi
   "mcpServers": {
     "openzim-mcp": {
       "command": "uvx",
-      "args": ["openzim-mcp", "/path/to/zim/files"]
+      "args": ["openzim-mcp", "~/zim-files"]
     }
   }
 }
@@ -114,7 +114,7 @@ For full control, run in Advanced mode to expose all 8 specialized tools:
   "mcpServers": {
     "openzim-mcp-advanced": {
       "command": "uvx",
-      "args": ["openzim-mcp", "--mode", "advanced", "/path/to/zim/files"]
+      "args": ["openzim-mcp", "--mode", "advanced", "~/zim-files"]
     }
   }
 }

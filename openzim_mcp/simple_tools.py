@@ -66,6 +66,11 @@ from .zim_operations import ZimOperations
 
 logger = logging.getLogger(__name__)
 
+#: ``search_all``'s aggregate count of archives the server could see, as it
+#: appears in the legacy JSON-string variant. Matched rather than parsed so a
+#: large fan-out response is not decoded just to read one integer.
+_NO_ARCHIVES_AVAILABLE_RE = re.compile(r'"files_available":\s*0\s*[,}]')
+
 
 # Phase D sub-D-2 query-rewrite telemetry events.
 _QUERY_REWRITE_MISSPELLING = "query_rewrite.misspelling"
@@ -3742,6 +3747,22 @@ class SimpleToolsHandler(
                 actual_query,
                 limit_per_file=options.get("limit", 5),
             )
+            # ``search all files for X`` is the one phrase the *ambiguous*
+            # arm of the no-archive gate actively advertises, so a user who
+            # read that recovery advice on a machine with archives and typed
+            # the same phrase on an empty one landed here — and got
+            # ``"files_available": 0`` with an empty result list, which
+            # states the problem and answers nothing. Fanning out across
+            # zero archives is the empty case, not a search.
+            #
+            # Read off the fan-out's own count rather than probing the
+            # directories again: the walk has already happened by this
+            # point, and a second one would be pure cost on every call,
+            # empty or not. ``== 0`` and not falsiness, because a payload
+            # that omits the key entirely has not told us the directories
+            # are empty and must not be answered as though it had.
+            if data.get("files_available") == 0:
+                return self._nothing_to_search_response()
             # Phase D sub-D-1: cross-encoder rerank across all archives.
             # Hits are flattened into a single candidate list (tagged with
             # their source archive index so they can be redistributed after
@@ -3777,9 +3798,26 @@ class SimpleToolsHandler(
             ):
                 reason = "archive_unavailable"
             return _HandlerResult(body=body, reason=reason, suggestions=suggestions)
-        return self.zim_operations.search_all(
+        legacy = self.zim_operations.search_all(
             params.get("query", query),
             limit_per_file=options.get("limit", 5),
+        )
+        # Same signal, read out of the legacy JSON string variant. This is
+        # this server's own envelope (``search_all`` is a ``json.dumps`` of
+        # ``search_all_data``), and ``files_available`` appears once, at the
+        # top level, so the scan is unambiguous — and, unlike re-listing the
+        # directories, it touches no filesystem.
+        if _NO_ARCHIVES_AVAILABLE_RE.search(legacy):
+            return self._nothing_to_search_response()
+        return legacy
+
+    def _nothing_to_search_response(self) -> str:
+        """What ``search all files`` says when there is nothing to fan out over."""
+        return (
+            "**No ZIM Archives Loaded**\n\n"
+            "There is nothing to search across — the allowed directories "
+            "contain no `.zim` files.\n\n"
+            f"{acquisition_hint_markdown()}"
         )
 
     def _handle_walk_namespace(

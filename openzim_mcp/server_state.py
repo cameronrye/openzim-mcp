@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Tuple, Union, cast
 
 from . import __version__
 from .constants import CACHE_HIGH_HIT_RATE_THRESHOLD, CACHE_LOW_HIT_RATE_THRESHOLD
+from .onboarding import acquisition_hint_line
 from .responses import ToolErrorPayload, tool_error
 from .security import redact_paths_in_message, sanitize_path_for_error
 from .tool_schemas import HealthStatus, ServerConfigurationResponse
@@ -180,7 +181,15 @@ def _finalize_health_status(
     """Roll up accumulated checks into the final ``status`` field."""
     if total_zim_files == 0:
         warnings.append("No ZIM files found in any directory")
+        # "Add ZIM files" answers "what" and leaves "from where" hanging.
+        # ``troubleshooting.mdx`` sends readers here for exactly this
+        # symptom, and the file listing beside it already hands over a
+        # download command; a health report that stops short of one is the
+        # un-helped half of the same sentence. The warning string above is
+        # quoted verbatim by the docs, so it is left byte-identical and the
+        # guidance is added as a recommendation instead.
         recommendations.append("Add ZIM files to configured directories")
+        recommendations.append(acquisition_hint_line())
         _downgrade_to_warning(health_info)
 
     if accessible_dirs == 0:
