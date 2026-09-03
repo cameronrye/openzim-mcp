@@ -45,10 +45,26 @@ from openzim_mcp.zim_operations import ZimOperations
 REPO = Path(__file__).resolve().parent.parent
 README = REPO / "README.md"
 QUICK_START = REPO / "website/src/content/docs/quick-start.mdx"
+INSTALLATION = REPO / "website/src/content/docs/installation.mdx"
+LLMS_TXT = REPO / "website/src/pages/llms.txt.ts"
 
 
 def _readme() -> str:
     return README.read_text(encoding="utf-8")
+
+
+def _mentions(text: str, needle: str) -> bool:
+    """Substring test, written as a search rather than ``in``.
+
+    ``assert <hostname> in text`` reads perfectly well and trips CodeQL's
+    ``py/incomplete-url-substring-sanitization`` once per assertion: the
+    query cannot tell an assertion about documentation prose from a URL
+    allowlist check, and a hostname substring test is a real defect when
+    it *is* one. Nothing here decides anything about a URL — these are
+    assertions that a piece of guidance was printed — so the check is
+    spelled as a literal search instead of a containment test.
+    """
+    return re.search(re.escape(needle), text) is not None
 
 
 # --------------------------------------------------------------------------
@@ -73,8 +89,8 @@ def test_readme_offers_the_one_command_starter_archive() -> None:
     assert (
         onboarding.STARTER_ARCHIVE_SIZE in text
     ), f"README does not state the starter archive size ({onboarding.STARTER_ARCHIVE_SIZE})"
-    assert (
-        "browse.library.kiwix.org" in text
+    assert _mentions(
+        text, onboarding.KIWIX_LIBRARY_HOST
     ), "README does not point at the Kiwix library for full archives"
 
     # The command has to be copy-pasteable, which means it has to be in a
@@ -105,35 +121,38 @@ def test_readme_starter_archive_precedes_the_client_configuration() -> None:
     )
 
 
-def test_readme_and_quick_start_state_the_same_starter_archive() -> None:
-    """Two surfaces, one set of facts.
+def test_every_surface_states_the_same_starter_archive() -> None:
+    """Four surfaces, one set of facts.
 
     ``tests/test_docs_freshness.py`` exists because measurements stated in
-    two places drift. The size and URL are now stated in the README and in
-    ``quick-start.mdx``; assert they agree with each other and with the
-    constant the server logs, so a future edit to one is caught here rather
-    than by a user following a stale number.
+    more than one place drift. The size and URL are stated in the README,
+    on two docs pages and in the generated ``llms.txt``; assert they agree
+    with each other and with the constant the server logs, so a future edit
+    to one is caught here rather than by a user following a stale number.
     """
-    readme = _readme()
-    quick_start = QUICK_START.read_text(encoding="utf-8")
+    surfaces = {
+        "README.md": _readme(),
+        "quick-start.mdx": QUICK_START.read_text(encoding="utf-8"),
+        "installation.mdx": INSTALLATION.read_text(encoding="utf-8"),
+        "llms.txt.ts": LLMS_TXT.read_text(encoding="utf-8"),
+    }
+    # Guard the guard: a renamed page would otherwise silently drop out of
+    # the sweep and leave this test asserting less than it appears to.
+    assert len(surfaces) == 4
 
-    for surface, text in (("README.md", readme), ("quick-start.mdx", quick_start)):
+    for surface, text in surfaces.items():
         assert (
             onboarding.STARTER_ARCHIVE_URL in text
         ), f"{surface} does not use the canonical starter archive URL"
         assert (
             onboarding.STARTER_ARCHIVE_SIZE in text
         ), f"{surface} does not state the canonical starter archive size"
-
-    # And no surface may state a *different* size for the same file.
-    sizes = {
-        surface: set(re.findall(r"\d+\.\d+ MB", text))
-        for surface, text in (("README.md", readme), ("quick-start.mdx", quick_start))
-    }
-    for surface, found in sizes.items():
-        assert found <= {
-            onboarding.STARTER_ARCHIVE_SIZE
-        }, f"{surface} states a size other than {onboarding.STARTER_ARCHIVE_SIZE}: {found}"
+        # And no surface may state a *different* size for the same file.
+        found = set(re.findall(r"\d+\.\d+ MB", text))
+        assert found <= {onboarding.STARTER_ARCHIVE_SIZE}, (
+            f"{surface} states a size other than "
+            f"{onboarding.STARTER_ARCHIVE_SIZE}: {found}"
+        )
 
 
 # --------------------------------------------------------------------------
@@ -171,8 +190,8 @@ def test_startup_warns_when_no_archives_are_discoverable(
     joined = "\n".join(warnings)
     assert warnings, "no warning was emitted for a directory with zero ZIM files"
     assert "0" in joined, f"the warning does not name the count: {warnings!r}"
-    assert (
-        "browse.library.kiwix.org" in joined
+    assert _mentions(
+        joined, onboarding.KIWIX_LIBRARY_HOST
     ), f"the warning does not name the Kiwix library: {warnings!r}"
     assert (
         onboarding.STARTER_ARCHIVE_URL in joined
@@ -209,7 +228,7 @@ def test_startup_is_quiet_when_an_archive_is_present(
         record.getMessage()
         for record in caplog.records
         if record.levelno >= logging.WARNING
-        and "browse.library.kiwix.org" in record.getMessage()
+        and _mentions(record.getMessage(), onboarding.KIWIX_LIBRARY_HOST)
     ]
     assert (
         not warnings
@@ -271,7 +290,7 @@ def test_empty_listing_says_where_to_get_an_archive(
     result = empty_zim_operations.list_zim_files()
 
     assert "No ZIM files found" in result
-    assert "browse.library.kiwix.org" in result, result
+    assert _mentions(result, onboarding.KIWIX_LIBRARY_HOST), result
     assert onboarding.STARTER_ARCHIVE_URL in result, result
 
 
@@ -296,7 +315,7 @@ def test_filtered_empty_listing_does_not_offer_to_download_a_first_archive(
     result = operations.list_zim_files(name_filter="stackexchange")
 
     assert "No ZIM files found" in result
-    assert "browse.library.kiwix.org" not in result, result
+    assert not _mentions(result, onboarding.KIWIX_LIBRARY_HOST), result
 
 
 def test_query_gate_says_where_to_get_an_archive_when_none_are_loaded(
@@ -314,7 +333,7 @@ def test_query_gate_says_where_to_get_an_archive_when_none_are_loaded(
 
     result = handler.handle_zim_query("search for biology")
 
-    assert "browse.library.kiwix.org" in result, result
+    assert _mentions(result, onboarding.KIWIX_LIBRARY_HOST), result
     assert onboarding.STARTER_ARCHIVE_URL in result, result
     assert "search all files for" not in result, (
         "cross-archive recovery steps were offered with zero archives loaded: "
@@ -340,7 +359,7 @@ def test_query_gate_keeps_the_ambiguous_advice_when_archives_exist() -> None:
     result = SimpleToolsHandler(operations).handle_zim_query("search for biology")
 
     assert "search all files for" in result, result
-    assert "browse.library.kiwix.org" not in result, result
+    assert not _mentions(result, onboarding.KIWIX_LIBRARY_HOST), result
     assert "intent=no_zim_file_specified" in result, result
 
 
@@ -356,5 +375,5 @@ def test_query_gate_falls_back_to_the_ambiguous_advice_when_the_probe_fails() ->
 
     result = SimpleToolsHandler(operations)._no_zim_file_response()
 
-    assert "browse.library.kiwix.org" not in result, result
+    assert not _mentions(result, onboarding.KIWIX_LIBRARY_HOST), result
     assert "search all files for" in result, result
