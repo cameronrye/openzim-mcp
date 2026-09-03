@@ -51,16 +51,34 @@ dependencies = [
     "beautifulsoup4>=4.14.3,<5.0",
     "html2text>=2025.4.15,<2027.0",
     "libzim>=3.9.0,<4.0",
-    # Held to 2.0.x deliberately: sdk_compat.py patches the dicts under the
-    # SDK's method tables, and server.py/subscriptions.py install handlers
-    # through the private ``_request_handlers`` registry. CI resolves the
-    # lockfile, but fresh installs (pip/uvx, Smithery, Docker) resolve the
-    # newest wheel this range admits — a 2.1 that moves any of those seams
-    # would break them at runtime with the suite still green. Raising the
-    # ceiling is a deliberate bump PR that re-audits the seams. It will not
-    # retire the ping shim: 2026-07-28 defines no ping, so no SDK release is
-    # going to supply those rows (see sdk_compat and issue #371).
-    "mcp[cli]>=2.0.0,<2.1",
+    # One audited minor series at a time. Upstream's VERSIONING.md excludes
+    # underscore-prefixed names and undocumented modules from its compatibility
+    # promise, and this server depends on a spread of them: sdk_compat.py
+    # patches the dicts under the method tables, server.py/subscriptions.py
+    # install handlers through ``_request_handlers`` + ``HandlerEntry``,
+    # resource_tools.py
+    # writes into ``_resource_manager._templates``, http_app.py imports
+    # ``check_accept_headers`` / ``MCP_SESSION_ID_HEADER`` /
+    # ``DEFAULT_MAX_REQUEST_BODY_SIZE``, and mcp_envelope.py calls
+    # ``fn_metadata.convert_result``. CI resolves the lockfile, but fresh
+    # installs (pip/uvx, Smithery, Docker) take the newest wheel the range
+    # admits, so an unaudited minor would break those with the suite green.
+    #
+    # The floor is 2.1.0, not 2.0.0: the request-body cap only lives at its
+    # current home from 2.1.0 on, so 2.0.x now fails at
+    # ``import openzim_mcp.http_app``.
+    #
+    # To raise the ceiling: re-audit the seams against the new wheel, run the
+    # full suite AND ``pytest -m live`` (SSE is exercised nowhere else, and
+    # upstream #3336 changed it), re-measure the advertised schema footprint,
+    # move the floor to the new series' first release, and ``uv lock
+    # --upgrade-package mcp`` — plain ``uv lock`` keeps the old resolution, so
+    # a widened cap otherwise ships a wheel CI never ran.
+    # ``tests/test_sdk_seam_audit.py`` pins what that audit established.
+    #
+    # None of that retires the ping shim: 2026-07-28 defines no ping, so no SDK
+    # release is going to supply those rows (see sdk_compat and issue #371).
+    "mcp[cli]>=2.1.0,<2.2",
     "pydantic>=2.13.3,<3.0",
     "pydantic-settings>=2.14.0,<3.0",
     "tiktoken>=0.7.0,<1.0",

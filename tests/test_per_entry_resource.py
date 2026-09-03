@@ -585,9 +585,11 @@ class TestPerEntryResource:
     ):
         """A redirect cycle (A → A) raises MCPError with the diagnostic intact.
 
-        ``MCPError`` is the one exception type SDK v2's ``read_resource``
-        re-raises verbatim; anything else is swallowed into a generic
-        "Error reading resource <uri>" that tells the client nothing.
+        ``MCPError`` and ``ResourceError`` are the exception types SDK v2's
+        ``read_resource`` re-raises verbatim (2.0.x re-raised only
+        ``MCPError``); anything else is swallowed into a generic "Error
+        reading resource <uri>" that tells the client nothing. ``MCPError``
+        is the one that carries a chosen JSON-RPC code as well as the text.
         """
         from mcp.shared.exceptions import MCPError
 

@@ -238,7 +238,7 @@ def test_d62_oversized_sessionless_body_is_bounded_not_buffered(
     the gate reads it under the SDK's own request cap and answers the SDK's
     413 when that is exceeded — without minting a session either way.
     """
-    from mcp.server.streamable_http_manager import DEFAULT_MAX_REQUEST_BODY_SIZE
+    from mcp.server.transport_security import DEFAULT_MAX_REQUEST_BODY_SIZE
 
     client, server = http_client
     chunk = b"x" * 65536

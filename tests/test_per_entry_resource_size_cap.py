@@ -67,9 +67,11 @@ class TestBinaryResourceCap:
     async def test_oversize_binary_raises_with_actionable_message(self):
         """Read of an oversize binary raises MCPError pointing at the paged tool.
 
-        ``MCPError`` is the one exception type SDK v2's ``read_resource``
-        forwards verbatim to the wire; any other type is replaced by a
-        generic "Error reading resource <uri>" and the guidance is lost.
+        ``MCPError`` and ``ResourceError`` are the types SDK v2's
+        ``read_resource`` forwards verbatim to the wire (2.0.x forwarded only
+        ``MCPError``); any other type is replaced by a generic "Error reading
+        resource <uri>" and the guidance is lost. ``MCPError`` is the one that
+        also carries a chosen JSON-RPC code.
         """
         from unittest.mock import MagicMock, patch
 

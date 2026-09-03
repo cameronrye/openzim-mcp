@@ -172,11 +172,14 @@ class ZimEntryResource(Resource):
                 ),
             ) from exc
         except OpenZimMcpArchiveError as exc:
-            # SDK v2's ``read_resource`` forwards only ``MCPError`` verbatim;
-            # every other exception type is replaced by a generic "Error
-            # reading resource <uri>". Redirect-cycle/depth diagnostics tell
-            # the caller what actually went wrong, so convert them at the
-            # boundary instead of letting the SDK discard them.
+            # SDK v2's ``read_resource`` forwards only ``MCPError`` and
+            # ``ResourceError`` verbatim; every other exception type is
+            # replaced by a generic "Error reading resource <uri>" (an
+            # ``UnexpectedResourceError`` since 2.1.0, a bare ``ResourceError``
+            # before that — either way the original text is dropped).
+            # Redirect-cycle/depth diagnostics tell the caller what actually
+            # went wrong, so convert them at the boundary instead of letting
+            # the SDK discard them.
             raise MCPError(code=INTERNAL_ERROR, message=str(exc)) from exc
 
         # Mutate so the SDK's read_resource picks up the detected MIME.
@@ -259,8 +262,11 @@ class ZimEntryTemplate(ResourceTemplate):
         target_path = await asyncio.to_thread(_resolve_zim_name, self.server_ref, name)
         if not target_path:
             # ResourceNotFoundError reaches the client as ``-32602`` invalid
-            # params with this message; a bare ValueError would escape the
-            # SDK's error mapping as a generic "Internal server error".
+            # params with this message; a bare ValueError would lose the
+            # message to a generic ``-32603`` instead (pre-2.1.0 it escaped
+            # ``read_resource`` entirely as "Internal server error"; from
+            # 2.1.0 it is caught there and becomes "Error reading resource
+            # <uri>" — indistinguishable to the caller either way).
             raise ResourceNotFoundError(f"ZIM file '{name}' not found")
 
         # ``UriTemplate.match`` has already percent-decoded the captured
@@ -272,12 +278,13 @@ class ZimEntryTemplate(ResourceTemplate):
             decoded_path = sanitize_input(params["path"], INPUT_LIMIT_ENTRY_PATH)
         except OpenZimMcpValidationError as e:
             # Converted for the same reason as the ``ResourceNotFoundError``
-            # above, and it has to happen HERE rather than in a caller:
-            # ``ResourceManager.get_resource`` invokes ``create_resource``
-            # outside the ``try`` that wraps ``resource.read()``, so nothing
-            # downstream maps this. An unmapped exception is replaced wholesale
-            # by a generic "Internal server error", discarding the one thing
-            # the caller can act on ("Input is empty…" / "Input too long: …").
+            # above, and it has to happen HERE rather than in a caller: nothing
+            # downstream maps an ``OpenZimMcpValidationError``. Up to mcp 2.0.x
+            # ``read_resource`` called ``get_resource`` outside the ``try``, so
+            # it escaped unmapped; from 2.1.0 the call is inside, so it is
+            # caught and replaced by a generic "Error reading resource <uri>".
+            # Either way the one thing the caller can act on is discarded
+            # ("Input is empty…" / "Input too long: …").
             raise MCPError(code=INVALID_PARAMS, message=str(e)) from e
         return ZimEntryResource(
             # v2's Resource.uri is a plain ``str`` (it was ``AnyUrl`` in 1.x).
