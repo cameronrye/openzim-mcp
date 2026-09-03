@@ -497,16 +497,22 @@ class TestPerEntryResource:
     async def test_rejected_entry_path_keeps_its_message_on_the_wire(
         self, server, ctx: Context, bad_path: str, expected: str
     ):
-        """A path ``sanitize_input`` rejects must not become "Internal server error".
+        """A rejected path must not become an opaque server fault.
 
         ``sanitize_input`` raises ``OpenZimMcpValidationError``, which is
-        neither ``MCPError`` nor a ``ResourceError`` — and nothing downstream
-        converts it, because ``ResourceManager.get_resource`` calls
-        ``create_resource`` *outside* the ``try`` that wraps ``resource.read()``.
-        An unmapped exception is replaced wholesale by a generic
-        ``-32603 Internal server error``, so the caller loses the only
-        actionable part ("Input is empty…" / "Input too long: N > M") and reads
-        a request-shaped mistake as a retryable server fault.
+        neither ``MCPError`` nor a ``ResourceError``, and nothing downstream
+        maps it — so it has to be converted here.
+
+        The *reason* it has to be converted here moved in mcp 2.1.0 while the
+        conclusion did not. Up to 2.0.x ``read_resource`` called
+        ``get_resource`` outside the ``try`` that wraps ``resource.read()``,
+        so the exception escaped unmapped and reached the client as a generic
+        ``-32603 Internal server error``. From 2.1.0 that call is inside the
+        ``try``, whose first clause is ``except (MCPError, ResourceError):
+        raise`` — so it is caught and re-raised as ``UnexpectedResourceError``
+        with the text ``Error reading resource <uri>``. Either way the caller
+        loses the only actionable part ("Input is empty…" / "Input too
+        long: N > M") and reads a request-shaped mistake as a server fault.
         """
         from mcp.shared.exceptions import MCPError
         from mcp_types import INVALID_PARAMS

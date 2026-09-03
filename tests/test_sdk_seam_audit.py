@@ -9,29 +9,42 @@ That gap is what these tests close: each one pins a property of the SDK the
 range spans, so a resolution that moves one fails here by name rather than at
 runtime in someone's deployment.
 
-The three behaviours below all changed between 2.0.0 and 2.1.0 in ways that
-touch code or comments in this repo:
+The behaviours below all changed between 2.0.0 and 2.1.0 in ways that touch
+code or comments in this repo:
 
 * upstream #3336 moved ``DEFAULT_MAX_REQUEST_BODY_SIZE`` (and
   ``RequestBodyLimitMiddleware``) into ``mcp.server.transport_security`` and
-  put a body cap on the SSE message endpoint;
+  put a method guard and a body cap on the SSE message endpoint;
 * upstream #3314 stopped a *crashing* tool body's exception text from
   reaching the client — while deliberately leaving argument-validation
   failures leaking pydantic's report, which is why ``zim_browse``'s
   ``_ModeArg`` comment is still accurate;
 * 2.1.1's ``read_resource`` moved ``get_resource`` inside the ``try`` and
   added a runtime ``str | bytes`` check on ``Resource.read()``.
+
+What is deliberately *not* here: the advertised schema footprint (already
+measured live and asserted against the allocation table in
+``test_phase_f_schema_budget.py`` and against the docs in
+``test_docs_freshness.py`` — a third hardcoded copy would red those same
+edits with the least informative message of the three); upstream's ping
+stance (``test_sdk_ping_shim.py::test_canary_upstream_still_lacks_modern_ping``
+asserts it against the resolved SDK, which is the range-sensitive form of the
+claim); and the docs-quote-the-range gate, which moved to
+``test_docs_freshness.py`` section 15 when it was widened to sweep prose.
 """
 
 from __future__ import annotations
 
 import json
-import tempfile
+import tomllib
 from pathlib import Path
 from typing import Any
 
+import httpx
 import pytest
 from mcp.server.mcpserver.exceptions import ResourceNotFoundError, ToolError
+from packaging.requirements import Requirement
+from packaging.version import Version
 
 from openzim_mcp.config import OpenZimMcpConfig
 from openzim_mcp.server import OpenZimMcpServer
@@ -82,6 +95,38 @@ class TestRequestBodyCapSeam:
         from mcp.server.transport_security import RequestBodyLimitMiddleware
 
         assert callable(RequestBodyLimitMiddleware)
+
+    def test_gate_sources_the_cap_from_its_canonical_home(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The gate must read ``transport_security``, not the re-export.
+
+        Both spellings resolve to the same 4 MiB int inside this range, so a
+        plain value assertion cannot tell them apart and the import move was
+        unobservable — the whole floor decision rested on an edit no test
+        would have noticed reverting.
+
+        Patching the constant on ``transport_security`` separates them:
+        ``streamable_http_manager`` binds its own module-level name at import
+        time (``from ... import X as X``), so it keeps the old value while the
+        canonical module reports the new one. The gate's import is
+        function-local, so it re-reads on every construction.
+        """
+        import mcp.server.streamable_http_manager as manager
+        import mcp.server.transport_security as canonical
+
+        from openzim_mcp.http_app import SessionlessRequestGateMiddleware
+
+        async def _app(scope: Any, receive: Any, send: Any) -> None:  # pragma: no cover
+            raise AssertionError("not called")
+
+        sentinel = 4 * 1024 * 1024 + 7
+        monkeypatch.setattr(canonical, "DEFAULT_MAX_REQUEST_BODY_SIZE", sentinel)
+        # Guard the guard: if upstream ever made the re-export a live lookup
+        # this test would stop distinguishing the two homes and quietly pass.
+        assert manager.DEFAULT_MAX_REQUEST_BODY_SIZE != sentinel
+
+        assert SessionlessRequestGateMiddleware(_app)._max_body_size == sentinel
 
 
 class TestToolFailureTextOnTheWire:
@@ -266,8 +311,86 @@ class TestResourceReadSeam:
             assert isinstance(item.content, (str, bytes))
 
 
+class TestSseTransportSeam:
+    """#3336's method guard on the SSE message endpoint.
+
+    ``--transport sse`` is deprecated but still shipped, and the server
+    reaches it through ``self.mcp.run(transport="sse", ...)`` — which is why
+    an earlier audit that grepped for ``sse_app`` concluded #3336 was a no-op
+    here. ``tests/live/test_live_sse.py`` covers this against a real spawned
+    process, but the live marker is deselected by ``addopts`` and no workflow
+    passes ``-m live``, so nothing in CI was watching a transport whose patch
+    releases Dependabot may now propose. This drives the same app object
+    ``run_sse_async`` builds, in-process, so it runs on every PR.
+    """
+
+    @staticmethod
+    def _sse_app(tmp_path: Path) -> Any:
+        server = _server(tmp_path)
+        return server.mcp.sse_app(
+            host=server.config.host,
+            transport_security=server._transport_security,
+        )
+
+    @pytest.mark.asyncio
+    async def test_message_endpoint_answers_405_not_a_content_type_error(
+        self, tmp_path: Path
+    ) -> None:
+        """``GET /messages/`` must blame the verb, not the headers.
+
+        Before #3336 a ``GET`` fell straight through into the POST handler and
+        came back ``400 Invalid Content-Type header`` — a status that sends
+        the caller to fix a header when the real problem is the method. The
+        guard is the first statement in ``handle_post_message``, ahead of
+        transport-security validation, so this reaches it without a Host
+        allow-list entry.
+        """
+        transport = httpx.ASGITransport(app=self._sse_app(tmp_path))
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://127.0.0.1"
+        ) as client:
+            response = await client.get("/messages/")
+
+        assert response.status_code == 405, response.text
+        assert "POST" in response.headers.get("allow", "")
+
+
 class TestDeclaredRangeIsTheTestedRange:
     """The lockfile must not sit below the top minor of the declared cap."""
+
+    @staticmethod
+    def _declared_specifier() -> Any:
+        """``mcp``'s specifier, parsed rather than pattern-matched.
+
+        The first version of this read ``"mcp\\[cli\\]>=[\\d.]+,<(\\d+)\\.(\\d+)"``
+        out of the raw file and reported "mcp requirement not found in
+        pyproject.toml" for anything it did not recognise — so writing the cap
+        as ``<2.2.0`` would have failed both range gates with an error naming
+        the wrong problem.
+        """
+        data = tomllib.loads(
+            (Path(__file__).resolve().parents[1] / "pyproject.toml").read_text(
+                encoding="utf-8"
+            )
+        )
+        for raw in data["project"]["dependencies"]:
+            requirement = Requirement(raw)
+            if requirement.name == "mcp":
+                return requirement.specifier
+        raise AssertionError("no mcp requirement in pyproject's dependencies")
+
+    @staticmethod
+    def _locked_version(name: str) -> str:
+        """``name``'s version as pinned in ``uv.lock``."""
+        lock = tomllib.loads(
+            (Path(__file__).resolve().parents[1] / "uv.lock").read_text(
+                encoding="utf-8"
+            )
+        )
+        for package in lock["package"]:
+            if package["name"] == name:
+                return str(package["version"])
+        raise AssertionError(f"{name} not found in uv.lock")
 
     def test_locked_mcp_is_in_the_caps_top_minor(self) -> None:
         """Guard against a widened cap that ships an untested wheel.
@@ -277,97 +400,34 @@ class TestDeclaredRangeIsTheTestedRange:
         green PR that advertises a new range while CI goes on testing the old
         floor — and only a fresh ``pip install`` finds out. (That is not
         hypothetical: plain ``uv lock`` on the ``<2.2`` widening left the
-        lockfile on 2.0.0.) This asserts the resolved version sits in the
+        lockfile on 2.0.0.) This asserts the *locked* version sits in the
         highest minor series the cap admits, so that PR fails here instead.
-        """
-        import importlib.metadata as md
-        import re
 
-        pyproject = (Path(__file__).resolve().parents[1] / "pyproject.toml").read_text(
-            encoding="utf-8"
-        )
-        match = re.search(r'"mcp\[cli\]>=[\d.]+,<(\d+)\.(\d+)"', pyproject)
-        assert match is not None, "mcp requirement not found in pyproject.toml"
-        cap_major, cap_minor = int(match.group(1)), int(match.group(2))
-        if cap_minor == 0:
+        Read out of ``uv.lock``, not out of ``importlib.metadata``: every
+        workflow installs with ``uv sync --locked``, so the lockfile is what
+        CI actually exercises, and it is the file the failure message tells
+        you to regenerate. Asserting the interpreter's own site-packages
+        instead would red on a contributor's stale venv for a reason the
+        message misdescribes, and could not see a lockfile CI would install
+        differently.
+        """
+        upper = [s for s in self._declared_specifier() if s.operator in ("<", "<=")]
+        assert len(upper) == 1, f"expected exactly one upper bound, got {upper}"
+        cap = Version(upper[0].version)
+        if upper[0].operator == "<" and cap.minor == 0:
             pytest.skip(
                 "cap is a major boundary; the top minor it admits is not "
                 "knowable without querying the index"
             )
+        if upper[0].operator == "<":
+            top = (cap.major, cap.minor - 1)
+        else:
+            top = (cap.major, cap.minor)
 
-        installed = md.version("mcp")
-        major, minor = (int(part) for part in installed.split(".")[:2])
-        assert (major, minor) == (cap_major, cap_minor - 1), (
-            f"pyproject admits mcp <{cap_major}.{cap_minor}, so the top series "
-            f"is {cap_major}.{cap_minor - 1}.x, but the resolved wheel is "
-            f"{installed}. Run `uv lock --upgrade-package mcp` so CI tests the "
-            "wheel a fresh install would get."
+        locked = Version(self._locked_version("mcp"))
+        assert (locked.major, locked.minor) == top, (
+            f"pyproject admits mcp{self._declared_specifier()}, so the top "
+            f"series is {top[0]}.{top[1]}.x, but uv.lock pins {locked}. Run "
+            "`uv lock --upgrade-package mcp` so CI tests the wheel a fresh "
+            "install would get."
         )
-
-    def test_docs_quote_the_declared_range(self) -> None:
-        """The user-facing range must be the one pyproject declares.
-
-        ``upgrading.mdx`` tells library embedders which SDK to pin against.
-        It sat at ``mcp>=2.0.0,<2.1`` with nothing watching it, which is how a
-        published requirement outlives the requirement it describes.
-        """
-        import re
-
-        root = Path(__file__).resolve().parents[1]
-        pyproject = (root / "pyproject.toml").read_text(encoding="utf-8")
-        match = re.search(r'"mcp\[cli\](>=[\d.]+,<[\d.]+)"', pyproject)
-        assert match is not None, "mcp requirement not found in pyproject.toml"
-        declared = match.group(1)
-
-        doc = root / "website" / "src" / "content" / "docs" / "upgrading.mdx"
-        text = doc.read_text(encoding="utf-8")
-        quoted = re.findall(r"`mcp(>=[\d.]+,<[\d.]+)`", text)
-        assert quoted, f"{doc} no longer quotes an mcp range; drop this gate"
-        for found in quoted:
-            assert found == declared, (
-                f"{doc} advertises mcp{found} but pyproject declares "
-                f"mcp[cli]{declared}"
-            )
-
-    def test_ping_shim_is_not_retired_by_this_range(self) -> None:
-        """The cap moving does not make ``sdk_compat`` redundant.
-
-        2026-07-28 defines no ``ping``, so no SDK release supplies those rows
-        (python-sdk#3273, closed ``not_planned``). The dedicated canary in
-        ``test_sdk_ping_shim.py`` asserts the same thing about the method
-        tables; this states the *policy* alongside the range it belongs to,
-        so a future ceiling bump does not re-litigate it.
-        """
-        from openzim_mcp import sdk_compat
-
-        assert hasattr(sdk_compat, "install_ping_keepalive_shim")
-
-
-def test_advanced_schema_footprint_is_unchanged_by_the_bump() -> None:
-    """``func_metadata`` churned upstream; the wire schema must not have.
-
-    The advanced surface is 23,887 bytes against a 25 KiB cap
-    (``test_phase_f_schema_budget``). This pins the exact figure so an SDK
-    resolution that alters how schemas are generated is visible as a number
-    rather than as slack silently eaten inside the cap.
-    """
-    with tempfile.TemporaryDirectory(prefix="openzim_mcp_seam_") as allowed:
-        server = OpenZimMcpServer(
-            OpenZimMcpConfig(allowed_directories=[allowed], tool_mode="advanced")
-        )
-        total = 0
-        for name, tool in server.mcp._tool_manager._tools.items():
-            payload: dict[str, Any] = {
-                "name": name,
-                "description": tool.description,
-                "inputSchema": tool.parameters,
-            }
-            if tool.output_schema is not None:
-                payload["outputSchema"] = tool.output_schema
-            total += len(json.dumps(payload, separators=(",", ":")).encode())
-
-    assert total == 23_887, (
-        f"advanced surface is {total} bytes, expected 23,887. If an SDK bump "
-        "moved this, re-measure and update the figure here, in "
-        "test_phase_f_schema_budget's ALLOCATION comments and in the docs."
-    )

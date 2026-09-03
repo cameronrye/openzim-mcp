@@ -29,9 +29,13 @@ import datetime as dt
 import json
 import re
 import tempfile
+import tomllib
 from pathlib import Path
 
 import pytest
+from packaging.requirements import Requirement
+from packaging.specifiers import SpecifierSet
+from packaging.version import Version
 
 from openzim_mcp import __version__
 from openzim_mcp.config import OpenZimMcpConfig
@@ -2503,4 +2507,122 @@ def test_release_stamp_is_derived_and_split_by_surface() -> None:
     assert not dates, (
         f"DocsLayout.astro contains date literals {dates} — doc pages are "
         "date-free by decision, and a hand-written date is also unstamped."
+    )
+
+
+# --------------------------------------------------------------------------
+# 15. The published mcp range must be the range pyproject declares.
+# --------------------------------------------------------------------------
+#
+# The SDK range is a published install requirement, not an implementation
+# detail: ``upgrading.mdx`` quotes it so library embedders know what to pin
+# against, and ``resources-prompts-subscriptions.mdx`` explains in prose which
+# series the private-API seams hold the server to. Both drifted a full minor
+# behind ``pyproject.toml`` and neither had anything watching it — upgrading
+# still advertised ``mcp>=2.0.0,<2.1`` after the floor moved to 2.1.0, and the
+# subscriptions page still said the pin "holds `mcp` to 2.0.x". A reader who
+# follows either one pins a range that no longer resolves against the wheel
+# this project publishes.
+#
+# Two shapes are swept, because the drift showed up as both, and a gate that
+# only understood the first would have passed the second:
+#
+#   * an explicit range (``mcp>=2.1.0,<2.2``), which must be the declared
+#     specifier — compared as parsed versions, so ``<2.2`` and ``<2.2.0`` are
+#     the same claim; and
+#   * a series claim (``holds `mcp` to 2.1.x``), which must name a series the
+#     declared specifier admits *in full*.
+#
+# Scope is the doc corpus above, which deliberately excludes CHANGELOG.md:
+# a shipped release note records what that release required and must not be
+# rewritten when the requirement moves.
+
+# ``mcp>=2.1.0,<2.2`` / ``mcp[cli]>=2.1.0,<2.2``, backticked or bare. The
+# lookbehind keeps this off ``openzim-mcp``, which is this project, not the SDK.
+_MCP_RANGE_RE = re.compile(
+    r"(?<![\w-])mcp(?:\[cli\])?`?\s*(>=\s*[0-9][\w.]*\s*,\s*<\s*[0-9][\w.]*)"
+)
+# ``holds `mcp` to 2.0.x`` — a series named near an ``mcp`` package reference.
+# The gap forbids ``.`` so the anchor and the version have to share a clause;
+# without that, any sentence mentioning the SDK anywhere would claim any
+# ``N.M.x`` later in the paragraph (docs/roadmap.md talks about this project's
+# own v2.0.x/v2.1.x/v2.2.x lines two clauses away from the words "MCP Python
+# SDK", and matched before the constraint was added).
+_MCP_SERIES_RE = re.compile(
+    r"(?<![\w-])`?mcp`?(?:\[cli\])?[^.\n]{0,40}?\b(\d+)\.(\d+)\.x\b", re.IGNORECASE
+)
+
+
+def _declared_mcp_specifier() -> SpecifierSet:
+    """The ``mcp`` specifier from ``[project] dependencies``.
+
+    Parsed with ``tomllib`` + ``packaging`` rather than by regex over the raw
+    file: the first version of this gate matched ``"mcp\\[cli\\]>=[\\d.]+,<[\\d.]+"``
+    and would have reported "mcp requirement not found in pyproject.toml" —
+    an error naming the wrong problem — the day someone wrote the cap as
+    ``<2.2.0``.
+    """
+    data = tomllib.loads((REPO / "pyproject.toml").read_text(encoding="utf-8"))
+    for raw in data["project"]["dependencies"]:
+        requirement = Requirement(raw)
+        if requirement.name == "mcp":
+            return requirement.specifier
+    raise AssertionError("no mcp requirement in pyproject's [project] dependencies")
+
+
+def _normalised(spec: SpecifierSet) -> set[tuple[str, Version]]:
+    """Comparable form: operators plus parsed versions, so ``<2.2 == <2.2.0``."""
+    return {(s.operator, Version(s.version)) for s in spec}
+
+
+def _doc_claims(pattern: re.Pattern[str]) -> list[tuple[Path, int, re.Match[str]]]:
+    hits: list[tuple[Path, int, re.Match[str]]] = []
+    for path in _doc_files():
+        prose = _visible_prose(path.read_text(encoding="utf-8"))
+        for match in pattern.finditer(prose):
+            hits.append((path, prose.count("\n", 0, match.start()) + 1, match))
+    return hits
+
+
+def test_docs_quote_the_declared_mcp_range() -> None:
+    """Every published ``mcp>=…,<…`` must be the one pyproject declares."""
+    declared = _declared_mcp_specifier()
+    hits = _doc_claims(_MCP_RANGE_RE)
+    assert hits, (
+        "no doc page quotes an mcp range any more. Either the pages stopped "
+        "telling embedders what to pin — which is the drift this gate exists "
+        "to catch — or the range moved somewhere this pattern cannot see."
+    )
+    stale = [
+        f"{path.relative_to(REPO)}:{line} advertises mcp{match.group(1)}"
+        for path, line, match in hits
+        if _normalised(SpecifierSet(match.group(1))) != _normalised(declared)
+    ]
+    assert not stale, f"pyproject declares mcp{declared}, but:\n  " + "\n  ".join(stale)
+
+
+def test_no_doc_pins_mcp_to_a_series_the_range_excludes() -> None:
+    """A prose series claim must name a series the declared range admits.
+
+    ``upgrading.mdx`` states the range as a literal, so the gate above covers
+    it. The subscriptions page states it as English — "holds `mcp` to 2.0.x" —
+    and that sentence outlived two ceiling moves because no pattern was
+    looking for prose. Admitted "in full" is the standard on purpose: a page
+    that says the pin holds mcp to 2.1.x while the range is ``>=2.1.5,<2.2``
+    is telling a reader that 2.1.0 will work.
+    """
+    declared = _declared_mcp_specifier()
+    stale = []
+    for path, line, match in _doc_claims(_MCP_SERIES_RE):
+        major, minor = int(match.group(1)), int(match.group(2))
+        first = Version(f"{major}.{minor}.0")
+        last = Version(f"{major}.{minor}.999999")
+        if not (declared.contains(first) and declared.contains(last)):
+            stale.append(
+                f"{path.relative_to(REPO)}:{line} says mcp {major}.{minor}.x "
+                f"in {match.group(0)!r}"
+            )
+    assert not stale, (
+        f"pyproject declares mcp{declared}, which does not admit that whole "
+        "series:\n  " + "\n  ".join(stale)
     )

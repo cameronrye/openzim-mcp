@@ -31,13 +31,18 @@ def test_sse_endpoint_accepts_get(spawn_live_server) -> None:
 def test_sse_message_endpoint_rejects_non_post(spawn_live_server) -> None:
     """``GET /messages/`` must answer 405, not fall into the POST handler.
 
-    This is the only place the SDK's SSE transport is exercised at all, and
-    the transport moved under it: upstream #3336 put a 4 MiB body cap and a
-    method guard on the message endpoint, which the server reaches through
+    Upstream #3336 put a 4 MiB body cap and a method guard on the message
+    endpoint, which the server reaches through
     ``self.mcp.run(transport="sse", ...)`` rather than by naming ``sse_app``.
     Before that, a ``GET`` fell straight through to the POST handler and came
     back as ``400 Invalid Content-Type header`` — a status that blames the
     request's headers when the real problem is the verb.
+
+    This is the end-to-end form, through a real spawned process and a real
+    socket, and the ``live`` marker keeps it out of CI (``addopts`` carries
+    ``-m 'not live'``). The seam that a patch bump could move is guarded in
+    CI too, against the same app object ``run_sse_async`` builds, by
+    ``tests/test_sdk_seam_audit.py::TestSseTransportSeam``.
     """
     srv = spawn_live_server(transport="sse")
     resp = httpx.get(f"{srv.base_url}/messages/", timeout=5)
