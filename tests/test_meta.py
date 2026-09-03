@@ -150,24 +150,116 @@ def test_footer_no_content_type_match_renders_browse_hint():
     """BUG #4: a content_type-filter miss must NOT reuse the namespace footer.
 
     It points at browse/include_assets and the content-type filter, not at
-    ``list_namespaces``.
+    the archive-metadata recovery. The tool it names is ``zim_browse``:
+    ``browse_namespace`` was deleted in v2.0.0, and asserting on it here is
+    what let that name survive in the footer.
     """
     meta = {"tokens_est": 0, "chars": 0, "truncated": False}
     meta["reason"] = "no_content_type_match"
-    footer = format_footer(meta, footer_enabled=True)
+    footer = format_footer(meta, footer_enabled=True, tool_mode="advanced")
     assert "content type" in footer
-    assert "browse_namespace" in footer
+    assert "zim_browse" in footer
+    assert "browse_namespace" not in footer
     assert "Unknown namespace" not in footer
-    assert "list_namespaces" not in footer
+    assert "zim_metadata" not in footer
 
 
 def test_footer_bad_namespace_unchanged():
     """BUG #4 regression: a genuine bad namespace still gets the namespace
-    recovery footer."""
+    recovery footer — routed to ``zim_metadata``, which absorbed
+    ``list_namespaces`` in the v2.0.0 consolidation."""
     meta = {"tokens_est": 0, "chars": 0, "truncated": False, "reason": "bad_namespace"}
-    footer = format_footer(meta, footer_enabled=True)
+    footer = format_footer(meta, footer_enabled=True, tool_mode="advanced")
     assert "Unknown namespace" in footer
-    assert "list_namespaces" in footer
+    assert "zim_metadata" in footer
+    assert "list_namespaces" not in footer
+
+
+ADVICE_ONLY_REASONS = (
+    "no_xapian_index",
+    "bad_namespace",
+    "no_content_type_match",
+    "sample_only",
+    "archive_unavailable",
+    "search_all_budget_exceeded",
+)
+
+
+@pytest.mark.parametrize("reason", ADVICE_ONLY_REASONS)
+def test_footer_advice_never_names_a_deleted_tool_by_default(reason: str):
+    """The default ``tool_mode`` must never advertise a v2.0.0-deleted tool.
+
+    ``format_footer``'s default is the fail-safe mode (``simple``): naming no
+    tool is wrong in no mode, whereas naming one is wrong whenever the client
+    cannot see it. This also pins that a caller which forgets to thread
+    ``tool_mode`` degrades to prose rather than to a dead tool name.
+    """
+    footer = format_footer({"reason": reason}, footer_enabled=True)
+    dead = [
+        name
+        for name in (
+            "find_entry_by_title",
+            "browse_namespace",
+            "walk_namespace",
+            "list_namespaces",
+            "list_zim_files",
+        )
+        if name in footer
+    ]
+    assert not dead, f"footer for {reason!r} names deleted tool(s) {dead}: {footer!r}"
+
+
+@pytest.mark.parametrize("reason", ADVICE_ONLY_REASONS)
+@pytest.mark.parametrize("tool_mode", ("simple", "advanced"))
+def test_footer_advice_branches_render_actionable_prose(reason: str, tool_mode: str):
+    """All six advice branches render in both modes.
+
+    Four of them had no test at all before this, which is how the dead tool
+    names survived three years of the 8-tool surface.
+    """
+    footer = format_footer({"reason": reason}, footer_enabled=True, tool_mode=tool_mode)
+    assert footer.startswith("> ")
+    assert len(footer) > len("> ")
+    # The generic fallback means the branch did not fire.
+    assert footer != "> No results. Try a shorter or differently-spelled query."
+
+
+def test_footer_advice_falls_back_when_reason_has_no_branch():
+    """``0_hits`` / ``low_relevance`` / ``bad_query`` share the generic line."""
+    for reason in ("0_hits", "low_relevance", "bad_query"):
+        for tool_mode in ("simple", "advanced"):
+            assert (
+                format_footer(
+                    {"reason": reason}, footer_enabled=True, tool_mode=tool_mode
+                )
+                == "> No results. Try a shorter or differently-spelled query."
+            )
+
+
+def test_footer_sample_only_routes_to_walk_mode_in_advanced():
+    footer = format_footer(
+        {"reason": "sample_only"}, footer_enabled=True, tool_mode="advanced"
+    )
+    assert "zim_browse" in footer
+    assert "walk" in footer
+    assert "walk_namespace" not in footer
+
+
+def test_footer_no_xapian_index_routes_to_title_search_in_advanced():
+    footer = format_footer(
+        {"reason": "no_xapian_index"}, footer_enabled=True, tool_mode="advanced"
+    )
+    assert "zim_search" in footer
+    assert "title" in footer
+    assert "find_entry_by_title" not in footer
+
+
+def test_footer_archive_unavailable_routes_to_health_in_advanced():
+    footer = format_footer(
+        {"reason": "archive_unavailable"}, footer_enabled=True, tool_mode="advanced"
+    )
+    assert "zim_health" in footer
+    assert "list_zim_files" not in footer
 
 
 def test_footer_disabled():

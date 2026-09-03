@@ -456,8 +456,15 @@ def render_walk_namespace(data: Mapping[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def render_search_all(data: Mapping[str, Any], query: str) -> str:
+def render_search_all(
+    data: Mapping[str, Any], query: str, *, tool_mode: str = "simple"
+) -> str:
     """Render a search_all fan-out payload as a compact per-archive list.
+
+    ``tool_mode`` gates the recovery advice on the two zero-hit bodies below,
+    matching :func:`openzim_mcp.meta.format_footer`: a simple-mode client sees
+    only ``zim_query``, so naming any other tool there points it at something
+    it cannot call. Defaults to the fail-safe mode.
 
     H10: previously the simple-mode dispatcher always called the legacy
     markdown ``search_all`` which bypassed ``search_all_data`` entirely —
@@ -482,10 +489,14 @@ def render_search_all(data: Mapping[str, Any], query: str) -> str:
         # archives never actually evaluated wastes turns chasing a
         # not-the-real-problem fix.
         if files_failed > 0 and files_failed >= files_searched:
+            recovery = (
+                "Check `zim_health` and server logs"
+                if tool_mode == "advanced"
+                else "Retry shortly, or ask an operator to check the logs"
+            )
             lines.append(
                 f"All {files_failed} archive(s) returned errors before search "
-                "completed. Check `list_zim_files` and server logs; the query "
-                "itself was not the problem."
+                f"completed. {recovery}; the query itself was not the problem."
             )
         else:
             # Post-v2.0.5 D-O: add `tell me about X` cross-intent
@@ -497,11 +508,15 @@ def render_search_all(data: Mapping[str, Any], query: str) -> str:
             # instead of literal full-text matching. Same defect
             # class as D-L / D-N on the other compact no-results
             # bodies.
+            tail = (
+                "broaden the terms, or check `zim_health`."
+                if tool_mode == "advanced"
+                else "or broaden the terms."
+            )
             lines.append(
                 "No results in any archive. Try `suggestions for "
                 f"{query[:30]}`, `tell me about {query[:30]}` (with "
-                "`synthesize=True` for cross-archive auto-fetch), "
-                "broaden the terms, or check `list_zim_files`."
+                "`synthesize=True` for cross-archive auto-fetch), " + tail
             )
         return "\n".join(lines)
 

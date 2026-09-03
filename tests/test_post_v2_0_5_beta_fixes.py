@@ -548,16 +548,28 @@ class TestSearchAllNoResultsIncludesTellMeAboutBullet:
         ), f"Cross-intent `tell me about X` recovery missing. Got:\n{out}"
 
     def test_no_results_body_preserves_existing_recoveries(self) -> None:
-        """Regression: existing suggestions remain — `suggestions
-        for X` alt_spelling pointer and `list_zim_files` hint."""
+        """Regression: existing suggestions remain — the `suggestions for X`
+        alt_spelling pointer, and the server-state hint.
+
+        The server-state hint used to be spelled ``list_zim_files``, a tool
+        deleted in v2.0.0; asserting on that name here is part of why it
+        survived. It is now ``zim_health`` — and only in advanced mode, since
+        a simple-mode client has no tool but ``zim_query`` to call.
+        """
         from openzim_mcp.compact_renderers import render_search_all
 
-        out = render_search_all(
-            {"results": [], "files_searched": 2, "files_failed": 0},
-            "nonexistentxyzqwer123",
+        payload = {"results": [], "files_searched": 2, "files_failed": 0}
+        advanced = render_search_all(
+            payload, "nonexistentxyzqwer123", tool_mode="advanced"
         )
-        assert "suggestions for nonexistentxyzqwer123" in out
-        assert "list_zim_files" in out
+        assert "suggestions for nonexistentxyzqwer123" in advanced
+        assert "`zim_health`" in advanced
+        assert "list_zim_files" not in advanced
+
+        simple = render_search_all(payload, "nonexistentxyzqwer123")
+        assert "suggestions for nonexistentxyzqwer123" in simple
+        assert "list_zim_files" not in simple
+        assert "zim_health" not in simple
 
     def test_all_archives_failed_path_unchanged(self) -> None:
         """Regression: the all-archives-failed branch

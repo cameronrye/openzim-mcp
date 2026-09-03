@@ -1139,6 +1139,7 @@ class SimpleToolsHandler(
             footer = format_footer(
                 meta,
                 footer_enabled=self.zim_operations.config.meta.footer_enabled,
+                tool_mode=self.zim_operations.config.tool_mode,
             )
             if footer:
                 result = result + "\n\n" + footer
@@ -3783,7 +3784,11 @@ class SimpleToolsHandler(
                 SearchAllResponse,
                 {**cast(Dict[str, Any], data), "results": per_file},
             )
-            body = compact_renderers.render_search_all(data, actual_query)
+            body = compact_renderers.render_search_all(
+                data,
+                actual_query,
+                tool_mode=self.zim_operations.config.tool_mode,
+            )
             # H10: surface the aggregate ``reason`` / ``suggestions`` from
             # _meta so the footer renders structured recovery hints in
             # the no-hit aggregate case. Without this, the legacy

@@ -158,8 +158,23 @@ def _humanize_count(n: int) -> str:
     return f"{int(k)}K"
 
 
-def format_footer(meta: Dict[str, Any], *, footer_enabled: bool) -> str:
-    """Render a one-line markdown blockquote footer from a `_meta` envelope."""
+def format_footer(
+    meta: Dict[str, Any], *, footer_enabled: bool, tool_mode: str = "simple"
+) -> str:
+    """Render a one-line markdown blockquote footer from a `_meta` envelope.
+
+    ``tool_mode`` selects which recovery advice the footer may give, on the
+    same principle :func:`openzim_mcp.instructions.instructions_for` applies
+    to the server instructions: naming a tool the client cannot see is worse
+    than naming none. ``zim_query`` is backed by the same handler in both
+    modes (``server.py``), so these footers ship to simple-mode clients —
+    where ``zim_query`` is the only registered tool — on every failed call.
+    Advanced-mode advice therefore names the v2 tool; simple-mode advice is
+    phrased as something the model can act on with ``zim_query`` alone.
+
+    The default is the fail-safe mode: a caller that forgets to thread
+    ``tool_mode`` degrades to prose rather than to an uncallable tool name.
+    """
     if not footer_enabled or not meta:
         return ""
 
@@ -175,7 +190,7 @@ def format_footer(meta: Dict[str, Any], *, footer_enabled: bool) -> str:
     #   query — same recovery prose as 0_hits.
     # - ``sample_only`` (C2): the page came from a sampled discovery and
     #   more entries remain even though ``done=True``. Tells the model
-    #   to pivot to ``walk_namespace`` for exhaustive iteration.
+    #   to pivot to walk-mode browsing for exhaustive iteration.
     # - ``archive_unavailable`` (H10): every per-file archive failed in a
     #   fan-out (search_all) — the issue is infrastructural, not the query.
     # - ``search_all_budget_exceeded`` (H22): the aggregate timeout fired
@@ -194,31 +209,42 @@ def format_footer(meta: Dict[str, Any], *, footer_enabled: bool) -> str:
         suggestions = meta.get("suggestions") or []
         visible = suggestions[:3]
         if not visible:
+            advanced = tool_mode == "advanced"
             if reason == "no_xapian_index":
-                return (
-                    "> No full-text index on this archive. "
-                    "Try `find_entry_by_title` or `browse_namespace`."
+                return "> No full-text index on this archive. " + (
+                    "Try `zim_search(mode='title')` or `zim_browse`."
+                    if advanced
+                    else "Ask again naming the article title exactly."
                 )
             if reason == "bad_namespace":
-                return (
-                    "> Unknown namespace. Try `list_namespaces` to see valid options."
+                return "> Unknown namespace. " + (
+                    "Try `zim_metadata` to see valid options."
+                    if advanced
+                    else "Ask again without naming a namespace."
                 )
             if reason == "no_content_type_match":
                 return (
                     "> No full-text-indexed entries match that content type. "
                     "Binary assets (images, media) aren't in the search index — "
-                    "use `browse_namespace` (include_assets=True) to discover "
-                    "them, or drop the `content_type` filter."
+                    + (
+                        "use `zim_browse` (include_assets=True) to discover "
+                        "them, or drop the `content_type` filter."
+                        if advanced
+                        else "ask again without restricting the content type."
+                    )
                 )
             if reason == "sample_only":
-                return (
-                    "> Sampled view only — more entries remain. "
-                    "Use `walk_namespace` for exhaustive iteration."
+                return "> Sampled view only — more entries remain. " + (
+                    "Use `zim_browse(mode='walk')` for exhaustive iteration."
+                    if advanced
+                    else "Ask again for a narrower slice to see the rest."
                 )
             if reason == "archive_unavailable":
-                return (
-                    "> All archives failed to respond. Check `list_zim_files` "
-                    "and server logs."
+                return "> All archives failed to respond. " + (
+                    "Check `zim_health` and server logs."
+                    if advanced
+                    else "That is a server-side failure, not the query — "
+                    "retry shortly, or ask an operator to check the logs."
                 )
             if reason == "search_all_budget_exceeded":
                 return (
