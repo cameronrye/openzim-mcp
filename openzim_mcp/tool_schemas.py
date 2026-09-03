@@ -177,7 +177,8 @@ class NamespaceSummary(TypedDict):
     # True when the bucket was discovered exhaustively (full iteration,
     # or a deterministic source like ``archive.metadata_keys`` /
     # canonical-probes-only). False when the bucket's ``total`` was
-    # extrapolated from random sampling.
+    # extrapolated from a sample (the sample itself is deterministic per
+    # archive, but a projection is still an estimate).
     is_authoritative: bool
     # Diagnostic fields surfaced for callers that want to reason about
     # the discovery method. ``description`` and ``sample_entries`` come

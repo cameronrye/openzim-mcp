@@ -122,8 +122,8 @@ _CONTENT_CACHE_CASES = [
     (
         "namespaces_data",
         lambda zo, p: zo.list_namespaces_data(p),
-        lambda vp: f"namespaces_data:v2b:{vp}",
-        lambda vp, tok: f"namespaces_data:v2b:{vp}:{tok}",
+        lambda vp: f"namespaces_data:v2c:{vp}",
+        lambda vp, tok: f"namespaces_data:v2c:{vp}:{tok}",
     ),
     (
         "main_page",
