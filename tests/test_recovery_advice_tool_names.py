@@ -122,7 +122,8 @@ RENDERED_MODULES = frozenset(
 #   before ``register_resources``), pinned by
 #   ``test_simple_mode_registers_no_resources``.
 # * ``zim/structure.py`` — the ``zim_get`` names live in
-#   ``get_section_data``'s section-miss payloads. Simple mode never forwards
+#   ``_get_section_data``'s section-miss payloads (the body behind the
+#   ``get_section_data`` entry point). Simple mode never forwards
 #   them: ``SimpleToolsHandler._handle_get_section`` resolves the heading
 #   against its own list and writes its own not-found / empty-section bodies,
 #   pinned by ``test_simple_mode_get_section_never_forwards_the_payload``.
