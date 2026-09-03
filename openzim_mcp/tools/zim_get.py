@@ -313,6 +313,26 @@ def _validate_branch_combination(
                 "call instead."
             ),
         )
+    if content_offset and (binary or main_page or view != "full"):
+        # Same class as the batch guard above, and the last branch of it:
+        # ``content_offset`` reaches the data layer on the single-entry
+        # ``view='full'`` path and nowhere else. The summary / toc / structure
+        # views, the main page, and the binary fetch each took it and threw it
+        # away, so a caller paging any of them re-read the same response.
+        branch = (
+            "`binary=True`"
+            if binary
+            else "`main_page=True`" if main_page else f"`view={view!r}`"
+        )
+        return tool_error(
+            operation="invalid_path_combination",
+            message=(
+                "`content_offset` pages a full article body and is honored "
+                f"only on a single-entry `view='full'` call; {branch} ignores "
+                "it. Drop `content_offset`, or page the body with "
+                "`view='full'`."
+            ),
+        )
     if binary:
         if entry_paths:
             return tool_error(

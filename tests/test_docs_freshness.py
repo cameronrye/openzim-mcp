@@ -1875,6 +1875,13 @@ def test_cursor_precedence_is_documented_the_way_it_behaves() -> None:
 
     This is the asymmetry the section exists to state, and the one both the
     original research and my own first assumption got backwards.
+
+    The walk half of this test used to assert the opposite of what it asserts
+    now: that `mode="walk"` returned the same rows whatever `offset` it was
+    handed, because the section warned it silently ignored one. It did ignore
+    it, and that was the defect — a caller could not tell the ignored offset
+    from an exhausted namespace. Walk now refuses the argument instead, so
+    what is pinned here is the refusal.
     """
     import asyncio
 
@@ -1915,6 +1922,7 @@ def test_cursor_precedence_is_documented_the_way_it_behaves() -> None:
     walk = call(
         "zim_browse", zim_file_path=archive, namespace="A", mode="walk", limit=3
     )
+    assert walk["results"], "walk stopped returning rows; the premise is gone"
     walked = call(
         "zim_browse",
         zim_file_path=archive,
@@ -1923,11 +1931,10 @@ def test_cursor_precedence_is_documented_the_way_it_behaves() -> None:
         limit=3,
         offset=3,
     )
-    assert [r["path"] for r in walk["results"]] == [
-        r["path"] for r in walked["results"]
-    ], (
-        "`zim_browse(mode='walk')` now honours `offset` — the Cursors section "
-        "warns that it does not and that walk must be driven by its cursor"
+    assert walked.get("operation") == "invalid_combination", (
+        "`zim_browse(mode='walk')` no longer rejects `offset` — the Cursors "
+        "section states that it refuses one and that walk must be driven by "
+        f"its cursor (got {walked!r})"
     )
 
 

@@ -69,6 +69,23 @@ def register(server: "OpenZimMcpServer") -> None:
                         f"(provided: {mode!r})."
                     ),
                 )
+            # Walk iterates by entry id from the position its own cursor
+            # encodes, and ``walk_namespace_data`` has no offset parameter —
+            # so an ``offset`` here was accepted and dropped, handing back
+            # page one to a caller who believed it had advanced. Reject it and
+            # name the cursor, which is the only thing that does advance a
+            # walk. (Page mode's offset is load-bearing and unaffected.)
+            if mode == "walk" and offset:
+                return tool_error(
+                    operation="invalid_combination",
+                    message=(
+                        "`mode='walk'` iterates by entry id and does not "
+                        f"accept `offset` (provided: {offset}); it would "
+                        "return the first page again. Follow `next_cursor` to "
+                        "advance a walk, or use `mode='page'` to seek by "
+                        "`offset`."
+                    ),
+                )
 
             # A cursor is bound to the issuing tool (browse vs walk) so a
             # replayed handle can't apply one mode's resume position to the
