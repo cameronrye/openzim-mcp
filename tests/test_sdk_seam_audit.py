@@ -320,8 +320,9 @@ class TestSseTransportSeam:
     here. ``tests/live/test_live_sse.py`` covers this against a real spawned
     process, but the live marker is deselected by ``addopts`` and no workflow
     passes ``-m live``, so nothing in CI was watching a transport whose patch
-    releases Dependabot may now propose. This drives the same app object
-    ``run_sse_async`` builds, in-process, so it runs on every PR.
+    releases Dependabot may now propose. This builds the app through the same
+    ``sse_app`` call ``run_sse_async`` makes, with the arguments ``server.py``
+    hands ``mcp.run``, and drives it in-process — so it runs on every PR.
     """
 
     @staticmethod
