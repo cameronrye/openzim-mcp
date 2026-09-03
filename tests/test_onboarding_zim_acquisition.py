@@ -189,7 +189,11 @@ def test_startup_warns_when_no_archives_are_discoverable(
     ]
     joined = "\n".join(warnings)
     assert warnings, "no warning was emitted for a directory with zero ZIM files"
-    assert "0" in joined, f"the warning does not name the count: {warnings!r}"
+    # The count, not merely the digit: ``tmp_path`` is full of digits, so a
+    # bare ``"0" in joined`` would pass on a message that never mentions it.
+    assert (
+        "0 ZIM files found" in joined
+    ), f"the warning does not name the count: {warnings!r}"
     assert _mentions(
         joined, onboarding.KIWIX_LIBRARY_HOST
     ), f"the warning does not name the Kiwix library: {warnings!r}"
