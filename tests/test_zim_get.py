@@ -375,3 +375,78 @@ async def test_single_entry_without_entry_path_returns_envelope_if_validator_reg
         == "Provide one of `entry_path`, `entry_paths`, or `main_page=True`."
     )
     ops.get_zim_entry_data.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# content_offset pages a full single-entry body and nothing else
+#
+# The batch guard above was one branch of a wider drop: the summary / toc /
+# structure views, the main page and the binary fetch each took a
+# ``content_offset`` and threw it away, so a caller paging any of them re-read
+# the same response instead of advancing.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("kwargs", "dropped_call"),
+    [
+        ({"entry_path": "A/Cat", "view": "summary"}, "get_entry_summary_data"),
+        ({"entry_path": "A/Cat", "view": "toc"}, "get_table_of_contents_data"),
+        ({"entry_path": "A/Cat", "view": "structure"}, "get_article_structure_data"),
+        ({"main_page": True}, "get_main_page_data"),
+        ({"entry_path": "I/cat.png", "binary": True}, "get_binary_entry_data"),
+    ],
+)
+async def test_content_offset_rejected_outside_single_entry_full_view(
+    server: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+    kwargs: dict[str, Any],
+    dropped_call: str,
+) -> None:
+    ops = _patch_async_ops(
+        monkeypatch,
+        get_entry_summary_data={"summary": ""},
+        get_table_of_contents_data={"toc": []},
+        get_article_structure_data={"sections": []},
+        get_main_page_data={"content": ""},
+        get_binary_entry_data={"bytes": 0},
+    )
+    register_zim_get(server)
+    fn, _ = server._tools_store["zim_get"]
+    result = await fn(zim_file_path="/x.zim", content_offset=500, **kwargs)
+    assert result.get("operation") == "invalid_path_combination", (
+        f"`content_offset` was accepted for {kwargs!r} and silently "
+        f"discarded; got {result!r}"
+    )
+    assert "content_offset" in result["message"]
+    getattr(ops, dropped_call).assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("kwargs", "expected_call"),
+    [
+        ({"entry_path": "A/Cat", "view": "summary"}, "get_entry_summary_data"),
+        ({"main_page": True}, "get_main_page_data"),
+        ({"entry_path": "I/cat.png", "binary": True}, "get_binary_entry_data"),
+    ],
+)
+async def test_zero_content_offset_still_dispatches(
+    server: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+    kwargs: dict[str, Any],
+    expected_call: str,
+) -> None:
+    """content_offset=0 is the default — it must never trip the guard."""
+    ops = _patch_async_ops(
+        monkeypatch,
+        get_entry_summary_data={"summary": ""},
+        get_main_page_data={"content": ""},
+        get_binary_entry_data={"bytes": 0},
+    )
+    register_zim_get(server)
+    fn, _ = server._tools_store["zim_get"]
+    result = await fn(zim_file_path="/x.zim", content_offset=0, **kwargs)
+    assert "operation" not in result, result
+    getattr(ops, expected_call).assert_awaited_once()

@@ -102,3 +102,56 @@ async def test_invalid_mode_rejected(
     fn, _ = server._tools_store["zim_browse"]
     result = await fn(zim_file_path="/x.zim", namespace="C", mode="grep")  # type: ignore[arg-type]
     assert result["operation"] == "invalid_mode"
+
+
+# ---------------------------------------------------------------------------
+# walk resumes by cursor, never by offset
+#
+# ``walk_namespace_data`` has no offset parameter, so an ``offset`` here was
+# accepted and dropped: the caller got page one back, indistinguishable from
+# an exhausted namespace. Page mode's offset is load-bearing and unaffected,
+# which is what the third test pins.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_walk_rejects_offset(
+    server: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ops = _patch_async_ops(monkeypatch, walk_namespace_data={"results": []})
+    register_zim_browse(server)
+    fn, _ = server._tools_store["zim_browse"]
+    result = await fn(
+        zim_file_path="/x.zim", namespace="C", mode="walk", limit=3, offset=3
+    )
+    assert result.get("operation") == "invalid_combination", (
+        f"`offset` was accepted in mode='walk' and silently discarded; "
+        f"got {result!r}"
+    )
+    assert "`offset`" in result["message"]
+    assert "walk" in result["message"]
+    assert "cursor" in result["message"]
+    ops.walk_namespace_data.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_walk_without_offset_still_dispatches(
+    server: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ops = _patch_async_ops(monkeypatch, walk_namespace_data={"results": []})
+    register_zim_browse(server)
+    fn, _ = server._tools_store["zim_browse"]
+    await fn(zim_file_path="/x.zim", namespace="C", mode="walk", limit=3)
+    ops.walk_namespace_data.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_page_mode_still_honours_offset(
+    server: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The guard is walk-only."""
+    ops = _patch_async_ops(monkeypatch, browse_namespace_data={"results": []})
+    register_zim_browse(server)
+    fn, _ = server._tools_store["zim_browse"]
+    await fn(zim_file_path="/x.zim", namespace="C", mode="page", limit=3, offset=3)
+    assert ops.browse_namespace_data.await_args.kwargs["offset"] == 3

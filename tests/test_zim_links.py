@@ -119,3 +119,88 @@ async def test_unknown_direction_rejected(
     fn, _ = server._tools_store["zim_links"]
     result = await fn(zim_file_path="/x.zim", entry_path="A/Cat", direction="sideways")  # type: ignore[arg-type]
     assert result["operation"] == "invalid_direction"
+
+
+# ---------------------------------------------------------------------------
+# kind is outbound-only; related does not paginate
+#
+# ``kind`` buckets the links extracted from an article body, which only the
+# outbound walk produces — yet the other two directions accepted one and
+# dropped it, answering "what media links here" with the whole inbound set.
+# ``offset`` on ``related`` was the same silent no-op the cursor guard below
+# already refused, spelled the other way.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("direction", ["inbound", "related"])
+@pytest.mark.parametrize("kind", ["external", "media"])
+async def test_non_outbound_direction_rejects_kind(
+    server: MagicMock, monkeypatch: pytest.MonkeyPatch, direction: str, kind: str
+) -> None:
+    """``kind`` selects an outbound bucket; the other directions have none."""
+    ops = _patch_async_ops(
+        monkeypatch,
+        get_inbound_links_data={"results": []},
+        get_related_articles_data={"results": []},
+    )
+    register_zim_links(server)
+    fn, _ = server._tools_store["zim_links"]
+    result = await fn(
+        zim_file_path="/x.zim", entry_path="A/Cat", direction=direction, kind=kind
+    )
+    assert result.get("operation") == "invalid_combination", (
+        f"`kind={kind!r}` was accepted for direction={direction!r} and "
+        f"silently discarded; got {result!r}"
+    )
+    assert "`kind`" in result["message"]
+    assert direction in result["message"]
+    assert "outbound" in result["message"]
+    ops.get_inbound_links_data.assert_not_awaited()
+    ops.get_related_articles_data.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("direction", "expected_call"),
+    [
+        ("inbound", "get_inbound_links_data"),
+        ("related", "get_related_articles_data"),
+    ],
+)
+async def test_non_outbound_direction_allows_default_kind(
+    server: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+    direction: str,
+    expected_call: str,
+) -> None:
+    """``kind`` defaults to "internal", which stays a valid call everywhere."""
+    ops = _patch_async_ops(
+        monkeypatch,
+        get_inbound_links_data={"results": []},
+        get_related_articles_data={"results": []},
+    )
+    register_zim_links(server)
+    fn, _ = server._tools_store["zim_links"]
+    await fn(zim_file_path="/x.zim", entry_path="A/Cat", direction=direction)
+    getattr(ops, expected_call).assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_related_rejects_offset(
+    server: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``related`` already rejects a cursor; ``offset`` is the same request."""
+    ops = _patch_async_ops(monkeypatch, get_related_articles_data={"results": []})
+    register_zim_links(server)
+    fn, _ = server._tools_store["zim_links"]
+    result = await fn(
+        zim_file_path="/x.zim", entry_path="A/Cat", direction="related", offset=10
+    )
+    assert result.get("operation") == "invalid_combination", (
+        f"`offset` was accepted for direction='related' and silently "
+        f"discarded — every page is page one; got {result!r}"
+    )
+    assert "`offset`" in result["message"]
+    assert "related" in result["message"]
+    ops.get_related_articles_data.assert_not_awaited()
