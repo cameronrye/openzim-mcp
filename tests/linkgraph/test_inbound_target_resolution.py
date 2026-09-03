@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import shutil
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Dict, Iterator, List, Optional, Tuple, cast
 
 import pytest
@@ -23,10 +24,16 @@ from openzim_mcp.zim.structure import _StructureMixin
 
 
 class _StubSelf:
-    """A minimal ``self`` exposing only the seams the method calls."""
+    """A minimal ``self`` exposing only the seams the method calls.
 
-    def __init__(self, archive_path: Path) -> None:
+    ``config`` is one of them: the not-found error the existence gate raises
+    picks its "how to find the right path" clause by ``tool_mode``, because
+    the simple-mode surface cannot call the tool the advanced wording names.
+    """
+
+    def __init__(self, archive_path: Path, tool_mode: str = "advanced") -> None:
         self._archive_path = archive_path
+        self.config = SimpleNamespace(tool_mode=tool_mode)
 
     def _validate_zim_path(self, zim_file_path: str) -> Path:
         return self._archive_path
