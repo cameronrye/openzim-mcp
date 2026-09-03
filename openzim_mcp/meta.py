@@ -237,8 +237,9 @@ def format_footer(
                         "use `zim_browse` (include_assets=True) to discover "
                         "them, or drop the `content_type` filter."
                         if advanced
-                        else "ask again without the `content_type` filter; "
-                        "assets are not reachable from this tool."
+                        else "ask again without the `content_type` filter. "
+                        "This tool cannot discover assets, but `get binary "
+                        "content of <path>` fetches one you can already name."
                     )
                 )
             if reason == "sample_only":

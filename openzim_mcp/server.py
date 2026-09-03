@@ -270,6 +270,7 @@ class OpenZimMcpServer:
             table_row_threshold=config.content.table_row_threshold,
             table_char_threshold=config.content.table_char_threshold,
             infobox_kv_limit=config.content.infobox_kv_limit,
+            tool_mode=config.tool_mode,
         )
         # ``RateLimitConfig`` is unified — ``OpenZimMcpConfig.rate_limit`` is
         # the same model the limiter expects, including ``per_operation_limits``
@@ -393,8 +394,10 @@ class OpenZimMcpServer:
         if config.tool_mode == TOOL_MODE_SIMPLE:
             logger.info("Running in SIMPLE mode with 1 intelligent tool (zim_query)")
         else:
+            # ``get_server_configuration`` was deleted in v2.0.0; the
+            # configuration it exposed is part of the zim_health payload.
             logger.debug(
-                "Use get_server_configuration() MCP tool for detailed configuration"
+                "Detailed configuration is available from the zim_health MCP tool"
             )
 
     def _create_enhanced_error_message(

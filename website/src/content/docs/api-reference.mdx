@@ -108,12 +108,16 @@ hint names the tool; the simple hint is a request the intent parser resolves:
 |---|---|---|
 | `no_xapian_index` | ``Try `zim_search(mode='title')` or `zim_browse`.`` | ``Ask for `find article titled <title>` or `browse namespace C` — neither needs the index.`` |
 | `bad_namespace` | ``Try `zim_metadata` to see valid options.`` | ``Ask for `list namespaces` to see valid options.`` |
+| `no_content_type_match` | ``Binary assets (images, media) aren't in the search index — use `zim_browse` (include_assets=True) to discover them, or drop the `content_type` filter.`` | ``Binary assets (images, media) aren't in the search index — ask again without the `content_type` filter. This tool cannot discover assets, but `get binary content of <path>` fetches one you can already name.`` |
 | `sample_only` | ``Use `zim_browse(mode='walk')` for exhaustive iteration.`` | ``Ask for `walk namespace <namespace>` for exhaustive iteration.`` |
 | `archive_unavailable` | ``Check `zim_health` and server logs.`` | ``That is a server-side failure, not the query — retry shortly, or ask an operator to check the logs.`` |
 
-The same split applies to the `cross_file` no-results body and to the
-"entry not found" message, and `zim_health()` in the error-envelope
-troubleshooting steps becomes `list available ZIM files` in simple mode.
+The same split applies to every other recovery string the server emits: the
+`cross_file` no-results body, the "entry not found" and metadata-key-miss
+messages, and the `(Image content - Cannot display directly; ...)` line, which
+names `zim_get(entry_path=..., binary=True)` in advanced mode and
+`get binary content of <path>` in simple. `zim_health()` in the error-envelope
+troubleshooting steps likewise becomes `list available ZIM files`.
 
 Setting it to `false` suppresses the line. On an advanced-mode dict response
 that costs you nothing, because `_meta` is a real key there; in simple mode it

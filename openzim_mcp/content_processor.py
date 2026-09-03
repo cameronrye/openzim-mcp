@@ -16,6 +16,7 @@ from .constants import (
     FURNITURE_HEADING_PREFIXES,
     UNWANTED_HTML_SELECTORS,
 )
+from .recovery_advice import fetch_binary
 from .title_promotion import _DISCRIMINATOR_STOP_WORDS
 
 logger = logging.getLogger(__name__)
@@ -1330,6 +1331,7 @@ class ContentProcessor:
         table_row_threshold: int = 8,
         table_char_threshold: int = 600,
         infobox_kv_limit: int = 30,
+        tool_mode: str = "simple",
     ):
         """
         Initialize content processor.
@@ -1341,11 +1343,19 @@ class ContentProcessor:
             table_char_threshold: Tables with more characters than this are
                 replaced in compact mode.
             infobox_kv_limit: Maximum KV pairs returned by extract_infobox.
+            tool_mode: Which tool set the client can see. Gates the recovery
+                wording on the image branch of ``process_mime_content``,
+                which names a tool the caller has to be able to issue.
+                Defaults to the fail-safe mode (``simple`` registers
+                ``zim_query`` alone), so a caller that forgets to thread it
+                degrades to a ``zim_query``-shaped instruction rather than
+                to an uncallable tool name.
         """
         self.snippet_length = snippet_length
         self._table_row_threshold = table_row_threshold
         self._table_char_threshold = table_char_threshold
         self._infobox_kv_limit = infobox_kv_limit
+        self._tool_mode = tool_mode
         logger.debug(
             f"ContentProcessor initialized with snippet_length={snippet_length}"
         )
@@ -2103,12 +2113,12 @@ class ContentProcessor:
             elif mime_type.startswith("text/"):
                 return raw_content.strip()
             elif mime_type.startswith("image/"):
-                # Names the single-entry call rather than a bare
-                # ``binary=True``: batch mode rejects that combination, so
-                # the shorter phrasing sent batch callers to an error.
+                # The phrasing is mode-aware: ``zim_get`` is not registered
+                # in simple mode, where this line is just as reachable
+                # (``zim_query('get article <image path>')`` renders it).
                 return (
-                    "(Image content - Cannot display directly; fetch it with "
-                    "zim_get(entry_path=..., binary=True))"
+                    "(Image content - Cannot display directly; "
+                    f"{fetch_binary(self._tool_mode)})"
                 )
             else:
                 return f"(Unsupported content type: {mime_type})"

@@ -350,7 +350,9 @@ class _StructureMixin:
         # it stands for; rewriting here keys the bundle on the resolved path,
         # so ``W/mainPage`` shares one bundle with the real landing page
         # rather than building a second under a name libzim cannot serve.
-        entry_path = rewrite_well_known_path(archive, entry_path)
+        entry_path = rewrite_well_known_path(
+            archive, entry_path, tool_mode=self.config.tool_mode
+        )
 
         try:
             return get_or_build_bundle(

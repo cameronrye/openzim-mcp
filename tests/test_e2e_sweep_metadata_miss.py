@@ -21,8 +21,7 @@ import pytest
 from openzim_mcp.exceptions import OpenZimMcpEntryNotFoundError
 
 
-@pytest.fixture
-def content_ops(tmp_path):
+def _content_ops(tmp_path, tool_mode: str = "advanced"):
     from openzim_mcp.cache import OpenZimMcpCache
     from openzim_mcp.config import CacheConfig, ContentConfig, OpenZimMcpConfig
     from openzim_mcp.content_processor import ContentProcessor
@@ -33,13 +32,20 @@ def content_ops(tmp_path):
         allowed_directories=[str(tmp_path)],
         cache=CacheConfig(enabled=False, max_size=4, ttl_seconds=60),
         content=ContentConfig(max_content_length=5000, snippet_length=200),
+        tool_mode=tool_mode,
     )
     return ZimOperations(
         cfg,
         PathValidator(cfg.allowed_directories),
         OpenZimMcpCache(cfg.cache),
-        ContentProcessor(snippet_length=200),
+        ContentProcessor(snippet_length=200, tool_mode=tool_mode),
     )
+
+
+@pytest.fixture
+def content_ops(tmp_path):
+    """The advanced surface — the one this module's hint was written for."""
+    return _content_ops(tmp_path)
 
 
 def _archive_without(key_error: bool = True) -> MagicMock:
@@ -67,6 +73,22 @@ def test_recovery_hint_names_a_callable_tool(content_ops):
     message = str(exc_info.value)
     assert "zim_browse" in message
     assert "walk namespace" not in message
+
+
+def test_recovery_hint_is_callable_in_simple_mode(tmp_path):
+    """The same fix, one surface further: ``zim_browse`` is not registered.
+
+    Naming it here repeated the very defect this module was written for —
+    an advanced tool offered to the client that has only ``zim_query`` —
+    and the message is echoed verbatim into the ``zim_query`` body, so it
+    was reaching real simple-mode callers.
+    """
+    ops = _content_ops(tmp_path, tool_mode="simple")
+    with pytest.raises(OpenZimMcpEntryNotFoundError) as exc_info:
+        ops._get_metadata_entry_data(_archive_without(), "M/NoSuchKey", 5000, 0)
+    message = str(exc_info.value)
+    assert "browse namespace M" in message
+    assert "zim_browse" not in message
 
 
 def test_present_metadata_key_still_returns_payload(content_ops):

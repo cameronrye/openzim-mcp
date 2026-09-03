@@ -7,14 +7,18 @@ Both defects surfaced driving the installed server against the live corpus:
   therefore counted as an anchorable query term. The article's actual
   migraine paragraph sat 11k chars further down.
 * A non-binary fetch of an image dead-ends on a placeholder that never
-  names the ``binary=True`` argument which does return the bytes.
+  names the route which does return the bytes — ``binary=True`` on the
+  advanced surface, ``get binary content of <path>`` in simple mode, where
+  ``zim_get`` is not registered at all.
 """
+
+import pytest
 
 from openzim_mcp.content_processor import ContentProcessor
 
 
-def _processor() -> ContentProcessor:
-    return ContentProcessor(snippet_length=3000)
+def _processor(tool_mode: str = "advanced") -> ContentProcessor:
+    return ContentProcessor(snippet_length=3000, tool_mode=tool_mode)
 
 
 class TestSnippetAnchoringIgnoresStopWords:
@@ -49,6 +53,32 @@ class TestSnippetAnchoringIgnoresStopWords:
 
 class TestImagePlaceholderNamesBinaryArgument:
     def test_placeholder_points_at_binary_true(self):
-        result = _processor().process_mime_content(b"fake image data", "image/png")
+        result = _processor("advanced").process_mime_content(
+            b"fake image data", "image/png"
+        )
         assert "Image content" in result
         assert "binary=True" in result
+
+    def test_simple_mode_placeholder_names_a_route_that_exists(self):
+        """Simple mode registers ``zim_query`` alone.
+
+        The advanced placeholder named ``zim_get(entry_path=..., binary=True)``
+        in both modes, so the one client that cannot call ``zim_get`` was the
+        one being told to. The replacement is the ``binary`` intent, which
+        ``zim_query`` does resolve.
+        """
+        result = _processor("simple").process_mime_content(
+            b"fake image data", "image/png"
+        )
+        assert "Image content" in result
+        assert "get binary content of" in result
+        assert "zim_get" not in result
+
+    @pytest.mark.parametrize("tool_mode", ["simple", "advanced"])
+    def test_placeholder_always_offers_a_next_step(self, tool_mode):
+        """Neither mode may "fix" the hint by dropping the route."""
+        result = _processor(tool_mode).process_mime_content(
+            b"fake image data", "image/png"
+        )
+        assert "Cannot display directly" in result
+        assert result.rstrip().endswith(")")
