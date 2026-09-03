@@ -6,8 +6,8 @@ than as silent drift. Only the second can ever be *retired* by that signal:
 its canary fails when the SDK fixes the defect itself, while the first works
 around a deliberate spec decision that leaves nothing to wait for.
 
-The first is the ping keepalive shim. SDK 2.0.0's per-version method tables
-lack ``("ping", "2026-07-28")`` because the revision itself does:
+The first is the ping keepalive shim. The SDK's per-version method tables lack
+``("ping", "2026-07-28")`` because the revision itself does:
 ``PingRequest`` appears nowhere in ``schema/2026-07-28/schema.json``, and
 https://github.com/modelcontextprotocol/python-sdk/issues/3273 was closed
 not-planned on 2026-08-20 as "intended behaviour of the 2026-07-28 MCP

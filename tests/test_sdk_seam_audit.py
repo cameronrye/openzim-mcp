@@ -73,38 +73,22 @@ class TestRequestBodyCapSeam:
 
         assert DEFAULT_MAX_REQUEST_BODY_SIZE == 4 * 1024 * 1024
 
-    def test_sessionless_gate_mirrors_the_sdk_cap(self) -> None:
-        """The gate buffers a sessionless POST under *the SDK's* cap.
-
-        ``SessionlessRequestGateMiddleware`` replays a buffered body into the
-        SDK, so its ceiling has to be the SDK's own or the gate becomes the
-        limit nobody documented.
-        """
-        from mcp.server.transport_security import DEFAULT_MAX_REQUEST_BODY_SIZE
-
-        from openzim_mcp.http_app import SessionlessRequestGateMiddleware
-
-        async def _app(scope: Any, receive: Any, send: Any) -> None:  # pragma: no cover
-            raise AssertionError("not called")
-
-        gate = SessionlessRequestGateMiddleware(_app)
-        assert gate._max_body_size == DEFAULT_MAX_REQUEST_BODY_SIZE
-
-    def test_body_limit_middleware_lives_beside_it(self) -> None:
-        """#3336 moved the middleware with the constant; the SSE app uses it."""
-        from mcp.server.transport_security import RequestBodyLimitMiddleware
-
-        assert callable(RequestBodyLimitMiddleware)
-
     def test_gate_sources_the_cap_from_its_canonical_home(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """The gate must read ``transport_security``, not the re-export.
 
-        Both spellings resolve to the same 4 MiB int inside this range, so a
-        plain value assertion cannot tell them apart and the import move was
+        ``SessionlessRequestGateMiddleware`` replays a buffered body into the
+        SDK, so its ceiling has to be the SDK's own or the gate becomes the
+        limit nobody documented. A plain
+        ``gate._max_body_size == DEFAULT_MAX_REQUEST_BODY_SIZE`` used to stand
+        here saying so and was deleted as dead weight: both spellings resolve
+        to the same 4 MiB int inside this range, so that assertion could not
+        tell the two homes apart *and* stayed green when the ``else`` branch
+        was replaced by a hardcoded ``4 * 1024 * 1024``. The import move was
         unobservable — the whole floor decision rested on an edit no test
-        would have noticed reverting.
+        would have noticed reverting. This one reds under both mutations, so
+        it subsumes the equality outright.
 
         Patching the constant on ``transport_security`` separates them:
         ``streamable_http_manager`` binds its own module-level name at import
@@ -268,23 +252,95 @@ class TestResourceReadSeam:
             await server.mcp.read_resource("zim://no-such-archive/entry/A%2FX")
 
     @pytest.mark.asyncio
-    async def test_every_registered_resource_reads_str_or_bytes(
+    async def test_a_non_str_read_is_wrapped_not_forwarded(
         self, tmp_path: Path
     ) -> None:
-        """2.1.1 raises ``TypeError`` on anything else, wrapped as a crash.
+        """2.1.1's ``TypeError`` becomes ``UnexpectedResourceError``.
 
-        The check is new in 2.1.1, so a resource returning (say) a ``dict``
-        went out as JSON under 2.0.0 and becomes a generic
-        "Error reading resource" now. Every static resource this server
-        publishes is read here to show none of them do that.
+        The check is new in 2.1.1: before it, a ``Resource.read()`` returning
+        (say) a ``dict`` went out to the client as JSON; now it raises inside
+        the ``try``, where ``except (MCPError, ResourceError): raise`` does
+        *not* catch a ``TypeError``, so it falls through to the generic
+        wrapper. That is what turns a shape change into an opaque "Error
+        reading resource <uri>" instead of a silently different payload, and
+        it is the half of the rework this file has to pin, so it is driven
+        with a resource built to trip it.
+
+        A purpose-built one, because no resource this server registers can
+        reach the check — see the sweep below for why. Reads *through*
+        ``server.mcp.read_resource``, not ``resource.read()``, because the
+        check lives in the caller.
         """
+        from mcp.server.mcpserver.exceptions import UnexpectedResourceError
+        from mcp.server.mcpserver.resources.base import Resource
+
+        class _DictResource(Resource):
+            async def read(self) -> Any:
+                return {"not": "a string"}
+
+        server = _server(tmp_path)
+        server.mcp._resource_manager.add_resource(
+            _DictResource(
+                uri="zim://seam-audit-nonstr",
+                name="seam_audit_nonstr",
+                mime_type="application/json",
+            )
+        )
+
+        with pytest.raises(UnexpectedResourceError) as excinfo:
+            await server.mcp.read_resource("zim://seam-audit-nonstr")
+
+        assert isinstance(excinfo.value.__cause__, TypeError), excinfo.value.__cause__
+        # ...and the client is told nothing but the URI.
+        assert "not a string" not in str(excinfo.value), str(excinfo.value)
+
+    @pytest.mark.asyncio
+    async def test_registered_resource_functions_return_str_themselves(
+        self, tmp_path: Path
+    ) -> None:
+        """Each static resource function returns ``str`` *before* the SDK helps.
+
+        This used to sweep the static list through ``read_resource`` and
+        assert ``isinstance(content, (str, bytes))``, which cannot fail:
+        every static resource here is a ``FunctionResource``, and
+        ``FunctionResource.read()`` JSON-encodes anything that is not already
+        ``str``/``bytes`` (``pydantic_core.to_json(result, fallback=str,
+        indent=2)``) before ``read_resource`` ever type-checks it. Verified:
+        making ``list_zim_files_resource`` return ``{"mutant": True}`` left
+        that sweep green.
+
+        So the property worth holding is the repo's, one layer lower — the
+        function's own return type. ``zim://files`` builds its payload with
+        ``json.dumps(..., indent=2, ensure_ascii=False)``; falling back to
+        the SDK's encoder would keep the suite green while changing the bytes
+        on the wire (different escaping, different key handling). The
+        ``FunctionResource`` assertion is the other half: if a ``Resource``
+        subclass is ever registered statically, its ``read()`` *can* reach the
+        type check above, and this reds to say so.
+        """
+        import inspect
+
+        from mcp.server.mcpserver.resources import FunctionResource
+
         server = _server(tmp_path)
         static = await server.mcp.list_resources()
         assert static, "expected at least one static resource"
+
+        registry = server.mcp._resource_manager._resources
         for descriptor in static:
-            contents = await server.mcp.read_resource(str(descriptor.uri))
-            for item in contents:
-                assert isinstance(item.content, (str, bytes)), descriptor.uri
+            resource = registry[str(descriptor.uri)]
+            assert isinstance(resource, FunctionResource), (
+                f"{descriptor.uri} is a {type(resource).__name__}, not a "
+                "FunctionResource: its read() reaches 2.1.1's str|bytes check "
+                "directly, so it needs the treatment ZimEntryResource gets."
+            )
+            fn = resource.fn
+            raw = await fn() if inspect.iscoroutinefunction(fn) else fn()
+            assert isinstance(raw, (str, bytes)), (
+                f"{descriptor.uri} returns {type(raw).__name__}; the SDK will "
+                "JSON-encode it with pydantic_core.to_json, silently changing "
+                "the bytes this resource puts on the wire."
+            )
 
     @pytest.mark.asyncio
     async def test_entry_template_read_survives_the_type_check(
@@ -355,6 +411,44 @@ class TestSseTransportSeam:
         assert response.status_code == 405, response.text
         assert "POST" in response.headers.get("allow", "")
 
+    @pytest.mark.asyncio
+    async def test_message_endpoint_caps_the_request_body(self, tmp_path: Path) -> None:
+        """#3336 moved ``RequestBodyLimitMiddleware`` with the constant.
+
+        ``SseServerTransport.__init__`` wraps its post handler in that
+        middleware, so the SSE endpoint refuses an over-cap body before any
+        of its own code runs. The first version of this asserted
+        ``callable(RequestBodyLimitMiddleware)`` after importing it — true of
+        any class, so the import was the whole test and the docstring's "the
+        SSE app uses it" went unchecked. This drives the app instead: nothing
+        in this repo imports the middleware, so its module home is not a seam
+        we depend on; the cap being enforced on that route is.
+
+        The under-cap control is what makes the 413 mean something: it comes
+        back 421 from transport-security's Host check, which sits *behind*
+        the body limit — so the 413 is the cap answering, not a blanket
+        rejection of everything posted here.
+        """
+        from mcp.server.transport_security import DEFAULT_MAX_REQUEST_BODY_SIZE
+
+        transport = httpx.ASGITransport(app=self._sse_app(tmp_path))
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://127.0.0.1"
+        ) as client:
+            oversized = await client.post(
+                "/messages/",
+                content=b"x" * (DEFAULT_MAX_REQUEST_BODY_SIZE + 1),
+                headers={"content-type": "application/json"},
+            )
+            small = await client.post(
+                "/messages/",
+                content=b"{}",
+                headers={"content-type": "application/json"},
+            )
+
+        assert oversized.status_code == 413, oversized.text
+        assert small.status_code != 413, small.text
+
 
 class TestDeclaredRangeIsTheTestedRange:
     """The lockfile must not sit below the top minor of the declared cap."""
@@ -411,23 +505,47 @@ class TestDeclaredRangeIsTheTestedRange:
         instead would red on a contributor's stale venv for a reason the
         message misdescribes, and could not see a lockfile CI would install
         differently.
+
+        A major-boundary cap (``<3.0``) used to ``pytest.skip`` here, on the
+        grounds that which minor series such a range admits at the top is not
+        knowable offline. That is true and it was the wrong answer: the skip
+        fired exactly in the case the gate exists for — ``>=2.1.0,<3.0``
+        without ``--upgrade-package mcp`` is the same trap one bound wider —
+        and announced itself as a single ``s`` in the CI log. It fails now,
+        because the policy this whole audit rests on (pyproject's requirement
+        comment, and the docs sentence about holding ``mcp`` to one series) is
+        one audited minor series at a time. Widening past that is a decision
+        someone has to take here, in this test, rather than inherit from a
+        skip.
         """
-        upper = [s for s in self._declared_specifier() if s.operator in ("<", "<=")]
+        declared = self._declared_specifier()
+        upper = [s for s in declared if s.operator in ("<", "<=")]
         assert len(upper) == 1, f"expected exactly one upper bound, got {upper}"
         cap = Version(upper[0].version)
-        if upper[0].operator == "<" and cap.minor == 0:
-            pytest.skip(
-                "cap is a major boundary; the top minor it admits is not "
-                "knowable without querying the index"
-            )
+        locked = Version(self._locked_version("mcp"))
+
+        assert locked in declared, (
+            f"uv.lock pins mcp {locked}, which pyproject's mcp{declared} does "
+            "not admit — CI is testing a wheel no fresh install can get. Run "
+            "`uv lock --upgrade-package mcp`."
+        )
+        assert not (upper[0].operator == "<" and cap.minor == 0), (
+            f"pyproject caps mcp at the major boundary {upper[0]}, which "
+            "admits every minor series below it; which one a fresh install "
+            "resolves cannot be read out of the lockfile, so this gate can no "
+            "longer tell a tested wheel from an untested one. This audit pins "
+            "one minor series at a time (see the module docstring and "
+            "pyproject's requirement comment). Either declare a minor cap "
+            f"(`<{cap.major - 1}.N`), or re-audit the seams against the new "
+            "major and rewrite this gate deliberately."
+        )
         if upper[0].operator == "<":
             top = (cap.major, cap.minor - 1)
         else:
             top = (cap.major, cap.minor)
 
-        locked = Version(self._locked_version("mcp"))
         assert (locked.major, locked.minor) == top, (
-            f"pyproject admits mcp{self._declared_specifier()}, so the top "
+            f"pyproject admits mcp{declared}, so the top "
             f"series is {top[0]}.{top[1]}.x, but uv.lock pins {locked}. Run "
             "`uv lock --upgrade-package mcp` so CI tests the wheel a fresh "
             "install would get."

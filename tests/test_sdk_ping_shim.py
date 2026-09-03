@@ -2,7 +2,7 @@
 
 The shim works around a deliberate spec decision, not an upstream defect:
 2026-07-28 drops ping (``PingRequest`` is absent from that revision's schema),
-SDK 2.0.0's per-version method tables lack ``("ping", "2026-07-28")`` to
+the SDK's per-version method tables lack ``("ping", "2026-07-28")`` to
 match, and python-sdk#3273 was closed not-planned on 2026-08-20 as intended
 behaviour. Left alone, every modern-negotiated connection would have its
 keepalive rejected with -32601; this server answers it regardless, for clients

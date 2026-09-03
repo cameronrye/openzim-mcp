@@ -2535,7 +2535,11 @@ def test_release_stamp_is_derived_and_split_by_surface() -> None:
 #
 # Scope is the doc corpus above, which deliberately excludes CHANGELOG.md:
 # a shipped release note records what that release required and must not be
-# rewritten when the requirement moves.
+# rewritten when the requirement moves. "Deliberately" is asserted, not just
+# asserted-in-a-comment — see
+# ``test_changelog_stays_out_of_the_mcp_range_sweep`` at the end of this
+# section, which fails if the changelog joins the corpus and equally if it
+# stops carrying the historical range the exclusion exists to protect.
 
 # ``mcp>=2.1.0,<2.2`` / ``mcp[cli]>=2.1.0,<2.2``, backticked or bare. The
 # lookbehind keeps this off ``openzim-mcp``, which is this project, not the SDK.
@@ -2629,4 +2633,46 @@ def test_no_doc_pins_mcp_to_a_series_the_range_excludes() -> None:
     assert not stale, (
         f"pyproject declares mcp{declared}, which does not admit that whole "
         "series:\n  " + "\n  ".join(stale)
+    )
+
+
+def test_changelog_stays_out_of_the_mcp_range_sweep() -> None:
+    """The corpus's CHANGELOG exclusion is deliberate, so it is asserted.
+
+    ``CHANGELOG.md`` records ``mcp>=2.0.0,<2.1`` in the v3.0.0 entry: a true
+    statement of what that release required, and one the gates above would
+    report as stale the moment the file entered their corpus. It does not,
+    but only because ``_DOC_ROOTS`` names the three repo-root files it reads
+    one by one — a fact about a tuple literal two thousand lines up, not a
+    decision anyone recorded. The comment introducing section 15 calls the
+    exclusion deliberate; this is what makes that true.
+
+    Both halves matter. If the historical range ever disappeared from the
+    changelog the exclusion would be about an empty set, and this would be
+    guarding nothing — so its presence is asserted too, which is also how the
+    test stays honest if the range pattern is ever narrowed.
+    """
+    changelog = REPO / "CHANGELOG.md"
+    assert changelog.is_file()
+    assert changelog not in _doc_files(), (
+        "CHANGELOG.md is in the doc corpus, so the mcp range gates now read "
+        "shipped release notes as live claims and will red on history. "
+        "Released entries record what that release required and must not be "
+        "rewritten when the requirement moves: keep the changelog out of "
+        "_DOC_ROOTS."
+    )
+
+    declared = _declared_mcp_specifier()
+    prose = _visible_prose(changelog.read_text(encoding="utf-8"))
+    historical = [
+        match.group(1)
+        for match in _MCP_RANGE_RE.finditer(prose)
+        if _normalised(SpecifierSet(match.group(1))) != _normalised(declared)
+    ]
+    assert historical, (
+        "CHANGELOG.md no longer records an mcp range that differs from "
+        f"mcp{declared}, so the exclusion above is guarding nothing. Either a "
+        "release note was rewritten to match the current requirement — which "
+        "is the thing the exclusion exists to permit *not* doing — or "
+        "_MCP_RANGE_RE stopped matching the shape release notes use."
     )

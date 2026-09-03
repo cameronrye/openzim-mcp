@@ -558,7 +558,7 @@ async def test_legacy_clients_are_not_served_the_per_uri_ttl(tmp_path: Path) -> 
 async def test_modern_clients_can_ping(tmp_path: Path) -> None:
     """A keepalive ping on a 2026-07-28 connection is answered, not -32601.
 
-    2026-07-28 drops ping, and SDK 2.0.0 ships its modern method tables
+    2026-07-28 drops ping, and the SDK ships its modern method tables
     without a ping row to match (python-sdk#3273, closed not-planned as
     intended spec behaviour), so a keepalive-pinging modern client — the kind
     this port exists to serve — would see METHOD_NOT_FOUND on every ping and
