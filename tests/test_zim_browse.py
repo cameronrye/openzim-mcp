@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from openzim_mcp.pagination import Cursor
 from openzim_mcp.tools.zim_browse import register as register_zim_browse
 
 
@@ -105,12 +106,15 @@ async def test_invalid_mode_rejected(
 
 
 # ---------------------------------------------------------------------------
-# walk resumes by cursor, never by offset
+# walk resumes by cursor, never by a bare offset
 #
-# ``walk_namespace_data`` has no offset parameter, so an ``offset`` here was
-# accepted and dropped: the caller got page one back, indistinguishable from
-# an exhausted namespace. Page mode's offset is load-bearing and unaffected,
-# which is what the third test pins.
+# ``walk_namespace_data`` has no offset parameter, so a bare ``offset`` here
+# was accepted and dropped: the caller got page one back, indistinguishable
+# from an exhausted namespace. Page mode's offset is load-bearing and
+# unaffected. A cursor *plus* an offset is not that defect — the offset loses
+# to the cursor, which is the precedence rule every paginating tool follows —
+# so the walk must still resume, and that is what
+# ``test_walk_with_a_cursor_still_resumes_when_an_offset_tags_along`` pins.
 # ---------------------------------------------------------------------------
 
 
@@ -125,7 +129,7 @@ async def test_walk_rejects_offset(
         zim_file_path="/x.zim", namespace="C", mode="walk", limit=3, offset=3
     )
     assert result.get("operation") == "invalid_combination", (
-        f"`offset` was accepted in mode='walk' and silently discarded; "
+        f"a bare `offset` was accepted in mode='walk' and silently discarded; "
         f"got {result!r}"
     )
     assert "`offset`" in result["message"]
@@ -155,3 +159,62 @@ async def test_page_mode_still_honours_offset(
     fn, _ = server._tools_store["zim_browse"]
     await fn(zim_file_path="/x.zim", namespace="C", mode="page", limit=3, offset=3)
     assert ops.browse_namespace_data.await_args.kwargs["offset"] == 3
+
+
+@pytest.mark.asyncio
+async def test_walk_with_a_cursor_still_resumes_when_an_offset_tags_along(
+    server: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A cursor resume is not the silent-drop defect, so it must not be
+    rejected alongside it.
+
+    The Cursors section of the API reference states the precedence rule for
+    every paginating tool: an explicit `offset` *loses* to a cursor. A client
+    that keeps sending the offset it started the run from — or that fills the
+    argument from a template — was resuming correctly before the bare-offset
+    guard existed, and still has to.
+    """
+    ops = _patch_async_ops(monkeypatch, walk_namespace_data={"results": []})
+    register_zim_browse(server)
+    fn, _ = server._tools_store["zim_browse"]
+    cursor = Cursor.encode(
+        tool="walk_namespace", state={"o": 42, "l": 3, "ns": "C", "ai": "qq"}
+    )
+
+    result = await fn(
+        zim_file_path="/x.zim",
+        namespace="C",
+        mode="walk",
+        limit=3,
+        cursor=cursor,
+        offset=3,
+    )
+
+    assert result == {"results": []}, (
+        f"a cursor-driven walk was rejected because an offset came with it; "
+        f"got {result!r}"
+    )
+    ops.walk_namespace_data.assert_awaited_once()
+    assert ops.walk_namespace_data.await_args.kwargs["cursor_state"]["scan_at"] == 42
+
+
+@pytest.mark.asyncio
+async def test_walk_reports_a_bad_cursor_before_the_offset_guard(
+    server: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The cursor fault is the specific one; report it, not the offset."""
+    ops = _patch_async_ops(monkeypatch, walk_namespace_data={"results": []})
+    register_zim_browse(server)
+    fn, _ = server._tools_store["zim_browse"]
+
+    result = await fn(
+        zim_file_path="/x.zim",
+        namespace="C",
+        mode="walk",
+        limit=3,
+        cursor="not-a-cursor",
+        offset=3,
+    )
+
+    assert result["operation"] == "cursor_decode"
+    ops.walk_namespace_data.assert_not_awaited()

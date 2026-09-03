@@ -436,7 +436,7 @@ zim_browse(
 |-----------|-------|-------|
 | `namespace` | | `C`, `M`, `W`, `X` on modern archives; `A`, `I`, `-` on legacy ones. Which you get depends on the archive — see [ZIM concepts](/openzim-mcp/docs/zim-concepts/) and read the real breakdown from `zim_metadata` |
 | `limit` | 1–200 (`page`) / 1–500 (`walk`) | Default 50 (`page`) / 200 (`walk`). `page` rejects anything above 200 |
-| `cursor`, `offset` | | Both modes emit and accept a `cursor`. `offset` is page-only — `mode="walk"` **rejects** a non-zero one with `invalid_combination`, since a walk advances by cursor |
+| `cursor`, `offset` | | Both modes emit and accept a `cursor`. `offset` is page-only: a walk advances by cursor, so `mode="walk"` **rejects** a non-zero one sent on its own (`invalid_combination`). Sent *alongside* a walk cursor it is accepted and ignored, per the precedence rule under [Cursors](#cursors) |
 | `include_assets` | | Browses of C-namespace pages on domain-scheme archives hide css/js/font assets by default in **both** modes; pass `True` to include them. Only the `page_info.assets_filtered` flag is `mode="page"`-only |
 
 **Returns:** a paginated envelope for both modes — `{results, next_cursor, total, done, page_info, namespace, …}` — with `next_cursor` driving `walk` iteration until `done: true`.
@@ -699,7 +699,9 @@ mint identical cursors.
 **Precedence is not symmetric.** An explicit `limit` wins over the page size the cursor encodes —
 the encoded size is only a fallback when you omit `limit`. An explicit `offset`, by contrast,
 *loses*: when a cursor is present its offset is used and yours is ignored. So pass a cursor or an
-offset, never both.
+offset, never both. This holds on every cursor-accepting surface, including the ones that refuse a
+*bare* `offset` (below) — `zim_browse(mode="walk")` resumes from the cursor and ignores the offset
+riding along with it, exactly as `mode="page"` does.
 
 **There is a length cap, on one surface.** `zim_query` rejects a cursor over 2048 characters with
 a `cursor_decode` envelope. The advanced tools have no length check.
@@ -716,12 +718,12 @@ a `cursor_decode` envelope. The advanced tools have no length check.
 
 **"Drop the cursor and pass `offset`" is the usual recovery, but it does not work everywhere.**
 `zim_search` accepts `offset` only for single-archive `mode="fulltext"`; `title`, `suggest` and
-`cross_file=True` reject it and have no pagination at all. `zim_browse(mode="walk")` and
-`zim_links(direction="related")` reject it too, with `invalid_combination` — walk iteration must be
-driven by its cursor, and `related` returns one ranked set that only `limit` resizes. (Both used to
-accept the argument and drop it, handing back page one to a caller who believed it had advanced.)
-Where the substitution does work, the cursor page and the equivalent `offset` page are the same
-rows.
+`cross_file=True` reject it and have no pagination at all. `zim_browse(mode="walk")` rejects a
+*bare* one with `invalid_combination` — a walk has no offset to seek to, so iteration must be
+driven by its cursor — and `zim_links(direction="related")` rejects one outright, since it returns
+a single ranked set that only `limit` resizes. (Both used to accept the argument and drop it,
+handing back page one to a caller who believed it had advanced.) Where the substitution does work,
+the cursor page and the equivalent `offset` page are the same rows.
 
 ## Error responses
 

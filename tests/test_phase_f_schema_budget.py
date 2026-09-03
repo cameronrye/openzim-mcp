@@ -93,7 +93,7 @@ ALLOCATION = {
     "zim_get_section": 1_840,  # 1,863B
     "zim_browse": 2_080,  # 2,170B
     "zim_metadata": 1_310,  # 1,386B
-    "zim_links": 2_700,  # 2,985B
+    "zim_links": 2_700,  # 2,990B
     "zim_health": 1_300,  # 1,367B
 }
 

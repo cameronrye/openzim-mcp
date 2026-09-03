@@ -1880,8 +1880,14 @@ def test_cursor_precedence_is_documented_the_way_it_behaves() -> None:
     now: that `mode="walk"` returned the same rows whatever `offset` it was
     handed, because the section warned it silently ignored one. It did ignore
     it, and that was the defect — a caller could not tell the ignored offset
-    from an exhausted namespace. Walk now refuses the argument instead, so
+    from an exhausted namespace. Walk now refuses a *bare* offset instead, so
     what is pinned here is the refusal.
+
+    Refusing a bare one is not the same as refusing the pair. The precedence
+    paragraph applies to every cursor-accepting surface, walk included: an
+    offset riding along with a cursor loses to it, and the walk still resumes.
+    That half is pinned too, because the guard is one clause away from
+    breaking a correct resume.
     """
     import asyncio
 
@@ -1932,9 +1938,35 @@ def test_cursor_precedence_is_documented_the_way_it_behaves() -> None:
         offset=3,
     )
     assert walked.get("operation") == "invalid_combination", (
-        "`zim_browse(mode='walk')` no longer rejects `offset` — the Cursors "
-        "section states that it refuses one and that walk must be driven by "
-        f"its cursor (got {walked!r})"
+        "`zim_browse(mode='walk')` no longer rejects a bare `offset` — the "
+        "Cursors section states that it refuses one and that walk must be "
+        f"driven by its cursor (got {walked!r})"
+    )
+
+    # ... and the refusal must not have swallowed the resume it points at.
+    resumed_walk = call(
+        "zim_browse",
+        zim_file_path=archive,
+        namespace="A",
+        mode="walk",
+        limit=3,
+        cursor=walk["next_cursor"],
+    )
+    outranked = call(
+        "zim_browse",
+        zim_file_path=archive,
+        namespace="A",
+        mode="walk",
+        limit=3,
+        cursor=walk["next_cursor"],
+        offset=3,
+    )
+    assert [r["path"] for r in outranked.get("results", [])] == [
+        r["path"] for r in resumed_walk["results"]
+    ], (
+        "a walk cursor no longer outranks an `offset` sent with it — the "
+        "Cursors section states the offset loses on every cursor-accepting "
+        f"surface, walk included (got {outranked!r})"
     )
 
 

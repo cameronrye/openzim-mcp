@@ -69,23 +69,6 @@ def register(server: "OpenZimMcpServer") -> None:
                         f"(provided: {mode!r})."
                     ),
                 )
-            # Walk iterates by entry id from the position its own cursor
-            # encodes, and ``walk_namespace_data`` has no offset parameter —
-            # so an ``offset`` here was accepted and dropped, handing back
-            # page one to a caller who believed it had advanced. Reject it and
-            # name the cursor, which is the only thing that does advance a
-            # walk. (Page mode's offset is load-bearing and unaffected.)
-            if mode == "walk" and offset:
-                return tool_error(
-                    operation="invalid_combination",
-                    message=(
-                        "`mode='walk'` iterates by entry id and does not "
-                        f"accept `offset` (provided: {offset}); it would "
-                        "return the first page again. Follow `next_cursor` to "
-                        "advance a walk, or use `mode='page'` to seek by "
-                        "`offset`."
-                    ),
-                )
 
             # A cursor is bound to the issuing tool (browse vs walk) so a
             # replayed handle can't apply one mode's resume position to the
@@ -98,6 +81,30 @@ def register(server: "OpenZimMcpServer") -> None:
             )
             if cursor_error is not None:
                 return cursor_error
+            # Walk iterates by entry id from the position its own cursor
+            # encodes, and ``walk_namespace_data`` has no offset parameter —
+            # so a bare ``offset`` here was accepted and dropped, handing back
+            # page one to a caller who believed it had advanced. Reject it and
+            # name the cursor, which is the only thing that does advance a
+            # walk. (Page mode's offset is load-bearing and unaffected.)
+            #
+            # This sits *after* cursor decoding on purpose. With a cursor the
+            # offset is not silently lost, it loses to the cursor — the
+            # documented, tool-wide precedence rule that page mode follows
+            # too — and rejecting the pair would break a correct resume that
+            # happens to repeat the offset it started from. Only the case
+            # with nothing else to advance the walk is an error.
+            if mode == "walk" and offset and state is None:
+                return tool_error(
+                    operation="invalid_combination",
+                    message=(
+                        "`mode='walk'` iterates by entry id and does not "
+                        f"accept a bare `offset` (provided: {offset}); it "
+                        "would return the first page again. Follow "
+                        "`next_cursor` to advance a walk, or use "
+                        "`mode='page'` to seek by `offset`."
+                    ),
+                )
             eff_assets = include_assets
             if state is not None:
                 # The cursor's ``ns`` is canonical (the data layer maps
