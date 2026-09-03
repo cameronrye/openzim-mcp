@@ -140,8 +140,8 @@ _CONTENT_CACHE_CASES = [
     (
         "browse_ns_data",
         lambda zo, p: zo.browse_namespace_data(p, "A", 50, 0),
-        lambda vp: f"browse_ns_data:v2e:{vp}:A:50:0:assets=False",
-        lambda vp, tok: f"browse_ns_data:v2e:{vp}:{tok}:A:50:0:assets=False",
+        lambda vp: f"browse_ns_data:v2f:{vp}:A:50:0:assets=False",
+        lambda vp, tok: f"browse_ns_data:v2f:{vp}:{tok}:A:50:0:assets=False",
     ),
     (
         # An explicit limit is passed so the key is not affected by the

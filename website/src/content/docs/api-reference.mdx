@@ -454,7 +454,7 @@ zim_metadata(zim_file_path: str) -> Any
 **Returns:** structured response with:
 
 - **`metadata`** — archive M-namespace fields, keyed exactly as libzim emits them, which is **capitalized**: `Title`, `Language`, `Creator`, `Publisher`, `Date`, `Flavour`, and so on. `metadata["title"]` raises `KeyError` — use `metadata["Title"]`.
-- **`namespaces`** — a deterministic namespace breakdown (surfaces minority namespaces — `M`, `W`, `X`, `I` — that random sampling could miss).
+- **`namespaces`** — a namespace breakdown. Archives above 1,000 entries are sampled rather than walked, so the per-namespace counts outside the dominant namespace are projections, not exact totals (each bucket carries `is_authoritative`). The sample is a fixed stride over entry ids, seeded from the archive UUID: the same archive always answers the same thing, and minority namespaces (`M`, `W`, `X`, `I`, `-`) are surfaced rather than lost to whichever entries a random draw happened to hit.
 - **`archive_identity`** — `{uuid, is_multipart}`, the libzim archive identity (*added in v2.1*).
 - **`index_capabilities`** — `{has_fulltext_index, has_title_index}`: whether full-text search and title suggestions will work against this archive (*added in v2.1*).
 - **`counter_breakdown`** — `{mimetype: count}` parsed from the `M/Counter` metadata, so you can profile an archive's content composition without walking it. Omitted when the archive has no `M/Counter` entry (*added in v2.1*).

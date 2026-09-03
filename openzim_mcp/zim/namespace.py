@@ -17,11 +17,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, cast
 from libzim.reader import Archive  # type: ignore[import-untyped]
 
 import openzim_mcp.zim_operations as _zim_ops_mod
-from openzim_mcp.constants import (
-    NAMESPACE_MAX_ENTRIES,
-    NAMESPACE_MAX_SAMPLE_SIZE,
-    NAMESPACE_SAMPLE_ATTEMPTS_MULTIPLIER,
-)
+from openzim_mcp.constants import NAMESPACE_MAX_ENTRIES, NAMESPACE_MAX_SAMPLE_SIZE
 from openzim_mcp.exceptions import (
     OpenZimMcpArchiveError,
     OpenZimMcpValidationError,
@@ -193,6 +189,15 @@ def _deterministic_sample_ids(
 
     The UUID-derived phase keeps two same-sized archives from probing the
     identical offsets, without reintroducing any run-to-run variation.
+
+    The trade being made: a systematic sample is biased whenever the
+    population has a period that divides the stride. An archive whose
+    dirent table repeated a namespace pattern with period
+    ``total/sample_size`` would land every draw in the same namespace. ZIM
+    dirents are sorted by path, so namespaces appear as contiguous runs
+    rather than as a repeating cycle, and no corpus archive exercises it —
+    but that is the failure mode to look for if a projection ever comes back
+    absurd, and it is why ``_probe_known_namespaces`` still runs afterwards.
     """
     if total_entries <= 0 or sample_size <= 0:
         return []
@@ -371,7 +376,7 @@ class _NamespaceMixin:
             self._iterate_all_entries(archive, total_entries, record)
             self._finalise_full_iteration(namespaces)
         else:
-            self._sample_entries(archive, total_entries, seen_entries, record)
+            self._sample_entries(archive, total_entries, record)
             self._probe_known_namespaces(archive, seen_entries, record)
             self._finalise_sampled(namespaces, total_entries)
 
@@ -574,13 +579,14 @@ class _NamespaceMixin:
             ns_info.pop("_sampled_count", None)
 
     @staticmethod
-    def _sample_entries(
-        archive: Archive, total_entries: int, seen_entries: set[str], record: Any
-    ) -> None:
+    def _sample_entries(archive: Archive, total_entries: int, record: Any) -> None:
         """Sample up to NAMESPACE_MAX_SAMPLE_SIZE distinct entries.
 
         Deterministic by construction — see :func:`_deterministic_sample_ids`
-        for why ``get_random_entry`` could not be used here.
+        for why ``get_random_entry`` could not be used here. That helper
+        yields exactly ``sample_size`` distinct ids, so the old
+        retry-until-distinct loop (and the "stop once we have enough" bound
+        that went with it) has no work left to do.
         """
         sample_size = min(NAMESPACE_MAX_SAMPLE_SIZE, total_entries)
         logger.debug(
@@ -591,8 +597,6 @@ class _NamespaceMixin:
                 total_entries, sample_size, _archive_sample_seed(archive)
             )
             for entry_id in entry_ids:
-                if len(seen_entries) >= sample_size:
-                    break
                 try:
                     entry = archive._get_entry_by_id(entry_id)
                     record(entry.path, entry.title or "", is_probe=False)
@@ -606,10 +610,15 @@ class _NamespaceMixin:
     ) -> None:
         """Probe canonical paths to surface namespaces missed by sampling.
 
-        Random sampling on a large archive will silently miss minority
-        namespaces (e.g. M, W, X, I when A holds 99%+ of entries). Trying
-        canonical paths in each common namespace surfaces them
-        deterministically.
+        A 1-in-N sample of a large archive can still miss minority
+        namespaces (e.g. M, W, X, I when A holds 99%+ of entries) — with
+        ``NAMESPACE_MAX_SAMPLE_SIZE`` draws over a 20k-entry archive the
+        stride is ~20, so a namespace with fewer than ~20 entries may fall
+        entirely between two steps. Trying canonical paths in each common
+        namespace surfaces those, independently of where the stride lands.
+
+        A probe proves existence only; the hit is recorded as a floor, not
+        as sampled signal, so it never feeds the ratio projection.
         """
         for canonical_path in self._get_known_namespace_probes():
             try:
@@ -633,7 +642,7 @@ class _NamespaceMixin:
     ) -> None:
         """Project per-namespace totals from sample counts.
 
-        We extrapolate ONLY the randomly-sampled count via sampling ratio —
+        We extrapolate ONLY the sampled count via the sampling ratio —
         probed entries are confirmed-present-but-frequency-unknown, so they
         only contribute a lower-bound floor. Project only when we have
         enough sampled signal to make a stable estimate; below the
@@ -873,12 +882,18 @@ class _NamespaceMixin:
         # cursor ``s.o`` is therefore a row offset again; ``total`` stays the
         # authoritative ``entry_count``. The bump stops pre-fix cached pages —
         # with the old entry-id-offset cursor — from leaking through.
+        # Bumped again v2e -> v2f when the old-scheme sampled branch stopped
+        # drawing from ``get_random_entry``: the archive does not change when
+        # the sampler does, so a persisted snapshot would keep serving the
+        # pre-fix pages (a different random population per page, and an empty
+        # result for every namespace the article index cannot reach) until TTL
+        # expiry.
         # The stat token (mtime_ns:size) invalidates the page when the
         # archive is replaced in place (archive_stat_token contract).
         from openzim_mcp.bundle import archive_stat_token
 
         cache_key = (
-            f"browse_ns_data:v2e:{validated_path}:"
+            f"browse_ns_data:v2f:{validated_path}:"
             f"{archive_stat_token(validated_path)}:{namespace}:"
             f"{limit}:{offset}:assets={include_assets}"
         )
@@ -1521,8 +1536,8 @@ class _NamespaceMixin:
 
         Returns ``(sorted_paths, full_iteration)`` where ``full_iteration`` is
         True when every entry in the archive was inspected (so the result is
-        exhaustive). For larger archives, falls back to random sampling and
-        returns False — counts/paths are then a lower bound.
+        exhaustive). For larger archives, falls back to a systematic sample of
+        entry ids and returns False — counts/paths are then a lower bound.
 
         New-scheme dispatch: M is enumerated from ``archive.metadata_keys``
         (full iteration, exhaustive); namespaces other than C/M return empty
@@ -1624,19 +1639,41 @@ class _NamespaceMixin:
     def _sample_namespace_entries(
         self, archive: Archive, namespace: str, has_new_scheme: bool = False
     ) -> Tuple[List[str], set[str]]:
-        """Sample random entries until ``NAMESPACE_MAX_ENTRIES`` matches found."""
+        """Sample entry ids until ``NAMESPACE_MAX_ENTRIES`` matches are found.
+
+        Uses the same systematic walk as the ``list_namespaces`` sampler
+        (:func:`_deterministic_sample_ids`), for the same two reasons:
+
+        * **agreement.** ``get_random_entry`` draws from the *article*
+          index, so on an archive whose articles all live in ``A`` this
+          function could never return an ``I`` or ``-`` entry however many
+          draws it took — while ``list_namespaces``, which walks entry ids,
+          reports both. Two tools describing the same archive differently
+          is worse than either being imprecise.
+        * **determinism.** ``browse_namespace`` is cached and paginated;
+          a sample that re-rolls on every call hands page 2 a different
+          population than page 1.
+
+        The returned ``total`` is still a lower bound (capped at
+        ``NAMESPACE_MAX_ENTRIES``), which is what
+        ``page_info.total_is_lower_bound`` advertises.
+        """
         total_entries = archive.entry_count
         max_samples = min(NAMESPACE_MAX_SAMPLE_SIZE * 2, total_entries)
-        max_attempts = max_samples * NAMESPACE_SAMPLE_ATTEMPTS_MULTIPLIER
         logger.debug(f"Sampling for entries in namespace '{namespace}'")
 
         results: List[str] = []
         seen: set[str] = set()
+        entry_ids = _deterministic_sample_ids(
+            total_entries, max_samples, _archive_sample_seed(archive)
+        )
         attempts = 0
-        while len(results) < NAMESPACE_MAX_ENTRIES and attempts < max_attempts:
+        for entry_id in entry_ids:
+            if len(results) >= NAMESPACE_MAX_ENTRIES:
+                break
             attempts += 1
             try:
-                path = archive.get_random_entry().path
+                path = archive._get_entry_by_id(entry_id).path
                 if path in seen:
                     continue
                 seen.add(path)
@@ -1648,7 +1685,7 @@ class _NamespaceMixin:
                 ):
                     results.append(path)
             except Exception as e:
-                logger.debug(f"Error sampling entry: {e}")
+                logger.debug(f"Error sampling entry {entry_id}: {e}")
 
         logger.info(
             f"Found {len(results)} entries in namespace '{namespace}' "
@@ -1687,8 +1724,19 @@ class _NamespaceMixin:
                 logger.debug(f"Error checking pattern {pattern}: {e}")
 
     def _get_common_namespace_patterns(self, namespace: str) -> List[str]:
-        """Get common path patterns for a namespace."""
-        patterns = []
+        """Get common path patterns for a namespace.
+
+        Seeded with the canonical probes ``list_namespaces`` uses, so a
+        namespace that tool surfaces by probe alone (``X`` is found via
+        ``X/fulltext/xapian``, which is not in the browse-specific list
+        below) is never advertised as non-empty by one tool and reported
+        empty by the other.
+        """
+        patterns = [
+            probe
+            for probe in self._get_known_namespace_probes()
+            if probe.split("/", 1)[0] == namespace
+        ]
 
         # Common patterns based on namespace
         if namespace == "C":

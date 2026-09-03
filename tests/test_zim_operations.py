@@ -1661,9 +1661,11 @@ class TestZimOperations:
 
         # Test browse_namespace_data cache hit. Same contract — cache
         # stores the post-attach payload. Key bumped v2b -> v2c when
-        # new-scheme C browse began filtering _zim_static infra assets.
+        # new-scheme C browse began filtering _zim_static infra assets, and
+        # v2e -> v2f when the old-scheme sampled branch became deterministic
+        # (pre-fix pages listed nothing for I / -).
         cache_key = (
-            f"browse_ns_data:v2e:{validated_path}:{stat_token}:A:50:0:assets=False"
+            f"browse_ns_data:v2f:{validated_path}:{stat_token}:A:50:0:assets=False"
         )
         cached_browse = {"cached": "browse", "_meta": {"chars": 1}}
         zim_operations.cache.set(cache_key, cached_browse)
