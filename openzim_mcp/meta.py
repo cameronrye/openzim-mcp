@@ -166,14 +166,20 @@ def format_footer(
     ``tool_mode`` selects which recovery advice the footer may give, on the
     same principle :func:`openzim_mcp.instructions.instructions_for` applies
     to the server instructions: naming a tool the client cannot see is worse
-    than naming none. ``zim_query`` is backed by the same handler in both
-    modes (``server.py``), so these footers ship to simple-mode clients —
-    where ``zim_query`` is the only registered tool — on every failed call.
-    Advanced-mode advice therefore names the v2 tool; simple-mode advice is
-    phrased as something the model can act on with ``zim_query`` alone.
+    than naming none. The only caller is the ``zim_query`` response path
+    (``simple_tools.py``), and ``zim_query`` is registered in BOTH modes —
+    so an advice string written for the advanced tool set reaches simple-mode
+    clients, where ``zim_query`` is the only registered tool, unchanged.
+
+    Advanced-mode advice therefore names the v2 tool. Simple-mode advice is
+    phrased as a query ``intent_parser.IntentParser`` actually recognises
+    (``find article titled X``, ``list namespaces``, ``walk namespace X``) —
+    a plain-English paraphrase is worse than useless, because it parses as a
+    literal search for its own text.
 
     The default is the fail-safe mode: a caller that forgets to thread
-    ``tool_mode`` degrades to prose rather than to an uncallable tool name.
+    ``tool_mode`` degrades to a zim_query-shaped instruction rather than to
+    an uncallable tool name.
     """
     if not footer_enabled or not meta:
         return ""
@@ -214,13 +220,14 @@ def format_footer(
                 return "> No full-text index on this archive. " + (
                     "Try `zim_search(mode='title')` or `zim_browse`."
                     if advanced
-                    else "Ask again naming the article title exactly."
+                    else "Ask for `find article titled <title>` or "
+                    "`browse namespace C` — neither needs the index."
                 )
             if reason == "bad_namespace":
                 return "> Unknown namespace. " + (
                     "Try `zim_metadata` to see valid options."
                     if advanced
-                    else "Ask again without naming a namespace."
+                    else "Ask for `list namespaces` to see valid options."
                 )
             if reason == "no_content_type_match":
                 return (
@@ -230,14 +237,16 @@ def format_footer(
                         "use `zim_browse` (include_assets=True) to discover "
                         "them, or drop the `content_type` filter."
                         if advanced
-                        else "ask again without restricting the content type."
+                        else "ask again without the `content_type` filter; "
+                        "assets are not reachable from this tool."
                     )
                 )
             if reason == "sample_only":
                 return "> Sampled view only — more entries remain. " + (
                     "Use `zim_browse(mode='walk')` for exhaustive iteration."
                     if advanced
-                    else "Ask again for a narrower slice to see the rest."
+                    else "Ask for `walk namespace <namespace>` for exhaustive "
+                    "iteration."
                 )
             if reason == "archive_unavailable":
                 return "> All archives failed to respond. " + (

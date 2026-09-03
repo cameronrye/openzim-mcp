@@ -222,7 +222,9 @@ class _OutboundLinkBuckets(NamedTuple):
         return self.external
 
 
-def _entry_not_found_error(entry_path: str) -> OpenZimMcpEntryNotFoundError:
+def _entry_not_found_error(
+    entry_path: str, *, tool_mode: str = "simple"
+) -> OpenZimMcpEntryNotFoundError:
     """Typed not-found error for a missing ``entry_path``.
 
     libzim reports a miss as a bare ``KeyError('Cannot find entry')``. Left
@@ -235,11 +237,25 @@ def _entry_not_found_error(entry_path: str) -> OpenZimMcpEntryNotFoundError:
     *Resource Not Found* template, the same envelope ``zim_get`` produces
     for the identical miss, and what marks the failure a caller mistake
     rather than a server fault when the tool seam picks a log level.
+
+    ``tool_mode`` gates the "how to find the right path" clause. This message
+    is not swallowed by the simple-mode layer — ``zim_query('structure of X')``
+    and ``zim_query('what links to X')`` both echo it verbatim into the
+    response body — so naming ``zim_search`` unconditionally handed a
+    simple-mode client (registry: ``zim_query`` alone) an uncallable next step
+    at the exact moment it was recovering from a failure. The simple wording
+    is the ``find_by_title`` intent, which is what the recovery bullets
+    rendered just below this message already use. Defaults to the fail-safe
+    mode, like :func:`openzim_mcp.meta.format_footer`.
     """
+    locate = (
+        "or use `zim_search(mode='title')` to locate the entry."
+        if tool_mode == "advanced"
+        else "or ask for `find article titled <title>` to locate the entry."
+    )
     return OpenZimMcpEntryNotFoundError(
         f"Entry not found: '{entry_path}'. Double-check the spelling and "
-        "path (entry paths are case-sensitive), or use "
-        "`zim_search(mode='title')` to locate the entry."
+        f"path (entry paths are case-sensitive), {locate}"
         + url_shaped_path_hint(entry_path)
     )
 
@@ -346,7 +362,9 @@ class _StructureMixin:
                 compact=compact,
             )
         except KeyError as e:
-            raise _entry_not_found_error(entry_path) from e
+            raise _entry_not_found_error(
+                entry_path, tool_mode=self.config.tool_mode
+            ) from e
 
     def get_article_structure_data(
         self, zim_file_path: str, entry_path: str
@@ -1535,7 +1553,7 @@ class _StructureMixin:
         # index has heard of is a miss; a dangling one still has real linkers
         # to report, which is the whole question "what links here?" asks.
         if not in_archive and page.total == 0:
-            raise _entry_not_found_error(entry_path)
+            raise _entry_not_found_error(entry_path, tool_mode=self.config.tool_mode)
 
         results: List[Dict[str, Any]] = [
             {

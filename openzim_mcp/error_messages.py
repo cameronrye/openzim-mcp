@@ -222,7 +222,10 @@ NOT_FOUND_ERROR_CONFIG = ErrorConfig(
     ],
 )
 
-# Generic error template
+# Generic error template. ``{status_check}`` / ``{help_hint}`` are the two
+# spots that named a tool; they are filled per ``tool_mode`` from
+# ``_GENERIC_FILLS`` so a simple-mode client (registry: ``zim_query`` alone)
+# is never told to call ``zim_health()``.
 GENERIC_ERROR_TEMPLATE = """**Operation Failed**
 
 **Operation**: {operation}
@@ -231,15 +234,83 @@ GENERIC_ERROR_TEMPLATE = """**Operation Failed**
 
 **Troubleshooting Steps**:
 1. Try the operation again (temporary issues may resolve)
-2. Use `zim_health()` to check for server issues
+2. {status_check}
 3. Verify your input parameters are correct
 4. Check if other operations work with the same file
 5. Consider using alternative tools or approaches
 
 **Technical Details**: {details}
 
-**Need Help?** Use `zim_health()` to check server status \
-or try simpler operations first."""
+**Need Help?** {help_hint}"""
+
+# Per-mode fills for the two tool-naming slots above.
+_GENERIC_FILLS: Dict[str, Dict[str, str]] = {
+    "advanced": {
+        "status_check": "Use `zim_health()` to check for server issues",
+        "help_hint": (
+            "Use `zim_health()` to check server status "
+            "or try simpler operations first."
+        ),
+    },
+    "simple": {
+        "status_check": (
+            "Ask for `list available ZIM files` to check the server responds"
+        ),
+        "help_hint": (
+            "Ask for `list available ZIM files` to check the server responds, "
+            "or try simpler operations first."
+        ),
+    },
+}
+
+# Recovery steps that name a tool only the ADVANCED registry exposes, paired
+# with wording a simple-mode client can act on. Simple mode registers
+# ``zim_query`` alone, so ``Use `zim_health()`...`` there describes a tool the
+# client cannot see — the same defect the recovery footers in
+# ``openzim_mcp.meta`` carried. Each replacement is a query the intent parser
+# actually resolves (``list available ZIM files`` -> ``list_files``), not a
+# plain-English paraphrase that would parse as a literal search.
+# ``tests/test_recovery_advice_tool_names.py`` renders every template in both
+# modes and fails if a step names an unregistered tool.
+_SIMPLE_MODE_STEPS: Dict[str, str] = {
+    "Use `zim_health()` to check overall server status": (
+        "Ask for `list available ZIM files` to confirm the server sees " "the archive"
+    ),
+    "Use `zim_health()` to see server state and allowed directories": (
+        "Ask for `list available ZIM files` to see the paths the server " "will accept"
+    ),
+    (
+        "Use `zim_health()` and pass a `loaded_archives[].path` value "
+        "verbatim as `zim_file_path`"
+    ): (
+        "Ask for `list available ZIM files` and pass one of those paths "
+        "verbatim as `zim_file_path`"
+    ),
+    "Use `zim_health()` for environment validation": (
+        "Ask for `list available ZIM files` to see which archives the "
+        "server can actually read"
+    ),
+    "No ZIM files are loaded — check the allowed directories via `zim_health()`": (
+        "No ZIM files are loaded — ask an operator to check the server's "
+        "allowed directories"
+    ),
+}
+
+
+def _for_tool_mode(config: ErrorConfig, tool_mode: str) -> ErrorConfig:
+    """Rewrite advanced-only recovery steps for a simple-mode client.
+
+    ``ERROR_CONFIGS`` is written in advanced-mode terms because that is the
+    surface where every named tool exists. Returns ``config`` unchanged when
+    nothing needed rewriting, so identity comparisons in existing tests keep
+    working.
+    """
+    if tool_mode == "advanced":
+        return config
+    steps = [_SIMPLE_MODE_STEPS.get(step, step) for step in config.steps]
+    if steps == list(config.steps):
+        return config
+    return ErrorConfig(title=config.title, issue=config.issue, steps=steps)
 
 
 # Cap on the "Technical Details" echo. Matches ``security._CONTEXT_MAX_LENGTH``
@@ -328,6 +399,8 @@ def format_generic_error(
     error_type: str,
     context: str,
     details: str,
+    *,
+    tool_mode: str = "simple",
 ) -> str:
     """Format a generic error message.
 
@@ -336,15 +409,21 @@ def format_generic_error(
         error_type: The type of error
         context: Additional context (sanitized)
         details: Technical error details
+        tool_mode: Which registry the client can see. Defaults to the
+            fail-safe mode — a caller that forgets to thread it gets advice
+            phrased for the one-tool surface rather than a tool name that
+            may not exist there.
 
     Returns:
         Formatted generic error message
     """
+    fills = _GENERIC_FILLS.get(tool_mode, _GENERIC_FILLS["simple"])
     return GENERIC_ERROR_TEMPLATE.format(
         operation=operation,
         error_type=error_type,
         context=context,
         details=_bound_details(details),
+        **fills,
     )
 
 
@@ -353,6 +432,7 @@ def get_error_config(
     *,
     operation: Optional[str] = None,
     count_archives: Optional[Callable[[], int]] = None,
+    tool_mode: str = "simple",
 ) -> ErrorConfig | None:
     """Get the error configuration for an exception type.
 
@@ -369,10 +449,24 @@ def get_error_config(
             honour — see ``_archive_path_config``.
         count_archives: Zero-arg callable returning the number of loaded
             archives; consulted only for archive-path errors.
+        tool_mode: Which registry the client can see. The templates are
+            written in advanced-mode terms; ``_for_tool_mode`` rewrites the
+            steps that name an advanced-only tool for a simple-mode client.
+            Defaults to the fail-safe mode.
 
     Returns:
         ErrorConfig if found, None otherwise
     """
+    config = _resolve_error_config(error, operation, count_archives)
+    return None if config is None else _for_tool_mode(config, tool_mode)
+
+
+def _resolve_error_config(
+    error: Exception,
+    operation: Optional[str],
+    count_archives: Optional[Callable[[], int]],
+) -> ErrorConfig | None:
+    """Pick the template for ``error``, in advanced-mode wording."""
     message = str(error).lower()
 
     # M5: security rejections (security.py raises "Access denied - Path is
