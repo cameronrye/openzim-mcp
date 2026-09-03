@@ -1042,11 +1042,17 @@ def _is_mode_shaped(expr: ast.expr) -> bool:
 class TestModeAwareCallsAreWired:
     """Every mode-aware renderer must be *told* the mode by its caller.
 
-    The four seams the e2e class above covers were found by hand. This rule
-    is the general form, and it is the cheap half of the defence: a new
+    The seams the e2e class above covers were found by hand. This rule is
+    the general form, and it is the cheap half of the defence: a new
     mode-aware helper, or a new call to an existing one, cannot be added
     without threading the config through — including on the paths that are
-    too deep or too rare to drive end to end.
+    too deep or too rare to drive end to end. It is not a replacement for
+    the e2e half: it can see that a mode is passed, never that the mode
+    passed is the server's.
+
+    Calls inside a helper's own defining module are checked too — reverting
+    ``zim/structure.py``'s two ``_entry_not_found_error`` kwargs is exactly
+    the mutation that started this round, and both are same-module calls.
 
     Every parameter here defaults to ``simple`` (the fail-safe mode), so a
     missed call site degrades an advanced client to ``zim_query`` prose
@@ -1067,9 +1073,7 @@ class TestModeAwareCallsAreWired:
                 if not isinstance(node, ast.Call):
                     continue
                 name = _called_name(node)
-                if name not in mode_aware or module == mode_aware[name]:
-                    # Calls inside the defining module are the definition's
-                    # own business (defaults, recursion, self-tests).
+                if name not in mode_aware:
                     continue
                 if id(node) in suppressed:
                     # A raise nothing can see carries no advice. The one
