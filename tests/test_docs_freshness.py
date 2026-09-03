@@ -2543,11 +2543,15 @@ _MCP_RANGE_RE = re.compile(
     r"(?<![\w-])mcp(?:\[cli\])?`?\s*(>=\s*[0-9][\w.]*\s*,\s*<\s*[0-9][\w.]*)"
 )
 # ``holds `mcp` to 2.0.x`` — a series named near an ``mcp`` package reference.
-# The gap forbids ``.`` so the anchor and the version have to share a clause;
-# without that, any sentence mentioning the SDK anywhere would claim any
-# ``N.M.x`` later in the paragraph (docs/roadmap.md talks about this project's
-# own v2.0.x/v2.1.x/v2.2.x lines two clauses away from the words "MCP Python
-# SDK", and matched before the constraint was added).
+# The gap forbids ``.`` so the anchor and the version have to share a clause,
+# bounding how far an ``mcp`` mention can reach for a version number. Stated as
+# what it is: a bound, not a fix for an observed false positive. The corpus's
+# other ``N.M.x`` talk is docs/roadmap.md describing *this* project's own
+# v2.0.x / v2.1.x / v2.2.x lines, and what keeps those out is the ``\b`` — they
+# are written ``v``-prefixed, so there is no word boundary before the digit.
+# Measured: with the gap opened to any 1000 characters the corpus still yields
+# no extra match, so the constraint costs nothing to keep and would matter the
+# day someone writes a series bare.
 _MCP_SERIES_RE = re.compile(
     r"(?<![\w-])`?mcp`?(?:\[cli\])?[^.\n]{0,40}?\b(\d+)\.(\d+)\.x\b", re.IGNORECASE
 )
