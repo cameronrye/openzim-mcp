@@ -1780,7 +1780,9 @@ class _NamespaceMixin:
         elif namespace == "I":
             patterns.extend(["I/favicon.png", "I/logo.png", "I/image.jpg"])
 
-        return patterns
+        # The two lists overlap (M/Title, I/favicon.png, ...); de-duplicate
+        # so a caller doesn't pay for the same has_entry_by_path twice.
+        return list(dict.fromkeys(patterns))
 
     def walk_namespace_data(
         self,

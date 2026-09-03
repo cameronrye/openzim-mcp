@@ -269,10 +269,14 @@ def test_browse_probes_cover_every_namespace_list_can_surface_by_probe() -> None
     ops = _NamespaceMixin()
     for probe in ops._get_known_namespace_probes():
         namespace = probe.split("/", 1)[0]
-        assert probe in ops._get_common_namespace_patterns(namespace), (
+        patterns = ops._get_common_namespace_patterns(namespace)
+        assert probe in patterns, (
             f"{probe} proves {namespace!r} exists to list_namespaces but "
             f"browse_namespace never tries it"
         )
+        # The two lists overlap, so the union has to be de-duplicated or
+        # browse pays for the same has_entry_by_path lookup twice.
+        assert len(patterns) == len(set(patterns)), f"duplicate probes: {patterns}"
 
 
 # ---------------------------------------------------------------------------
