@@ -11,7 +11,7 @@ from typing import Optional
 
 from pydantic import ValidationError as PydanticValidationError
 
-from . import __version__
+from . import __version__, onboarding
 from .config import OpenZimMcpConfig
 from .constants import TOOL_MODE_SIMPLE, VALID_TOOL_MODES
 from .exceptions import OpenZimMcpConfigurationError
@@ -212,6 +212,19 @@ def main() -> None:
         # emitted regardless of operator-configured verbosity.
         logger.info("OpenZIM MCP server started in %s", mode_desc)
         logger.info("Allowed directories: %s", ", ".join(args.directories))
+
+        # Config validation only proves the directories exist — a directory
+        # with no ``.zim`` in it starts a server that answers every query
+        # with nothing, under a log line that says "started successfully".
+        # Say so, and say where an archive comes from.
+        #
+        # Through the logger, never ``print``: stdout is the JSON-RPC stream
+        # under the default stdio transport, and prose written there corrupts
+        # the frame for every stdio client.
+        if not onboarding.count_zim_files(config.allowed_directories):
+            logger.warning(
+                "%s", onboarding.no_archives_log_message(config.allowed_directories)
+            )
 
         # ``OpenZimMcpServer.run()`` derives the wire transport from
         # ``config.transport`` directly (translating our short name 'http'

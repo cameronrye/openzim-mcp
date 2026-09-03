@@ -60,7 +60,17 @@ Verify the install:
 openzim-mcp --help
 ```
 
-Download ZIM files from the [Kiwix Library](https://library.kiwix.org/) into a directory of your choice before running the server.
+### Get your first ZIM archive
+
+The server does nothing without an archive to read. Grab a real one — a 13.6 MB extract of English Wikipedia on climate change, from the openZIM project's own testing suite. No account, nothing to install:
+
+```bash
+mkdir -p ~/zim-files
+curl -fsSL -o ~/zim-files/wikipedia_en_climate_change_mini_2024-06.zim \
+  https://raw.githubusercontent.com/openzim/zim-testing-suite/main/data/withns/wikipedia_en_climate_change_mini_2024-06.zim
+```
+
+That is the directory you point the server at below. For full archives — Wikipedia, Wiktionary, Stack Exchange and the rest, ranging from a few hundred MB to tens of GB — browse [browse.library.kiwix.org](https://browse.library.kiwix.org/) and save the `.zim` into the same directory. More detail, including checksums and a Windows PowerShell equivalent: [Quick start](https://cameronrye.github.io/openzim-mcp/docs/quick-start/).
 
 ### Smithery & one-click install
 
