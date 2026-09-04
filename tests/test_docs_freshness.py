@@ -2556,9 +2556,70 @@ _MCP_RANGE_RE = re.compile(
 # Measured: with the gap opened to any 1000 characters the corpus still yields
 # no extra match, so the constraint costs nothing to keep and would matter the
 # day someone writes a series bare.
+#
+# This locates a *mention*. It is not on its own the thing worth failing on:
+# a page that says "`mcp` 2.0.x is no longer supported" names an excluded
+# series in order to tell the reader it is excluded, which is the upgrade note
+# any ceiling move has to publish, and this very PR's. Measured, before the
+# split below existed: pasting that sentence into upgrading.mdx reddened the
+# gate with "says mcp 2.0.x in '`mcp` 2.0.x'". A gate that fires on the correct
+# documentation of its own change is not a gate, it is a trap for whoever moves
+# the note out of a PR description and into the docs — so the classification
+# below decides which mentions are claims a reader would act on.
 _MCP_SERIES_RE = re.compile(
     r"(?<![\w-])`?mcp`?(?:\[cli\])?[^.\n]{0,40}?\b(\d+)\.(\d+)\.x\b", re.IGNORECASE
 )
+# The clause a mention sits in: from the previous sentence/clause break to the
+# next. ``.`` only counts when whitespace follows, so ``2.0.x`` and ``2.1.0``
+# do not split themselves; ``:`` counts, which is what separates
+# "Upgrade note:" from the sentence it introduces.
+_CLAUSE_BREAK_RE = re.compile(r"[.!?;:](?=\s)|\n")
+# Live-requirement words: the clause tells a reader to install, pin or expect
+# that series. Deliberately a short list — a mention with none of these is left
+# alone, so the cost of the list being incomplete is a stale pin phrased in a
+# way nobody has written yet, not a red on a sentence that is correct.
+_SERIES_PINNED_RE = re.compile(
+    r"\b(?:pin(?:s|ned|ning)?|hold(?:s|ing)?|held|require(?:s|d|ment|ments)?"
+    r"|need(?:s|ed)?|must|depend(?:s|ed|ency|encies)?|install(?:s|ed|ing)?"
+    r"|resolve(?:s|d)?|support(?:s|ed)?|compatible|compatibility"
+    r"|tested against|works? with|runs? on|target(?:s|ed)?)\b",
+    re.IGNORECASE,
+)
+# ...and the veto: the same clause reading as a retirement or a history note.
+# Both halves are needed, because the retirement sentence is *phrased* with a
+# requirement word — "no longer **supported**", "**required** before 3.3" — so
+# a requirement-word rule alone would still fire on it.
+_SERIES_RETIRED_RE = re.compile(
+    r"\b(?:no longer|not|never|unsupported|drop(?:s|ped|ping)?|remove[sd]?"
+    r"|stop(?:s|ped)?|was|were|used to|previously|formerly|prior to|before"
+    r"|until|up to|legacy|historical(?:ly)?|old(?:er)?)\b",
+    re.IGNORECASE,
+)
+
+
+def _clause_around(prose: str, start: int, end: int) -> str:
+    left = 0
+    for boundary in _CLAUSE_BREAK_RE.finditer(prose, 0, start):
+        left = boundary.end()
+    ahead = _CLAUSE_BREAK_RE.search(prose, end)
+    return prose[left : ahead.start() if ahead else len(prose)]
+
+
+def _series_pin_claims(prose: str) -> list[tuple[int, re.Match[str]]]:
+    """Series mentions that read as a live pin, with their 1-based line.
+
+    A mention qualifies when its clause carries a requirement word and does
+    not read as a retirement note. Heuristic, and stated as one: it is the
+    difference between "the dependency pin holds `mcp` to 2.0.x" and "`mcp`
+    2.0.x is no longer supported", both of which name an excluded series and
+    only the first of which is a claim a reader can be misled by.
+    """
+    claims = []
+    for match in _MCP_SERIES_RE.finditer(prose):
+        clause = _clause_around(prose, match.start(), match.end())
+        if _SERIES_PINNED_RE.search(clause) and not _SERIES_RETIRED_RE.search(clause):
+            claims.append((prose.count("\n", 0, match.start()) + 1, match))
+    return claims
 
 
 def _declared_mcp_specifier() -> SpecifierSet:
@@ -2618,21 +2679,84 @@ def test_no_doc_pins_mcp_to_a_series_the_range_excludes() -> None:
     looking for prose. Admitted "in full" is the standard on purpose: a page
     that says the pin holds mcp to 2.1.x while the range is ``>=2.1.5,<2.2``
     is telling a reader that 2.1.0 will work.
+
+    Only *pins* are stale. Naming a dropped series in order to say it was
+    dropped is the upgrade note a ceiling move owes its readers, and it is
+    what this PR's own body says — see ``_series_pin_claims`` above, and
+    ``test_the_series_gate_reads_pins_not_retirement_notes`` for both
+    directions of that distinction held as a table.
     """
     declared = _declared_mcp_specifier()
     stale = []
-    for path, line, match in _doc_claims(_MCP_SERIES_RE):
-        major, minor = int(match.group(1)), int(match.group(2))
-        first = Version(f"{major}.{minor}.0")
-        last = Version(f"{major}.{minor}.999999")
-        if not (declared.contains(first) and declared.contains(last)):
-            stale.append(
-                f"{path.relative_to(REPO)}:{line} says mcp {major}.{minor}.x "
-                f"in {match.group(0)!r}"
-            )
+    for path in _doc_files():
+        prose = _visible_prose(path.read_text(encoding="utf-8"))
+        for line, match in _series_pin_claims(prose):
+            major, minor = int(match.group(1)), int(match.group(2))
+            first = Version(f"{major}.{minor}.0")
+            last = Version(f"{major}.{minor}.999999")
+            if not (declared.contains(first) and declared.contains(last)):
+                stale.append(
+                    f"{path.relative_to(REPO)}:{line} pins mcp {major}.{minor}.x "
+                    f"in {match.group(0)!r}"
+                )
     assert not stale, (
         f"pyproject declares mcp{declared}, which does not admit that whole "
         "series:\n  " + "\n  ".join(stale)
+    )
+
+
+# Both directions of the pin/retirement split, as prose the corpus plausibly
+# carries. The first entry is the real sentence the gate was written for, taken
+# verbatim from resources-prompts-subscriptions.mdx before this PR corrected
+# it; the second block is the upgrade note this PR publishes, which the
+# mention-only pattern reddened on. Held as a table rather than as a comment
+# because narrowing a pattern is exactly the edit that can quietly turn a gate
+# into one that no longer catches anything.
+_SERIES_PIN_CASES = (
+    (
+        "All five are why the dependency pin holds `mcp` to 2.0.x — raising "
+        "the ceiling is a deliberate bump that re-audits each seam."
+    ),
+    "This release requires mcp 2.0.x.",
+    "`mcp` 2.0.x is required if you embed the server as a library.",
+    "Install `mcp` 2.0.x alongside it.",
+    "The cap holds mcp to 2.0.x.",
+    "openzim-mcp supports mcp 2.0.x.",
+)
+_SERIES_RETIREMENT_CASES = (
+    "**Upgrade note: mcp 2.0.x is no longer supported.**",
+    "`mcp` 2.0.x is no longer supported.",
+    "`mcp` 2.0.x is not supported.",
+    "Support for `mcp` 2.0.x was dropped in this release.",
+    "This release drops `mcp` 2.0.x.",
+    "Releases before this one required `mcp` 2.0.x.",
+    "Up to `mcp` 2.0.x the SSE message endpoint supported a GET.",
+)
+
+
+def test_the_series_gate_reads_pins_not_retirement_notes() -> None:
+    """The prose gate must fire on a pin and stay quiet on an upgrade note.
+
+    Both halves are asserted because each protects the other. Without the
+    first, narrowing the pattern to silence a false positive could silence
+    the gate outright and nothing would say so. Without the second, the gate
+    reds on the sentence every ceiling move has to write — measured: with the
+    mention-only pattern, "`mcp` 2.0.x is no longer supported" in
+    upgrading.mdx failed this section, so moving this PR's upgrade note into
+    the docs would have been booby-trapped.
+
+    Every case names 2.0.x, a series today's range excludes, so a claim that
+    reaches the gate above is a claim it would report.
+    """
+    missed = [text for text in _SERIES_PIN_CASES if not _series_pin_claims(text)]
+    assert not missed, (
+        "the prose gate no longer reads these as pins, so a doc could pin an "
+        "excluded series and stay green:\n  " + "\n  ".join(missed)
+    )
+    fired = [text for text in _SERIES_RETIREMENT_CASES if _series_pin_claims(text)]
+    assert not fired, (
+        "the prose gate reads these retirement notes as live pins, so "
+        "documenting a dropped series would red the suite:\n  " + "\n  ".join(fired)
     )
 
 

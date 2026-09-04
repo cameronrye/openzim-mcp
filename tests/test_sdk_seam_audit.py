@@ -274,25 +274,40 @@ class TestResourceReadSeam:
         from mcp.server.mcpserver.exceptions import UnexpectedResourceError
         from mcp.server.mcpserver.resources.base import Resource
 
+        uri = "zim://seam-audit-nonstr"
+        payload = {"seam_audit": "payload-must-not-reach-the-client"}
+
         class _DictResource(Resource):
             async def read(self) -> Any:
-                return {"not": "a string"}
+                return payload
 
         server = _server(tmp_path)
         server.mcp._resource_manager.add_resource(
             _DictResource(
-                uri="zim://seam-audit-nonstr",
+                uri=uri,
                 name="seam_audit_nonstr",
                 mime_type="application/json",
             )
         )
 
         with pytest.raises(UnexpectedResourceError) as excinfo:
-            await server.mcp.read_resource("zim://seam-audit-nonstr")
+            await server.mcp.read_resource(uri)
 
         assert isinstance(excinfo.value.__cause__, TypeError), excinfo.value.__cause__
-        # ...and the client is told nothing but the URI.
-        assert "not a string" not in str(excinfo.value), str(excinfo.value)
+        # ...and the client is told nothing but the URI. Asserted as equality
+        # rather than as the payload's absence, because an absence check here
+        # cannot fail: this line read `assert "not a string" not in
+        # str(excinfo.value)` against a fixture returning {"not": "a string"},
+        # whose repr is {'not': 'a string'} — the space-separated substring it
+        # looked for is not a substring of any rendering of that dict, so the
+        # docstring's headline claim was unchecked. Measured: appending the
+        # cause to the SDK's message (`f"...{uri}: {exc}"`) left the old line
+        # green; equality reds on that mutation and on any other addition,
+        # including a `str | bytes` TypeError that names the value it rejected.
+        assert str(excinfo.value) == f"Error reading resource {uri}", (
+            f"read_resource's message must carry the URI and nothing else, "
+            f"but it is {str(excinfo.value)!r} (payload was {payload!r})"
+        )
 
     @pytest.mark.asyncio
     async def test_registered_resource_functions_return_str_themselves(
