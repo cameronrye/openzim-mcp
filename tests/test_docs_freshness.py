@@ -2623,6 +2623,17 @@ def _series_pin_claims(prose: str) -> list[tuple[int, re.Match[str]]]:
     difference between "the dependency pin holds `mcp` to 2.0.x" and "`mcp`
     2.0.x is no longer supported", both of which name an excluded series and
     only the first of which is a claim a reader can be misled by.
+
+    Residual, recorded rather than implied away: one shape still reads as a
+    pin when it is the opposite, a *directive to leave* the series. Measured —
+    "You must upgrade off `mcp` 2.0.x" and "Anyone still pinning `mcp` 2.0.x
+    must move to 2.1" both qualify today, on `must` plus `pinning`. Telling
+    them apart needs the preposition and which version follows it ("move to
+    2.1" versus "move to 2.0.x"), which is parsing rather than matching, and
+    the near miss cuts the other way too: vetoing on `move`/`upgrade` would
+    lose a genuinely stale "move to `mcp` 2.0.x". So the line is drawn here,
+    and a contributor who reds on one of those sentences should add it to the
+    table below rather than widen either pattern by guess.
     """
     claims = []
     for match in _MCP_SERIES_RE.finditer(prose):
