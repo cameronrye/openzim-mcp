@@ -20,7 +20,7 @@ from typing import Any, Callable, Dict, List, Optional, Union, cast
 
 import openzim_mcp.zim_operations as _zim_ops_mod
 
-from . import compact_renderers
+from . import compact_renderers, recovery_advice
 from .article_body import _ArticleBodyMixin
 from .chain_detection import _ChainMixin
 from .compact_format import _CompactFormatMixin
@@ -129,6 +129,50 @@ class _TellMeAboutPick:
     top_title: str
     disambig_twin_path: Optional[str]
     related_extends_paths: List[str]
+
+
+# The clauses ``recovery_advice`` appends to backend messages, in the order
+# a reader of that module meets them. Only used to derive
+# ``_SIMPLE_RECOVERY_TAILS`` below; kept as a tuple rather than read off
+# ``dir(recovery_advice)`` so adding a clause is a deliberate decision here
+# too (``TestBackendRecoveryTailIsStrippedSymmetrically`` in
+# ``tests/test_recovery_advice_tool_names.py`` pins the tuple against the
+# module).
+_RECOVERY_CLAUSES: tuple[Callable[[str], str], ...] = (
+    recovery_advice.locate_entry,
+    recovery_advice.locate_or_explore,
+    recovery_advice.correct_entry_path,
+    recovery_advice.verify_archive,
+    recovery_advice.metadata_keys,
+    recovery_advice.fetch_binary,
+)
+
+
+def _simple_halves_of_stripped_clauses(
+    leak_re: "re.Pattern[str]",
+) -> tuple[str, ...]:
+    """Simple wording of every clause whose ADVANCED wording ``leak_re`` eats.
+
+    ``_BACKEND_API_LEAK_RE`` is shaped like the advanced half — ``Try using
+    zim_search() ...`` — so the tool-mode split silently stopped it
+    matching for simple-mode callers: the same recovery, reworded, came
+    through where it used to be deleted. That left a generic ``find article
+    titled <title>`` sitting directly above a bullet list already offering
+    ``find article titled <the real path>``, i.e. a placeholder duplicating
+    a concrete suggestion.
+
+    Deriving the simple halves from the same predicate keeps the two
+    columns from drifting again: a clause is stripped in both modes or in
+    neither. The clauses the regex never matched (``metadata_keys``,
+    ``fetch_binary``) are deliberately still echoed in both modes — they
+    name the *only* route to a metadata key or to an entry's bytes, which
+    the handler's own bullet list does not offer.
+    """
+    return tuple(
+        clause("simple")
+        for clause in _RECOVERY_CLAUSES
+        if leak_re.search(clause(recovery_advice.ADVANCED))
+    )
 
 
 class SimpleToolsHandler(
@@ -1704,6 +1748,25 @@ class SimpleToolsHandler(
     _BACKEND_API_LEAK_RE = re.compile(
         r"\s*Try using \w+\(\)[^.]*\.?",
     )
+    # The regex above only ever matched the ADVANCED half of the recovery
+    # clauses, so the tool-mode split un-stripped these bodies for
+    # simple-mode callers alone. See
+    # ``_simple_halves_of_stripped_clauses`` for why both halves go.
+    _SIMPLE_RECOVERY_TAILS = _simple_halves_of_stripped_clauses(_BACKEND_API_LEAK_RE)
+
+    @classmethod
+    def _strip_backend_recovery(cls, err: str) -> str:
+        """Drop the backend's own recovery tail from an echoed error.
+
+        These renderers replace it with recovery commands built from the
+        path the caller actually asked for, so whatever generic tail the
+        backend appended is at best a duplicate with a ``<placeholder>``
+        where the concrete bullet below has the real value.
+        """
+        err = cls._BACKEND_API_LEAK_RE.sub("", err)
+        for tail in cls._SIMPLE_RECOVERY_TAILS:
+            err = err.replace(tail, "")
+        return re.sub(r"\s{2,}", " ", err).strip()
 
     def _render_not_found_recovery(
         self,
@@ -1729,8 +1792,7 @@ class SimpleToolsHandler(
         — which now fires because the handler returned a string instead
         of raising.
         """
-        err = sanitize_context_for_error(str(exc))
-        err = self._BACKEND_API_LEAK_RE.sub("", err).strip()
+        err = self._strip_backend_recovery(sanitize_context_for_error(str(exc)))
         recovery_path = entry_path[:60]
         # Post-v2.0.5 D-P: add `tell me about X` as a fourth
         # recovery option. Same sibling-widening as D-N (which added
@@ -1790,8 +1852,7 @@ class SimpleToolsHandler(
                 Only ``links in`` and ``articles related to`` do; the other
                 four must not be told to "retry with a smaller ``limit``".
         """
-        err = sanitize_context_for_error(str(exc))
-        err = self._BACKEND_API_LEAK_RE.sub("", err).strip()
+        err = self._strip_backend_recovery(sanitize_context_for_error(str(exc)))
         if limit_capable:
             first_bullet = (
                 "- Retry with a smaller `limit` — this operation caps lower "

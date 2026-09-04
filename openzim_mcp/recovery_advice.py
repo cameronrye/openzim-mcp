@@ -24,11 +24,23 @@ Each function defaults to the fail-safe mode: a caller that forgets to
 thread ``tool_mode`` degrades to a ``zim_query``-shaped instruction rather
 than to an uncallable tool name.
 
-The advanced wording is deliberately unchanged from what these messages
-carried before the split, ``Try using zim_search()`` phrasing included —
-``SimpleToolsHandler._BACKEND_API_LEAK_RE`` strips that exact sentence
-shape out of echoed backend errors, and rewording it here would change
-what advanced ``zim_query`` callers see for reasons unrelated to this fix.
+The advanced wording keeps the ``Try using zim_search()`` sentence shape
+the pre-split messages used, because
+``SimpleToolsHandler._BACKEND_API_LEAK_RE`` matches that shape to delete
+the backend's generic tail out of the "article not found" bodies, which
+write their own recovery from the path the caller asked for. Two advanced
+messages did change bytes in the process — ``rewrite_well_known_path``'s
+main-page miss now shares ``locate_entry``'s sentence rather than its own
+near-identical one, and the empty-metadata-key error joins
+``metadata_keys`` with a full stop instead of a dash — same tools, same
+meaning.
+
+That strip is applied per clause, not per mode:
+``SimpleToolsHandler._SIMPLE_RECOVERY_TAILS`` is derived by asking the
+regex about each clause's ADVANCED half and deleting the SIMPLE half of
+whichever clauses it matches. Reword one half here and the other follows;
+they cannot drift into a body that carries the tail for one mode and not
+the other.
 """
 
 from __future__ import annotations
