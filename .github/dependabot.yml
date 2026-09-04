@@ -37,15 +37,17 @@ updates:
       prefix: "deps"
       prefix-development: "deps-dev"
       include: "scope"
-    ignore:
-      # mcp 2.0.0 deleted the mcp.server.fastmcp package tree (renamed to
-      # mcp.server.mcpserver, FastMCP -> MCPServer). server.py, mcp_envelope.py
-      # and tools/resource_tools.py import the old path at runtime, so widening
-      # the bound past <2.0 publishes a wheel that fails at `import openzim_mcp`
-      # — and CI can't catch it, because the lockfile keeps resolving 1.x.
-      # Drop this once the rename port lands with an mcp-version CI axis.
-      - dependency-name: "mcp"
-        update-types: ["version-update:semver-major"]
+    # No `ignore` entry for mcp. The one that used to live here blocked
+    # `version-update:semver-major` because the 1.x -> 2.0 rename (fastmcp ->
+    # mcpserver) would have broken `import openzim_mcp`. That port landed in
+    # v3.0.0, and under `versioning-strategy: lockfile-only` the rule could
+    # not fire anyway: Dependabot resolves inside pyproject's specifier, and
+    # `mcp[cli]>=2.1.0,<2.2` admits no other major — nor any other minor. What
+    # it *does* admit is a 2.1 patch, which is precisely the update this
+    # ecosystem should propose, because CI runs the full suite against the
+    # locked wheel. Crossing the cap stays a hand-audited PR (see the comment
+    # on the requirement itself); an unreachable rule here only made the file
+    # look like it was doing that work.
     # Group related updates together
     groups:
       # Group all patch updates together

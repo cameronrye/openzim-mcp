@@ -29,9 +29,13 @@ import datetime as dt
 import json
 import re
 import tempfile
+import tomllib
 from pathlib import Path
 
 import pytest
+from packaging.requirements import Requirement
+from packaging.specifiers import SpecifierSet
+from packaging.version import Version
 
 from openzim_mcp import __version__
 from openzim_mcp.config import OpenZimMcpConfig
@@ -2542,4 +2546,321 @@ def test_release_stamp_is_derived_and_split_by_surface() -> None:
     assert not dates, (
         f"DocsLayout.astro contains date literals {dates} — doc pages are "
         "date-free by decision, and a hand-written date is also unstamped."
+    )
+
+
+# --------------------------------------------------------------------------
+# 15. The published mcp range must be the range pyproject declares.
+# --------------------------------------------------------------------------
+#
+# The SDK range is a published install requirement, not an implementation
+# detail: ``upgrading.mdx`` quotes it so library embedders know what to pin
+# against, and ``resources-prompts-subscriptions.mdx`` explains in prose which
+# series the private-API seams hold the server to. Both drifted a full minor
+# behind ``pyproject.toml`` and neither had anything watching it — upgrading
+# still advertised ``mcp>=2.0.0,<2.1`` after the floor moved to 2.1.0, and the
+# subscriptions page still said the pin "holds `mcp` to 2.0.x". A reader who
+# follows either one pins a range that no longer resolves against the wheel
+# this project publishes.
+#
+# Two shapes are swept, because the drift showed up as both, and a gate that
+# only understood the first would have passed the second:
+#
+#   * an explicit range (``mcp>=2.1.0,<2.2``), which must be the declared
+#     specifier — compared as parsed versions, so ``<2.2`` and ``<2.2.0`` are
+#     the same claim; and
+#   * a series claim (``holds `mcp` to 2.1.x``), which must name a series the
+#     declared specifier admits *in full*.
+#
+# Scope is the doc corpus above, which deliberately excludes CHANGELOG.md:
+# a shipped release note records what that release required and must not be
+# rewritten when the requirement moves. "Deliberately" is asserted, not just
+# asserted-in-a-comment — see
+# ``test_changelog_stays_out_of_the_mcp_range_sweep`` at the end of this
+# section, which fails if the changelog joins the corpus and equally if it
+# stops carrying the historical range the exclusion exists to protect.
+
+# ``mcp>=2.1.0,<2.2`` / ``mcp[cli]>=2.1.0,<2.2``, backticked or bare. The
+# lookbehind keeps this off ``openzim-mcp``, which is this project, not the SDK.
+_MCP_RANGE_RE = re.compile(
+    r"(?<![\w-])mcp(?:\[cli\])?`?\s*(>=\s*[0-9][\w.]*\s*,\s*<\s*[0-9][\w.]*)"
+)
+# ``holds `mcp` to 2.0.x`` — a series named near an ``mcp`` package reference.
+# The gap forbids ``.`` so the anchor and the version have to share a clause,
+# bounding how far an ``mcp`` mention can reach for a version number. Stated as
+# what it is: a bound, not a fix for an observed false positive. The corpus's
+# other ``N.M.x`` talk is docs/roadmap.md describing *this* project's own
+# v2.0.x / v2.1.x / v2.2.x lines, and what keeps those out is the ``\b`` — they
+# are written ``v``-prefixed, so there is no word boundary before the digit.
+# Measured: with the gap opened to any 1000 characters the corpus still yields
+# no extra match, so the constraint costs nothing to keep and would matter the
+# day someone writes a series bare.
+#
+# This locates a *mention*. It is not on its own the thing worth failing on:
+# a page that says "`mcp` 2.0.x is no longer supported" names an excluded
+# series in order to tell the reader it is excluded, which is the upgrade note
+# any ceiling move has to publish, and this very PR's. Measured, before the
+# split below existed: pasting that sentence into upgrading.mdx reddened the
+# gate with "says mcp 2.0.x in '`mcp` 2.0.x'". A gate that fires on the correct
+# documentation of its own change is not a gate, it is a trap for whoever moves
+# the note out of a PR description and into the docs — so the classification
+# below decides which mentions are claims a reader would act on.
+_MCP_SERIES_RE = re.compile(
+    r"(?<![\w-])`?mcp`?(?:\[cli\])?[^.\n]{0,40}?\b(\d+)\.(\d+)\.x\b", re.IGNORECASE
+)
+# The clause a mention sits in: from the previous sentence/clause break to the
+# next. ``.`` only counts when whitespace follows, so ``2.0.x`` and ``2.1.0``
+# do not split themselves; ``:`` counts, which is what separates
+# "Upgrade note:" from the sentence it introduces.
+_CLAUSE_BREAK_RE = re.compile(r"[.!?;:](?=\s)|\n")
+# Live-requirement words: the clause tells a reader to install, pin or expect
+# that series. Deliberately a short list — a mention with none of these is left
+# alone, so the cost of the list being incomplete is a stale pin phrased in a
+# way nobody has written yet, not a red on a sentence that is correct.
+_SERIES_PINNED_RE = re.compile(
+    r"\b(?:pin(?:s|ned|ning)?|hold(?:s|ing)?|held|require(?:s|d|ment|ments)?"
+    r"|need(?:s|ed)?|must|depend(?:s|ed|ency|encies)?|install(?:s|ed|ing)?"
+    r"|resolve(?:s|d)?|support(?:s|ed)?|compatible|compatibility"
+    r"|tested against|works? with|runs? on|target(?:s|ed)?)\b",
+    re.IGNORECASE,
+)
+# ...and the veto: the same clause reading as a retirement or a history note.
+# Both halves are needed, because the retirement sentence is *phrased* with a
+# requirement word — "no longer **supported**", "**required** before 3.3" — so
+# a requirement-word rule alone would still fire on it.
+#
+# Negation and an explicit retirement verb, plus the words that frame a clause
+# as being about the past. Bare past tense is deliberately *not* here: "was"
+# and "were" would have vetoed "openzim-mcp was tested against `mcp` 2.0.x",
+# which on a published doc page is exactly the stale claim this section
+# exists to catch — the place where that sentence is legitimately about the
+# past is CHANGELOG.md, and the corpus already excludes it by decision (see
+# ``test_changelog_stays_out_of_the_mcp_range_sweep``). Every retirement case
+# in the table below is still vetoed without them, because each one also
+# carries a negation or a retirement verb.
+_SERIES_RETIRED_RE = re.compile(
+    r"\b(?:no longer|not|never|unsupported|drop(?:s|ped|ping)?|remove[sd]?"
+    r"|stop(?:s|ped)?|used to|previously|formerly|prior to|before"
+    r"|until|up to|legacy|historical(?:ly)?)\b",
+    re.IGNORECASE,
+)
+
+
+def _clause_around(prose: str, start: int, end: int) -> str:
+    left = 0
+    for boundary in _CLAUSE_BREAK_RE.finditer(prose, 0, start):
+        left = boundary.end()
+    ahead = _CLAUSE_BREAK_RE.search(prose, end)
+    return prose[left : ahead.start() if ahead else len(prose)]
+
+
+def _series_pin_claims(prose: str) -> list[tuple[int, re.Match[str]]]:
+    """Series mentions that read as a live pin, with their 1-based line.
+
+    A mention qualifies when its clause carries a requirement word and does
+    not read as a retirement note. Heuristic, and stated as one: it is the
+    difference between "the dependency pin holds `mcp` to 2.0.x" and "`mcp`
+    2.0.x is no longer supported", both of which name an excluded series and
+    only the first of which is a claim a reader can be misled by.
+
+    Residual, recorded rather than implied away: one shape still reads as a
+    pin when it is the opposite, a *directive to leave* the series. Measured —
+    "You must upgrade off `mcp` 2.0.x" and "Anyone still pinning `mcp` 2.0.x
+    must move to 2.1" both qualify today, on `must` plus `pinning`. Telling
+    them apart needs the preposition and which version follows it ("move to
+    2.1" versus "move to 2.0.x"), which is parsing rather than matching, and
+    the near miss cuts the other way too: vetoing on `move`/`upgrade` would
+    lose a genuinely stale "move to `mcp` 2.0.x". So the line is drawn here,
+    and a contributor who reds on one of those sentences should add it to the
+    table below rather than widen either pattern by guess.
+    """
+    claims = []
+    for match in _MCP_SERIES_RE.finditer(prose):
+        clause = _clause_around(prose, match.start(), match.end())
+        if _SERIES_PINNED_RE.search(clause) and not _SERIES_RETIRED_RE.search(clause):
+            claims.append((prose.count("\n", 0, match.start()) + 1, match))
+    return claims
+
+
+def _declared_mcp_specifier() -> SpecifierSet:
+    """The ``mcp`` specifier from ``[project] dependencies``.
+
+    Parsed with ``tomllib`` + ``packaging`` rather than by regex over the raw
+    file: the first version of this gate matched ``"mcp\\[cli\\]>=[\\d.]+,<[\\d.]+"``
+    and would have reported "mcp requirement not found in pyproject.toml" —
+    an error naming the wrong problem — the day someone wrote the cap as
+    ``<2.2.0``.
+    """
+    data = tomllib.loads((REPO / "pyproject.toml").read_text(encoding="utf-8"))
+    for raw in data["project"]["dependencies"]:
+        requirement = Requirement(raw)
+        if requirement.name == "mcp":
+            return requirement.specifier
+    raise AssertionError("no mcp requirement in pyproject's [project] dependencies")
+
+
+def _normalised(spec: SpecifierSet) -> set[tuple[str, Version]]:
+    """Comparable form: operators plus parsed versions, so ``<2.2 == <2.2.0``."""
+    return {(s.operator, Version(s.version)) for s in spec}
+
+
+def _doc_claims(pattern: re.Pattern[str]) -> list[tuple[Path, int, re.Match[str]]]:
+    hits: list[tuple[Path, int, re.Match[str]]] = []
+    for path in _doc_files():
+        prose = _visible_prose(path.read_text(encoding="utf-8"))
+        for match in pattern.finditer(prose):
+            hits.append((path, prose.count("\n", 0, match.start()) + 1, match))
+    return hits
+
+
+def test_docs_quote_the_declared_mcp_range() -> None:
+    """Every published ``mcp>=…,<…`` must be the one pyproject declares."""
+    declared = _declared_mcp_specifier()
+    hits = _doc_claims(_MCP_RANGE_RE)
+    assert hits, (
+        "no doc page quotes an mcp range any more. Either the pages stopped "
+        "telling embedders what to pin — which is the drift this gate exists "
+        "to catch — or the range moved somewhere this pattern cannot see."
+    )
+    stale = [
+        f"{path.relative_to(REPO)}:{line} advertises mcp{match.group(1)}"
+        for path, line, match in hits
+        if _normalised(SpecifierSet(match.group(1))) != _normalised(declared)
+    ]
+    assert not stale, f"pyproject declares mcp{declared}, but:\n  " + "\n  ".join(stale)
+
+
+def test_no_doc_pins_mcp_to_a_series_the_range_excludes() -> None:
+    """A prose series claim must name a series the declared range admits.
+
+    ``upgrading.mdx`` states the range as a literal, so the gate above covers
+    it. The subscriptions page states it as English — "holds `mcp` to 2.0.x" —
+    and that sentence outlived two ceiling moves because no pattern was
+    looking for prose. Admitted "in full" is the standard on purpose: a page
+    that says the pin holds mcp to 2.1.x while the range is ``>=2.1.5,<2.2``
+    is telling a reader that 2.1.0 will work.
+
+    Only *pins* are stale. Naming a dropped series in order to say it was
+    dropped is the upgrade note a ceiling move owes its readers, and it is
+    what this PR's own body says — see ``_series_pin_claims`` above, and
+    ``test_the_series_gate_reads_pins_not_retirement_notes`` for both
+    directions of that distinction held as a table.
+    """
+    declared = _declared_mcp_specifier()
+    stale = []
+    for path in _doc_files():
+        prose = _visible_prose(path.read_text(encoding="utf-8"))
+        for line, match in _series_pin_claims(prose):
+            major, minor = int(match.group(1)), int(match.group(2))
+            first = Version(f"{major}.{minor}.0")
+            last = Version(f"{major}.{minor}.999999")
+            if not (declared.contains(first) and declared.contains(last)):
+                stale.append(
+                    f"{path.relative_to(REPO)}:{line} pins mcp {major}.{minor}.x "
+                    f"in {match.group(0)!r}"
+                )
+    assert not stale, (
+        f"pyproject declares mcp{declared}, which does not admit that whole "
+        "series:\n  " + "\n  ".join(stale)
+    )
+
+
+# Both directions of the pin/retirement split, as prose the corpus plausibly
+# carries. The first entry is the real sentence the gate was written for, taken
+# verbatim from resources-prompts-subscriptions.mdx before this PR corrected
+# it; the second block is the upgrade note this PR publishes, which the
+# mention-only pattern reddened on. Held as a table rather than as a comment
+# because narrowing a pattern is exactly the edit that can quietly turn a gate
+# into one that no longer catches anything.
+_SERIES_PIN_CASES = (
+    (
+        "All five are why the dependency pin holds `mcp` to 2.0.x — raising "
+        "the ceiling is a deliberate bump that re-audits each seam."
+    ),
+    "This release requires mcp 2.0.x.",
+    "`mcp` 2.0.x is required if you embed the server as a library.",
+    "Install `mcp` 2.0.x alongside it.",
+    "The cap holds mcp to 2.0.x.",
+    "openzim-mcp supports mcp 2.0.x.",
+    # Bare past tense is not a retirement note. On a published doc page this
+    # is a stale support claim; the file where it would be history is
+    # CHANGELOG.md, which the corpus excludes on purpose.
+    "openzim-mcp was tested against `mcp` 2.0.x.",
+)
+_SERIES_RETIREMENT_CASES = (
+    "**Upgrade note: mcp 2.0.x is no longer supported.**",
+    "`mcp` 2.0.x is no longer supported.",
+    "`mcp` 2.0.x is not supported.",
+    "Support for `mcp` 2.0.x was dropped in this release.",
+    "This release drops `mcp` 2.0.x.",
+    "Releases before this one required `mcp` 2.0.x.",
+    "Up to `mcp` 2.0.x the SSE message endpoint supported a GET.",
+)
+
+
+def test_the_series_gate_reads_pins_not_retirement_notes() -> None:
+    """The prose gate must fire on a pin and stay quiet on an upgrade note.
+
+    Both halves are asserted because each protects the other. Without the
+    first, narrowing the pattern to silence a false positive could silence
+    the gate outright and nothing would say so. Without the second, the gate
+    reds on the sentence every ceiling move has to write — measured: with the
+    mention-only pattern, "`mcp` 2.0.x is no longer supported" in
+    upgrading.mdx failed this section, so moving this PR's upgrade note into
+    the docs would have been booby-trapped.
+
+    Every case names 2.0.x, a series today's range excludes, so a claim that
+    reaches the gate above is a claim it would report.
+    """
+    missed = [text for text in _SERIES_PIN_CASES if not _series_pin_claims(text)]
+    assert not missed, (
+        "the prose gate no longer reads these as pins, so a doc could pin an "
+        "excluded series and stay green:\n  " + "\n  ".join(missed)
+    )
+    fired = [text for text in _SERIES_RETIREMENT_CASES if _series_pin_claims(text)]
+    assert not fired, (
+        "the prose gate reads these retirement notes as live pins, so "
+        "documenting a dropped series would red the suite:\n  " + "\n  ".join(fired)
+    )
+
+
+def test_changelog_stays_out_of_the_mcp_range_sweep() -> None:
+    """The corpus's CHANGELOG exclusion is deliberate, so it is asserted.
+
+    ``CHANGELOG.md`` records ``mcp>=2.0.0,<2.1`` in the v3.0.0 entry: a true
+    statement of what that release required, and one the gates above would
+    report as stale the moment the file entered their corpus. It does not,
+    but only because ``_DOC_ROOTS`` names the three repo-root files it reads
+    one by one — a fact about a tuple literal two thousand lines up, not a
+    decision anyone recorded. The comment introducing section 15 calls the
+    exclusion deliberate; this is what makes that true.
+
+    Both halves matter. If the historical range ever disappeared from the
+    changelog the exclusion would be about an empty set, and this would be
+    guarding nothing — so its presence is asserted too, which is also how the
+    test stays honest if the range pattern is ever narrowed.
+    """
+    changelog = REPO / "CHANGELOG.md"
+    assert changelog.is_file()
+    assert changelog not in _doc_files(), (
+        "CHANGELOG.md is in the doc corpus, so the mcp range gates now read "
+        "shipped release notes as live claims and will red on history. "
+        "Released entries record what that release required and must not be "
+        "rewritten when the requirement moves: keep the changelog out of "
+        "_DOC_ROOTS."
+    )
+
+    declared = _declared_mcp_specifier()
+    prose = _visible_prose(changelog.read_text(encoding="utf-8"))
+    historical = [
+        match.group(1)
+        for match in _MCP_RANGE_RE.finditer(prose)
+        if _normalised(SpecifierSet(match.group(1))) != _normalised(declared)
+    ]
+    assert historical, (
+        "CHANGELOG.md no longer records an mcp range that differs from "
+        f"mcp{declared}, so the exclusion above is guarding nothing. Either a "
+        "release note was rewritten to match the current requirement — which "
+        "is the thing the exclusion exists to permit *not* doing — or "
+        "_MCP_RANGE_RE stopped matching the shape release notes use."
     )

@@ -614,8 +614,13 @@ class SessionlessRequestGateMiddleware:
         max_body_size: Optional[int] = None,
         mcp_path: str = MCP_PATH,
     ) -> None:
-        """Wrap ``app``; ``max_body_size`` defaults to the SDK's request cap."""
-        from mcp.server.streamable_http_manager import DEFAULT_MAX_REQUEST_BODY_SIZE
+        """Wrap ``app``; ``max_body_size`` defaults to the SDK's request cap.
+
+        The cap lives in ``transport_security`` from mcp 2.1.0 (upstream
+        #3336); ``streamable_http_manager`` still re-exports it, but a
+        compatibility re-export is exactly the sort of thing a minor drops.
+        """
+        from mcp.server.transport_security import DEFAULT_MAX_REQUEST_BODY_SIZE
 
         self.app = app
         self._mcp_path = mcp_path

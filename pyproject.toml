@@ -51,16 +51,41 @@ dependencies = [
     "beautifulsoup4>=4.14.3,<5.0",
     "html2text>=2025.4.15,<2027.0",
     "libzim>=3.9.0,<4.0",
-    # Held to 2.0.x deliberately: sdk_compat.py patches the dicts under the
-    # SDK's method tables, and server.py/subscriptions.py install handlers
-    # through the private ``_request_handlers`` registry. CI resolves the
-    # lockfile, but fresh installs (pip/uvx, Smithery, Docker) resolve the
-    # newest wheel this range admits — a 2.1 that moves any of those seams
-    # would break them at runtime with the suite still green. Raising the
-    # ceiling is a deliberate bump PR that re-audits the seams. It will not
-    # retire the ping shim: 2026-07-28 defines no ping, so no SDK release is
-    # going to supply those rows (see sdk_compat and issue #371).
-    "mcp[cli]>=2.0.0,<2.1",
+    # One audited minor series at a time. Upstream's VERSIONING.md excludes
+    # underscore-prefixed names and undocumented modules from its compatibility
+    # promise, and this server depends on a spread of them: sdk_compat.py
+    # patches the dicts under the method tables, server.py/subscriptions.py
+    # install handlers through ``_request_handlers`` + ``HandlerEntry``,
+    # resource_tools.py writes into ``_resource_manager._templates``,
+    # http_app.py imports ``check_accept_headers`` /
+    # ``MCP_SESSION_ID_HEADER`` / ``DEFAULT_MAX_REQUEST_BODY_SIZE``, and
+    # mcp_envelope.py calls ``fn_metadata.convert_result``. CI resolves the
+    # lockfile, but fresh installs (pip/uvx, Smithery, Docker) take the newest
+    # wheel the range admits, so an unaudited minor would break those with the
+    # suite green.
+    #
+    # The floor moves with the ceiling on purpose, so the declared range is
+    # exactly the one series CI resolves and tests. 2.0.x is not merely
+    # unaudited, it is behaviourally different: a crashing tool body's
+    # exception text reaches the client verbatim (upstream #3314 landed in
+    # 2.1.0), the SSE message endpoint answers a GET with 400 rather than 405,
+    # and ``DEFAULT_MAX_REQUEST_BODY_SIZE`` has not yet moved to
+    # ``transport_security`` — which makes building the HTTP app raise
+    # ImportError, though stdio still starts. An ``except ImportError``
+    # fallback would restore the import and none of the rest, on a branch no
+    # CI job runs.
+    #
+    # To raise the ceiling: re-audit the seams against the new wheel, run the
+    # full suite AND ``pytest -m live``, re-measure the advertised schema
+    # footprint, move the floor to the new series' first release, and ``uv
+    # lock --upgrade-package mcp`` — plain ``uv lock`` keeps the old
+    # resolution, so a widened cap otherwise ships a wheel CI never ran.
+    # ``tests/test_sdk_seam_audit.py`` pins what that audit established, and
+    # fails if the lockfile is left below the cap's top series.
+    #
+    # None of that retires the ping shim: 2026-07-28 defines no ping, so no SDK
+    # release is going to supply those rows (see sdk_compat and issue #371).
+    "mcp[cli]>=2.1.0,<2.2",
     "pydantic>=2.13.3,<3.0",
     "pydantic-settings>=2.14.0,<3.0",
     "tiktoken>=0.7.0,<1.0",
@@ -164,13 +189,20 @@ omit = ["tests/*"]
 [dependency-groups]
 dev = [
     "black>=26.3.1",
-    # Used by tests/live/ only. Previously arrived transitively via mcp 1.x;
-    # the v2 SDK ships httpx2 instead, so the live suite fails to import
+    # Used by tests/live/ and by the in-process ASGI seam tests in
+    # tests/test_sdk_seam_audit.py. Previously arrived transitively via mcp
+    # 1.x; the v2 SDK ships httpx2 instead, so those suites fail to import
     # without an explicit declaration. Declared here rather than depended on
     # transitively so a future SDK dependency change can't break collection.
     "httpx>=0.28",
     "flake8>=7.3.0",
     "isort>=8.0.1",
+    # Used by the dependency-range gates in tests/test_sdk_seam_audit.py and
+    # tests/test_docs_freshness.py, which parse pyproject's own specifier
+    # instead of pattern-matching it. Arrives transitively via black/pytest
+    # today; declared for the same reason httpx is, so a tooling change
+    # cannot break collection.
+    "packaging>=25.0",
     # Capped below 3.0. The 2.x major was taken deliberately, as the old cap
     # comment asked: 2.3.1 type-checks the whole package clean under both the
     # Makefile config and the pre-commit hook's args, and the pre-commit rev

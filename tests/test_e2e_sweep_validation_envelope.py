@@ -139,9 +139,10 @@ async def test_internal_pydantic_failure_is_not_reported_as_the_caller_s_fault(
 ) -> None:
     """An error from inside a tool body must not become ``invalid_argument``.
 
-    The SDK wraps *any* body exception as ``ToolError(...) from e``, and the
-    envelope handler classifies on "is there a ValidationError in the
-    chain". Today every tool body catches its own exceptions, so nothing
+    The SDK wraps a crashing body as ``UnexpectedToolError(...) from e`` — a
+    ``ToolError`` subclass — and the envelope handler classifies on "is there
+    a ValidationError in the chain", which the ``__cause__`` chain still
+    carries. Today every tool body catches its own exceptions, so nothing
     reaches that handler — but if one ever stops, an internal model failure
     would be reported to the caller as a bad argument, naming a field they
     never sent and cannot fix.
@@ -165,9 +166,11 @@ async def test_internal_pydantic_failure_is_not_reported_as_the_caller_s_fault(
     # absorbed by the tool body and answered as a tool_error envelope. This
     # has to assert the envelope's SHAPE, not the absence of the leak
     # strings — an unabsorbed exception reaches the wire as the SDK's bare
-    # text block ("Error executing tool zim_search: Failed to open ZIM
-    # archive: …"), which contains neither string and would sail past a
-    # negative assertion while the property was broken.
+    # text block ("Error executing tool zim_search", with the exception's own
+    # text withheld since mcp 2.1.0), which contains neither string and would
+    # sail past a negative assertion while the property was broken. That the
+    # SDK now withholds the detail makes the shape assertion *more* necessary,
+    # not less: the wire text no longer names the archive either.
     (tmp_path / "a.zim").write_bytes(b"not a zim file at all")
     async with advanced_session(tmp_path) as session:
         result = await session.call_tool(
