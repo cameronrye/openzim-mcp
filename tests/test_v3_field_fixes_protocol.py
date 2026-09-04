@@ -448,6 +448,37 @@ async def _serve_stdio(
     return _responses(stdout_bytes)
 
 
+async def _serve_stdio_bare(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    frames: list[str],
+    *,
+    hold_eof_until_answered: int,
+    write_delay: float = 0.0,
+) -> list[dict[str, Any]]:
+    """The same, served by the SDK's own ``stdio_server`` with no relay.
+
+    ``MCPServer.run_stdio_async`` minus this server's wiring, for the canaries
+    that have to observe the upstream transport itself. The stdin gate is
+    mandatory here: nothing else holds EOF back from the dispatcher, which
+    cancels the handler of any request still being answered when it lands.
+    """
+    config = OpenZimMcpConfig(allowed_directories=[str(tmp_path)], tool_mode="advanced")
+    low = OpenZimMcpServer(config).mcp._lowlevel_server
+    stdout_bytes = _plug_std_streams(
+        monkeypatch,
+        frames,
+        hold_eof_until_answered=hold_eof_until_answered,
+        write_delay=write_delay,
+    )
+    with anyio.fail_after(20):
+        async with stdio_server() as (read_stream, write_stream):
+            await low.run(
+                read_stream, write_stream, low.create_initialization_options()
+            )
+    return _responses(stdout_bytes)
+
+
 def _by_id(responses: list[dict[str, Any]], request_id: Any) -> list[dict[str, Any]]:
     return [r for r in responses if "id" in r and r["id"] == request_id]
 
@@ -541,21 +572,13 @@ async def test_canary_sdk_stdio_still_drops_malformed_frames(
     handler, so stdin holds EOF back until that answer lands — see
     ``_ScriptedStdin`` for what the bare SDK does to it otherwise.
     """
-    config = OpenZimMcpConfig(allowed_directories=[str(tmp_path)], tool_mode="advanced")
-    low = OpenZimMcpServer(config).mcp._lowlevel_server
-    stdout_bytes = _plug_std_streams(
+    responses = await _serve_stdio_bare(
         monkeypatch,
+        tmp_path,
         [*_LEGACY_OPENING, _NOT_JSON, _BATCH, _ping(5, modern=False)],
         hold_eof_until_answered=5,
     )
 
-    with anyio.fail_after(20):
-        async with stdio_server() as (read_stream, write_stream):
-            await low.run(
-                read_stream, write_stream, low.create_initialization_options()
-            )
-
-    responses = _responses(stdout_bytes)
     assert [r for r in responses if "error" in r] == []
     assert len(_by_id(responses, 5)) == 1
 
@@ -581,22 +604,14 @@ async def test_canary_answers_trailing_ping_under_a_slow_stdout_writer(
     event loop in ``write``/``flush`` threads. Charging those writes a delay
     reproduces the loaded runner that lost the race; the gate survives it.
     """
-    config = OpenZimMcpConfig(allowed_directories=[str(tmp_path)], tool_mode="advanced")
-    low = OpenZimMcpServer(config).mcp._lowlevel_server
-    stdout_bytes = _plug_std_streams(
+    responses = await _serve_stdio_bare(
         monkeypatch,
+        tmp_path,
         [*_LEGACY_OPENING, _NOT_JSON, _BATCH, _ping(5, modern=False)],
         hold_eof_until_answered=5,
         write_delay=_SLOW_WRITE_DELAY_S,
     )
 
-    with anyio.fail_after(20):
-        async with stdio_server() as (read_stream, write_stream):
-            await low.run(
-                read_stream, write_stream, low.create_initialization_options()
-            )
-
-    responses = _responses(stdout_bytes)
     assert len(_by_id(responses, 1)) == 1, "the inline initialize was not answered"
     assert len(_by_id(responses, 5)) == 1, (
         "the trailing ping went unanswered: EOF reached the dispatcher before "
