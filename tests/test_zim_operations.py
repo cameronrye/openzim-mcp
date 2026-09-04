@@ -1649,8 +1649,9 @@ class TestZimOperations:
         # Test list_namespaces_data cache hit.
         # Phase B #12 fix: the cache now stores POST-ATTACH payloads
         # (with ``_meta`` already attached), and cache hits return them
-        # verbatim. Seed accordingly.
-        cache_key = f"namespaces_data:v2b:{validated_path}:{stat_token}"
+        # verbatim. Seed accordingly. Key bumped v2b -> v2c when the
+        # sampled branch became deterministic (payload contents changed).
+        cache_key = f"namespaces_data:v2c:{validated_path}:{stat_token}"
         cached_ns = {"cached": "namespaces", "_meta": {"chars": 1}}
         zim_operations.cache.set(cache_key, cached_ns)
 
@@ -1660,9 +1661,11 @@ class TestZimOperations:
 
         # Test browse_namespace_data cache hit. Same contract — cache
         # stores the post-attach payload. Key bumped v2b -> v2c when
-        # new-scheme C browse began filtering _zim_static infra assets.
+        # new-scheme C browse began filtering _zim_static infra assets, and
+        # v2e -> v2f when the old-scheme sampled branch became deterministic
+        # (pre-fix pages listed nothing for I / -).
         cache_key = (
-            f"browse_ns_data:v2e:{validated_path}:{stat_token}:A:50:0:assets=False"
+            f"browse_ns_data:v2f:{validated_path}:{stat_token}:A:50:0:assets=False"
         )
         cached_browse = {"cached": "browse", "_meta": {"chars": 1}}
         zim_operations.cache.set(cache_key, cached_browse)

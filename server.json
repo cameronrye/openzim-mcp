@@ -21,7 +21,7 @@
         {
           "type": "positional",
           "valueHint": "zim_directory",
-          "description": "Path to a directory containing your .zim archive files. Repeat for multiple directories. Download archives from the Kiwix library (https://library.kiwix.org/).",
+          "description": "Path to a directory containing your .zim archive files. Repeat for multiple directories. No archive yet? Download the 13.6 MB starter archive from https://raw.githubusercontent.com/openzim/zim-testing-suite/main/data/withns/wikipedia_en_climate_change_mini_2024-06.zim into a new folder (for example ~/zim-files) and choose that folder. Full archives: https://browse.library.kiwix.org/",
           "format": "filepath",
           "isRequired": true,
           "isRepeated": true

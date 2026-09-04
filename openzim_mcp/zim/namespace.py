@@ -9,6 +9,7 @@ without changes.
 """
 
 import contextlib
+import hashlib
 import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, cast
@@ -16,11 +17,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, cast
 from libzim.reader import Archive  # type: ignore[import-untyped]
 
 import openzim_mcp.zim_operations as _zim_ops_mod
-from openzim_mcp.constants import (
-    NAMESPACE_MAX_ENTRIES,
-    NAMESPACE_MAX_SAMPLE_SIZE,
-    NAMESPACE_SAMPLE_ATTEMPTS_MULTIPLIER,
-)
+from openzim_mcp.constants import NAMESPACE_MAX_ENTRIES, NAMESPACE_MAX_SAMPLE_SIZE
 from openzim_mcp.exceptions import (
     OpenZimMcpArchiveError,
     OpenZimMcpValidationError,
@@ -163,6 +160,107 @@ def _scan_fill_c_namespace(
 _NAMESPACE_PROJECTION_MIN_SAMPLES = 3
 
 
+def _deterministic_sample_ids(
+    total_entries: int, sample_size: int, seed_token: str
+) -> List[int]:
+    """Pick ``sample_size`` entry ids out of ``total_entries``, reproducibly.
+
+    This replaces ``Archive.get_random_entry()`` on the namespace-discovery
+    path. libzim exposes no seed for that call, so it made
+    ``list_namespaces`` answer differently on every invocation — and the
+    answer is cached, so each cache fill froze one arbitrary roll of the
+    dice. It was also *blind*: ``get_random_entry`` draws from the archive's
+    **article** index, so namespaces that hold no articles (``I`` images,
+    ``-`` layout assets) could never be sampled at all, however many entries
+    they held.
+
+    The replacement is a systematic sample: walk the id space at a fixed
+    stride ``total/sample_size``, starting from a phase derived from the
+    archive's UUID. That gives us three things at once:
+
+    * **determinism** — same archive, same ids, same payload, forever.
+    * **spread** — the walk covers the whole id space rather than the first
+      N entries. Old-scheme ZIM archives store dirents grouped by namespace,
+      so a strided walk represents each namespace roughly in proportion to
+      its true size (systematic sampling over an ordered population), which
+      is what the ratio projection downstream assumes.
+    * **distinct draws** — ids are unique by construction, so the old
+      retry-until-distinct loop (and its attempts multiplier) is gone.
+
+    The UUID-derived phase keeps two same-sized archives from probing the
+    identical offsets, without reintroducing any run-to-run variation.
+
+    The trade being made: a systematic sample is biased whenever the
+    population has a period that divides the stride. An archive whose
+    dirent table repeated a namespace pattern with period
+    ``total/sample_size`` would land every draw in the same namespace. ZIM
+    dirents are sorted by path, so namespaces appear as contiguous runs
+    rather than as a repeating cycle, and no corpus archive exercises it —
+    but that is the failure mode to look for if a projection ever comes back
+    absurd, and it is why ``_probe_known_namespaces`` still runs afterwards.
+    """
+    if total_entries <= 0 or sample_size <= 0:
+        return []
+    if sample_size >= total_entries:
+        return list(range(total_entries))
+
+    step = total_entries / sample_size
+    digest = hashlib.blake2b(seed_token.encode("utf-8"), digest_size=8).digest()
+    offset = int.from_bytes(digest, "big") % total_entries
+    # ``int(i * step)`` is strictly increasing while ``step >= 1`` (which
+    # holds because sample_size < total_entries), and rotating a set of
+    # distinct values modulo ``total_entries`` keeps them distinct.
+    return [(offset + int(i * step)) % total_entries for i in range(sample_size)]
+
+
+def _archive_sample_seed(archive: Archive) -> str:
+    """Stable per-archive seed for :func:`_deterministic_sample_ids`."""
+    try:
+        return str(getattr(archive, "uuid", "") or "")
+    except Exception as e:  # pragma: no cover - defensive, libzim may raise
+        logger.debug(f"Unable to read archive uuid for sampling seed: {e}")
+        return ""
+
+
+def _clamp_projections_to_total(
+    estimates: Dict[str, int], floors: Dict[str, int], total_entries: int
+) -> None:
+    """Shrink projections in place so they cannot sum above the archive total.
+
+    The per-namespace estimate is ``max(projected, observed)``: a ratio
+    extrapolation for namespaces with enough sampled signal, floored by the
+    entries we actually laid eyes on (sampled + probed). Both halves are
+    individually reasonable and their sum was not — a namespace discovered
+    only by a canonical-path probe adds its floor on top of a projection
+    that has already spent the whole budget, so ``list_namespaces`` reported
+    per-namespace counts summing past its own ``total_entries``.
+
+    Observed counts are facts, so only the extrapolated part above each
+    floor is scaled down, proportionally, into whatever headroom the floors
+    leave. Truncating each share keeps the result at or below the total.
+
+    This runs on the sampled branch only, where every bucket comes from the
+    iterable entry surface that ``entry_count`` counts. It does not touch
+    the new-scheme M/W namespaces added afterwards, which legitimately sit
+    outside ``entry_count`` (see ``render_namespaces``' "+N" reconciliation).
+    """
+    projected = sum(estimates.values())
+    if projected <= total_entries:
+        return
+    observed = sum(floors.values())
+    headroom = total_entries - observed
+    if headroom < 0:
+        # What we observed already exceeds the stated total, so the total
+        # is not describing the same population. Under-reporting entries we
+        # have seen with our own eyes would be the worse lie; leave them.
+        return
+    # Positive by construction here: projected > total_entries >= observed.
+    projected_excess = projected - observed
+    for ns in estimates:
+        excess = estimates[ns] - floors[ns]
+        estimates[ns] = floors[ns] + int(excess * headroom / projected_excess)
+
+
 class _NamespaceMixin:
     """Namespace listing / browsing / walking methods for ZimOperations."""
 
@@ -204,13 +302,18 @@ class _NamespaceMixin:
 
         # Cache key bumped to v2b (Phase B) so v1.x cached responses (old
         # shape: entry_count key) don't leak through after the rename to ``total``.
+        # Bumped again to v2c when the sampled branch stopped drawing from
+        # ``get_random_entry``: the archive does not change when the sampler
+        # does, so a persisted snapshot would keep serving pre-fix listings
+        # (random ``sample_entries``, no ``I`` bucket, per-namespace counts
+        # summing above ``total_entries``) until TTL expiry.
         # The stat token (mtime_ns:size) invalidates the listing when the
         # archive is replaced in place (archive_stat_token contract, which
         # names namespace listings explicitly).
         from openzim_mcp.bundle import archive_stat_token
 
         cache_key = (
-            f"namespaces_data:v2b:{validated_path}:"
+            f"namespaces_data:v2c:{validated_path}:"
             f"{archive_stat_token(validated_path)}"
         )
         cached_result = self.cache.get(cache_key)
@@ -248,9 +351,10 @@ class _NamespaceMixin:
 
         For small archives (entry_count <= NAMESPACE_MAX_SAMPLE_SIZE) iterate
         every entry by ID so the namespace inventory is exhaustive. For larger
-        archives, fall back to random sampling and return estimated counts.
-        Random sampling on small entry pools collides heavily, leaving
-        namespaces undiscovered and counts wildly off.
+        archives, fall back to a systematic sample of entry ids (see
+        :func:`_deterministic_sample_ids`) and return estimated counts —
+        deterministic per archive, and projected so the buckets cannot sum
+        above ``entry_count``.
 
         For new-scheme archives, the iterable surface only contains C
         entries; M is enumerated separately via ``archive.metadata_keys`` and
@@ -272,7 +376,7 @@ class _NamespaceMixin:
             self._iterate_all_entries(archive, total_entries, record)
             self._finalise_full_iteration(namespaces)
         else:
-            self._sample_entries(archive, total_entries, seen_entries, record)
+            self._sample_entries(archive, total_entries, record)
             self._probe_known_namespaces(archive, seen_entries, record)
             self._finalise_sampled(namespaces, total_entries)
 
@@ -475,24 +579,29 @@ class _NamespaceMixin:
             ns_info.pop("_sampled_count", None)
 
     @staticmethod
-    def _sample_entries(
-        archive: Archive, total_entries: int, seen_entries: set[str], record: Any
-    ) -> None:
-        """Random-sample up to NAMESPACE_MAX_SAMPLE_SIZE distinct entries."""
+    def _sample_entries(archive: Archive, total_entries: int, record: Any) -> None:
+        """Sample up to NAMESPACE_MAX_SAMPLE_SIZE distinct entries.
+
+        Deterministic by construction — see :func:`_deterministic_sample_ids`
+        for why ``get_random_entry`` could not be used here. That helper
+        yields exactly ``sample_size`` distinct ids, so the old
+        retry-until-distinct loop (and the "stop once we have enough" bound
+        that went with it) has no work left to do.
+        """
         sample_size = min(NAMESPACE_MAX_SAMPLE_SIZE, total_entries)
-        max_sample_attempts = sample_size * NAMESPACE_SAMPLE_ATTEMPTS_MULTIPLIER
         logger.debug(
             f"Sampling {sample_size} entries from {total_entries} total entries"
         )
         try:
-            for _ in range(max_sample_attempts):
-                if len(seen_entries) >= sample_size:
-                    break
+            entry_ids = _deterministic_sample_ids(
+                total_entries, sample_size, _archive_sample_seed(archive)
+            )
+            for entry_id in entry_ids:
                 try:
-                    entry = archive.get_random_entry()
+                    entry = archive._get_entry_by_id(entry_id)
                     record(entry.path, entry.title or "", is_probe=False)
                 except Exception as e:
-                    logger.debug(f"Error sampling entry: {e}")
+                    logger.debug(f"Error sampling entry {entry_id}: {e}")
         except Exception as e:
             logger.warning(f"Error during namespace sampling: {e}")
 
@@ -501,10 +610,15 @@ class _NamespaceMixin:
     ) -> None:
         """Probe canonical paths to surface namespaces missed by sampling.
 
-        Random sampling on a large archive will silently miss minority
-        namespaces (e.g. M, W, X, I when A holds 99%+ of entries). Trying
-        canonical paths in each common namespace surfaces them
-        deterministically.
+        A 1-in-N sample of a large archive can still miss minority
+        namespaces (e.g. M, W, X, I when A holds 99%+ of entries) — with
+        ``NAMESPACE_MAX_SAMPLE_SIZE`` draws over a 20k-entry archive the
+        stride is ~20, so a namespace with fewer than ~20 entries may fall
+        entirely between two steps. Trying canonical paths in each common
+        namespace surfaces those, independently of where the stride lands.
+
+        A probe proves existence only; the hit is recorded as a floor, not
+        as sampled signal, so it never feeds the ratio projection.
         """
         for canonical_path in self._get_known_namespace_probes():
             try:
@@ -528,30 +642,42 @@ class _NamespaceMixin:
     ) -> None:
         """Project per-namespace totals from sample counts.
 
-        We extrapolate ONLY the randomly-sampled count via sampling ratio —
+        We extrapolate ONLY the sampled count via the sampling ratio —
         probed entries are confirmed-present-but-frequency-unknown, so they
         only contribute a lower-bound floor. Project only when we have
         enough sampled signal to make a stable estimate; below the
         threshold, single-hit projections vary by 100%+ and effectively
         manufacture numbers.
+
+        The projections are then clamped as a set: a bucket found only by a
+        canonical-path probe used to add its floor on top of a ratio
+        projection that had already accounted for the entire archive, so the
+        published per-namespace counts summed above ``total_entries``. See
+        :func:`_clamp_projections_to_total`.
         """
         sampled_only_count = sum(v["_sampled_count"] for v in namespaces.values())
         sampling_ratio = (
             sampled_only_count / total_entries if sampled_only_count else 0.0
         )
-        for ns_info in namespaces.values():
+        floors: Dict[str, int] = {}
+        estimates: Dict[str, int] = {}
+        for namespace, ns_info in namespaces.items():
             sampled = ns_info["_sampled_count"]
             probed = ns_info["_probed_count"]
             if sampling_ratio > 0 and sampled >= _NAMESPACE_PROJECTION_MIN_SAMPLES:
                 estimated_from_sample = int(sampled / sampling_ratio)
             else:
                 estimated_from_sample = 0
-            estimated_total = max(estimated_from_sample, sampled + probed)
+            floors[namespace] = sampled + probed
+            estimates[namespace] = max(estimated_from_sample, floors[namespace])
 
-            ns_info["sampled_count"] = sampled
-            ns_info["probed_count"] = probed
-            ns_info["estimated_total"] = estimated_total
-            ns_info["total"] = estimated_total
+        _clamp_projections_to_total(estimates, floors, total_entries)
+
+        for namespace, ns_info in namespaces.items():
+            ns_info["sampled_count"] = ns_info["_sampled_count"]
+            ns_info["probed_count"] = ns_info["_probed_count"]
+            ns_info["estimated_total"] = estimates[namespace]
+            ns_info["total"] = estimates[namespace]
             # Sampling-derived counts are projections, not exact totals.
             ns_info["is_authoritative"] = False
             ns_info.pop("_probed_count", None)
@@ -624,9 +750,11 @@ class _NamespaceMixin:
     def _get_known_namespace_probes() -> List[str]:
         """Canonical paths that, if present, prove a namespace exists.
 
-        Used by list_namespaces to deterministically surface minority
-        namespaces (M, W, X, I, -) that random sampling would otherwise miss
-        on archives where one namespace dominates.
+        Used by list_namespaces to surface minority namespaces (M, W, X, I,
+        -) that a 1-in-N sample can still miss on archives where one
+        namespace dominates. A probe proves existence; it says nothing about
+        how many entries the namespace holds, which is why probed hits are
+        counted separately from sampled ones.
         """
         return [
             # Metadata
@@ -754,12 +882,18 @@ class _NamespaceMixin:
         # cursor ``s.o`` is therefore a row offset again; ``total`` stays the
         # authoritative ``entry_count``. The bump stops pre-fix cached pages —
         # with the old entry-id-offset cursor — from leaking through.
+        # Bumped again v2e -> v2f when the old-scheme sampled branch stopped
+        # drawing from ``get_random_entry``: the archive does not change when
+        # the sampler does, so a persisted snapshot would keep serving the
+        # pre-fix pages (a different random population per page, and an empty
+        # result for every namespace the article index cannot reach) until TTL
+        # expiry.
         # The stat token (mtime_ns:size) invalidates the page when the
         # archive is replaced in place (archive_stat_token contract).
         from openzim_mcp.bundle import archive_stat_token
 
         cache_key = (
-            f"browse_ns_data:v2e:{validated_path}:"
+            f"browse_ns_data:v2f:{validated_path}:"
             f"{archive_stat_token(validated_path)}:{namespace}:"
             f"{limit}:{offset}:assets={include_assets}"
         )
@@ -1402,8 +1536,8 @@ class _NamespaceMixin:
 
         Returns ``(sorted_paths, full_iteration)`` where ``full_iteration`` is
         True when every entry in the archive was inspected (so the result is
-        exhaustive). For larger archives, falls back to random sampling and
-        returns False — counts/paths are then a lower bound.
+        exhaustive). For larger archives, falls back to a systematic sample of
+        entry ids and returns False — counts/paths are then a lower bound.
 
         New-scheme dispatch: M is enumerated from ``archive.metadata_keys``
         (full iteration, exhaustive); namespaces other than C/M return empty
@@ -1505,19 +1639,41 @@ class _NamespaceMixin:
     def _sample_namespace_entries(
         self, archive: Archive, namespace: str, has_new_scheme: bool = False
     ) -> Tuple[List[str], set[str]]:
-        """Sample random entries until ``NAMESPACE_MAX_ENTRIES`` matches found."""
+        """Sample entry ids until ``NAMESPACE_MAX_ENTRIES`` matches are found.
+
+        Uses the same systematic walk as the ``list_namespaces`` sampler
+        (:func:`_deterministic_sample_ids`), for the same two reasons:
+
+        * **agreement.** ``get_random_entry`` draws from the *article*
+          index, so on an archive whose articles all live in ``A`` this
+          function could never return an ``I`` or ``-`` entry however many
+          draws it took — while ``list_namespaces``, which walks entry ids,
+          reports both. Two tools describing the same archive differently
+          is worse than either being imprecise.
+        * **determinism.** ``browse_namespace`` is cached and paginated;
+          a sample that re-rolls on every call hands page 2 a different
+          population than page 1.
+
+        The returned ``total`` is still a lower bound (capped at
+        ``NAMESPACE_MAX_ENTRIES``), which is what
+        ``page_info.total_is_lower_bound`` advertises.
+        """
         total_entries = archive.entry_count
         max_samples = min(NAMESPACE_MAX_SAMPLE_SIZE * 2, total_entries)
-        max_attempts = max_samples * NAMESPACE_SAMPLE_ATTEMPTS_MULTIPLIER
         logger.debug(f"Sampling for entries in namespace '{namespace}'")
 
         results: List[str] = []
         seen: set[str] = set()
+        entry_ids = _deterministic_sample_ids(
+            total_entries, max_samples, _archive_sample_seed(archive)
+        )
         attempts = 0
-        while len(results) < NAMESPACE_MAX_ENTRIES and attempts < max_attempts:
+        for entry_id in entry_ids:
+            if len(results) >= NAMESPACE_MAX_ENTRIES:
+                break
             attempts += 1
             try:
-                path = archive.get_random_entry().path
+                path = archive._get_entry_by_id(entry_id).path
                 if path in seen:
                     continue
                 seen.add(path)
@@ -1529,7 +1685,7 @@ class _NamespaceMixin:
                 ):
                     results.append(path)
             except Exception as e:
-                logger.debug(f"Error sampling entry: {e}")
+                logger.debug(f"Error sampling entry {entry_id}: {e}")
 
         logger.info(
             f"Found {len(results)} entries in namespace '{namespace}' "
@@ -1568,8 +1724,19 @@ class _NamespaceMixin:
                 logger.debug(f"Error checking pattern {pattern}: {e}")
 
     def _get_common_namespace_patterns(self, namespace: str) -> List[str]:
-        """Get common path patterns for a namespace."""
-        patterns = []
+        """Get common path patterns for a namespace.
+
+        Seeded with the canonical probes ``list_namespaces`` uses, so a
+        namespace that tool surfaces by probe alone (``X`` is found via
+        ``X/fulltext/xapian``, which is not in the browse-specific list
+        below) is never advertised as non-empty by one tool and reported
+        empty by the other.
+        """
+        patterns = [
+            probe
+            for probe in self._get_known_namespace_probes()
+            if probe.split("/", 1)[0] == namespace
+        ]
 
         # Common patterns based on namespace
         if namespace == "C":
@@ -1613,7 +1780,9 @@ class _NamespaceMixin:
         elif namespace == "I":
             patterns.extend(["I/favicon.png", "I/logo.png", "I/image.jpg"])
 
-        return patterns
+        # The two lists overlap (M/Title, I/favicon.png, ...); de-duplicate
+        # so a caller doesn't pay for the same has_entry_by_path twice.
+        return list(dict.fromkeys(patterns))
 
     def walk_namespace_data(
         self,

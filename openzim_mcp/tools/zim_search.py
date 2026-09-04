@@ -217,6 +217,33 @@ def register(server: "OpenZimMcpServer") -> None:
                         "fan-out, or set `cross_file=False` to pin an archive."
                     ),
                 )
+            # Only ``_handle_fulltext_mode`` was ever handed these — the title
+            # and suggest data calls have no filter parameters, so both
+            # arguments were accepted in every mode and dropped in two of the
+            # three. A model asking for one namespace got every namespace,
+            # with nothing in the payload saying the filter had gone. Same
+            # class as the M28 ``offset`` guard above: reject the call rather
+            # than answer a narrower question than the one that was asked.
+            if mode != "fulltext" and (
+                namespace is not None or content_type is not None
+            ):
+                dropped = " and ".join(
+                    f"`{name}`"
+                    for name, value in (
+                        ("namespace", namespace),
+                        ("content_type", content_type),
+                    )
+                    if value is not None
+                )
+                return tool_error(
+                    operation="invalid_combination",
+                    message=(
+                        f"{dropped} filtering is only supported in "
+                        f"`mode='fulltext'`; mode={mode!r} has no filter step "
+                        "and would return unfiltered results. Switch to "
+                        "`mode='fulltext'`, or drop the filter."
+                    ),
+                )
 
             if mode == "suggest":
                 if cross_file:

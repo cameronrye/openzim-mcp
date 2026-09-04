@@ -38,7 +38,7 @@ PARAMETERS:
                "suggest" rejects this with `invalid_combination`).
   namespace    Only valid in mode="fulltext". Restricts search to
                one ZIM namespace letter (e.g. "C" for content).
-               Silently ignored in other modes.
+               Rejected in title/suggest modes.
   content_type Only valid in mode="fulltext". Restricts search to
                one MIME bucket (e.g. "text/html").
   limit        Max results; cap 50 title/suggest/cross_file, 100 filtered, else 1000.

@@ -331,7 +331,7 @@ zim_search(
 | `mode` | `"fulltext"` (default; libzim full-text index), `"title"` (title-indexed lookup with fast `C/<Title>` path), or `"suggest"` (auto-complete prefix) |
 | `zim_file_path` | Required unless only one ZIM is in the allowed dirs. **Must be omitted** when `cross_file=True` — passing both returns an `invalid_combination` envelope |
 | `cross_file` | When `True`, queries every allowed ZIM file. The `SearchAllResponse` carries one row per file in `results`; each row's `result` is that file's `SearchResponse` |
-| `namespace`, `content_type` | Optional filters (only meaningful for `mode="fulltext"`) |
+| `namespace`, `content_type` | Optional filters, `mode="fulltext"` only. `title` and `suggest` have no filter step and **reject** either one with an `invalid_combination` envelope rather than answering unfiltered |
 | `limit` | 1–1000 for plain single-archive `fulltext`; 1–100 when `namespace`/`content_type` filters are set; 1–50 for `cross_file=True` and for `title`/`suggest` |
 | `cursor` | Accepted for surface uniformity but **rejected** when non-empty (`invalid_combination` envelope) — paginate single-archive fulltext with `offset` instead |
 
@@ -375,7 +375,7 @@ The four branches are **mutually exclusive**. Setting more than one (e.g. `entry
 | `view` | `"full"` (default; article body), `"summary"` (opening paragraph), `"toc"` (hierarchical TOC), `"structure"` (headings + section anchors). Combining a non-`"full"` `view` with `binary=True` or `main_page=True` is **rejected** with `operation="invalid_path_combination"`, not silently ignored |
 | `binary` | When `True`, returns raw bytes (base64) with native MIME type. Default per-entry cap 10,000,000 bytes (10 MB decimal, not 10 MiB) |
 | `max_content_length` | Per-entry char cap, min 1 (the `OPENZIM_MCP_CONTENT__MAX_CONTENT_LENGTH` config field has its own ≥ 100 floor) |
-| `content_offset` | Page through long articles without re-fetching the prefix |
+| `content_offset` | Page through long articles without re-fetching the prefix. Honored on a single-entry `view="full"` call only — batch, binary, main-page and the non-`"full"` views have no second page, so a non-zero value there is **rejected** with `operation="invalid_path_combination"` rather than dropped |
 | `compact` | Compact-mode prose (default `False` — preserves legacy byte-identical behavior; a default flip was considered and explicitly deferred for lack of adoption telemetry) |
 | `compact_budget` | **Inert on this tool.** It is declared in the signature but never forwarded, so it does not cap the response. Only `zim_query` honors it |
 
@@ -436,7 +436,7 @@ zim_browse(
 |-----------|-------|-------|
 | `namespace` | | `C`, `M`, `W`, `X` on modern archives; `A`, `I`, `-` on legacy ones. Which you get depends on the archive — see [ZIM concepts](/openzim-mcp/docs/zim-concepts/) and read the real breakdown from `zim_metadata` |
 | `limit` | 1–200 (`page`) / 1–500 (`walk`) | Default 50 (`page`) / 200 (`walk`). `page` rejects anything above 200 |
-| `cursor`, `offset` | | Both modes emit and accept a `cursor`. `offset` is the page-only parameter |
+| `cursor`, `offset` | | Both modes emit and accept a `cursor`. `offset` is page-only: a walk advances by cursor, so `mode="walk"` **rejects** a non-zero one sent on its own (`invalid_combination`). Sent *alongside* a walk cursor it is accepted and ignored, per the precedence rule under [Cursors](#cursors) |
 | `include_assets` | | Browses of C-namespace pages on domain-scheme archives hide css/js/font assets by default in **both** modes; pass `True` to include them. Only the `page_info.assets_filtered` flag is `mode="page"`-only |
 
 **Returns:** a paginated envelope for both modes — `{results, next_cursor, total, done, page_info, namespace, …}` — with `next_cursor` driving `walk` iteration until `done: true`.
@@ -454,7 +454,7 @@ zim_metadata(zim_file_path: str) -> Any
 **Returns:** structured response with:
 
 - **`metadata`** — archive M-namespace fields, keyed exactly as libzim emits them, which is **capitalized**: `Title`, `Language`, `Creator`, `Publisher`, `Date`, `Flavour`, and so on. `metadata["title"]` raises `KeyError` — use `metadata["Title"]`.
-- **`namespaces`** — a deterministic namespace breakdown (surfaces minority namespaces — `M`, `W`, `X`, `I` — that random sampling could miss).
+- **`namespaces`** — a namespace breakdown. Archives above 1,000 entries are sampled rather than walked, so the per-namespace counts outside the dominant namespace are projections, not exact totals (each bucket carries `is_authoritative`). The sample is a fixed stride over entry ids, seeded from the archive UUID: the same archive always answers the same thing, and minority namespaces (`M`, `W`, `X`, `I`, `-`) are surfaced rather than lost to whichever entries a random draw happened to hit.
 - **`archive_identity`** — `{uuid, is_multipart}`, the libzim archive identity (*added in v2.1*).
 - **`index_capabilities`** — `{has_fulltext_index, has_title_index}`: whether full-text search and title suggestions will work against this archive (*added in v2.1*).
 - **`counter_breakdown`** — `{mimetype: count}` parsed from the `M/Counter` metadata, so you can profile an archive's content composition without walking it. Omitted when the archive has no `M/Counter` entry (*added in v2.1*).
@@ -483,7 +483,7 @@ zim_links(
 | `"inbound"` | Pages that link TO this entry, ranked by linker importance. Requires a pre-built link-graph sidecar (see below) |
 | `"related"` | Outbound link-graph neighbors with deduplication |
 
-`cursor` / `offset` apply to `"outbound"` and `"inbound"`; `"related"` returns a single ranked set and rejects a `cursor`.
+`cursor` / `offset` apply to `"outbound"` and `"inbound"`; `"related"` returns a single ranked set and rejects both (`cursor_unsupported` for a cursor, `invalid_combination` for a non-zero `offset`). `kind` buckets an article's own outbound links, so `"inbound"` and `"related"` reject a non-default `kind` with `invalid_combination` instead of returning an unbucketed set under the label you asked for.
 
 `direction="inbound"` requires the link-graph sidecar to be built first: `openzim-mcp build link-graph <archive>.zim` walks the archive once and writes `<archive>.zim.linkgraph.sqlite` next to it (`--force` overwrites an existing sidecar; `--output PATH` relocates it). When the sidecar is absent or stale, `zim_links` returns a structured `inbound_sidecar_unavailable` error rather than failing. A sidecar is stale when the archive's UUID no longer matches the one recorded at build time (it was rebuilt or replaced), or when its schema version predates the running server's.
 
@@ -699,7 +699,9 @@ mint identical cursors.
 **Precedence is not symmetric.** An explicit `limit` wins over the page size the cursor encodes —
 the encoded size is only a fallback when you omit `limit`. An explicit `offset`, by contrast,
 *loses*: when a cursor is present its offset is used and yours is ignored. So pass a cursor or an
-offset, never both.
+offset, never both. This holds on every cursor-accepting surface, including the ones that refuse a
+*bare* `offset` (below) — `zim_browse(mode="walk")` resumes from the cursor and ignores the offset
+riding along with it, exactly as `mode="page"` does.
 
 **There is a length cap, on one surface.** `zim_query` rejects a cursor over 2048 characters with
 a `cursor_decode` envelope. The advanced tools have no length check.
@@ -716,10 +718,12 @@ a `cursor_decode` envelope. The advanced tools have no length check.
 
 **"Drop the cursor and pass `offset`" is the usual recovery, but it does not work everywhere.**
 `zim_search` accepts `offset` only for single-archive `mode="fulltext"`; `title`, `suggest` and
-`cross_file=True` reject it and have no pagination at all. And `zim_browse(mode="walk")` ignores
-`offset` on the advanced surface — you get page one back while believing you advanced — so walk
-iteration must be driven by its cursor. Where the substitution does work, the cursor page and the
-equivalent `offset` page are the same rows.
+`cross_file=True` reject it and have no pagination at all. `zim_browse(mode="walk")` rejects a
+*bare* one with `invalid_combination` — a walk has no offset to seek to, so iteration must be
+driven by its cursor — and `zim_links(direction="related")` rejects one outright, since it returns
+a single ranked set that only `limit` resizes. (Both used to accept the argument and drop it,
+handing back page one to a caller who believed it had advanced.) Where the substitution does work,
+the cursor page and the equivalent `offset` page are the same rows.
 
 ## Error responses
 
