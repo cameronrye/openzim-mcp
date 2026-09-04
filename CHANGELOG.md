@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.3.0](https://github.com/cameronrye/openzim-mcp/compare/v3.2.5...v3.3.0) (2026-09-04)
+
+
+### Added
+
+* require mcp 2.1.x ([#419](https://github.com/cameronrye/openzim-mcp/issues/419)) ([2ea089a](https://github.com/cameronrye/openzim-mcp/commit/2ea089a197cb5eb5af8f9d3209dcf999eee4f1ec))
+
+
+### Fixed
+
+* make namespace discovery deterministic and its counts add up ([#417](https://github.com/cameronrye/openzim-mcp/issues/417)) ([d25bab1](https://github.com/cameronrye/openzim-mcp/commit/d25bab1692704af1243ecfae4addc406e45eb4ca))
+* reject arguments a mode cannot honour instead of dropping them ([#416](https://github.com/cameronrye/openzim-mcp/issues/416)) ([acb67a8](https://github.com/cameronrye/openzim-mcp/commit/acb67a850010b947291796fba5ace87e32fbbca2))
+* say where a first ZIM archive comes from ([#418](https://github.com/cameronrye/openzim-mcp/issues/418)) ([c963226](https://github.com/cameronrye/openzim-mcp/commit/c963226e54c20ca7c52be0189e190ea2530e919d))
+
 ## [3.2.5](https://github.com/cameronrye/openzim-mcp/compare/v3.2.4...v3.2.5) (2026-09-02)
 
 
