@@ -2589,10 +2589,20 @@ _SERIES_PINNED_RE = re.compile(
 # Both halves are needed, because the retirement sentence is *phrased* with a
 # requirement word — "no longer **supported**", "**required** before 3.3" — so
 # a requirement-word rule alone would still fire on it.
+#
+# Negation and an explicit retirement verb, plus the words that frame a clause
+# as being about the past. Bare past tense is deliberately *not* here: "was"
+# and "were" would have vetoed "openzim-mcp was tested against `mcp` 2.0.x",
+# which on a published doc page is exactly the stale claim this section
+# exists to catch — the place where that sentence is legitimately about the
+# past is CHANGELOG.md, and the corpus already excludes it by decision (see
+# ``test_changelog_stays_out_of_the_mcp_range_sweep``). Every retirement case
+# in the table below is still vetoed without them, because each one also
+# carries a negation or a retirement verb.
 _SERIES_RETIRED_RE = re.compile(
     r"\b(?:no longer|not|never|unsupported|drop(?:s|ped|ping)?|remove[sd]?"
-    r"|stop(?:s|ped)?|was|were|used to|previously|formerly|prior to|before"
-    r"|until|up to|legacy|historical(?:ly)?|old(?:er)?)\b",
+    r"|stop(?:s|ped)?|used to|previously|formerly|prior to|before"
+    r"|until|up to|legacy|historical(?:ly)?)\b",
     re.IGNORECASE,
 )
 
@@ -2722,6 +2732,10 @@ _SERIES_PIN_CASES = (
     "Install `mcp` 2.0.x alongside it.",
     "The cap holds mcp to 2.0.x.",
     "openzim-mcp supports mcp 2.0.x.",
+    # Bare past tense is not a retirement note. On a published doc page this
+    # is a stale support claim; the file where it would be history is
+    # CHANGELOG.md, which the corpus excludes on purpose.
+    "openzim-mcp was tested against `mcp` 2.0.x.",
 )
 _SERIES_RETIREMENT_CASES = (
     "**Upgrade note: mcp 2.0.x is no longer supported.**",
