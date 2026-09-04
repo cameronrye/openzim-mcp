@@ -126,6 +126,25 @@ SITE_BASE = f"{SITE_ORIGIN}{BASE}"
 # branch adding it, is not on main yet. Resolve against the working tree.
 EDIT_LINK_PREFIX = "https://github.com/cameronrye/openzim-mcp/blob/main/"
 
+# URLs this repo hands to users that none of the four link forms above can
+# collect. The starter ZIM archive is given as a bare ``curl`` line inside a
+# fenced block — a fence is blanked, and a bare URL is deliberately not
+# scraped — so the single external dependency the whole onboarding path rests
+# on was the one URL CI never probed. ``curl -fsSL`` writes nothing and prints
+# nothing on a 404, so upstream restructuring ``zim-testing-suite`` would reach
+# users as "the command did nothing" with every check still green.
+#
+# Kept as a literal because this script is stdlib-only and runs as bare
+# ``python3`` in CI (no ``uv``), so it cannot import ``openzim_mcp``.
+# ``tests/test_onboarding_zim_acquisition.py`` pins this list against
+# ``openzim_mcp.onboarding.STARTER_ARCHIVE_URL`` so the two cannot drift.
+EXTRA_EXTERNAL_URLS = {
+    "https://raw.githubusercontent.com/openzim/zim-testing-suite/main"
+    "/data/withns/wikipedia_en_climate_change_mini_2024-06.zim": (
+        "openzim_mcp/onboarding.py (STARTER_ARCHIVE_URL)"
+    ),
+}
+
 # Hosts that rate-limit or block unauthenticated HEAD/GET from CI runners.
 # Skipped rather than silently passed, and reported in the summary.
 EXTERNAL_SKIP_HOSTS = ("badge.fury.io", "img.shields.io", "codecov.io")
@@ -334,6 +353,8 @@ def _collect_external(index: SiteIndex) -> dict[str, set[str]]:
         for pattern in MARKDOWN_URL_RES:
             for url in pattern.findall(prose):
                 urls.setdefault(html.unescape(url), set()).add(name)
+    for url, source in EXTRA_EXTERNAL_URLS.items():
+        urls.setdefault(url, set()).add(source)
     return urls
 
 
@@ -395,7 +416,9 @@ def check_external(
     block; and, in the built HTML, an absolute ``src`` — HREF_RE reads
     ``href`` alone, so an ``<img src>`` pointing at another host is collected
     by neither half of this checker. A URL written any of those ways is
-    checked by nothing at all.
+    checked by nothing at all — unless it is listed in EXTRA_EXTERNAL_URLS,
+    which is how a URL that can only sensibly live inside a fence (the
+    starter archive's ``curl`` line) still gets probed.
 
     Only the URLs that reach the ``_probe`` call at the bottom are counted as
     probed: links to our own site are resolved against the build, "edit this

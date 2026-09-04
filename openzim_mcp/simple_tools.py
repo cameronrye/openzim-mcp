@@ -34,6 +34,7 @@ from .exceptions import (
 )
 from .intent_parser import IntentParser, _strip_quote_pair, safe_regex_sub
 from .meta import build_meta, format_footer
+from .onboarding import acquisition_hint_markdown
 from .pagination import archive_identity
 from .rerank import (
     _INFO_LEVEL_TELEMETRY_EVENTS,
@@ -64,6 +65,11 @@ from .tool_schemas import (
 from .zim_operations import ZimOperations
 
 logger = logging.getLogger(__name__)
+
+#: ``search_all``'s aggregate count of archives the server could see, as it
+#: appears in the legacy JSON-string variant. Matched rather than parsed so a
+#: large fan-out response is not decoded just to read one integer.
+_NO_ARCHIVES_AVAILABLE_RE = re.compile(r'"files_available":\s*0\s*[,}]')
 
 
 # Phase D sub-D-2 query-rewrite telemetry events.
@@ -814,32 +820,7 @@ class SimpleToolsHandler(
                 if not zim_file_path:
                     zim_file_path = self._auto_select_zim_file()
                 if not zim_file_path:
-                    # Post-v2.0.5 D-M: callers hitting the
-                    # ambiguous-archive gate (2+ archives loaded, no
-                    # ``zim_file_path`` arg, intent doesn't
-                    # auto-select) saw only "specify a ZIM file
-                    # path" with a raw file listing — no hint that
-                    # ``search all files for X`` or
-                    # ``synthesize=True`` would route across all
-                    # archives without an explicit path. Add a
-                    # "Try one of these to recover:" block
-                    # mirroring the shape used elsewhere.
-                    return (
-                        "**No ZIM File Specified**\n\n"
-                        "Please specify a ZIM file path, or ensure there is "
-                        "exactly one ZIM file available.\n\n"
-                        "**Try one of these to recover:**\n"
-                        "- Pass the `zim_file_path` argument to target a "
-                        "specific archive\n"
-                        "- `search all files for <terms>` — fan out across "
-                        "every loaded archive\n"
-                        "- `tell me about <topic>` with `synthesize=True` — "
-                        "auto-open every loaded archive and pick the best "
-                        "hit\n\n"
-                        "**Available files:**\n"
-                        f"{self.zim_operations.list_zim_files()}"
-                        "\n<!-- intent=no_zim_file_specified cert=1.00 -->"
-                    )
+                    return self._no_zim_file_response()
             # Hallucinated paths were already normalized at the top of
             # ``handle_zim_query`` (see comment above the synthesize branch).
             # By this point, ``zim_file_path`` is either a known real path,
@@ -3766,6 +3747,22 @@ class SimpleToolsHandler(
                 actual_query,
                 limit_per_file=options.get("limit", 5),
             )
+            # ``search all files for X`` is the one phrase the *ambiguous*
+            # arm of the no-archive gate actively advertises, so a user who
+            # read that recovery advice on a machine with archives and typed
+            # the same phrase on an empty one landed here — and got
+            # ``"files_available": 0`` with an empty result list, which
+            # states the problem and answers nothing. Fanning out across
+            # zero archives is the empty case, not a search.
+            #
+            # Read off the fan-out's own count rather than probing the
+            # directories again: the walk has already happened by this
+            # point, and a second one would be pure cost on every call,
+            # empty or not. ``== 0`` and not falsiness, because a payload
+            # that omits the key entirely has not told us the directories
+            # are empty and must not be answered as though it had.
+            if data.get("files_available") == 0:
+                return self._nothing_to_search_response()
             # Phase D sub-D-1: cross-encoder rerank across all archives.
             # Hits are flattened into a single candidate list (tagged with
             # their source archive index so they can be redistributed after
@@ -3801,9 +3798,26 @@ class SimpleToolsHandler(
             ):
                 reason = "archive_unavailable"
             return _HandlerResult(body=body, reason=reason, suggestions=suggestions)
-        return self.zim_operations.search_all(
+        legacy = self.zim_operations.search_all(
             params.get("query", query),
             limit_per_file=options.get("limit", 5),
+        )
+        # Same signal, read out of the legacy JSON string variant. This is
+        # this server's own envelope (``search_all`` is a ``json.dumps`` of
+        # ``search_all_data``), and ``files_available`` appears once, at the
+        # top level, so the scan is unambiguous — and, unlike re-listing the
+        # directories, it touches no filesystem.
+        if _NO_ARCHIVES_AVAILABLE_RE.search(legacy):
+            return self._nothing_to_search_response()
+        return legacy
+
+    def _nothing_to_search_response(self) -> str:
+        """What ``search all files`` says when there is nothing to fan out over."""
+        return (
+            "**No ZIM Archives Loaded**\n\n"
+            "There is nothing to search across — the allowed directories "
+            "contain no `.zim` files.\n\n"
+            f"{acquisition_hint_markdown()}"
         )
 
     def _handle_walk_namespace(
@@ -4679,6 +4693,68 @@ class SimpleToolsHandler(
             if real_path and Path(real_path).name.lower().startswith(stem):
                 hits.append(real_path)
         return hits[0] if len(hits) == 1 else None
+
+    def _no_archives_loaded(self) -> bool:
+        """True when the allowed directories hold no archive at all.
+
+        Separates the two situations ``_auto_select_zim_file`` collapses
+        into one ``None``: *ambiguous* (2+ archives, pick one) and *empty*
+        (nothing to pick). A probe that raises is reported as "not empty",
+        so an unexpected failure degrades to the pre-existing message
+        rather than telling a user with a full library to download one.
+        """
+        try:
+            return not self.zim_operations.list_zim_files_data()
+        except Exception as exc:  # noqa: BLE001 — advice must never raise
+            logger.debug("Archive-count probe failed: %s", exc)
+            return False
+
+    def _no_zim_file_response(self) -> str:
+        """The gate reached when no archive could be selected.
+
+        Post-v2.0.5 D-M: callers hitting the ambiguous-archive gate (2+
+        archives loaded, no ``zim_file_path`` arg, intent doesn't
+        auto-select) saw only "specify a ZIM file path" with a raw file
+        listing — no hint that ``search all files for X`` or
+        ``synthesize=True`` would route across all archives without an
+        explicit path. Hence the "Try one of these to recover:" block.
+
+        Those recovery steps are nonsense in the *other* case that lands
+        here — zero archives loaded — where fanning out across "every
+        loaded archive" fans out across nothing. A user whose directory is
+        empty (a mistyped path, or the far more common "installed the
+        server, never downloaded an archive") was told to specify a path
+        that does not exist. Give them the one thing that helps: where an
+        archive comes from.
+
+        Both arms keep the ``**No ZIM File Specified**`` title and the
+        ``intent=no_zim_file_specified`` footer — the envelope other
+        surfaces key on — and differ only in the advice between them.
+        """
+        if self._no_archives_loaded():
+            return (
+                "**No ZIM File Specified**\n\n"
+                "No ZIM archives are loaded — the allowed directories "
+                "contain no `.zim` files, so there is nothing to search.\n\n"
+                f"{acquisition_hint_markdown()}\n"
+                "\n<!-- intent=no_zim_file_specified cert=1.00 -->"
+            )
+        return (
+            "**No ZIM File Specified**\n\n"
+            "Please specify a ZIM file path, or ensure there is "
+            "exactly one ZIM file available.\n\n"
+            "**Try one of these to recover:**\n"
+            "- Pass the `zim_file_path` argument to target a "
+            "specific archive\n"
+            "- `search all files for <terms>` — fan out across "
+            "every loaded archive\n"
+            "- `tell me about <topic>` with `synthesize=True` — "
+            "auto-open every loaded archive and pick the best "
+            "hit\n\n"
+            "**Available files:**\n"
+            f"{self.zim_operations.list_zim_files()}"
+            "\n<!-- intent=no_zim_file_specified cert=1.00 -->"
+        )
 
     def _auto_select_zim_file(self) -> Optional[str]:
         """Phase F: thin wrapper delegating to ``topic_preprocessing``.
