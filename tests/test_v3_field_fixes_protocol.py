@@ -407,9 +407,13 @@ def _responses(
 
     ``complete_only`` reads a buffer still being written: it stops at the last
     newline and skips anything that will not parse, so a half-written frame is
-    simply not there yet instead of raising.
+    simply not there yet instead of raising. It is also the only mode that
+    tolerates undecodable bytes, since a snapshot can split a multi-byte
+    character; a finished stream that will not decode is a wire defect and
+    still raises.
     """
-    text = stdout_bytes.getvalue().decode(errors="replace")
+    raw = stdout_bytes.getvalue()
+    text = raw.decode(errors="replace") if complete_only else raw.decode()
     if complete_only:
         text = text[: text.rfind("\n") + 1]
     parsed: list[dict[str, Any]] = []
