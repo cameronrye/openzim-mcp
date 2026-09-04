@@ -32,7 +32,7 @@ const SITE = 'https://cameronrye.github.io/openzim-mcp';
 // import it rather than restating it, so release-please-config.json still has
 // exactly one file to update — this one, already registered there as a
 // `generic` extra-file.
-export const VERSION = '3.3.0'; // x-release-please-version
+export const VERSION = '3.3.1'; // x-release-please-version
 
 // The date that release went out, stamped by the same release-please generic
 // updater under the `date` scope. The annotation is not theoretical: `git log
