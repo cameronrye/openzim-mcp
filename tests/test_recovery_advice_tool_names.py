@@ -59,12 +59,18 @@ rule here. Reading bare names package-wide is not available — the v2.0.0
 names are still live ``ZimOperations`` methods and intent labels and the
 live ones are their own registration literals, 132 legitimate occurrences
 today — and an allowlist that size would say less than it hid. Nothing
-exploits the gap at present: every bare-prose tool name left in the package
-sits on an advanced-only surface (``tools/prompts.py``,
-``tools/resource_tools.py``, ``tools/zim_*.py``), and
-``test_simple_mode_registers_no_resources`` plus the ``mode == "simple"``
-return in ``openzim_mcp/tools/__init__.py`` keep those surfaces off the
-simple client.
+exploits the gap at present. Every bare-prose tool name left in the package
+is one of three things:
+
+* an advanced-only surface — ``tools/prompts.py``,
+  ``tools/resource_tools.py``, ``tools/zim_search.py``'s description, and
+  ``instructions.ADVANCED_INSTRUCTIONS`` — none of which reaches a simple
+  client (``test_simple_mode_registers_no_resources``, the
+  ``mode == "simple"`` return in ``openzim_mcp/tools/__init__.py``, and
+  ``test_simple_instructions_name_only_the_registered_tool`` below);
+* a ``config.py`` ``Field`` description, where naming both surfaces is the
+  subject rather than an instruction;
+* a log line, which no client reads.
 """
 
 from __future__ import annotations
@@ -843,6 +849,21 @@ class TestRecoveryAdviceGuardCoverage:
             "ADVANCED_ONLY_ADVICE drifted from the strings it excuses: "
             f"stale={sorted(claimed - used)}, missing={sorted(used - claimed)}"
         )
+
+    def test_simple_instructions_name_only_the_registered_tool(
+        self, registries: Dict[str, Set[str]]
+    ) -> None:
+        """Pins one leg of the bare-prose residual in the module docstring.
+
+        ``instructions.ADVANCED_INSTRUCTIONS`` names all eight tools in bare
+        prose, which no rule here can see. It is harmless only because
+        ``instructions_for`` hands simple clients the other string.
+        """
+        from openzim_mcp.instructions import instructions_for
+
+        for mode in TOOL_MODES:
+            named = set(_rendered_tool_references(instructions_for(mode)))
+            assert named <= registries[mode], (mode, sorted(named))
 
     def test_simple_mode_registers_no_resources(
         self, servers: Dict[str, OpenZimMcpServer]
