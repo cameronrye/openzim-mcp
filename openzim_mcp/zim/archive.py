@@ -55,6 +55,7 @@ from openzim_mcp.exceptions import (
     OpenZimMcpEntryNotFoundError,
 )
 from openzim_mcp.meta import attach_meta
+from openzim_mcp.onboarding import acquisition_hint_markdown
 from openzim_mcp.preset_data import ArchivePreset, resolve_preset_from_entries
 from openzim_mcp.recovery_advice import locate_entry
 from openzim_mcp.security import PathValidator
@@ -797,11 +798,26 @@ class ZimOperations(
 
         if not all_zim_files:
             if (name_filter or "").strip():
+                # A filter that matched nothing is not an empty library, so
+                # this arm deliberately stays free of download advice — the
+                # caller has archives, just none whose name contains this
+                # substring.
                 return (
                     "No ZIM files found in allowed directories matching filter "
                     f"{name_filter!r}"
                 )
-            return "No ZIM files found in allowed directories"
+            # Nothing at all. This string is the whole user interface for a
+            # GUI client, which keeps the server's stderr in a log file
+            # nobody opens, so the startup warning never reaches the person
+            # who most needs it. Say where an archive comes from here too.
+            #
+            # The first line stays byte-identical to what it always was —
+            # the docs site quotes it verbatim in two places, and callers
+            # match on it — so this only ever appends.
+            return (
+                "No ZIM files found in allowed directories\n\n"
+                f"{acquisition_hint_markdown()}"
+            )
 
         result_text = (
             f"Found {len(all_zim_files)} ZIM files in "

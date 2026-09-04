@@ -467,6 +467,14 @@ def _one_shot_stdio(
     of hanging it; the exit is then awaited separately, so a server that
     answers but lingers is told apart from one that never answers.
     """
+    # An allowed directory holding no ``.zim`` now draws a startup warning
+    # telling the operator where to get an archive — a real signal, and one
+    # this test's blanket ``"WARNING" not in stderr`` would otherwise read as
+    # the protocol-layer regression it is actually watching for. Give the
+    # server a nominal archive so the assertion keeps its full strength. None
+    # of the one-shot methods here (initialize / ping / tools|prompts list)
+    # opens an archive, so the bytes never have to be a valid ZIM.
+    (tmp_path / "sample.zim").write_bytes(b"placeholder")
     stderr_path = tmp_path / "server.stderr"
     with stderr_path.open("wb") as stderr:
         proc = subprocess.Popen(

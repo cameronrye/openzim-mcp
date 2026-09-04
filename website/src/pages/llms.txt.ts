@@ -205,7 +205,7 @@ The server takes **directories**, not individual files. The published Docker ima
   "mcpServers": {
     "openzim": {
       "command": "uvx",
-      "args": ["openzim-mcp@${VERSION}", "/path/to/zim/files"]
+      "args": ["openzim-mcp@${VERSION}", "~/zim-files"]
     }
   }
 }
@@ -310,7 +310,7 @@ Full reference: ${SITE}/docs/configuration/
 - Changelog: https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md
 - PyPI: https://pypi.org/project/openzim-mcp/
 - ZIM format specification: https://openzim.org/wiki/ZIM_file_format
-- ZIM archive library: https://library.kiwix.org/
+- ZIM archive library: https://browse.library.kiwix.org/
 - openZIM project: https://openzim.org/
 `;
 

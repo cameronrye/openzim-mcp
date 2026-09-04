@@ -66,6 +66,24 @@ def register(server: "OpenZimMcpServer") -> None:
                         f"(provided: {direction!r})."
                     ),
                 )
+            # ``kind`` buckets the links extracted from an article body, which
+            # only the outbound walk produces; the inbound and related sets
+            # are unbucketed. Both directions used to accept an explicit
+            # ``kind`` and drop it, so "what media links here" answered with
+            # every inbound link and read as a complete answer. Only a
+            # non-default value can be rejected — ``kind`` is a plain enum
+            # argument, so "internal" is indistinguishable from omitted.
+            if direction != "outbound" and kind != "internal":
+                return tool_error(
+                    operation="invalid_combination",
+                    message=(
+                        "`kind` selects one bucket of an article's own "
+                        "outbound links and is only supported by "
+                        f"`direction='outbound'`; direction={direction!r} "
+                        "returns a single unbucketed set. Drop `kind`, or "
+                        "switch to `direction='outbound'`."
+                    ),
+                )
 
             if direction == "outbound":
                 if kind not in _VALID_KINDS:
@@ -156,6 +174,20 @@ def register(server: "OpenZimMcpServer") -> None:
                     message=(
                         "`direction='related'` returns a single ranked set and "
                         "does not paginate; omit `cursor`."
+                    ),
+                )
+            # ``offset`` is the same request the cursor guard above refuses,
+            # spelled the other way, and it was the half that stayed silent:
+            # ``get_related_articles_data`` takes no offset, so every page was
+            # page one while the caller believed it had advanced.
+            if offset:
+                return tool_error(
+                    operation="invalid_combination",
+                    message=(
+                        "`direction='related'` returns a single ranked set and "
+                        f"does not paginate; `offset` (provided: {offset}) "
+                        "would return the same rows. Omit it, and raise "
+                        "`limit` if you need more neighbours."
                     ),
                 )
             return await ops.get_related_articles_data(

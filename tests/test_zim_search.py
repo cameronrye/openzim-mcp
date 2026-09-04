@@ -686,3 +686,75 @@ async def test_title_no_archive_returns_structured_error(
         fn, _ = server._tools_store["zim_search"]
         result = await fn(query="x", mode="title")
     assert result["operation"] == "missing_archive"
+
+
+# ---------------------------------------------------------------------------
+# namespace / content_type are fulltext-only
+#
+# Both were accepted in every mode and handed to ``_handle_fulltext_mode``
+# alone, so ``mode="title"`` with ``namespace="A"`` returned title hits from
+# every namespace, with nothing in the payload saying the filter had been
+# discarded — a plausible answer to a wider question than the one asked. The
+# rejection is paired with a no-filter case below, because the cheap way to
+# pass a rejection test is to reject the whole mode.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["title", "suggest"])
+@pytest.mark.parametrize(
+    "filter_kwargs", [{"namespace": "A"}, {"content_type": "text/html"}]
+)
+async def test_non_fulltext_mode_rejects_filters(
+    server: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+    mode: str,
+    filter_kwargs: dict[str, str],
+) -> None:
+    """A filter the mode cannot apply must not reach the data layer."""
+    ops = _patch_async_ops(
+        monkeypatch,
+        find_entry_by_title_data={"results": [], "_meta": {}},
+        get_search_suggestions_data={"suggestions": []},
+    )
+    with (
+        patch(
+            "openzim_mcp.topic_preprocessing.auto_select_zim_file",
+            return_value="/data/wiki.zim",
+        ),
+        patch(
+            "openzim_mcp.topic_preprocessing.promote_topic_via_title_index",
+            return_value=None,
+        ),
+    ):
+        register_zim_search(server)
+        fn, _ = server._tools_store["zim_search"]
+        result = await fn(query="Detroit", mode=mode, **filter_kwargs)
+
+    param = next(iter(filter_kwargs))
+    assert result.get("operation") == "invalid_combination", (
+        f"`{param}` was accepted in mode={mode!r} and silently discarded; "
+        f"got {result!r}"
+    )
+    # The message has to name the parameter, the mode, and the way out.
+    assert f"`{param}`" in result["message"]
+    assert mode in result["message"]
+    assert "fulltext" in result["message"]
+    ops.find_entry_by_title_data.assert_not_awaited()
+    ops.get_search_suggestions_data.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_suggest_without_filters_still_dispatches(
+    server: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The guard keys on the filters, not on the mode."""
+    ops = _patch_async_ops(monkeypatch, get_search_suggestions_data={"suggestions": []})
+    with patch(
+        "openzim_mcp.topic_preprocessing.auto_select_zim_file",
+        return_value="/data/wiki.zim",
+    ):
+        register_zim_search(server)
+        fn, _ = server._tools_store["zim_search"]
+        await fn(query="Det", mode="suggest")
+    ops.get_search_suggestions_data.assert_awaited_once()

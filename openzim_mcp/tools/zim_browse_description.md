@@ -18,7 +18,7 @@ PARAMETERS:
   cursor            Opaque pagination handle from `next_cursor`.
   limit             Page size: page 1-200 (default 50), walk 1-500
                     (default 200).
-  offset            Page-mode pagination offset (ignored in walk).
+  offset            Page-mode pagination offset (walk rejects it).
   include_assets    Default False hides assets (css/js/fonts/images/
                     media) in C-browse; True surfaces them, e.g. media
                     paths for `zim_get(binary=True)`.
