@@ -319,7 +319,10 @@ def test_m5_security_error_routes_to_security_template():
     err = OpenZimMcpSecurityError(
         "Access denied - Path is outside allowed directories: /etc/passwd"
     )
-    config = get_error_config(err)
+    # Advanced wording: ``get_error_config`` rewrites the ``zim_health()``
+    # step for simple-mode clients, so identity only holds for the mode the
+    # table itself is written in. Routing is what this test is about.
+    config = get_error_config(err, tool_mode="advanced")
     assert config is ERROR_CONFIGS[OpenZimMcpSecurityError]
     assert config is not PERMISSION_ERROR_CONFIG
 

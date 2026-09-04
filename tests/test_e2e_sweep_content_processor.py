@@ -7,14 +7,23 @@ Both defects surfaced driving the installed server against the live corpus:
   therefore counted as an anchorable query term. The article's actual
   migraine paragraph sat 11k chars further down.
 * A non-binary fetch of an image dead-ends on a placeholder that never
-  names the ``binary=True`` argument which does return the bytes.
+  names the route which does return the bytes — ``binary=True`` on the
+  advanced surface, ``get binary content of <path>`` in simple mode, where
+  ``zim_get`` is not registered at all.
 """
 
+import re
+
+import pytest
+
 from openzim_mcp.content_processor import ContentProcessor
+from openzim_mcp.intent_parser import IntentParser
+
+from .test_phase_f_migration import PHASE_F_TOOLS
 
 
-def _processor() -> ContentProcessor:
-    return ContentProcessor(snippet_length=3000)
+def _processor(tool_mode: str = "advanced") -> ContentProcessor:
+    return ContentProcessor(snippet_length=3000, tool_mode=tool_mode)
 
 
 class TestSnippetAnchoringIgnoresStopWords:
@@ -49,6 +58,65 @@ class TestSnippetAnchoringIgnoresStopWords:
 
 class TestImagePlaceholderNamesBinaryArgument:
     def test_placeholder_points_at_binary_true(self):
-        result = _processor().process_mime_content(b"fake image data", "image/png")
+        result = _processor("advanced").process_mime_content(
+            b"fake image data", "image/png"
+        )
         assert "Image content" in result
         assert "binary=True" in result
+
+    def test_simple_mode_placeholder_names_a_route_that_exists(self):
+        """Simple mode registers ``zim_query`` alone.
+
+        The advanced placeholder named ``zim_get(entry_path=..., binary=True)``
+        in both modes, so the one client that cannot call ``zim_get`` was the
+        one being told to. The replacement is the ``binary`` intent, which
+        ``zim_query`` does resolve.
+        """
+        result = _processor("simple").process_mime_content(
+            b"fake image data", "image/png"
+        )
+        assert "Image content" in result
+        assert "get binary content of" in result
+        assert "zim_get" not in result
+
+    @pytest.mark.parametrize("tool_mode", ["simple", "advanced"])
+    def test_placeholder_always_offers_a_next_step(self, tool_mode):
+        """Neither mode may "fix" the hint by dropping the route.
+
+        The first version of this test asserted only that the sentence
+        still said "Cannot display directly" and still ended in ``)``.
+        Both of those are supplied by the literal *around* the clause, so
+        emptying ``recovery_advice.fetch_binary`` for either mode — the
+        exact "fix" this test exists to forbid — left it green. It now
+        reads the route back out of the placeholder and requires it to be
+        one this mode's client can actually take.
+        """
+        result = _processor(tool_mode).process_mime_content(
+            b"fake image data", "image/png"
+        )
+        prefix = "(Image content - Cannot display directly; "
+        assert result.startswith(prefix) and result.endswith(")"), result
+        route = result[len(prefix) : -1].strip()
+        assert route, f"{tool_mode} placeholder dead-ends with no route: {result!r}"
+
+        if tool_mode == "advanced":
+            # The advanced client calls the tool itself, so the route has
+            # to name a registered one AND the argument that returns bytes
+            # — naming the tool without ``binary=True`` re-fetches the same
+            # unrenderable entry.
+            called = set(re.findall(r"([a-z_][a-z0-9_]*)\(", route))
+            assert called & PHASE_F_TOOLS, f"no registered tool in {route!r}"
+            assert "binary=True" in route, route
+        else:
+            # Simple mode registers ``zim_query`` alone, so the only route
+            # that exists is a request the intent parser resolves — and it
+            # has to resolve to the intent that returns the bytes, not to a
+            # full-text search for its own text.
+            quoted = re.findall(r"`([^`]+)`", route)
+            assert quoted, f"simple route quotes no request: {route!r}"
+            probe = quoted[0].replace("<path>", "A/Photo.png")
+            intent, _params, confidence = IntentParser().parse_intent(probe)
+            assert (intent, confidence >= 0.85) == ("binary", True), (
+                f"{probe!r} must resolve to the binary intent for the "
+                f"placeholder to be actionable; got {(intent, confidence)}"
+            )

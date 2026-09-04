@@ -189,7 +189,9 @@ def test_d03_absolute_and_traversal_inputs_keep_the_security_framing(
 def test_d03_name_error_renders_a_not_found_template_pointing_at_paths() -> None:
     err = OpenZimMcpArchiveNameError("Path did not match any loaded archive: x.zim")
 
-    config = get_error_config(err, operation="zim_browse")
+    # ``loaded_archives[].path`` is the advanced-mode step; simple mode
+    # cannot call zim_health, so it is rewritten to the zim_query phrasing.
+    config = get_error_config(err, operation="zim_browse", tool_mode="advanced")
 
     assert config is not None
     assert config.title == "Archive Not Found"

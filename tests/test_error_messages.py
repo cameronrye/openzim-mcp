@@ -190,10 +190,28 @@ class TestFormatGenericError:
             error_type="type",
             context="ctx",
             details="det",
+            tool_mode="advanced",
         )
 
         assert "Troubleshooting" in result
         assert "zim_health" in result
+
+    def test_format_generic_error_simple_mode_names_no_advanced_tool(self):
+        """Simple mode registers zim_query alone — no `zim_health()` there.
+
+        The default is the fail-safe mode, so a caller that forgets to thread
+        ``tool_mode`` cannot resurrect the uncallable advice.
+        """
+        result = format_generic_error(
+            operation="op",
+            error_type="type",
+            context="ctx",
+            details="det",
+        )
+
+        assert "Troubleshooting" in result
+        assert "zim_health" not in result
+        assert "list available ZIM files" in result
 
 
 class TestGetErrorConfig:
@@ -242,7 +260,7 @@ class TestGetErrorConfig:
     def test_get_error_config_permission_pattern(self):
         """Test getting config for permission error pattern."""
         error = Exception("Permission denied accessing file")
-        config = get_error_config(error)
+        config = get_error_config(error, tool_mode="advanced")
 
         assert config is not None
         assert config == PERMISSION_ERROR_CONFIG
@@ -250,7 +268,7 @@ class TestGetErrorConfig:
     def test_get_error_config_access_pattern(self):
         """Test getting config for access error pattern."""
         error = Exception("Access denied to resource")
-        config = get_error_config(error)
+        config = get_error_config(error, tool_mode="advanced")
 
         assert config is not None
         assert config == PERMISSION_ERROR_CONFIG
@@ -281,7 +299,7 @@ class TestGetErrorConfig:
     def test_get_error_config_case_insensitive(self):
         """Test that pattern matching is case insensitive."""
         error = Exception("PERMISSION DENIED")
-        config = get_error_config(error)
+        config = get_error_config(error, tool_mode="advanced")
 
         assert config is not None
         assert config == PERMISSION_ERROR_CONFIG

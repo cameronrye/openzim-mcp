@@ -37,6 +37,13 @@ from openzim_mcp.exceptions import (
     OpenZimMcpValidationError,
 )
 from openzim_mcp.meta import attach_meta
+from openzim_mcp.recovery_advice import (
+    correct_entry_path,
+    locate_entry,
+    locate_or_explore,
+    metadata_keys,
+    verify_archive,
+)
 from openzim_mcp.zim._ops_base import _json
 from openzim_mcp.zim.redirects import (
     best_effort_redirect_chain,
@@ -206,7 +213,9 @@ def _has_well_known_illustration(archive: Archive) -> bool:
         return False
 
 
-def rewrite_well_known_path(archive: Archive, entry_path: str) -> str:
+def rewrite_well_known_path(
+    archive: Archive, entry_path: str, *, tool_mode: str = "simple"
+) -> str:
     """Resolve a synthetic ``W/`` browse path to the entry it stands for.
 
     ``zim_browse``/``zim_metadata`` publish ``W/mainPage`` on new-scheme
@@ -237,7 +246,7 @@ def rewrite_well_known_path(archive: Archive, entry_path: str) -> str:
     if not resolved:
         raise OpenZimMcpEntryNotFoundError(
             "This archive declares no main page, so 'W/mainPage' cannot be "
-            "resolved. Use zim_search() to find an entry."
+            "resolved. " + locate_entry(tool_mode)
         )
     return str(resolved)
 
@@ -628,7 +637,7 @@ class _ContentMixin:
             raise OpenZimMcpArchiveError(
                 f"Entry retrieval failed for '{entry_path}': {e}. "
                 f"This may be due to file access issues or ZIM file corruption. "
-                f"Try using zim_health() to verify the archive is loaded and readable."
+                + verify_archive(self.config.tool_mode)
             ) from e
 
     def _get_zim_entry_from_archive(
@@ -811,7 +820,7 @@ class _ContentMixin:
             raise OpenZimMcpArchiveError(
                 f"Entry retrieval failed for '{entry_path}': {e}. "
                 f"This may be due to file access issues or ZIM file corruption. "
-                f"Try using zim_health() to verify the archive is loaded and readable."
+                + verify_archive(self.config.tool_mode)
             ) from e
 
         # ``_truncated`` / ``_total_chars`` / ``_content_chars`` are internal
@@ -904,7 +913,9 @@ class _ContentMixin:
         # advertised by one tool and rejected by another — with the
         # rejection advising "use browsing tools", the tool that had just
         # handed the caller the path.
-        entry_path = rewrite_well_known_path(archive, entry_path)
+        entry_path = rewrite_well_known_path(
+            archive, entry_path, tool_mode=self.config.tool_mode
+        )
         if entry_path == "W/favicon" and getattr(
             archive, "has_new_namespace_scheme", False
         ):
@@ -1080,8 +1091,7 @@ class _ContentMixin:
             raise OpenZimMcpEntryNotFoundError(
                 f"Entry not found: '{entry_path}'. "
                 f"The entry path may not exist in this ZIM file. "
-                f"Try using zim_search() to find available entries, "
-                f"or zim_browse() to explore the archive's namespaces."
+                + locate_or_explore(self.config.tool_mode)
                 + url_shaped_path_hint(entry_path)
             )
         except OpenZimMcpArchiveError:
@@ -1097,7 +1107,7 @@ class _ContentMixin:
                 f"Direct access failed: {direct_error}. "
                 f"Search-based fallback failed: {search_error}. "
                 f"The entry may not exist or the path format may be incorrect. "
-                f"Try using zim_search() to find the correct entry path."
+                + correct_entry_path(self.config.tool_mode)
             ) from search_error
 
     def _get_entry_data_from_archive(
@@ -1610,8 +1620,8 @@ class _ContentMixin:
         # Resource Not Found envelope.
         if not key:
             raise OpenZimMcpEntryNotFoundError(
-                "Empty metadata key. Pass a known M/<key> path — "
-                'zim_browse(namespace="M") lists the available keys.'
+                "Empty metadata key. Pass a known M/<key> path. "
+                + metadata_keys(self.config.tool_mode)
             )
         try:
             item = archive.get_metadata_item(key)
@@ -1620,7 +1630,7 @@ class _ContentMixin:
             raise OpenZimMcpEntryNotFoundError(
                 f"Entry not found: '{entry_path}'. "
                 f"Metadata key {key!r} does not exist in this archive. "
-                f'Use zim_browse(namespace="M") to list the available keys.'
+                + metadata_keys(self.config.tool_mode)
             ) from e
         if item is None:
             # Same contract as the raising branch above: a key that resolves
@@ -1631,7 +1641,7 @@ class _ContentMixin:
             raise OpenZimMcpEntryNotFoundError(
                 f"Entry not found: '{entry_path}'. "
                 f"Metadata key {key!r} resolved to an empty item. "
-                f'Use zim_browse(namespace="M") to list the available keys.'
+                + metadata_keys(self.config.tool_mode)
             )
         mime = item.mimetype or ""
         try:
@@ -1832,8 +1842,7 @@ class _ContentMixin:
                     else:
                         raise OpenZimMcpEntryNotFoundError(
                             f"Entry not found: '{entry_path}'. "
-                            f"Try using zim_search() to find available entries, "
-                            f"or zim_browse() to explore the archive's namespaces."
+                            + locate_or_explore(self.config.tool_mode)
                         )
 
                 # Resolve the redirect chain — libzim raises RuntimeError on

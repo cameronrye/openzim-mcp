@@ -82,17 +82,42 @@ different next move.
 | `scan_truncated` | A link scan stopped before reading the whole article | Totals are a floor, not a count |
 | `suggestion_total_is_lower_bound` | A suggestion listing did not reach the end of the index | `total` undercounts; raise `limit` |
 
+The Recovery column is written for **advanced mode**, where every tool it
+names is registered. In simple mode `zim_query` is the only tool there is, so
+the same `reason` renders the equivalent natural-language request instead —
+see [the rendered footer](#the-rendered-footer) below.
+
 The last three are the ones worth special-casing in client code: `sample_only`, `scan_truncated` and `suggestion_total_is_lower_bound` all ride responses that otherwise look complete — `sample_only` even keeps `done: false` on a page that already returned everything the sample held. The
-first nine also shape the simple-mode footer; the last two only appear in
+first nine also shape the footer; the last two only appear in
 `_meta`.
 
 ### The rendered footer
 
-When `OPENZIM_MCP_META__FOOTER_ENABLED` is `true` (the default), simple-mode
+When `OPENZIM_MCP_META__FOOTER_ENABLED` is `true` (the default), `zim_query`
 responses get a one-line markdown blockquote built from `_meta` and appended
 to the body — a token-budget summary normally, or the recovery hint when a
 `reason` is set. It also requires `compact=True`, which is the simple-mode
 default.
+
+**The recovery hint's text depends on `OPENZIM_MCP_TOOL_MODE`.** `zim_query` is
+registered in both modes, so a hint written for the advanced tool set would
+otherwise reach simple-mode clients that cannot call any of it. The advanced
+hint names the tool; the simple hint is a request the intent parser resolves:
+
+| `reason` | Advanced footer | Simple footer |
+|---|---|---|
+| `no_xapian_index` | ``Try `zim_search(mode='title')` or `zim_browse`.`` | ``Ask for `find article titled <title>` or `browse namespace C` — neither needs the index.`` |
+| `bad_namespace` | ``Try `zim_metadata` to see valid options.`` | ``Ask for `list namespaces` to see valid options.`` |
+| `no_content_type_match` | ``Binary assets (images, media) aren't in the search index — use `zim_browse` (include_assets=True) to discover them, or drop the `content_type` filter.`` | ``Binary assets (images, media) aren't in the search index — ask again without the `content_type` filter. This tool cannot discover assets, but `get binary content of <path>` fetches one you can already name.`` |
+| `sample_only` | ``Use `zim_browse(mode='walk')` for exhaustive iteration.`` | ``Ask for `walk namespace <namespace>` for exhaustive iteration.`` |
+| `archive_unavailable` | ``Check `zim_health` and server logs.`` | ``That is a server-side failure, not the query — retry shortly, or ask an operator to check the logs.`` |
+
+The same split applies to every other recovery string the server emits: the
+`cross_file` no-results body, the "entry not found" and metadata-key-miss
+messages, and the `(Image content - Cannot display directly; ...)` line, which
+names `zim_get(entry_path=..., binary=True)` in advanced mode and
+`get binary content of <path>` in simple. `zim_health()` in the error-envelope
+troubleshooting steps likewise becomes `list available ZIM files`.
 
 Setting it to `false` suppresses the line. On an advanced-mode dict response
 that costs you nothing, because `_meta` is a real key there; in simple mode it

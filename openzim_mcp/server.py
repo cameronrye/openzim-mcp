@@ -270,6 +270,7 @@ class OpenZimMcpServer:
             table_row_threshold=config.content.table_row_threshold,
             table_char_threshold=config.content.table_char_threshold,
             infobox_kv_limit=config.content.infobox_kv_limit,
+            tool_mode=config.tool_mode,
         )
         # ``RateLimitConfig`` is unified — ``OpenZimMcpConfig.rate_limit`` is
         # the same model the limiter expects, including ``per_operation_limits``
@@ -393,8 +394,10 @@ class OpenZimMcpServer:
         if config.tool_mode == TOOL_MODE_SIMPLE:
             logger.info("Running in SIMPLE mode with 1 intelligent tool (zim_query)")
         else:
+            # ``get_server_configuration`` was deleted in v2.0.0; the
+            # configuration it exposed is part of the zim_health payload.
             logger.debug(
-                "Use get_server_configuration() MCP tool for detailed configuration"
+                "Detailed configuration is available from the zim_health MCP tool"
             )
 
     def _create_enhanced_error_message(
@@ -423,10 +426,15 @@ class OpenZimMcpServer:
         # Check for known error types using externalized config. The tool
         # name and a lazy archive counter let archive-path advice name only
         # the recovery steps this tool can honour (D02).
+        # ``tool_mode`` keeps the recovery steps inside the registry the
+        # client can actually see: simple mode registers ``zim_query`` alone,
+        # so the templates' ``zim_health()`` advice would name a tool that
+        # does not exist there.
         config = get_error_config(
             error,
             operation=operation,
             count_archives=lambda: len(self.zim_operations.list_zim_files_data()),
+            tool_mode=self.config.tool_mode,
         )
         if config:
             return format_error_message(
@@ -439,6 +447,7 @@ class OpenZimMcpServer:
             error_type=error_type,
             context=sanitized_context,
             details=base_message,
+            tool_mode=self.config.tool_mode,
         )
 
     def _register_tools(self) -> None:

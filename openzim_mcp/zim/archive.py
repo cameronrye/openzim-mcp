@@ -57,6 +57,7 @@ from openzim_mcp.exceptions import (
 from openzim_mcp.meta import attach_meta
 from openzim_mcp.onboarding import acquisition_hint_markdown
 from openzim_mcp.preset_data import ArchivePreset, resolve_preset_from_entries
+from openzim_mcp.recovery_advice import locate_entry
 from openzim_mcp.security import PathValidator
 from openzim_mcp.timeout_utils import run_with_timeout
 from openzim_mcp.zim._ops_base import _ArchiveAccessMixin, _json
@@ -1721,7 +1722,9 @@ class ZimOperations(
         # A synthetic ``W/`` browse path names an entry not stored under that
         # name, so rewrite before probing — otherwise this ladder answers
         # not-found for a path the plain-body ladder serves.
-        entry_path = rewrite_well_known_path(archive, entry_path)
+        entry_path = rewrite_well_known_path(
+            archive, entry_path, tool_mode=self.config.tool_mode
+        )
 
         entry = None
         with suppress(Exception):
@@ -1735,6 +1738,6 @@ class ZimOperations(
             return resolved, resolved.path
         raise OpenZimMcpEntryNotFoundError(
             f"Entry not found: '{entry_path}'. "
-            f"Try using zim_search() to find available entries."
+            + locate_entry(self.config.tool_mode)
             + url_shaped_path_hint(entry_path)
         ) from None
