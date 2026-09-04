@@ -2797,6 +2797,12 @@ class SimpleToolsHandler(
             # arbitrary keys; ``SearchResponse`` is its precise wire shape
             # and the cast bridges the TypedDict / dict narrowing gap mypy
             # can't infer through assignment.
+            # The backend's relevance verdict, captured BEFORE the splice
+            # below can change which hits are on the page.
+            pre_splice_meta = payload.get("_meta", {}) or {}
+            backend_reason = pre_splice_meta.get("reason")
+            _hits_before = payload.get("results") or []
+            top_path_before = _hits_before[0].get("path") if _hits_before else None
             if offset == 0:
                 payload = cast(
                     SearchResponse,
@@ -2819,9 +2825,31 @@ class SimpleToolsHandler(
             # markdown shape is identical to the non-compact path.
             # Post-b1 P3-D1: pass display_query so ``Found N matches
             # for "X"`` echoes in the caller's original case.
-            return self.zim_operations._format_search_text(
+            body = self.zim_operations._format_search_text(
                 payload, display_query=display_query
             )
+            # v3.3.1 field report: ``low_relevance`` used to die here.
+            # ``zim/search.py`` computes it (no hit token-matches the query,
+            # so every result is weak), ``meta.py`` already has the footer
+            # branch that renders it — but this path returned a bare ``str``,
+            # so only the ZERO-results branch above ever reached that footer.
+            # The consequence in simple mode, where ``zim_query`` is the only
+            # tool: nine supplement monographs for "metformin dosage" served
+            # as a confident, complete answer.
+            #
+            # Suppressed when the canonical-title splice fired, because that
+            # injects an exact-title hit and the "every hit is weak" premise
+            # no longer holds — reporting it then would be its own lie.
+            if backend_reason == "low_relevance":
+                _hits_after = payload.get("results") or []
+                top_path_after = _hits_after[0].get("path") if _hits_after else None
+                if top_path_after == top_path_before:
+                    return _HandlerResult(
+                        body=body,
+                        reason="low_relevance",
+                        suggestions=list(pre_splice_meta.get("suggestions") or []),
+                    )
+            return body
 
         # compact=False: unchanged legacy path. Title promotion is
         # applied in compact mode only (the default surface for

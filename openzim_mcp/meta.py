@@ -262,6 +262,20 @@ def format_footer(
                     "was probed. Narrow the query or raise "
                     "`OPENZIM_MCP_SEARCH__SEARCH_ALL_TOTAL_TIMEOUT_SECONDS`."
                 )
+            if reason == "low_relevance":
+                # v3.3.1 field report: this branch used to fall through to the
+                # ``0_hits`` prose below, so a response that DID return hits
+                # was footed with "No results." — false in the other
+                # direction. ``low_relevance`` means Xapian matched something
+                # but no hit token-matches the query, so the rows above are
+                # real and probably not what was asked for.
+                return "> These matches look weak — no result matches your " + (
+                    "search terms directly. Try `zim_search(mode='title')` "
+                    "for an exact-title lookup, or rephrase."
+                    if advanced
+                    else "search terms directly. Ask for `find article titled "
+                    "<title>` for an exact-title lookup, or rephrase."
+                )
             return "> No results. Try a shorter or differently-spelled query."
         bits: List[str] = []
         for item in visible:
