@@ -1762,11 +1762,19 @@ class SimpleToolsHandler(
         path the caller actually asked for, so whatever generic tail the
         backend appended is at best a duplicate with a ``<placeholder>``
         where the concrete bullet below has the real value.
+
+        A clause removed from the MIDDLE of a message leaves the run of
+        spaces that separated it from what follows (``zim/content.py``
+        appends ``url_shaped_path_hint`` after one), so runs of spaces are
+        collapsed. Spaces and tabs only: both call sites hand this
+        ``sanitize_context_for_error`` output, which has already flattened
+        newlines, but the helper must not silently reflow a message that
+        has not been through it.
         """
         err = cls._BACKEND_API_LEAK_RE.sub("", err)
         for tail in cls._SIMPLE_RECOVERY_TAILS:
             err = err.replace(tail, "")
-        return re.sub(r"\s{2,}", " ", err).strip()
+        return re.sub(r"[ \t]{2,}", " ", err).strip()
 
     def _render_not_found_recovery(
         self,

@@ -1251,6 +1251,40 @@ class TestBackendRecoveryTailIsStrippedSymmetrically:
         )
         assert clause(tool_mode) in body, body
 
+    @pytest.mark.parametrize("tool_mode", TOOL_MODES)
+    def test_a_clause_removed_from_the_middle_leaves_one_space(
+        self, strip_handler: object, tool_mode: str
+    ) -> None:
+        """``zim/content.py`` appends a path hint AFTER the clause.
+
+        Deleting the clause out of the middle of that message leaves the
+        run of spaces that separated the two, in one mode by the regex and
+        in the other by the literal replace. Both have to land on the same
+        sentence.
+        """
+        clause = _clauses()["locate_or_explore"]
+        body = strip_handler._render_not_found_recovery(  # type: ignore[attr-defined]
+            "C/Nope",
+            Exception(
+                f"Entry not found: 'C/Nope'. {clause(tool_mode)} "
+                "Did you mean 'C/Nope.html'?"
+            ),
+            "get article",
+        )
+        assert "Entry not found: 'C/Nope'. Did you mean 'C/Nope.html'?" in body, body
+
+    def test_collapsing_spaces_never_reflows_line_breaks(self) -> None:
+        """Both call sites pre-flatten newlines; the helper must not rely on it."""
+        from openzim_mcp.simple_tools import SimpleToolsHandler
+
+        # A blank line and a space-before-newline are what separate this
+        # from a plain ``\s{2,}`` collapse; a lone ``\n`` is not a run, so
+        # the two spellings agree on it and it proves nothing.
+        assert (
+            SimpleToolsHandler._strip_backend_recovery("first line. \n\nsecond  line.")
+            == "first line. \n\nsecond line."
+        )
+
     @pytest.mark.asyncio
     async def test_missing_article_body_is_mode_independent_end_to_end(
         self, corpus_archive: str
