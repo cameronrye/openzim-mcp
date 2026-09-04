@@ -1296,12 +1296,10 @@ class TestP3D3NamespaceCountAggregatorAgreement:
                 self,
                 _archive: Any,
                 _total: int,
-                seen_entries: set,
                 record: Any,
             ) -> None:
                 # Record one C-namespace hit so the projection fires.
                 record("Berlin", "Berlin")
-                seen_entries.add("Berlin")
 
             def _probe_known_namespaces(self, *_a: Any, **_kw: Any) -> None:
                 pass
@@ -1371,11 +1369,9 @@ class TestP3D3NamespaceCountAggregatorAgreement:
                 self,
                 _archive: Any,
                 _total: int,
-                seen_entries: set,
                 record: Any,
             ) -> None:
                 record("Berlin", "Berlin")
-                seen_entries.add("Berlin")
 
             def _probe_known_namespaces(self, *_a: Any, **_kw: Any) -> None:
                 pass
