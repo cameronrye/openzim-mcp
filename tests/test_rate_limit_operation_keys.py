@@ -15,6 +15,7 @@ receives, so a future branch that forgets to resolve its key fails here.
 from __future__ import annotations
 
 import contextlib
+import time
 from typing import Any, Dict, List, Tuple
 from unittest.mock import AsyncMock, MagicMock
 
@@ -425,10 +426,22 @@ async def test_max_size_batch_is_expensive_but_never_impossible(
     """The split debit must not push the total past ``burst_size`` — a legal
     50-entry batch has to succeed on a full bucket, not be denied forever."""
     fn = live_limiter_server._tools_store["zim_get"]
-    capacity = float(live_limiter_server.rate_limiter.config.burst_size)
+    config = live_limiter_server.rate_limiter.config
+    capacity = float(config.burst_size)
 
+    started = time.monotonic()
     resp = await fn(zim_file_path="/x.zim", entry_paths=[f"A/{i}" for i in range(50)])
+    left = _global_tokens(live_limiter_server)
+    elapsed = time.monotonic() - started
 
     assert resp.get("operation") != "rate_limited"
     assert capacity == 40.0
-    assert _global_tokens(live_limiter_server) < 0.5
+    # Drained to empty, allowing for what refilled WHILE the call ran. The
+    # bucket refills continuously at ``requests_per_second``, so a bare
+    # ``left < 0.5`` also asserts the call returned within ~25ms — which it
+    # does locally and does not on a loaded CI runner (seen failing at 2.3
+    # tokens on macOS and 3.7 on Windows). The budget below is the same
+    # assertion with the clock taken out of it.
+    assert (
+        left <= float(config.requests_per_second) * elapsed + 0.5
+    ), f"{left} tokens left after {elapsed:.3f}s"
