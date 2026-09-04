@@ -45,8 +45,8 @@ jobs:
           # Let release-please own tag creation and the GitHub release shell
           # (changelog body). release.yml's create-release job detects an
           # existing release and uploads the wheel/sdist into it rather than
-          # creating a duplicate. Without this (`skip-github-release: true`),
-          # release-please does not set `release_created=true` on its outputs,
+          # creating a duplicate. Keep `skip-github-release` FALSE: setting it
+          # true stops release-please setting `release_created=true`,
           # and the trigger-release / trigger-docker-publish jobs below stay
           # perpetually skipped — the symptom that bit v1.0.1 (release PR
           # merged but never tagged).

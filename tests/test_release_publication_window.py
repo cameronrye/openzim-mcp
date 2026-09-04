@@ -357,3 +357,41 @@ def test_publish_step_fails_loudly_when_it_cannot_read_the_release(
     result = _run_publish_step(release_yml, tmp_path, is_draft=None, asset_count=4)
     assert result.returncode != 0, result.stdout + result.stderr
     assert not _published(result), result.stdout + result.stderr
+
+
+# --------------------------------------------------------------------------
+# The prose has to agree with the config
+# --------------------------------------------------------------------------
+
+_CONTRIBUTING_DRAFT_RE = re.compile(
+    r"`release-please-config\.json`\s+sets\s+`\"draft\":\s*(true|false)`"
+)
+
+
+def test_contributing_states_the_draft_setting_the_config_actually_has(
+    release_please_package: Dict[str, Any],
+) -> None:
+    """CONTRIBUTING's release walkthrough must not describe the old flow.
+
+    This is the half that rots silently. The workflow change is enforced by the
+    tests above, but the page a contributor reads to understand the release is
+    plain prose, and it spent this PR's whole review claiming the release is
+    "published immediately" while the config had already stopped doing that.
+    Pin the one machine-checkable claim it makes -- the ``draft`` value it
+    quotes -- to the value the config actually carries.
+    """
+    text = (ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8")
+    stated = _CONTRIBUTING_DRAFT_RE.search(text)
+    assert stated, (
+        "CONTRIBUTING.md no longer quotes release-please-config.json's `draft` "
+        "setting in the form this gate reads. If the walkthrough was reworded, "
+        "reword this regex with it -- do not delete the gate: the claim it "
+        "guards is the one that went stale."
+    )
+    claimed = stated.group(1) == "true"
+    actual = release_please_package.get("draft")
+    assert claimed is actual, (
+        f"CONTRIBUTING.md says the release is created with draft={claimed}, but "
+        f"release-please-config.json sets draft={actual}. One of them is lying "
+        "to whoever reads it next."
+    )
