@@ -31,6 +31,7 @@ import queue
 import subprocess
 import sys
 import threading
+import time
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from typing import Any, AsyncIterator, Iterator
@@ -301,38 +302,184 @@ def _ping(request_id: int, *, modern: bool) -> str:
     return json.dumps(frame)
 
 
-def _plug_std_streams(monkeypatch: pytest.MonkeyPatch, frames: list[str]) -> io.BytesIO:
+# How long the stdin gate below waits for the answer it is holding EOF for.
+# Only a broken server ever reaches it: the point of the bound is that such a
+# server fails on the assertion that is missing its response rather than
+# hanging the run.
+_EOF_GATE_TIMEOUT_S = 10.0
+
+
+class _ScriptedStdin(io.BytesIO):
+    """The frames, then an EOF that can be withheld until ``release`` fires.
+
+    ``stdio_server`` pulls stdin through ``anyio.wrap_file``, so every read
+    runs on a worker thread: blocking here parks that thread, never the event
+    loop. The block matters because the SDK's dispatcher answers only
+    ``initialize`` inline and spawns every other handler into a task group
+    whose cancel scope it cancels the instant its read stream ends — a
+    trailing request whose answer is still queued behind the stdout writer
+    loses it. Holding EOF back until the answer is on stdout is what makes a
+    caller that drives the bare SDK deterministic.
+    """
+
+    def __init__(self, data: bytes, release: threading.Event | None) -> None:
+        super().__init__(data)
+        self._release = release
+
+    def read(self, size: int | None = -1) -> bytes:
+        chunk = super().read(size)
+        if not chunk and size != 0 and self._release is not None:
+            self._release.wait(_EOF_GATE_TIMEOUT_S)
+        return chunk
+
+    def read1(self, size: int | None = -1) -> bytes:
+        return self.read(size)
+
+
+class _CapturedStdout(io.BytesIO):
+    """Captured stdout that can charge ``write_delay`` and open the EOF gate.
+
+    ``release`` fires once a response for ``answered_id`` has been written, so
+    a paired :class:`_ScriptedStdin` lets EOF through only after the answer is
+    on the wire. ``write_delay`` charges each write what a loaded CI box
+    charges the SDK's two ``write``/``flush`` worker-thread round trips per
+    response — while the writer is inside them it is not parked on its
+    zero-buffered receive, so the next handler blocks handing over its answer.
+    """
+
+    def __init__(
+        self,
+        *,
+        release: threading.Event | None = None,
+        answered_id: int | None = None,
+        write_delay: float = 0.0,
+    ) -> None:
+        super().__init__()
+        self._release = release
+        self._answered_id = answered_id
+        self._write_delay = write_delay
+
+    def write(self, data: Any) -> int:  # type: ignore[override]
+        if self._write_delay:
+            time.sleep(self._write_delay)
+        written = super().write(data)
+        if self._release is not None and not self._release.is_set():
+            if _by_id(_responses(self, complete_only=True), self._answered_id):
+                self._release.set()
+        return written
+
+
+def _plug_std_streams(
+    monkeypatch: pytest.MonkeyPatch,
+    frames: list[str],
+    *,
+    hold_eof_until_answered: int | None = None,
+    write_delay: float = 0.0,
+) -> io.BytesIO:
     """Point ``sys.stdin``/``sys.stdout`` at in-memory bytes and return stdout.
 
     ``stdio_server()`` probes ``sys.stdin.buffer.fileno()`` to decide whether
     to claim fd 0/1; a ``BytesIO`` raises ``UnsupportedOperation`` there, so
     the SDK serves the wire from the in-memory buffers in place — the exact
     production code path, minus the descriptor surgery.
+
+    ``hold_eof_until_answered`` withholds stdin's EOF until that request id
+    has been answered. Only callers driving the *bare* SDK need it; the ones
+    going through this server's relay must not ask for it, because the relay
+    holding EOF open itself is the very behaviour they assert.
     """
-    stdin_bytes = io.BytesIO("".join(f + "\n" for f in frames).encode())
-    stdout_bytes = io.BytesIO()
+    release = threading.Event() if hold_eof_until_answered is not None else None
+    stdin_bytes = _ScriptedStdin("".join(f + "\n" for f in frames).encode(), release)
+    stdout_bytes = _CapturedStdout(
+        release=release,
+        answered_id=hold_eof_until_answered,
+        write_delay=write_delay,
+    )
     monkeypatch.setattr(sys, "stdin", io.TextIOWrapper(stdin_bytes, encoding="utf-8"))
     monkeypatch.setattr(sys, "stdout", io.TextIOWrapper(stdout_bytes, encoding="utf-8"))
     return stdout_bytes
 
 
-def _responses(stdout_bytes: io.BytesIO) -> list[dict[str, Any]]:
-    return [
-        json.loads(line)
-        for line in stdout_bytes.getvalue().decode().splitlines()
-        if line.strip()
-    ]
+def _responses(
+    stdout_bytes: io.BytesIO, *, complete_only: bool = False
+) -> list[dict[str, Any]]:
+    """The JSON frames on stdout.
+
+    ``complete_only`` reads a buffer still being written: it stops at the last
+    newline and skips anything that will not parse, so a half-written frame is
+    simply not there yet instead of raising. It is also the only mode that
+    tolerates undecodable bytes, since a snapshot can split a multi-byte
+    character; a finished stream that will not decode is a wire defect and
+    still raises.
+    """
+    raw = stdout_bytes.getvalue()
+    text = raw.decode(errors="replace") if complete_only else raw.decode()
+    if complete_only:
+        text = text[: text.rfind("\n") + 1]
+    parsed: list[dict[str, Any]] = []
+    for line in text.splitlines():
+        if not line.strip():
+            continue
+        try:
+            frame = json.loads(line)
+        except ValueError:
+            if not complete_only:
+                raise
+            continue
+        if isinstance(frame, dict) or not complete_only:
+            parsed.append(frame)
+    return parsed
 
 
 async def _serve_stdio(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, frames: list[str]
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    frames: list[str],
+    *,
+    write_delay: float = 0.0,
 ) -> list[dict[str, Any]]:
-    """Everything the server writes to stdout for ``frames`` then EOF."""
+    """Everything the server writes to stdout for ``frames`` then EOF.
+
+    No stdin gate: this serves through ``run_stdio_async``, whose relay holds
+    EOF open itself until the requests it forwarded are answered. Gating stdin
+    here would hide a relay that stopped doing so.
+    """
     config = OpenZimMcpConfig(allowed_directories=[str(tmp_path)], tool_mode="advanced")
     server = OpenZimMcpServer(config)
-    stdout_bytes = _plug_std_streams(monkeypatch, frames)
+    stdout_bytes = _plug_std_streams(monkeypatch, frames, write_delay=write_delay)
     with anyio.fail_after(20):
         await server.mcp.run_stdio_async()
+    return _responses(stdout_bytes)
+
+
+async def _serve_stdio_bare(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    frames: list[str],
+    *,
+    hold_eof_until_answered: int,
+    write_delay: float = 0.0,
+) -> list[dict[str, Any]]:
+    """The same, served by the SDK's own ``stdio_server`` with no relay.
+
+    ``MCPServer.run_stdio_async`` minus this server's wiring, for the canaries
+    that have to observe the upstream transport itself. The stdin gate is
+    mandatory here: nothing else holds EOF back from the dispatcher, which
+    cancels the handler of any request still being answered when it lands.
+    """
+    config = OpenZimMcpConfig(allowed_directories=[str(tmp_path)], tool_mode="advanced")
+    low = OpenZimMcpServer(config).mcp._lowlevel_server
+    stdout_bytes = _plug_std_streams(
+        monkeypatch,
+        frames,
+        hold_eof_until_answered=hold_eof_until_answered,
+        write_delay=write_delay,
+    )
+    with anyio.fail_after(20):
+        async with stdio_server() as (read_stream, write_stream):
+            await low.run(
+                read_stream, write_stream, low.create_initialization_options()
+            )
     return _responses(stdout_bytes)
 
 
@@ -422,22 +569,84 @@ async def test_canary_sdk_stdio_still_drops_malformed_frames(
     ``stdio_server_answering_malformed_frames`` from ``sdk_compat.py``, the
     ``run_stdio_async`` override in ``mcp_envelope.py``, and this test. Keep
     the wire tests above — they assert the behavior either way.
+
+    The trailing ping is the liveness half of the signal: without it a server
+    that died on the first malformed frame would satisfy "no errors on the
+    wire" and retire the relay by accident. It is answered by a *spawned*
+    handler, so stdin holds EOF back until that answer lands — see
+    ``_ScriptedStdin`` for what the bare SDK does to it otherwise.
     """
-    config = OpenZimMcpConfig(allowed_directories=[str(tmp_path)], tool_mode="advanced")
-    low = OpenZimMcpServer(config).mcp._lowlevel_server
-    stdout_bytes = _plug_std_streams(
-        monkeypatch, [*_LEGACY_OPENING, _NOT_JSON, _BATCH, _ping(5, modern=False)]
+    responses = await _serve_stdio_bare(
+        monkeypatch,
+        tmp_path,
+        [*_LEGACY_OPENING, _NOT_JSON, _BATCH, _ping(5, modern=False)],
+        hold_eof_until_answered=5,
     )
 
-    with anyio.fail_after(20):
-        async with stdio_server() as (read_stream, write_stream):
-            await low.run(
-                read_stream, write_stream, low.create_initialization_options()
-            )
-
-    responses = _responses(stdout_bytes)
     assert [r for r in responses if "error" in r] == []
     assert len(_by_id(responses, 5)) == 1
+
+
+# The delay each stdout write is charged in the two tests below. Unloaded, the
+# SDK's write/flush round trips cost microseconds and the ping's handler beats
+# EOF by a single event-loop checkpoint; against the ungated harness 0.5ms lost
+# the answer in 97 of 100 runs and 2ms in 100 of 100. 5ms leaves that margin no
+# room at all, for about 20ms of suite time.
+_SLOW_WRITE_DELAY_S = 0.005
+
+
+@pytest.mark.asyncio
+async def test_canary_answers_trailing_ping_under_a_slow_stdout_writer(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The canary above is deterministic, not lucky.
+
+    Its liveness assertion failed twice on 2026-09-04 — once on a PR's CI and
+    once in the release job, where it blocked the v3.3.0 publish — because the
+    bare SDK's dispatcher cancels every spawned handler the moment stdin ends
+    and the ping's answer is queued behind a stdout writer that is off the
+    event loop in ``write``/``flush`` threads. Charging those writes a delay
+    reproduces the loaded runner that lost the race; the gate survives it.
+    """
+    responses = await _serve_stdio_bare(
+        monkeypatch,
+        tmp_path,
+        [*_LEGACY_OPENING, _NOT_JSON, _BATCH, _ping(5, modern=False)],
+        hold_eof_until_answered=5,
+        write_delay=_SLOW_WRITE_DELAY_S,
+    )
+
+    assert len(_by_id(responses, 1)) == 1, "the inline initialize was not answered"
+    assert len(_by_id(responses, 5)) == 1, (
+        "the trailing ping went unanswered: EOF reached the dispatcher before "
+        f"its spawned handler could hand the answer over; got {responses!r}"
+    )
+    assert "result" in _by_id(responses, 5)[0]
+
+
+@pytest.mark.asyncio
+async def test_relay_answers_trailing_ping_under_a_slow_stdout_writer(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The canary's neighbours need no stdin gate, and this is why.
+
+    Every other stdio test here serves through ``run_stdio_async``, whose
+    relay holds EOF until the requests it forwarded are answered. Under the
+    same slow writer that costs the bare SDK its trailing answer, the relay
+    keeps it — so ``_serve_stdio`` can keep proving that drain rather than
+    papering over its absence with a gate.
+    """
+    responses = await _serve_stdio(
+        monkeypatch,
+        tmp_path,
+        [*_LEGACY_OPENING, _NOT_JSON, _BATCH, _ping(5, modern=False)],
+        write_delay=_SLOW_WRITE_DELAY_S,
+    )
+
+    assert len(_by_id(responses, 5)) == 1, (
+        "the relay abandoned a request it had already read; " f"got {responses!r}"
+    )
+    assert "result" in _by_id(responses, 5)[0]
 
 
 # --------------------------------------------------------------------------
