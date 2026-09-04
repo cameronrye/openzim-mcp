@@ -14,14 +14,24 @@ copy-paste, and it registers ``zim_query`` alone. Naming any *other* tool
 there describes a tool the client cannot see — at the exact moment the
 model is recovering from a failure.
 
-Five rules, of which the last three are what make the first two worth
+Six rules, of which the last four are what make the first two worth
 having:
 
 * **Rendered scan** — every recovery string the covered surfaces produce is
   re-rendered in both modes and checked against that mode's live registry.
+  All three spellings of an instruction count here: a backticked
+  identifier, a bare ``name(`` call, and the name alone in prose ("use the
+  zim_browse tool"). See ``_BARE_TOOL_WORD`` for why the third is read out
+  of the rendered corpus only.
 * **Successor mapping** — the advanced half must name the v2 replacement,
   so a future "fix" cannot satisfy the scan by deleting the tool name and
   stripping the recovery of its actionable step.
+* **Clause contracts** — ``TestRecoveryAdviceClausesStayActionable`` is the
+  positive rule the scans lack: every ``recovery_advice`` clause is pinned
+  to what it must still SAY in each mode, the simple half down to the
+  intent its quoted request resolves to. Every scan above is satisfied by
+  the empty string, which left four of the six simple halves deletable with
+  the whole suite green.
 * **Coverage** — a static walk of *every* runtime string literal in the
   ``openzim_mcp`` package, reading backticked spans AND bare ``name(``
   calls. A literal that names a tool must be one this module actually
@@ -41,6 +51,20 @@ having:
 * **Wiring, statically** — ``TestModeAwareCallsAreWired`` generalises that:
   every call to a mode-aware helper anywhere in the package has to pass the
   configured mode, including on paths too deep to drive end to end.
+
+Known residual, stated rather than implied away: the **coverage** walk reads
+backticks and ``name(`` calls but not bare prose names, so a tool named in
+bare prose inside a module this guard does not render is invisible to every
+rule here. Reading bare names package-wide is not available — the v2.0.0
+names are still live ``ZimOperations`` methods and intent labels and the
+live ones are their own registration literals, 132 legitimate occurrences
+today — and an allowlist that size would say less than it hid. Nothing
+exploits the gap at present: every bare-prose tool name left in the package
+sits on an advanced-only surface (``tools/prompts.py``,
+``tools/resource_tools.py``, ``tools/zim_*.py``), and
+``test_simple_mode_registers_no_resources`` plus the ``mode == "simple"``
+return in ``openzim_mcp/tools/__init__.py`` keep those surfaces off the
+simple client.
 """
 
 from __future__ import annotations
@@ -48,7 +72,7 @@ from __future__ import annotations
 import ast
 import pathlib
 import re
-from typing import Dict, Iterator, List, Set, Tuple
+from typing import Callable, Dict, Iterator, List, Set, Tuple
 
 import pytest
 
@@ -93,6 +117,45 @@ NON_TOOL_VOCABULARY = frozenset(
         "zim_file_path",  # the archive-selection argument every tool takes
     }
 )
+
+# What each ``recovery_advice`` clause must still SAY, per mode.
+#
+# The scans above are all negative — they forbid naming the wrong tool.
+# Every one of them is satisfied by the empty string, which is how four of
+# the six clauses could have their simple half emptied with the whole suite
+# green: the advanced halves are pinned by the successor mapping and by
+# ``tests/test_v3_field_fixes_content.py``, but the half this module exists
+# to introduce had assertions for ``metadata_keys`` and ``fetch_binary``
+# only. These two tables are the positive rule, keyed by clause name so a
+# new clause has to be pinned before it can ship
+# (``test_every_clause_is_pinned_in_both_modes``).
+#
+# The simple half is pinned to the request it quotes AND to the intent that
+# request resolves to, because the wording alone is not the property that
+# matters: a plain-English paraphrase parses as a literal full-text search
+# for its own text, so a caller who follows it throws the recovery away.
+CLAUSE_PLACEHOLDERS = {"<title>": "Aspirin", "<path>": "A/Photo.png"}
+
+SIMPLE_CLAUSE_REQUESTS: Dict[str, Tuple[Tuple[str, str, float], ...]] = {
+    "correct_entry_path": (("find article titled <title>", "find_by_title", 0.90),),
+    "fetch_binary": (("get binary content of <path>", "binary", 0.90),),
+    "locate_entry": (("find article titled <title>", "find_by_title", 0.90),),
+    "locate_or_explore": (
+        ("find article titled <title>", "find_by_title", 0.90),
+        ("list namespaces", "list_namespaces", 0.95),
+    ),
+    "metadata_keys": (("browse namespace M", "browse", 0.85),),
+    "verify_archive": (("list available ZIM files", "list_files", 0.95),),
+}
+
+ADVANCED_CLAUSE_TOOLS: Dict[str, Set[str]] = {
+    "correct_entry_path": {"zim_search"},
+    "fetch_binary": {"zim_get"},
+    "locate_entry": {"zim_search"},
+    "locate_or_explore": {"zim_search", "zim_browse"},
+    "metadata_keys": {"zim_browse"},
+    "verify_archive": {"zim_health"},
+}
 
 # Modules whose user-facing recovery strings this module RENDERS, and so
 # checks per mode. Coverage itself is decided per *literal* (see
@@ -176,6 +239,29 @@ _TOOL_SHAPED = re.compile(r"^([a-z_][a-z0-9_]*)\s*(?:\(|$)")
 _TOOL_CALL_IN_PROSE = re.compile(r"(?<![\w.`])([a-z_][a-z0-9_]*)\(")
 _KNOWN_TOOL_NAMES = frozenset(PHASE_F_TOOLS) | frozenset(LEGACY_TO_PHASE_F)
 
+# Third spelling: the name alone, in prose, with neither backticks nor a
+# call paren — "use the zim_browse tool to see the namespaces". It reads as
+# an instruction exactly as plainly as the other two, and neither of the
+# rules above can see it.
+#
+# It is read out of the RENDERED corpus only, never out of the package-wide
+# walk, and the asymmetry is deliberate rather than lazy. Package-wide the
+# same rule fires on 132 literals today, essentially all of them internal:
+# the v2.0.0-deleted names are still live ``ZimOperations`` methods and
+# intent labels (``"search_all"``, ``"walk_namespace"``), and the live names
+# are their own registration literals (``tools/zim_browse.py``'s
+# ``"zim_browse"``) and mode-listing config descriptions. Watering the rule
+# down to survive that would leave it meaning nothing. The rendered corpus
+# is the opposite: small, client-facing and controlled, and it contains
+# exactly one bare mention today — ``**Operation**: zim_query`` echoing the
+# operation label, in a tool registered in both modes.
+#
+# What that leaves open is recorded rather than implied away: a tool name in
+# bare prose in a module this guard does not render is still invisible.
+# ``test_every_module_naming_a_tool_is_covered_by_this_guard`` would have to
+# read bare names package-wide to catch it, and cannot.
+_BARE_TOOL_WORD = re.compile(r"(?<![\w.`])([a-z][a-z0-9_]*)(?![\w(])")
+
 
 @pytest.fixture(scope="session")
 def servers(tmp_path_factory: pytest.TempPathFactory) -> Dict[str, OpenZimMcpServer]:
@@ -199,6 +285,21 @@ def servers(tmp_path_factory: pytest.TempPathFactory) -> Dict[str, OpenZimMcpSer
 def registries(servers: Dict[str, OpenZimMcpServer]) -> Dict[str, Set[str]]:
     return {
         mode: set(server.mcp._tool_manager._tools) for mode, server in servers.items()
+    }
+
+
+def _clauses() -> Dict[str, Callable[[str], str]]:
+    """Every public clause in ``openzim_mcp.recovery_advice``, by name.
+
+    Read off the module rather than listed, so a clause added without a
+    contract in ``SIMPLE_CLAUSE_REQUESTS`` /``ADVANCED_CLAUSE_TOOLS`` fails
+    ``test_every_clause_is_pinned_in_both_modes`` instead of shipping
+    unpinned.
+    """
+    return {
+        name: getattr(ra, name)
+        for name in dir(ra)
+        if not name.startswith("_") and callable(getattr(ra, name))
     }
 
 
@@ -304,12 +405,8 @@ def _recovery_advice_strings(tool_mode: str) -> Iterator[Tuple[str, str, str]]:
     the guard, reading only backticked spans, saw nothing.
     """
     module = "openzim_mcp/recovery_advice.py"
-    for name in sorted(dir(ra)):
-        if name.startswith("_"):
-            continue
-        clause = getattr(ra, name)
-        if callable(clause):
-            yield module, f"recovery_advice.{name}", clause(tool_mode)
+    for name, clause in sorted(_clauses().items()):
+        yield module, f"recovery_advice.{name}", clause(tool_mode)
 
 
 def _advice_strings(tool_mode: str) -> Iterator[Tuple[str, str, str]]:
@@ -336,6 +433,17 @@ def _tool_references(text: str) -> List[str]:
         name for name in _TOOL_CALL_IN_PROSE.findall(text) if name in _KNOWN_TOOL_NAMES
     )
     return found
+
+
+def _rendered_tool_references(text: str) -> List[str]:
+    """``_tool_references`` plus bare, uncalled names — rendered text only.
+
+    See ``_BARE_TOOL_WORD`` for why the third spelling is read here and not
+    in the package-wide walk.
+    """
+    return _tool_references(text) + [
+        name for name in _BARE_TOOL_WORD.findall(text) if name in _KNOWN_TOOL_NAMES
+    ]
 
 
 def _runtime_string_literals(path: pathlib.Path) -> Iterator[Tuple[int, str, str]]:
@@ -435,7 +543,7 @@ class TestRecoveryAdviceReferencesRegisteredTools:
         allowed = registered | NON_TOOL_VOCABULARY
         offenders = []
         for _module, label, text in _advice_strings(tool_mode):
-            for name in _tool_references(text):
+            for name in _rendered_tool_references(text):
                 if name not in allowed:
                     offenders.append(f"{label}: `{name}` in {text!r}")
         assert not offenders, (
@@ -472,7 +580,7 @@ class TestRecoveryAdviceReferencesRegisteredTools:
         for _module, label, text in _advice_strings("simple"):
             refs = [
                 n
-                for n in _tool_references(text)
+                for n in _rendered_tool_references(text)
                 if n not in NON_TOOL_VOCABULARY and n != "zim_query"
             ]
             if refs:
@@ -556,6 +664,83 @@ class TestRecoveryAdviceReferencesRegisteredTools:
         """The allowlist cannot be used to wave a tool name through."""
         tool_names = registries["advanced"] | set(LEGACY_TO_PHASE_F)
         assert not (NON_TOOL_VOCABULARY & tool_names)
+
+
+class TestRecoveryAdviceClausesStayActionable:
+    """Every clause has to keep SAYING something, in both modes.
+
+    The registry scans are all negative rules, and the empty string passes
+    every one of them. That left the simple half of ``locate_entry``,
+    ``locate_or_explore``, ``correct_entry_path`` and ``verify_archive``
+    deletable with the whole suite green — the same fix-by-deletion the
+    successor mapping closes on the advanced half, one column over, on the
+    half this PR exists to add.
+    """
+
+    def test_every_clause_is_pinned_in_both_modes(self) -> None:
+        """A new clause must arrive with its contract, not after it."""
+        clauses = set(_clauses())
+        assert set(SIMPLE_CLAUSE_REQUESTS) == clauses, (
+            "SIMPLE_CLAUSE_REQUESTS drifted from recovery_advice: "
+            f"unpinned={sorted(clauses - set(SIMPLE_CLAUSE_REQUESTS))}, "
+            f"stale={sorted(set(SIMPLE_CLAUSE_REQUESTS) - clauses)}"
+        )
+        assert set(ADVANCED_CLAUSE_TOOLS) == clauses, (
+            "ADVANCED_CLAUSE_TOOLS drifted from recovery_advice: "
+            f"unpinned={sorted(clauses - set(ADVANCED_CLAUSE_TOOLS))}, "
+            f"stale={sorted(set(ADVANCED_CLAUSE_TOOLS) - clauses)}"
+        )
+
+    @pytest.mark.parametrize("name", sorted(SIMPLE_CLAUSE_REQUESTS))
+    def test_simple_clause_quotes_a_request_the_parser_resolves(
+        self, name: str
+    ) -> None:
+        """The simple half quotes exactly the requests it is pinned to.
+
+        Both halves of that matter. The set comparison stops the clause
+        being emptied or having a route silently dropped; the parse stops
+        it being reworded into prose that reads like advice and resolves
+        to a full-text search for its own text.
+        """
+        from openzim_mcp.intent_parser import IntentParser
+
+        contract = SIMPLE_CLAUSE_REQUESTS[name]
+        text = _clauses()[name]("simple")
+        quoted = {span.strip() for span in _BACKTICKED.findall(text)}
+        assert quoted == {request for request, _intent, _conf in contract}, (
+            f"recovery_advice.{name}('simple') must quote exactly the pinned "
+            f"request(s); got {sorted(quoted)} from {text!r}"
+        )
+
+        parser = IntentParser()
+        for request, intent, confidence in contract:
+            probe = request
+            for placeholder, value in CLAUSE_PLACEHOLDERS.items():
+                probe = probe.replace(placeholder, value)
+            assert "<" not in probe, (
+                f"{request!r} carries a placeholder with no value in "
+                f"CLAUSE_PLACEHOLDERS, so this test cannot parse it"
+            )
+            parsed, _params, got = parser.parse_intent(probe)
+            assert parsed == intent and got >= confidence, (
+                f"recovery_advice.{name}('simple') tells the caller to ask "
+                f"{probe!r}, which must resolve to {intent} at >= "
+                f"{confidence}; got {(parsed, got)}"
+            )
+
+    @pytest.mark.parametrize("name", sorted(ADVANCED_CLAUSE_TOOLS))
+    def test_advanced_clause_names_its_successor(
+        self, name: str, registries: Dict[str, Set[str]]
+    ) -> None:
+        """The advanced half names exactly the v2 tool(s) it routes to."""
+        text = _clauses()[name]("advanced")
+        found = set(_tool_references(text))
+        assert found == ADVANCED_CLAUSE_TOOLS[name], (
+            f"recovery_advice.{name}('advanced') must route to "
+            f"{sorted(ADVANCED_CLAUSE_TOOLS[name])}; got {sorted(found)} "
+            f"from {text!r}"
+        )
+        assert found <= registries["advanced"], (found, name)
 
 
 class TestRecoveryAdviceGuardCoverage:
@@ -970,6 +1155,114 @@ class TestToolModeReachesTheRenderers:
         """``server`` -> ``ContentProcessor`` -> ``fetch_binary``."""
         out = await _zim_query(corpus_archive, tool_mode, "get article favicon.png")
         assert f"Cannot display directly; {ra.fetch_binary(tool_mode)})" in out, out
+
+
+@pytest.fixture(scope="session")
+def strip_handler(tmp_path_factory: pytest.TempPathFactory) -> object:
+    """A handler built only to call its renderers; it opens no archive."""
+    from openzim_mcp.cache import OpenZimMcpCache
+    from openzim_mcp.content_processor import ContentProcessor
+    from openzim_mcp.security import PathValidator
+    from openzim_mcp.simple_tools import SimpleToolsHandler
+    from openzim_mcp.zim_operations import ZimOperations
+
+    directory = str(tmp_path_factory.mktemp("strip_recovery"))
+    cfg = OpenZimMcpConfig(allowed_directories=[directory])
+    return SimpleToolsHandler(
+        ZimOperations(
+            cfg,
+            PathValidator(cfg.allowed_directories),
+            OpenZimMcpCache(cfg.cache),
+            ContentProcessor(snippet_length=100),
+        )
+    )
+
+
+class TestBackendRecoveryTailIsStrippedSymmetrically:
+    """What the not-found renderer *deletes* must not depend on the mode.
+
+    ``SimpleToolsHandler._render_not_found_recovery`` throws the backend's
+    own guidance away and writes its own recovery commands from the path the
+    caller actually asked for. It did that with a regex shaped like the
+    ADVANCED half of a clause (``Try using zim_search() ...``), so the mode
+    split silently stopped it matching for simple-mode callers alone: the
+    same recovery, reworded, came through where it had always been deleted,
+    putting a generic ``find article titled <title>`` directly above a
+    bullet list already offering ``find article titled <the real path>``.
+
+    The rule is now derived rather than spelt: a clause whose advanced half
+    the regex eats has its simple half eaten too. The two clauses the regex
+    never matched stay echoed in BOTH modes, which is the other half of the
+    decision — they name the only route to a metadata key or to an entry's
+    bytes, and the renderer's bullets offer neither.
+    """
+
+    STRIPPED = (
+        "locate_entry",
+        "locate_or_explore",
+        "correct_entry_path",
+        "verify_archive",
+    )
+    ECHOED = ("metadata_keys", "fetch_binary")
+
+    def test_the_strip_list_covers_every_clause_in_the_module(self) -> None:
+        """``_RECOVERY_CLAUSES`` is hand-written; it must stay complete.
+
+        A clause missing from it would be classified as "never stripped"
+        by omission rather than by the predicate.
+        """
+        from openzim_mcp.simple_tools import _RECOVERY_CLAUSES
+
+        assert {clause.__name__ for clause in _RECOVERY_CLAUSES} == set(_clauses())
+
+    def test_exactly_the_leak_shaped_clauses_are_stripped(self) -> None:
+        """Pins the classification, so neither list can be edited by hand."""
+        from openzim_mcp.simple_tools import SimpleToolsHandler
+
+        clauses = _clauses()
+        assert set(SimpleToolsHandler._SIMPLE_RECOVERY_TAILS) == {
+            clauses[name]("simple") for name in self.STRIPPED
+        }
+
+    @pytest.mark.parametrize("tool_mode", TOOL_MODES)
+    @pytest.mark.parametrize("name", STRIPPED)
+    def test_stripped_clause_leaves_no_trace_in_either_mode(
+        self, strip_handler: object, name: str, tool_mode: str
+    ) -> None:
+        clause = _clauses()[name]
+        body = strip_handler._render_not_found_recovery(  # type: ignore[attr-defined]
+            "C/Nope",
+            Exception(f"Entry not found: 'C/Nope'. {clause(tool_mode)}"),
+            "get article",
+        )
+        assert clause(tool_mode) not in body, body
+        assert "Entry not found: 'C/Nope'." in body, body
+
+    @pytest.mark.parametrize("tool_mode", TOOL_MODES)
+    @pytest.mark.parametrize("name", ECHOED)
+    def test_echoed_clause_survives_in_either_mode(
+        self, strip_handler: object, name: str, tool_mode: str
+    ) -> None:
+        clause = _clauses()[name]
+        body = strip_handler._render_not_found_recovery(  # type: ignore[attr-defined]
+            "C/Nope",
+            Exception(f"Entry not found: 'C/Nope'. {clause(tool_mode)}"),
+            "get article",
+        )
+        assert clause(tool_mode) in body, body
+
+    @pytest.mark.asyncio
+    async def test_missing_article_body_is_mode_independent_end_to_end(
+        self, corpus_archive: str
+    ) -> None:
+        """The live shape of it: same query, same archive, same bytes."""
+        bodies = {
+            mode: await _zim_query(
+                corpus_archive, mode, "get article C/NoSuchArticleXyz"
+            )
+            for mode in TOOL_MODES
+        }
+        assert bodies["simple"] == bodies["advanced"], bodies
 
 
 def _mode_aware_callables() -> Dict[str, str]:
