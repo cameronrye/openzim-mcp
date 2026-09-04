@@ -12,9 +12,14 @@ Both defects surfaced driving the installed server against the live corpus:
   ``zim_get`` is not registered at all.
 """
 
+import re
+
 import pytest
 
 from openzim_mcp.content_processor import ContentProcessor
+from openzim_mcp.intent_parser import IntentParser
+
+from .test_phase_f_migration import PHASE_F_TOOLS
 
 
 def _processor(tool_mode: str = "advanced") -> ContentProcessor:
@@ -76,9 +81,42 @@ class TestImagePlaceholderNamesBinaryArgument:
 
     @pytest.mark.parametrize("tool_mode", ["simple", "advanced"])
     def test_placeholder_always_offers_a_next_step(self, tool_mode):
-        """Neither mode may "fix" the hint by dropping the route."""
+        """Neither mode may "fix" the hint by dropping the route.
+
+        The first version of this test asserted only that the sentence
+        still said "Cannot display directly" and still ended in ``)``.
+        Both of those are supplied by the literal *around* the clause, so
+        emptying ``recovery_advice.fetch_binary`` for either mode — the
+        exact "fix" this test exists to forbid — left it green. It now
+        reads the route back out of the placeholder and requires it to be
+        one this mode's client can actually take.
+        """
         result = _processor(tool_mode).process_mime_content(
             b"fake image data", "image/png"
         )
-        assert "Cannot display directly" in result
-        assert result.rstrip().endswith(")")
+        prefix = "(Image content - Cannot display directly; "
+        assert result.startswith(prefix) and result.endswith(")"), result
+        route = result[len(prefix) : -1].strip()
+        assert route, f"{tool_mode} placeholder dead-ends with no route: {result!r}"
+
+        if tool_mode == "advanced":
+            # The advanced client calls the tool itself, so the route has
+            # to name a registered one AND the argument that returns bytes
+            # — naming the tool without ``binary=True`` re-fetches the same
+            # unrenderable entry.
+            called = set(re.findall(r"([a-z_][a-z0-9_]*)\(", route))
+            assert called & PHASE_F_TOOLS, f"no registered tool in {route!r}"
+            assert "binary=True" in route, route
+        else:
+            # Simple mode registers ``zim_query`` alone, so the only route
+            # that exists is a request the intent parser resolves — and it
+            # has to resolve to the intent that returns the bytes, not to a
+            # full-text search for its own text.
+            quoted = re.findall(r"`([^`]+)`", route)
+            assert quoted, f"simple route quotes no request: {route!r}"
+            probe = quoted[0].replace("<path>", "A/Photo.png")
+            intent, _params, confidence = IntentParser().parse_intent(probe)
+            assert (intent, confidence >= 0.85) == ("binary", True), (
+                f"{probe!r} must resolve to the binary intent for the "
+                f"placeholder to be actionable; got {(intent, confidence)}"
+            )
