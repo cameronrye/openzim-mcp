@@ -45,10 +45,21 @@ jobs:
           # Let release-please own tag creation and the GitHub release shell
           # (changelog body). release.yml's create-release job detects an
           # existing release and uploads the wheel/sdist into it rather than
-          # creating a duplicate. Without this, release-please does not set
-          # `release_created=true` on its outputs, and the trigger-release /
-          # trigger-docker-publish jobs below stay perpetually skipped — the
-          # symptom that bit v1.0.1 (release PR merged but never tagged).
+          # creating a duplicate. Keep `skip-github-release` FALSE: setting it
+          # true stops release-please setting `release_created=true`,
+          # and the trigger-release / trigger-docker-publish jobs below stay
+          # perpetually skipped — the symptom that bit v1.0.1 (release PR
+          # merged but never tagged).
+          #
+          # The release shell it creates is a DRAFT (`draft: true` in
+          # release-please-config.json), so nothing is public until
+          # release.yml has uploaded the assets and flipped it to published.
+          # A draft release does not create its git tag — GitHub only cuts the
+          # tag when a release is published — which would leave every job
+          # below with nothing to check out. `force-tag-creation: true` makes
+          # release-please push refs/tags/<tag> at the release commit itself,
+          # before creating the release, so the tag exists exactly as early as
+          # it did before while the release stays invisible.
 
           # Token for creating PRs and releases
           token: ${{ secrets.GITHUB_TOKEN }}

@@ -594,13 +594,13 @@ Breaking changes: append `!` to the type (`feat!:`) or include a `BREAKING CHANG
 1. Land conventional commits on `main` via squash-merge.
 2. `release-please.yml` opens a release PR (updates `CHANGELOG.md`, `pyproject.toml`, `.release-please-manifest.json`, `website/src/pages/llms.txt.ts`, `server.json`, `packaging/mcpb/manifest.json`, and the `x-release-please-version`-annotated docs; a follow-up `sync-uv-lock` job keeps `uv.lock` in step). `openzim_mcp/__init__.py` needs no stamp — it derives `__version__` via `importlib.metadata`.
 3. Review and merge the release PR.
-4. `release-please` pushes the `v<X.Y.Z>` tag and creates the GitHub Release. `release-please-config.json` sets `"draft": false`, so the release is **published immediately** — briefly with no assets attached.
+4. `release-please` pushes the `v<X.Y.Z>` tag and creates the GitHub Release. `release-please-config.json` sets `"draft": true`, so the release starts **unpublished** — nothing is public until `release.yml` has attached the assets. `"force-tag-creation": true` is what keeps the tag itself appearing at the release commit right away: GitHub does not cut a tag for a draft release, and every downstream job addresses that tag by name.
 5. `release-please.yml`'s `trigger-release` job dispatches `release.yml`: full `make check` gate → wheel + sdist + `.mcpb` bundle build → PyPI upload (Trusted Publishing, no token) → assets uploaded to the existing release (notes come from `CHANGELOG.md`). `release.yml` also runs a `publish-registry` job that publishes to the official MCP Registry via OIDC; it is deliberately *not* a dependency of `create-release`, so a registry hiccup cannot hold up the GitHub release.
 6. `release-please.yml`'s `trigger-docker-publish` job dispatches `docker-publish.yml`: multi-arch build → push to `ghcr.io/cameronrye/openzim-mcp:<X.Y.Z>` and `:latest`.
 
 Both workflows also declare a `push: tags: v*` trigger, but that trigger never fires for an automated release: release-please pushes the tag with `GITHUB_TOKEN`, and GitHub deliberately does not start workflow runs from `GITHUB_TOKEN`-authored events. The explicit `workflow_dispatch` calls in steps 5 and 6 are what actually start them — which is why every automated release run shows up as `workflow_dispatch`. The `push: tags` trigger exists for the manual path below.
 
-`release.yml`'s "Publish draft release" step is therefore a no-op on the release-please path (the release is already published) and only does real work on the manual-tag path, where `release.yml` creates the release as a draft, uploads assets, then publishes — the order that keeps assets attachable under GitHub's immutable-releases behavior.
+`release.yml`'s "Publish draft release" step is what makes a release public, on **every** path. The release-please path hands it a draft shell; the manual-tag path creates its own draft. Either way the order is the same — create as draft, upload assets, then publish — which is the order that keeps assets attachable under GitHub's immutable-releases behavior, since publishing locks the asset list.
 
 ### Manual / emergency release
 
