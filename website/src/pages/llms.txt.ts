@@ -32,7 +32,7 @@ const SITE = 'https://cameronrye.github.io/openzim-mcp';
 // import it rather than restating it, so release-please-config.json still has
 // exactly one file to update — this one, already registered there as a
 // `generic` extra-file.
-export const VERSION = '3.2.5'; // x-release-please-version
+export const VERSION = '3.3.0'; // x-release-please-version
 
 // The date that release went out, stamped by the same release-please generic
 // updater under the `date` scope. The annotation is not theoretical: `git log
@@ -88,7 +88,7 @@ export const VERSION = '3.2.5'; // x-release-please-version
 // rc=0. There is no error and no empty result to branch on, so a git-derived
 // scheme fails silently — every page stamped with the date of the last deploy
 // — rather than loudly. The website deploy checks out shallow.
-export const RELEASED = '2026-09-02'; // x-release-please-date
+export const RELEASED = '2026-09-04'; // x-release-please-date
 
 /** The eight advanced-mode tools, in registration order. Gated in Python. */
 const TOOLS: Array<[name: string, blurb: string]> = [
