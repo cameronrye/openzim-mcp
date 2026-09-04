@@ -21,13 +21,13 @@ PARAMETERS:
   zim_file_path   REQUIRED. The archive containing the article.
   entry_path      REQUIRED. The article whose links to inspect.
   direction       See DIRECTIONS above.
-  kind            Outbound only — which bucket to return: "internal"
-                  (default) / "external" / "media". One per call;
-                  `category_totals` reports four counts (see below).
+  kind            Outbound only — others reject it. Which bucket:
+                  "internal" (default) / "external" / "media". One
+                  per call; `category_totals` reports four counts.
   cursor          Cursor handle (outbound/inbound).
   limit           Page size. Outbound 1-500 (default 100);
                   inbound and related 1-100 (default 10).
-  offset          Pagination offset (outbound/inbound).
+  offset          Offset (outbound/inbound; related rejects it).
 
 RESPONSE:
   LinksResponse (outbound) or RelatedArticlesResponse (inbound /

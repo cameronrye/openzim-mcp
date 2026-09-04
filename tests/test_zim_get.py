@@ -11,6 +11,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+import openzim_mcp.tools.zim_get as zim_get_module
+from openzim_mcp.tools.zim_get import _validate_branch_combination
 from openzim_mcp.tools.zim_get import register as register_zim_get
 
 
@@ -375,3 +377,240 @@ async def test_single_entry_without_entry_path_returns_envelope_if_validator_reg
         == "Provide one of `entry_path`, `entry_paths`, or `main_page=True`."
     )
     ops.get_zim_entry_data.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# content_offset pages a full single-entry body and nothing else
+#
+# The batch guard above was one branch of a wider drop: the summary / toc /
+# structure views, the main page and the binary fetch each took a
+# ``content_offset`` and threw it away, so a caller paging any of them re-read
+# the same response instead of advancing.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("kwargs", "dropped_call"),
+    [
+        ({"entry_path": "A/Cat", "view": "summary"}, "get_entry_summary_data"),
+        ({"entry_path": "A/Cat", "view": "toc"}, "get_table_of_contents_data"),
+        ({"entry_path": "A/Cat", "view": "structure"}, "get_article_structure_data"),
+        ({"main_page": True}, "get_main_page_data"),
+        ({"entry_path": "I/cat.png", "binary": True}, "get_binary_entry_data"),
+    ],
+)
+async def test_content_offset_rejected_outside_single_entry_full_view(
+    server: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+    kwargs: dict[str, Any],
+    dropped_call: str,
+) -> None:
+    ops = _patch_async_ops(
+        monkeypatch,
+        get_entry_summary_data={"summary": ""},
+        get_table_of_contents_data={"toc": []},
+        get_article_structure_data={"sections": []},
+        get_main_page_data={"content": ""},
+        get_binary_entry_data={"bytes": 0},
+    )
+    register_zim_get(server)
+    fn, _ = server._tools_store["zim_get"]
+    result = await fn(zim_file_path="/x.zim", content_offset=500, **kwargs)
+    assert result.get("operation") == "invalid_path_combination", (
+        f"`content_offset` was accepted for {kwargs!r} and silently "
+        f"discarded; got {result!r}"
+    )
+    assert "content_offset" in result["message"]
+    getattr(ops, dropped_call).assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("kwargs", "expected_call"),
+    [
+        ({"entry_path": "A/Cat", "view": "summary"}, "get_entry_summary_data"),
+        ({"main_page": True}, "get_main_page_data"),
+        ({"entry_path": "I/cat.png", "binary": True}, "get_binary_entry_data"),
+    ],
+)
+async def test_zero_content_offset_still_dispatches(
+    server: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+    kwargs: dict[str, Any],
+    expected_call: str,
+) -> None:
+    """content_offset=0 is the default — it must never trip the guard."""
+    ops = _patch_async_ops(
+        monkeypatch,
+        get_entry_summary_data={"summary": ""},
+        get_main_page_data={"content": ""},
+        get_binary_entry_data={"bytes": 0},
+    )
+    register_zim_get(server)
+    fn, _ = server._tools_store["zim_get"]
+    result = await fn(zim_file_path="/x.zim", content_offset=0, **kwargs)
+    assert "operation" not in result, result
+    getattr(ops, expected_call).assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# ... and the rejection has to leave the caller somewhere to go
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("kwargs", "must_name"),
+    [
+        ({"entry_path": "I/cat.png", "binary": True}, "max_content_length"),
+        ({"main_page": True}, "entry_path"),
+    ],
+)
+async def test_content_offset_recovery_is_not_the_call_that_just_failed(
+    server: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+    kwargs: dict[str, Any],
+    must_name: str,
+) -> None:
+    """`view='full'` is already forced on the binary and main-page branches.
+
+    Offering it as the recovery there sends the caller back with a request
+    that differs from the rejected one in no way the server can see, and it
+    earns the byte-identical envelope — the re-ask loop this guard exists to
+    end. Each branch has to name something that changes the outcome.
+    """
+    _patch_async_ops(
+        monkeypatch,
+        get_main_page_data={"content": ""},
+        get_binary_entry_data={"bytes": 0},
+    )
+    register_zim_get(server)
+    fn, _ = server._tools_store["zim_get"]
+
+    rejected = await fn(zim_file_path="/x.zim", content_offset=500, **kwargs)
+    retried = await fn(
+        zim_file_path="/x.zim", content_offset=500, view="full", **kwargs
+    )
+    assert (
+        retried == rejected
+    ), "premise gone: adding `view='full'` to this branch used to be a no-op"
+
+    recovery = rejected["message"].split("ignores it. ", 1)[1]
+    assert "view=" not in recovery, (
+        f"the recovery offered for {kwargs!r} is the call that just failed: "
+        f"{recovery!r}"
+    )
+    assert (
+        must_name in recovery
+    ), f"the recovery for {kwargs!r} names nothing actionable: {recovery!r}"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("kwargs", "expected_message"),
+    [
+        (
+            {"main_page": True, "entry_path": "A/Cat"},
+            "`main_page=True` is the path-free branch — omit `entry_path` "
+            "and `entry_paths`.",
+        ),
+        (
+            {"entry_path": "I/cat.png", "binary": True, "view": "summary"},
+            "Binary mode locks `view='full'`.",
+        ),
+        (
+            {"view": "summary"},
+            "Provide one of `entry_path`, `entry_paths`, or `main_page=True`.",
+        ),
+    ],
+)
+async def test_a_broken_branch_outranks_the_content_offset_guard(
+    server: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+    kwargs: dict[str, Any],
+    expected_message: str,
+) -> None:
+    """A doubly-invalid call must be diagnosed by its most specific fault.
+
+    `content_offset` is the least specific thing wrong with any of these:
+    dropping it as instructed still leaves a call that cannot be served, so
+    diagnosing it first costs a round trip and teaches the wrong lesson.
+    """
+    _patch_async_ops(monkeypatch)
+    register_zim_get(server)
+    fn, _ = server._tools_store["zim_get"]
+
+    result = await fn(zim_file_path="/x.zim", content_offset=500, **kwargs)
+
+    assert result["operation"] == "invalid_path_combination"
+    assert result["message"] == expected_message, (
+        f"{kwargs!r} was diagnosed by its content_offset rather than by its "
+        f"broken branch; got {result['message']!r}"
+    )
+
+
+def test_branch_matrix_docstring_records_the_content_offset_rejection() -> None:
+    """The module docstring is this file's contract table; keep it true.
+
+    Each branch that refuses a non-zero `content_offset` at runtime has to say
+    so in its own `Forbidden:` list, so a maintainer reading the matrix to
+    wire up a new caller does not discover the rejection from an envelope.
+    """
+    docstring = zim_get_module.__doc__ or ""
+    matrix = docstring[docstring.index("## Branch matrix") :]
+    blocks = {
+        block.split(":", 1)[0].strip(): block for block in matrix.split("  - ")[1:]
+    }
+    assert set(blocks) == {
+        "Single body view",
+        "Single binary",
+        "Batch",
+        "Main page",
+    }, sorted(blocks)
+
+    rejecting_branches = {
+        "Single binary": dict(entry_path="I/cat.png", binary=True, view="full"),
+        "Batch": dict(entry_paths=["A/Cat"], view="full"),
+        "Main page": dict(main_page=True, view="full"),
+    }
+    for label, call in rejecting_branches.items():
+        rejected = _validate_branch_combination(
+            entry_path=call.get("entry_path"),
+            entry_paths=call.get("entry_paths"),
+            view=call["view"],
+            binary=call.get("binary", False),
+            main_page=call.get("main_page", False),
+            content_offset=7,
+        )
+        assert rejected is not None, f"{label} no longer rejects content_offset"
+        forbidden = blocks[label].split("Forbidden:", 1)[1]
+        assert "content_offset" in forbidden, (
+            f"the {label!r} row rejects a non-zero `content_offset` but its "
+            f"Forbidden list does not mention it: {forbidden!r}"
+        )
+
+    single = blocks["Single body view"]
+    assert (
+        _validate_branch_combination(
+            entry_path="A/Cat",
+            entry_paths=None,
+            view="summary",
+            binary=False,
+            main_page=False,
+            content_offset=7,
+        )
+        is not None
+    )
+    assert "content_offset" in single.split("Forbidden:", 1)[1], single
+    assert (
+        _validate_branch_combination(
+            entry_path="A/Cat",
+            entry_paths=None,
+            view="full",
+            binary=False,
+            main_page=False,
+            content_offset=7,
+        )
+        is None
+    ), "the one branch that honours content_offset stopped honouring it"

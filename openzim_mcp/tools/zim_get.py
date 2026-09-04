@@ -7,20 +7,28 @@ get_article_structure) into one 4-branch entry point.
 ## Branch matrix (defense-in-depth handler validation)
 
   - Single body view: requires `entry_path`. Optional `view`,
-    `max_content_length`, `content_offset`, `compact`, `compact_budget`.
-    Forbidden: `entry_paths`, `binary=True`, `main_page=True`.
+    `max_content_length`, `compact`, `compact_budget`, and —
+    `view="full"` only — `content_offset`. Forbidden: `entry_paths`,
+    `binary=True`, `main_page=True`, non-zero `content_offset` with
+    `view∈{summary,toc,structure}` (those views have no second page).
   - Single binary: requires `entry_path` + `binary=True`. `view`
     locked to ``"full"``. Optional `max_content_length` (caps the
     fetched BYTES — oversize entries return metadata with
     ``truncated: true``). Forbidden: `entry_paths`,
-    `view∈{summary,toc,structure}`, `main_page=True`.
+    `view∈{summary,toc,structure}`, `main_page=True`, non-zero
+    `content_offset`.
   - Batch: requires `entry_paths`. Full-body only — `view` is locked to
     "full" (a non-full `view` returns `invalid_path_combination`).
     Optional `max_content_length`, `compact`. Forbidden: `entry_path`,
     `binary=True`, `main_page=True`, non-zero `content_offset`.
   - Main page: requires `main_page=True`. `view` ignored (defaults to
     full-shaped response). Forbidden: `entry_path`, `entry_paths`,
-    `binary=True`, `view∈{summary,toc,structure}`.
+    `binary=True`, `view∈{summary,toc,structure}`, non-zero
+    `content_offset`.
+
+`content_offset` is therefore the one optional argument that a single
+branch owns: it reaches the data layer on a single-entry `view="full"`
+fetch and is rejected everywhere else, rather than accepted and dropped.
 
 The spec's preferred wire shape is JSON Schema oneOf over these
 branches. Gate 0.3 (small-model oneOf parsing) is `unvalidated` in
@@ -352,5 +360,46 @@ def _validate_branch_combination(
         return tool_error(
             operation="invalid_path_combination",
             message=_ERR_NO_BRANCH,
+        )
+    if content_offset and (binary or main_page or view != "full"):
+        # Same class as the batch guard above, and the last branch of it:
+        # ``content_offset`` reaches the data layer on the single-entry
+        # ``view='full'`` path and nowhere else. The summary / toc / structure
+        # views, the main page, and the binary fetch each took it and threw it
+        # away, so a caller paging any of them re-read the same response.
+        #
+        # Ordered last on purpose. It is the least specific fault on this
+        # list: every branch above describes a call whose *shape* is wrong,
+        # and a caller told to drop `content_offset` from
+        # ``main_page=True, entry_path=...`` would only earn the real error on
+        # the next round trip. By here the branch itself is known-good, which
+        # is also what lets each arm name a recovery that actually works —
+        # ``view='full'`` is already forced on the binary and main-page
+        # branches, so offering it there would send the caller back with a
+        # byte-identical request.
+        if binary:
+            branch = "`binary=True`"
+            recovery = (
+                "Drop `content_offset` — a binary fetch has no second page; "
+                "cap it with `max_content_length`, which returns `size` and "
+                "`truncated` instead."
+            )
+        elif main_page:
+            branch = "`main_page=True`"
+            recovery = (
+                "Drop `content_offset`, then page that article by its own "
+                "path — a plain `main_page=True` response carries the `path` "
+                "to pass as `entry_path`."
+            )
+        else:
+            branch = f"`view={view!r}`"
+            recovery = "Drop `content_offset`, or page the body with `view='full'`."
+        return tool_error(
+            operation="invalid_path_combination",
+            message=(
+                "`content_offset` pages a full article body and is honored "
+                f"only on a single-entry `view='full'` call; {branch} ignores "
+                f"it. {recovery}"
+            ),
         )
     return None

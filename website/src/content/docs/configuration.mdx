@@ -40,7 +40,7 @@ openzim-mcp --mode advanced /path/to/zim/files
 | `simple` (default) | 1 tool: `zim_query` (NL intent router) | small/local LLMs, MCP hosts that struggle with large tool catalogs |
 | `advanced` | 8 tools: `zim_query`, `zim_search`, `zim_get`, `zim_get_section`, `zim_browse`, `zim_metadata`, `zim_links`, `zim_health` (see [API reference](/openzim-mcp/docs/api-reference/)) | hosts that handle a richer tool surface, scripting, fine-grained control |
 
-**The advanced surface is 8 consolidated tools** — collapsed from the prior 22-tool v1 surface. The advanced-mode wire footprint is ~23.3KB (23,887 bytes, held under a hard 25,600-byte budget by `tests/test_phase_f_schema_budget.py`), down from ~36KB, clearing the [MCP Tax](https://www.mmntm.net/articles/mcp-context-tax) pain band (25–50KB schema) for small-model dispatch. See the [v1 → v2 migration table](/openzim-mcp/docs/api-reference/#v1--v2-migration) if you're upgrading.
+**The advanced surface is 8 consolidated tools** — collapsed from the prior 22-tool v1 surface. The advanced-mode wire footprint is ~23.3KB (23,892 bytes, held under a hard 25,600-byte budget by `tests/test_phase_f_schema_budget.py`), down from ~36KB, clearing the [MCP Tax](https://www.mmntm.net/articles/mcp-context-tax) pain band (25–50KB schema) for small-model dispatch. See the [v1 → v2 migration table](/openzim-mcp/docs/api-reference/#v1--v2-migration) if you're upgrading.
 
 ## Transport
 
