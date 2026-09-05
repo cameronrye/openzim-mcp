@@ -1030,6 +1030,9 @@ _PARAM_EXTRACTORS = {
     "walk_namespace": _extract_walk_namespace,
     "find_by_title": _extract_find_by_title,
     "related": _extract_related,
+    # Same shape as ``related``: the topic/entry path trails the direction
+    # phrase, so the existing extractor handles it unchanged.
+    "inbound_links": _extract_related,
     "get_zim_entries": _extract_get_zim_entries,
     "get_section": _extract_get_section,
     "metadata": _extract_metadata,
@@ -1212,9 +1215,25 @@ class IntentParser:
             8,
         ),
         (r"\bwhat'?s\s+the\s+path\s+for\b", "find_by_title", 0.9, 8),
+        # Inbound links — "what links HERE", the reverse-direction question.
+        # v3.3.1 field report: every one of these phrasings used to fall
+        # through to the outbound ``related`` / ``links`` intents and be
+        # rendered under a header asserting the opposite direction, so simple
+        # mode answered "what links to X" with what X links FROM. Priority 10
+        # so these beat ``related`` (8) and ``links`` (7); ``what links from``
+        # deliberately stays outbound below.
+        (
+            r"\b(backlinks?\s+(for|to)|inbound\s+links?\s+(to|for)"
+            r"|what\s+links\s+(to|here)"
+            r"|wh(ich|at)\s+articles?\s+link\s+to"
+            r"|articles?\s+linking\s+to)\b",
+            "inbound_links",
+            0.92,
+            10,
+        ),
         # related - moderately specific
         (
-            r"\b(related\s+to|articles?\s+linking\s+to|what\s+links\s+(to|from))\b",
+            r"\b(related\s+to|what\s+links\s+from)\b",
             "related",
             0.9,
             8,

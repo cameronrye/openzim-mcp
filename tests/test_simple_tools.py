@@ -835,7 +835,9 @@ class TestSimpleToolsOptionsPassthrough:
             "articles related to",
             "articles related to ",
             "related to",
-            "what links to",
+            # "what links to" moved to the inbound-links intent in v3.3.1 —
+            # see test_inbound_missing_entry_path_returns_actionable_error.
+            # "what links FROM" stays outbound and belongs here.
             "what links from",
         ],
     )
@@ -859,6 +861,32 @@ class TestSimpleToolsOptionsPassthrough:
         assert "articles related to" in result.lower()
         # Backend must NOT be called with an empty entry_path.
         zim_ops.get_related_articles.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "query",
+        ["what links to", "backlinks for", "which articles link to"],
+    )
+    def test_inbound_missing_entry_path_returns_actionable_error(self, query):
+        """Inbound phrasings get their own missing-article error.
+
+        Before v3.3.1 these fell through to the OUTBOUND related handler and
+        were answered under a header claiming the opposite direction; the
+        empty-path case shared that handler's wording too.
+        """
+        from unittest.mock import MagicMock
+
+        from openzim_mcp.simple_tools import SimpleToolsHandler
+
+        zim_ops = MagicMock()
+        zim_ops.list_zim_files_data.return_value = [{"path": "/x.zim"}]
+        handler = SimpleToolsHandler(zim_ops)
+
+        result = handler.handle_zim_query(query)
+        assert "Missing Article" in result
+        assert "inbound links" in result.lower()
+        zim_ops.get_inbound_links_data.assert_not_called()
+        # And it must not offer the outbound wording as the example.
+        assert "articles related to" not in result.lower()
 
     @pytest.mark.parametrize(
         "query",

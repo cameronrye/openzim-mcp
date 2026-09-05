@@ -15,6 +15,7 @@ from unittest.mock import Mock
 
 import pytest
 
+from openzim_mcp.intent_parser import IntentParser
 from openzim_mcp.simple_tools import SimpleToolsHandler
 from openzim_mcp.zim.search import _SearchMixin
 
@@ -150,3 +151,65 @@ class TestLowRelevanceReachesTheNaturalLanguageSurface:
         # ``glucophage`` appears nowhere but the suggestion pool, so this
         # cannot be satisfied by the query echo the way "metformin" would be.
         assert "suggestions for glucophage" in rendered, rendered
+
+
+class TestInboundLinkQuestionsGetInboundAnswers:
+    """ "What links TO x" must not be answered with what x links FROM.
+
+    Simple mode had no inbound concept at all: every inbound phrasing fell
+    through to the outbound ``related`` / ``links`` intents and was rendered
+    under a header asserting the opposite direction. The archive ships a
+    ``.linkgraph.sqlite`` sidecar that answers the real question in
+    milliseconds, and ``zim_links(direction="inbound")`` already uses it — so
+    the data was present and simply unreachable from the only tool simple
+    mode exposes.
+    """
+
+    INBOUND_PHRASINGS = [
+        "what links to iep.utm.edu/plato/",
+        "inbound links to iep.utm.edu/plato/",
+        "backlinks for iep.utm.edu/plato/",
+        "which articles link to iep.utm.edu/plato/",
+        "articles linking to iep.utm.edu/plato/",
+    ]
+
+    OUTBOUND_PHRASINGS = [
+        "what links from iep.utm.edu/plato/",
+        "links in iep.utm.edu/plato/",
+    ]
+
+    @pytest.mark.parametrize("query", INBOUND_PHRASINGS)
+    def test_inbound_phrasings_parse_to_the_inbound_intent(self, query: str) -> None:
+        intent, _params, _conf = IntentParser.parse_intent(query)
+        assert intent == "inbound_links", f"{query!r} parsed as {intent!r}"
+
+    @pytest.mark.parametrize("query", OUTBOUND_PHRASINGS)
+    def test_outbound_phrasings_stay_outbound(self, query: str) -> None:
+        """Direction words must actually discriminate, or the above is vacuous."""
+        intent, _params, _conf = IntentParser.parse_intent(query)
+        assert intent != "inbound_links", f"{query!r} wrongly parsed as inbound"
+
+    def test_inbound_query_calls_the_inbound_backend(self) -> None:
+        """End to end: the handler must hit the sidecar, not the outbound path."""
+        ops = Mock()
+        ops.get_inbound_links_data.return_value = {
+            "entry_path": "iep.utm.edu/plato/",
+            "results": [
+                {"path": "iep.utm.edu/aristotle/", "title": "Aristotle"},
+            ],
+            "total": 97,
+            "done": False,
+            "next_cursor": None,
+            "page_info": {"offset": 0, "limit": 10, "returned_count": 1},
+        }
+        handler = SimpleToolsHandler(ops)
+        rendered = handler.handle_zim_query(
+            "what links to iep.utm.edu/plato/", "/test/file.zim"
+        )
+        assert isinstance(rendered, str), rendered
+        ops.get_inbound_links_data.assert_called_once()
+        # The outbound backend must NOT have been consulted — paired with the
+        # positive assertion above so "called nothing" fails too.
+        ops.extract_article_links.assert_not_called()
+        # And the rendering must not claim the opposite direction.
+        assert "linked from" not in rendered.lower(), rendered

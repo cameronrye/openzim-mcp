@@ -303,6 +303,38 @@ def _scan_truncated_footer(data: Mapping[str, Any]) -> Optional[str]:
     )
 
 
+def render_inbound_links(data: Mapping[str, Any], entry_path: str) -> str:
+    """Render an inbound-links payload — the articles that link TO ``entry_path``.
+
+    Deliberately worded so it can never be mistaken for the outbound list:
+    the v3.3.1 field report found simple mode answering "what links to X" with
+    X's outbound links under the header "Articles linked from X", which is the
+    opposite claim.
+    """
+    if not isinstance(data, dict):
+        return json.dumps(data)
+    results = data.get("results") or []
+    total = data.get("total", len(results))
+    header = f'# Articles that link TO "{entry_path}"'
+    if not results:
+        return f"{header}\n\nNo article in this archive links to it.\n"
+    lines = [header, ""]
+    for row in results:
+        path = row.get("path", "")
+        title = row.get("title") or path
+        anchor = row.get("anchor_text")
+        suffix = f" — linked as \u201c{anchor}\u201d" if anchor else ""
+        lines.append(f"- **{title}** (`{path}`){suffix}")
+    shown = len(results)
+    if isinstance(total, int) and total > shown:
+        lines.append("")
+        lines.append(
+            f"_Showing {shown} of {total} inbound links — raise `limit` "
+            "or pass `offset` for more._"
+        )
+    return "\n".join(lines) + "\n"
+
+
 def render_related(data: Mapping[str, Any], entry_path: str) -> str:
     """Render a get_related_articles payload as a compact list."""
     if not isinstance(data, dict):

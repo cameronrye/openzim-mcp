@@ -33,6 +33,7 @@ from .exceptions import (
     RegexTimeoutError,
 )
 from .intent_parser import IntentParser, _strip_quote_pair, safe_regex_sub
+from .linkgraph.reader import LinkGraphUnavailable
 from .meta import build_meta, format_footer
 from .onboarding import acquisition_hint_markdown
 from .pagination import archive_identity
@@ -1423,6 +1424,7 @@ class SimpleToolsHandler(
             "suggestions",
             "find_by_title",
             "related",
+            "inbound_links",
             "get_zim_entries",
             "binary",
         }
@@ -4111,6 +4113,81 @@ class SimpleToolsHandler(
             zim_file_path, title, cross_file=False, limit=limit
         )
 
+    def _handle_inbound_links(
+        self,
+        query: str,
+        zim_file_path: str,
+        params: Dict[str, Any],
+        options: Dict[str, Any],
+    ) -> str:
+        """Answer "what links HERE" from the link-graph sidecar.
+
+        v3.3.1 field report: simple mode had no inbound concept at all. Every
+        inbound phrasing ("what links to X", "backlinks for X", "which
+        articles link to X") fell through to the OUTBOUND ``related`` /
+        ``links`` intents and was rendered under a header asserting the
+        opposite direction — so the answer was confidently wrong rather than
+        missing. ``zim_links(direction="inbound")`` already read the
+        ``.linkgraph.sqlite`` sidecar that ships beside the archive; this
+        routes the natural-language surface at that same backend.
+        """
+        entry_path = params.get("entry_path")
+        if not entry_path:
+            return (
+                "**Missing Article**\n\n"
+                "Please specify which article to find inbound links for.\n"
+                "**Examples**:\n"
+                "- 'what links to Photosynthesis'\n"
+                "- 'backlinks for Cellular_respiration'\n"
+            )
+        # Same title-resolution step ``_handle_related`` uses: the parser
+        # hands over the user's phrasing, and entry paths store spaces as
+        # underscores.
+        promoted = find_title_match(
+            self.zim_operations, zim_file_path, entry_path, min_score=0.8
+        )
+        if promoted is not None and promoted.get("path"):
+            entry_path = promoted["path"]
+        limit, limit_note = self._clamp_intent_limit(
+            options.get("limit", 10), cap=100, default=10
+        )
+        try:
+            data = self.zim_operations.get_inbound_links_data(
+                zim_file_path,
+                entry_path,
+                limit=limit,
+                offset=int(options.get("offset", 0) or 0),
+            )
+            return compact_renderers.render_inbound_links(data, entry_path) + limit_note
+        except LinkGraphUnavailable as e:
+            # The sidecar is the only source for this direction. Say so, and
+            # name the exact command that builds it — the advanced tool's
+            # equivalent error already does.
+            return (
+                f"**Inbound links unavailable for `{entry_path}`**\n\n"
+                f"{sanitize_context_for_error(str(e))}\n\n"
+                "Inbound links need a link-graph sidecar built beside the "
+                "archive. An operator can create it with "
+                "`openzim-mcp build link-graph <archive.zim>`.\n"
+            )
+        except OpenZimMcpArchivePathError:
+            raise
+        except OpenZimMcpValidationError as e:
+            return self._render_invalid_request(
+                entry_path, e, "inbound links to", limit_capable=True
+            )
+        except Exception as e:
+            err = sanitize_context_for_error(str(e))
+            return (
+                f"**Article not found: `{entry_path}`**\n\n"
+                f"{err}\n\n"
+                "**Try one of these to recover:**\n"
+                f"- `suggestions for {entry_path[:40]}` — autocomplete "
+                "to catch typos / partial names\n"
+                f"- `find article titled {entry_path}` — title-index "
+                "lookup with fuzzy fallback\n"
+            )
+
     def _handle_related(
         self,
         query: str,
@@ -4257,6 +4334,7 @@ class SimpleToolsHandler(
         "walk_namespace": _handle_walk_namespace,
         "find_by_title": _handle_find_by_title,
         "related": _handle_related,
+        "inbound_links": _handle_inbound_links,
         "get_zim_entries": _handle_get_zim_entries,
         "get_section": _handle_get_section,
     }

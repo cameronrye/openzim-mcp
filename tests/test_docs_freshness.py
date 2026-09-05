@@ -1681,6 +1681,7 @@ _PHRASEBOOK_LABEL_TO_INTENT = {
     "One section": "get_section",
     "Outbound links": "links",
     "Related articles": "related",
+    "Inbound links": "inbound_links",
     "Browse a namespace": "browse",
     "Walk a namespace": "walk_namespace",
     "Batch fetch": "get_zim_entries",
