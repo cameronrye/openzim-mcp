@@ -355,15 +355,30 @@ def url_shaped_path_hint(entry_path: str) -> str:
     not exist on exactly the archives this hint fires for most:
     ``https://iep.utm.edu/stoicism/`` is filed at
     ``iep.utm.edu/stoicism/``, not at ``stoicism/``.
+
+    A ``www.`` host is the exception, and the reason this function no
+    longer returns the remainder unchanged. The IEP archive's own articles
+    link to ``https://www.iep.utm.edu/ibnrushd/`` while the archive files
+    the entry at ``iep.utm.edu/ibnrushd/``: the scheme-only correction
+    handed the caller ``www.iep.utm.edu/ibnrushd/``, which misses, and the
+    second miss carries no hint at all because the scheme is gone. Whether
+    an archive keeps the ``www.`` depends on the URL zimit was seeded
+    with, so both spellings are offered — the stripped one first, because
+    that is the one that resolves on the archives whose hrefs carry it.
     """
     scheme, separator, remainder = entry_path.partition("://")
     if not separator or not scheme.isalpha():
         return ""
-    suggestion = f" (e.g. '{remainder}')" if remainder else ""
-    return (
-        " Entry paths are archive-relative, never URLs: drop the scheme"
-        f"{suggestion}."
-    )
+    lead = " Entry paths are archive-relative, never URLs: drop the scheme"
+    if not remainder:
+        return lead + "."
+    host, slash, rest = remainder.partition("/")
+    if host[:4].lower() == "www." and len(host) > 4:
+        return (
+            f"{lead} (e.g. '{host[4:]}{slash}{rest}', or '{remainder}' "
+            "if that misses)."
+        )
+    return f"{lead} (e.g. '{remainder}')."
 
 
 def format_error_message(

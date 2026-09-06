@@ -47,12 +47,59 @@ def _get_encoder() -> Any:
         return None
 
 
+# Above this many characters, ``tokens_est`` is extrapolated from bounded
+# samples instead of encoding the whole string.
+#
+# v3.3.1 field report (fid 124): ``attach_meta`` json.dumps's the whole
+# payload and hands it to tiktoken unconditionally, base64 ``data`` field
+# included. On the DEFAULT binary path (a 9.9 MB entry, no unusual arguments)
+# that is 1.4 s and +240 MB of RSS; raise ``max_content_length`` and it
+# becomes 7.5 s and +1.25 GB, producing a 51-million-element token list — to
+# compute an advisory number that gates nothing and whose only content is
+# "this response is unusable". cl100k costs roughly 0.1 s and ~20x the
+# string's size in peak RSS per megabyte, so 200 KB is ~20 ms and is where
+# exactness stops being worth paying for.
+_EXACT_TOKENISE_LIMIT = 200_000
+# Three windows (head / middle / tail) rather than one prefix, so a payload
+# that mixes prose and a base64 blob is not estimated entirely from whichever
+# of the two happens to start it.
+_TOKENISE_SAMPLE_WINDOW = 32_000
+
+
+def _sampled_tokens_est(encoder: Any, rendered: str) -> int:
+    """Extrapolate a token count from bounded samples of ``rendered``.
+
+    Sampling rather than a flat chars/N divisor because the divisor is not
+    a constant across content types: cl100k averages ~4 chars per token on
+    English prose but ~1.4 on base64, so a chars/4 estimate under-reports a
+    media payload by ~3x — in the direction that causes context overflow.
+    Encoding a sample measures the ratio for the content actually present at
+    a cost that does not grow with the payload.
+    """
+    total = len(rendered)
+    window = _TOKENISE_SAMPLE_WINDOW
+    middle = (total - window) // 2
+    samples = [
+        rendered[:window],
+        rendered[middle : middle + window],
+        rendered[-window:],
+    ]
+    sampled_chars = sum(len(s) for s in samples)
+    sampled_tokens = sum(len(encoder.encode(s, disallowed_special=())) for s in samples)
+    if sampled_chars == 0:  # pragma: no cover — total > limit implies chars
+        return 0
+    return int(sampled_tokens * (total / sampled_chars))
+
+
 def _raw_tokens_est(rendered: str) -> Optional[int]:
     """Tokenize ``rendered``. Returns ``None`` when the tokenizer is
     unavailable or the encode fails, so callers can distinguish
     "couldn't estimate" from "zero tokens" — spec §5 requires omitting
     ``tokens_est`` on tiktoken init failure rather than emitting a
     misleading 0.
+
+    Payloads above :data:`_EXACT_TOKENISE_LIMIT` are estimated from bounded
+    samples; see the constant.
     """
     if not rendered:
         return 0
@@ -65,6 +112,8 @@ def _raw_tokens_est(rendered: str) -> Optional[int]:
         # tiktoken's default would raise on them, and they occur naturally
         # in article bodies and user queries about tokenizers — a
         # best-effort budget estimate must never fail the tool call.
+        if len(rendered) > _EXACT_TOKENISE_LIMIT:
+            return _sampled_tokens_est(encoder, rendered)
         return len(encoder.encode(rendered, disallowed_special=()))
     except Exception as e:
         logger.warning("token estimation failed; omitting tokens_est: %s", e)

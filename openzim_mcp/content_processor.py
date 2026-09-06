@@ -162,6 +162,25 @@ NON_NAVIGABLE_LINK_SCHEMES = (
     "data:",
     "blob:",
     "vbscript:",
+    # ``about:blank`` is what browsertrix/warc2zim writes when a link was
+    # not archived; the original URL survives only as the anchor text. It
+    # has no scheme separator (``://``) and no leading slash, so without
+    # this entry it was classified INTERNAL and joined onto the source
+    # directory — fabricating ``iep.utm.edu/hazlitt/about:blank``, a path
+    # zim_get cannot fetch, which then out-ranked every real neighbour in
+    # ``zim_links(direction="related")`` because the page linked it 14 times.
+    "about:",
+)
+
+# ``text/*`` MIME types that are page PLUMBING rather than readable content.
+# They are matched before the generic ``text/`` passthrough in
+# ``process_mime_content`` and answered with a one-line placeholder, the way
+# ``image/*`` and ``application/pdf`` already are.
+_PAGE_ASSET_MIME_PREFIXES = (
+    "text/css",
+    "text/javascript",
+    "text/ecmascript",
+    "text/x-javascript",
 )
 
 # URL schemes that mark an extracted link as pointing outside the archive.
@@ -656,6 +675,82 @@ def _strip_dangling_bold(text: str) -> str:
     return text
 
 
+def _term_pattern(typed: List[Tuple[str, bool]]) -> "re.Pattern[str]":
+    """Compile the folded-text search pattern for ``typed`` query terms.
+
+    Longest term first: alternation is first-match-wins, so a short term must
+    not shadow a longer alternative sharing its opening characters. A prefix
+    term closes on ``\\w*`` — the remainder of the word the stemmer matched;
+    a literal term keeps its closing ``\\b``. Both keep the leading ``\\b``:
+    Xapian prefixes anchor at a word start, so ``diabet*`` must not light up
+    the middle of ``prediabetes``. No ``re.IGNORECASE``: both sides are
+    already lowercased by the fold.
+
+    Shared by :func:`_highlight_terms` and :func:`_shift_window_to_first_hit`
+    so the window a snippet keeps and the spans it bolds agree by
+    construction.
+    """
+    ordered = sorted(typed, key=lambda tp: len(tp[0]), reverse=True)
+    alts = [
+        re.escape(term) + (r"\w*" if is_prefix else r"\b")
+        for term, is_prefix in ordered
+    ]
+    return re.compile(r"\b(?:" + "|".join(alts) + r")")
+
+
+# How much text to keep AHEAD of the first match when a snippet has to be
+# re-windowed, so the hit reads in context rather than opening the slice.
+# Capped at a quarter of the budget so a small ``snippet_length`` doesn't
+# spend its whole allowance on lead-in.
+_KWIC_LEAD_CHARS = 200
+
+
+def _shift_window_to_first_hit(
+    text: str, typed: List[Tuple[str, bool]], effective_len: int
+) -> str:
+    """Slide an over-long snippet so the first query hit survives truncation.
+
+    Paragraph anchoring picks the block that carries the query, but a block
+    can be far longer than ``snippet_length``: MedlinePlus's alphabetical
+    drug indexes render as ONE 48 KB blank-line-free list, and the hard cut
+    landed 1.6 KB before the first "aspirin". The result was a full-budget
+    snippet of unrelated brand names with nothing highlighted — the caller
+    could not tell why the entry matched, which is the one job of a snippet.
+
+    Returns ``text`` unchanged when it already fits, when nothing matches, or
+    when the first hit is inside the budget. Otherwise returns an ellipsis-
+    prefixed slice starting a little before the hit, snapped forward to a
+    whitespace boundary and past any markdown construct the cut fell inside
+    (so a link is never split into a dangling ``](url)``).
+    """
+    if not typed or len(text) <= effective_len:
+        return text
+    folded, index_map = _fold_with_index_map(text)
+    match = _term_pattern(typed).search(folded)
+    if match is None:
+        return text
+    hit = index_map[match.start()]
+    # Room the truncation pass will actually keep, minus its own "...".
+    if hit < max(effective_len - 3, 0):
+        return text
+    lead = min(_KWIC_LEAD_CHARS, max(effective_len // 4, 0))
+    cut = max(0, hit - lead)
+    if cut:
+        space = text.rfind(" ", cut, hit)
+        if space != -1:
+            cut = space + 1
+        # Never open inside a markdown link / emphasis run.
+        for skip in _HIGHLIGHT_SKIP_RE.finditer(text):
+            if skip.start() < cut < skip.end():
+                cut = skip.start()
+                break
+            if skip.start() >= cut:
+                break
+    if cut <= 0:
+        return text
+    return "..." + text[cut:]
+
+
 def _highlight_terms(text: str, query: str, *, max_hits: int) -> str:
     """Wrap the first `max_hits` occurrences of any query term in **bold**.
 
@@ -675,19 +770,8 @@ def _highlight_terms(text: str, query: str, *, max_hits: int) -> str:
     typed = _keep_highlightable_terms(query)
     if not typed:
         return text
-    # Longest first: alternation is first-match-wins, so a short term must
-    # not shadow a longer alternative sharing its opening characters.
-    typed.sort(key=lambda tp: len(tp[0]), reverse=True)
-    # A prefix term closes on ``\w*`` — the remainder of the word the
-    # stemmer matched; a literal term keeps its closing ``\b``. Both keep
-    # the leading ``\b``: Xapian prefixes anchor at a word start, so
-    # ``diabet*`` must not light up the middle of ``prediabetes``.
-    alts = [
-        re.escape(term) + (r"\w*" if is_prefix else r"\b") for term, is_prefix in typed
-    ]
-    # No ``re.IGNORECASE``: both sides are already lowercased by the fold.
-    # The group is non-capturing — only ``m.start()``/``m.end()`` are read.
-    pattern = re.compile(r"\b(?:" + "|".join(alts) + r")")
+    # Only ``m.start()``/``m.end()`` are read off the compiled pattern.
+    pattern = _term_pattern(typed)
     folded, index_map = _fold_with_index_map(text)
 
     # Pre-compute spans where we must not wrap. Overlapping markdown
@@ -707,11 +791,38 @@ def _highlight_terms(text: str, query: str, *, max_hits: int) -> str:
                 return True
         return False
 
-    # Collect the spans to bold, left to right, so ``max_hits`` selects the
-    # same occurrences the old ``pattern.sub`` pass did.
+    # Collect the spans to bold left to right, but ration the budget PER
+    # TERM first. ``max_hits`` used to be one global left-to-right cap, so
+    # ``what is the trolley problem`` spent all five spans on ``the`` before
+    # reaching a content word — the emphasis then told a reader the entry
+    # matched on an article. Each term gets a floor of
+    # ``max_hits // len(terms)`` (at least one); whatever is left over is
+    # filled left to right from the runners-up, so a single-term query keeps
+    # exactly its old five-in-a-row behaviour.
+    ordered = sorted(typed, key=lambda tp: len(tp[0]), reverse=True)
+
+    def _term_of(matched: str) -> str:
+        # Alternatives are longest-first and each is anchored at a word
+        # start, so the first term the match opens with is the one that
+        # produced it.
+        for term, _ in ordered:
+            if matched.startswith(term):
+                return term
+        return matched
+
+    per_term_cap = max(1, max_hits // len(ordered))
+    used: Dict[str, int] = {}
+    unsaturated = {term for term, _ in ordered}
     spans: List[Tuple[int, int]] = []
+    overflow: List[Tuple[int, int]] = []
     for m in pattern.finditer(folded):
         if len(spans) >= max_hits:
+            break
+        # Keep scanning while any term is still owed its share — that is the
+        # whole point — but stop once every term is saturated and there are
+        # already enough runners-up to fill the budget. ``text`` here is a
+        # post-truncation snippet, so the walk is bounded either way.
+        if not unsaturated and len(overflow) >= max_hits:
             break
         # Map the folded span back onto the original. The end is derived from
         # the LAST matched folded character rather than from ``index_map[fe]``
@@ -722,7 +833,17 @@ def _highlight_terms(text: str, query: str, *, max_hits: int) -> str:
         end = index_map[m.end() - 1] + 1
         if _is_forbidden(start):
             continue
-        spans.append((start, end))
+        term = _term_of(folded[m.start() : m.end()])
+        seen = used.get(term, 0)
+        if seen < per_term_cap:
+            used[term] = seen + 1
+            if seen + 1 >= per_term_cap:
+                unsaturated.discard(term)
+            spans.append((start, end))
+        elif len(overflow) < max_hits:
+            overflow.append((start, end))
+    if len(spans) < max_hits and overflow:
+        spans = sorted(spans + overflow[: max_hits - len(spans)])
 
     # Splice in REVERSE so earlier offsets stay valid as markers are inserted.
     out = text
@@ -839,6 +960,94 @@ def _is_furniture_heading(text: str) -> bool:
     )
 
 
+# Landmarks a furniture heading must never be promoted onto (see
+# ``_furniture_section_root``): decomposing one of these takes the whole
+# article with it. ``[document]`` is BeautifulSoup's name for the root.
+_FURNITURE_PROMOTION_STOP_TAGS = frozenset(
+    {"article", "main", "body", "html", "[document]"}
+)
+
+
+def _has_text_before(container: Tag, heading: Tag) -> bool:
+    """True if ``container`` carries non-whitespace text ahead of ``heading``.
+
+    ``descendants`` is document order, and a Tag is yielded before its own
+    strings, so reaching ``heading`` means everything seen so far preceded it.
+    Any real text there proves ``container`` is a SHARED wrapper (the article
+    body, a column) rather than the block this heading opens.
+    """
+    for node in container.descendants:
+        if node is heading:
+            return False
+        if isinstance(node, Comment):
+            continue
+        if isinstance(node, NavigableString) and node.strip():
+            return True
+    return False
+
+
+def _contains_peer_heading(node: Tag, heading: Tag, level: int) -> bool:
+    """True if ``node`` holds a heading of ``level`` or higher besides ``heading``."""
+    return any(
+        other is not heading
+        and isinstance(other, Tag)
+        and other.name in _HEADING_NAMES
+        and int(other.name[1]) <= level
+        for other in node.find_all(_HEADING_NAMES)
+    )
+
+
+def _furniture_section_root(target: Tag, level: int) -> Tag:
+    """Climb from a furniture heading to the outermost block it alone opens.
+
+    MedlinePlus wraps every section heading as
+    ``<section><div class="section"><div class="section-header">
+    <div class="section-title"><h2>…</h2></div></div>
+    <div class="section-body">…</div></div></section>`` — so the heading has
+    NO siblings and its body is an aunt node. Decomposing just the heading
+    deleted the label and kept the body, re-attributing site furniture to
+    whatever real section preceded it (a "Patient Handouts" list served under
+    "Older Adults" on medlineplus.gov/asthma.html). Promoting the target to
+    the wrapper removes the section as a unit.
+
+    Climbing stops at the first parent that is a landmark, that carries text
+    ahead of the heading, or that holds another same-or-higher-level heading —
+    all three mean the parent spans more than this one section. A flat
+    ``<article>`` layout therefore promotes nothing and keeps its old
+    sibling-walk behaviour.
+    """
+    node: Tag = target
+    while True:
+        parent = node.parent
+        if not isinstance(parent, Tag) or not parent.name:
+            return node
+        if parent.name in _FURNITURE_PROMOTION_STOP_TAGS:
+            return node
+        role = parent.get("role")
+        if isinstance(role, str) and role.strip().lower() == "main":
+            return node
+        if _has_text_before(parent, target):
+            return node
+        if _contains_peer_heading(parent, target, level):
+            return node
+        node = parent
+
+
+def _opens_peer_section(node: Any, heading: Tag, level: int) -> bool:
+    """True if ``node`` starts the next same-or-higher-level section.
+
+    A bare heading tag does, and so does a block that CONTAINS one — once the
+    extent is computed over promoted wrappers, the following peer section is a
+    ``<section>`` element rather than an ``<h2>``, and a sibling walk that only
+    looked at tag names would have swallowed the entire rest of the page.
+    """
+    if not isinstance(node, Tag) or not node.name:
+        return False
+    if node.name in _HEADING_NAMES and int(node.name[1]) <= level:
+        return True
+    return _contains_peer_heading(node, heading, level)
+
+
 def _strip_furniture_sections(soup: BeautifulSoup) -> None:
     """Remove in-article "furniture" sections in place (MedlinePlus etc.).
 
@@ -854,10 +1063,13 @@ def _strip_furniture_sections(soup: BeautifulSoup) -> None:
     it. Call sites must gate this to landmark-scoped content only (see
     ``select_main_content``) so chrome-free pages stay byte-identical.
 
-    Note: the extent is computed over DIRECT siblings of the heading, which
-    covers MedlinePlus's flat ``<article>`` layout. A furniture heading wrapped
-    in its own block (heading and body not siblings) is not handled — validate
-    against a live archive before broadening.
+    The extent is computed over the siblings of the heading's SECTION ROOT
+    (:func:`_furniture_section_root`), not of the heading itself: on the flat
+    ``<article>`` layout the root is the heading and nothing changes, while on
+    MedlinePlus's wrapped layout it is the enclosing ``<section>`` so the
+    body travels with its label. Deleting the label alone is strictly worse
+    than doing nothing — the orphaned body is then served under the preceding
+    section's title, with its char/word counts — so the two must move together.
     """
     while True:
         target: Optional[Tag] = None
@@ -870,17 +1082,14 @@ def _strip_furniture_sections(soup: BeautifulSoup) -> None:
         if target is None:
             return
         level = int(target.name[1])
+        root = _furniture_section_root(target, level)
         # Materialise the sibling list BEFORE removing anything (decomposing
         # mutates the sibling chain). ``next_siblings`` (unlike
         # ``find_next_siblings``) also yields bare NavigableString nodes, so
         # loose furniture text between headings is removed too.
-        doomed: List[Any] = [target]
-        for sibling in list(target.next_siblings):
-            if (
-                isinstance(sibling, Tag)
-                and sibling.name in _HEADING_NAMES
-                and int(sibling.name[1]) <= level
-            ):
+        doomed: List[Any] = [root]
+        for sibling in list(root.next_siblings):
+            if _opens_peer_section(sibling, target, level):
                 break
             doomed.append(sibling)
         for node in doomed:
@@ -951,6 +1160,54 @@ def _strip_in_page_nav(soup: BeautifulSoup) -> None:
         if any(id(parent) in doomed_ids for parent in node.parents):
             continue
         node.decompose()
+
+
+def _flatten_multiline_table_cells(soup: BeautifulSoup) -> None:
+    """Turn ``<br>`` inside a table cell into an explicit ``"; "`` separator.
+
+    html2text renders a cell's ``<br>`` as a real newline, which BREAKS the
+    pipe table it is writing: the IEP's conjunction truth table
+    (``<td><div>T<br>T<br>F<br>F</div></td>`` × 3, two ``<tr>``, so under the
+    ``replace_oversized_tables`` thresholds) came out as a three-column
+    header followed by ONE row whose three cells were each a four-line
+    stack — output that looks like valid markdown and encodes four logical
+    rows as one, inviting a wrong reading of the very thing the article is
+    about. The same shape flattened ``5th in Europe<br>1st in Germany`` into
+    a broken row on infobox-style tables.
+
+    ``_join_cell_text`` already made this call for the infobox path (a13 D7):
+    a block boundary inside a cell is a VALUE boundary, so it reads as
+    ``"; "``. This applies the same rule on the ordinary html2text path,
+    replacing only the ``<br>`` nodes so links, emphasis and nested markup
+    inside the cell survive. Cells with no ``<br>`` are untouched, so every
+    page without this shape renders byte-identically.
+    """
+    for cell in soup.find_all(["td", "th"]):
+        if not isinstance(cell, Tag):
+            continue
+        for br in cell.find_all("br"):
+            if isinstance(br, Tag):
+                # v3.3.1 field report follow-up: replacing EVERY <br> with
+                # "; " doubles the separator on consecutive breaks —
+                # ``HDL<br><br>Good`` rendered as ``HDL; ; Good`` on
+                # medlineplus.gov/cholesterollevelswhatyouneedtoknow.html.
+                # A run of breaks is one visual line break, so collapse it:
+                # skip a <br> whose previous meaningful sibling is also a <br>.
+                prev = br.previous_sibling
+                while (
+                    prev is not None
+                    and isinstance(prev, NavigableString)
+                    and not str(prev).strip()
+                ):
+                    prev = prev.previous_sibling
+                # A preceding <br> OR the separator a preceding <br> was
+                # already replaced with both mean "we are inside a run".
+                if getattr(prev, "name", None) == "br" or (
+                    isinstance(prev, NavigableString) and str(prev) == "; "
+                ):
+                    br.extract()
+                    continue
+                br.replace_with(NavigableString("; "))
 
 
 def select_main_content(soup: BeautifulSoup) -> BeautifulSoup:
@@ -1172,8 +1429,8 @@ def _classify_anchor(link: Tag, links_data: Dict[str, Any]) -> None:
     """Categorise one ``<a href>`` into internal/external/anchor lists.
 
     Skips empty hrefs and non-navigable schemes (``javascript:``, ``mailto:``,
-    ``tel:``, ``data:``, ``blob:``, ``vbscript:``) which pollute results
-    without being useful navigation targets.
+    ``tel:``, ``data:``, ``blob:``, ``vbscript:``, ``about:``) which pollute
+    results without being useful navigation targets.
     """
     href_attr = link.get("href")
     if not (href_attr and isinstance(href_attr, str)):
@@ -1677,6 +1934,8 @@ class ContentProcessor:
             for element in soup.select(selector):
                 element.decompose()
 
+        _flatten_multiline_table_cells(soup)
+
         infobox_md = ""
         if compact:
             kv_rows = self.extract_infobox(soup)
@@ -1831,6 +2090,15 @@ class ContentProcessor:
             else (selected[0] if selected else "")
         )
         snippet_text = _strip_snippet_render_junk(snippet_text)
+
+        # The anchor pass chose the right BLOCK, but a block can be far
+        # longer than the budget — a MedlinePlus drug index renders as one
+        # 48 KB list with no blank line in it. Slide the window so the hit
+        # the caller searched for survives the cut below.
+        if typed:
+            snippet_text = _shift_window_to_first_hit(
+                snippet_text, typed, effective_len
+            )
 
         # Truncate if too long. Reserve 3 chars for the trailing "..." so the
         # final string respects snippet_length rather than overshooting it.
@@ -2110,6 +2378,23 @@ class ContentProcessor:
                         select_main_content(soup), compact=compact
                     )
                 return self.html_to_plain_text(raw_content, compact=compact)
+            elif mime_type.startswith(_PAGE_ASSET_MIME_PREFIXES):
+                # Stylesheets and scripts are ``text/*``, so the passthrough
+                # below shipped them verbatim: one MedlinePlus stylesheet is
+                # 47k chars / ~19k estimated tokens of minified CSS with a
+                # base64 font blob inside it, returned with truncated=false
+                # and no signal that it was worthless — and one such path in
+                # a batch poisons the whole response. They carry no
+                # retrievable knowledge, so they get the one-line treatment
+                # image/* and application/pdf already get. Genuinely readable
+                # text/* (plain, vtt transcripts, xml data) still passes
+                # through untouched.
+                label = "Stylesheet" if mime_type.startswith("text/css") else "Script"
+                return (
+                    f"({label} — {len(content_bytes) / 1024:.1f} KB of "
+                    f"{mime_type}, not article content; "
+                    f"{fetch_binary(self._tool_mode)} to read the file itself)"
+                )
             elif mime_type.startswith("text/"):
                 return raw_content.strip()
             elif mime_type.startswith("image/"):

@@ -66,6 +66,27 @@ _DESCRIPTION = load_description("zim_get")
 
 _VALID_VIEWS = {"full", "summary", "toc", "structure"}
 
+# Hard ceiling on the binary branch's ``max_content_length``, regardless of
+# what the caller asks for.
+#
+# v3.3.1 field report (fid 123): ``max_content_length`` is documented as the
+# opt-in for large media, and the data layer's default cap (10 MB) is a
+# default, not a bound — so one call with ``max_content_length=100000000`` on
+# a 51 MB mp4 returned a 68 MB JSON-RPC line (53.7 M estimated tokens) and
+# took the server's RSS from 124 MB to 1.44 GB, where it stayed. The archive
+# holds 158 such videos, and the server's own oversize refusal is what points
+# a model at the argument ("raise max_content_length to at least 53820567 to
+# fetch the bytes").
+#
+# The knob stays — refusing every large fetch would break the one documented
+# path for PDFs and other media — but it is bounded. 25 MB of bytes is 2.5x
+# the default cap and base64s to a ~33 MB response: enough headroom for the
+# oversized PDFs and audio the knob exists for, and half the size of the
+# reported event. Anything above it is refused BEFORE the entry is read, so
+# the request costs nothing, rather than clamped — a silent clamp would hand
+# back a short file the caller believes is whole.
+MAX_BINARY_CONTENT_LENGTH = 25_000_000
+
 # Shared by ``_validate_branch_combination`` and the unreachable-branch guards
 # in the handler. Both must produce the identical envelope: the guards exist
 # only for the case where the validator has regressed, and a caller should not
@@ -157,6 +178,29 @@ def register(server: "OpenZimMcpServer") -> None:
                     message=(
                         "`max_content_length` must be a positive integer "
                         f"(provided: {max_content_length})."
+                    ),
+                )
+            # Binary only: on the text branches ``max_content_length`` caps a
+            # paginable character window that ``content_offset`` can walk, so
+            # a large value costs one page and nothing more. On the binary
+            # branch it sizes a base64 blob that ships whole on one line and
+            # has no continuation, so it needs an actual ceiling. See
+            # ``MAX_BINARY_CONTENT_LENGTH``.
+            if (
+                binary
+                and max_content_length is not None
+                and max_content_length > MAX_BINARY_CONTENT_LENGTH
+            ):
+                return tool_error(
+                    operation="invalid_max_content_length",
+                    message=(
+                        "`max_content_length` is capped at "
+                        f"{MAX_BINARY_CONTENT_LENGTH:,} bytes for a binary "
+                        f"fetch (provided: {max_content_length:,}); a larger "
+                        "response cannot be delivered on one line. Re-run at "
+                        "or below the cap — an entry bigger than the cap "
+                        "returns its metadata with `truncated: true` — or "
+                        "read the file outside the MCP surface."
                     ),
                 )
             err = _validate_branch_combination(

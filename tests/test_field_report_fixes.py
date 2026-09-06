@@ -213,3 +213,149 @@ class TestInboundLinkQuestionsGetInboundAnswers:
         ops.extract_article_links.assert_not_called()
         # And the rendering must not claim the opposite direction.
         assert "linked from" not in rendered.lower(), rendered
+
+
+class TestBudgetCutIsNeverReportedAsComplete:
+    """A page the response budget cut must never claim to be the last one.
+
+    ``exhausted`` is decided at FETCH time for a whole batch; the response
+    budget can break out part-way through RENDERING that batch. Both flags
+    then read true, ``done`` follows ``exhausted``, and the
+    ``budget_truncated and not done`` gate suppressed the truncation notice
+    — so a page that really did withhold rows shipped as complete, with no
+    ``next_offset`` and no cursor. That is worse than the unbounded response
+    it replaced: the caller cannot even tell it lost data.
+    """
+
+    def _collect(self, *, batch_len, want, budget_binds_at):
+        """Drive the real collector with a stubbed Xapian search object."""
+        from openzim_mcp.zim import search as search_mod
+
+        rows = [f"e{i}" for i in range(batch_len)]
+
+        class _FakeSearch:
+            def getResults(self, start, count):  # noqa: N802 - libzim spelling
+                return rows[:count]
+
+        mixin = search_mod._SearchMixin.__new__(search_mod._SearchMixin)
+        calls = {"n": 0}
+
+        def _row(archive, entry_id, **kw):
+            calls["n"] += 1
+            # Blow the char budget exactly at the configured row.
+            pad = "x" * (10**7 if calls["n"] == budget_binds_at else 1)
+            return {"path": str(entry_id), "title": "t", "snippet": pad}
+
+        mixin._search_result_row = _row  # type: ignore[method-assign]
+        return search_mod._SearchMixin._collect_distinct_hits(
+            mixin,
+            _FakeSearch(),
+            None,
+            "q",
+            limit=want,
+            offset=0,
+            total_results=10_000,
+            snippet_length=None,
+            max_paragraphs=None,
+            validated_path=None,
+        )
+
+    def test_mid_batch_budget_break_does_not_mark_the_stream_exhausted(self):
+        """The bug: a short batch + a budget break = 'done', silently."""
+        _rows, _consumed, exhausted, budget_truncated = self._collect(
+            batch_len=5, want=10, budget_binds_at=2
+        )
+        # Positive: the budget really did bind (else the negative is vacuous).
+        assert budget_truncated is True
+        # Negative: and the stream must NOT be called exhausted, because rows
+        # 3..5 of the fetched batch were never rendered.
+        assert exhausted is False
+
+    def test_fully_consumed_short_batch_still_marks_exhausted(self):
+        """The discriminator: no budget break means the short batch IS the end."""
+        _rows, _consumed, exhausted, budget_truncated = self._collect(
+            batch_len=5, want=10, budget_binds_at=None
+        )
+        assert budget_truncated is False
+        assert exhausted is True
+
+
+class TestTruncationVerdictRequiresAnActualZim:
+    """ "Truncated, re-download it" must not be said about a non-archive.
+
+    ``is_truncated_zim`` compared bytes 72..79 as a declared size without ever
+    re-checking the ZIM magic — and it is only ever reached AFTER the magic
+    check has already failed. So for any readable non-ZIM file of at least 80
+    bytes those bytes are effectively random, almost always form a huge value,
+    and the listing told the user to re-download a file that was never an
+    archive. That inverts the exact remedy distinction the warning exists to
+    draw.
+    """
+
+    def test_a_plain_text_file_is_not_called_a_truncated_archive(self, tmp_path):
+        from openzim_mcp.zim.archive import is_truncated_zim
+
+        # Well over the 80-byte header, no ZIM magic anywhere.
+        decoy = tmp_path / "notazim.zim"
+        decoy.write_bytes(
+            b"This is a plain text file pretending to be an archive. " * 8
+        )
+        assert is_truncated_zim(decoy) is False
+
+    def test_a_genuinely_short_zim_is_still_called_truncated(self, tmp_path):
+        """The discriminator — otherwise the assertion above is vacuous."""
+        import struct
+
+        from openzim_mcp.zim.archive import ZIM_MAGIC, is_truncated_zim
+
+        header = bytearray(80)
+        header[: len(ZIM_MAGIC)] = ZIM_MAGIC
+        # checksumPos declares a file far larger than what is on disk.
+        struct.pack_into("<Q", header, 72, 10_000_000)
+        short = tmp_path / "half.zim"
+        short.write_bytes(bytes(header))
+        assert is_truncated_zim(short) is True
+
+    def test_a_zim_header_stub_below_the_header_size_is_truncated(self, tmp_path):
+        """A real ZIM always carries a full 80-byte header."""
+        from openzim_mcp.zim.archive import ZIM_MAGIC, is_truncated_zim
+
+        stub = tmp_path / "header_only.zim"
+        stub.write_bytes(ZIM_MAGIC + b"partial")
+        assert is_truncated_zim(stub) is True
+
+
+class TestConsecutiveBreaksDoNotDoubleTheSeparator:
+    """``<br><br>`` in a table cell is one line break, not two separators.
+
+    The flattening pass that turns a cell's ``<br>`` into ``"; "`` fired on
+    every break, so a run of two rendered ``HDL; ; Good`` on a real
+    MedlinePlus cholesterol page.
+    """
+
+    def test_a_run_of_breaks_collapses_to_one_separator(self):
+        from bs4 import BeautifulSoup
+
+        from openzim_mcp.content_processor import _flatten_multiline_table_cells
+
+        soup = BeautifulSoup(
+            "<table><tr><td>HDL<br><br>Good</td></tr></table>", "html.parser"
+        )
+        _flatten_multiline_table_cells(soup)
+        text = soup.get_text()
+        assert "; ;" not in text, text
+        # Positive half: the break still became a separator at all.
+        assert "HDL; Good" in text, text
+
+    def test_a_single_break_still_separates(self):
+        """Discriminator — otherwise the above passes by removing everything."""
+        from bs4 import BeautifulSoup
+
+        from openzim_mcp.content_processor import _flatten_multiline_table_cells
+
+        soup = BeautifulSoup(
+            "<table><tr><td>5th in Europe<br>1st in Germany</td></tr></table>",
+            "html.parser",
+        )
+        _flatten_multiline_table_cells(soup)
+        assert "5th in Europe; 1st in Germany" in soup.get_text()

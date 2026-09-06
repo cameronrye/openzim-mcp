@@ -24,6 +24,7 @@ import logging
 import multiprocessing
 import os
 import re
+import struct
 import threading
 from concurrent.futures import ProcessPoolExecutor
 from concurrent.futures.process import BrokenProcessPool
@@ -87,6 +88,8 @@ __all__ = [
     "check_archive_integrity",
     "configure_libzim_caches",
     "has_zim_signature",
+    "is_truncated_zim",
+    "unreadable_zim_warning",
     "zim_archive",
     "zim_signature_error",
 ]
@@ -96,14 +99,33 @@ __all__ = [
 ARCHIVE_OPEN_TIMEOUT = 30.0
 
 # Every ZIM file starts with the little-endian magic number 72173914
-# (0x044D495A). Checking these four bytes is the cheapest possible
-# readability probe: it needs no libzim call and no header parse.
+# (0x044D495A). Checking these four bytes needs no libzim call, but it is only
+# half a readability probe: a truncated download keeps them (see
+# ``is_truncated_zim``).
 ZIM_MAGIC = b"ZIM\x04"
+
+# A complete ZIM header is 80 bytes and ends with ``checksumPos`` — a
+# little-endian uint64 at offset 72 holding the offset of the 16-byte MD5 that
+# closes the file. ``checksumPos + 16`` is therefore the total size the archive
+# declares for itself, which is what makes a half-finished download detectable
+# without reading (or checksumming) a single byte of its body.
+ZIM_HEADER_SIZE = 80
+_ZIM_CHECKSUM_POS_OFFSET = 72
+_ZIM_CHECKSUM_LENGTH = 16
 
 # Message attached to listing entries whose file fails the signature probe.
 UNREADABLE_ZIM_WARNING = (
     "Not a ZIM archive: the file does not start with the ZIM signature "
     "and cannot be opened"
+)
+
+# Message for a file that starts like a ZIM archive but stops short of the
+# size its own header declares. Kept distinct from UNREADABLE_ZIM_WARNING
+# because the remedy is the opposite of "replace this junk file": the archive
+# is the right one, the transfer is what failed.
+TRUNCATED_ZIM_WARNING = (
+    "Truncated ZIM archive: the file is smaller than its own header says it "
+    "should be, so it cannot be opened — re-download it"
 )
 
 # Message for a listing entry this process is not allowed to read at all.
@@ -119,8 +141,8 @@ def zim_signature_error(path: Path) -> Optional[OSError]:
     """The error that stopped ``path`` from being read, or None if it was read.
 
     ``has_zim_signature`` collapses "could not open the file" into the same
-    ``False`` as "opened it, wrong magic bytes", which is right for "can
-    libzim use this?" and wrong for telling an operator what to do about it:
+    ``False`` as "opened it, and it is not a usable archive", which is right
+    for "can libzim use this?" and wrong for telling an operator what to do about it:
     a permission problem answered with "not a ZIM archive, delete it"
     destroys a good archive. Callers that give advice ask this first.
     """
@@ -132,21 +154,98 @@ def zim_signature_error(path: Path) -> Optional[OSError]:
         return e
 
 
-def has_zim_signature(path: Path) -> bool:
-    """Return whether ``path`` begins with the ZIM magic bytes.
+def _declared_zim_size(header: bytes) -> Optional[int]:
+    """Total file size ``header`` claims for itself, or None if it makes none.
 
-    A ``False`` result means the file is not an openable archive (plain
-    text, a truncated download, a stray file renamed ``.zim``). A ``True``
-    result is only a cheap plausibility check — it does not verify the
-    archive's integrity; that is what ``Archive.check()`` is for. Read
-    errors (permissions, vanished file) count as unreadable; use
-    ``zim_signature_error`` to tell those two apart.
+    Returns None when the header is too short to carry ``checksumPos`` or the
+    field is zero (an archive written without a checksum): there is then no
+    claim to compare a file size against, and inventing one would condemn a
+    good archive.
+    """
+    if len(header) < ZIM_HEADER_SIZE:
+        return None
+    (checksum_pos,) = struct.unpack_from("<Q", header, _ZIM_CHECKSUM_POS_OFFSET)
+    if not checksum_pos:
+        return None
+    return int(checksum_pos) + _ZIM_CHECKSUM_LENGTH
+
+
+def is_truncated_zim(path: Path) -> bool:
+    """Return whether ``path`` stops short of the size its header declares.
+
+    This is the shape an interrupted multi-GB Kiwix download leaves behind —
+    the single most common way a first-run install ends up broken. The magic
+    bytes survive a truncation, so a probe that reads only those calls the
+    file readable and every later query then fails; comparing the on-disk
+    size against the header's own ``checksumPos`` costs one ``stat`` and
+    catches it. A file *longer* than its declared size is not truncated (it
+    may carry an appended payload) and is left to libzim to judge.
     """
     try:
         with open(path, "rb") as fh:
-            return fh.read(len(ZIM_MAGIC)) == ZIM_MAGIC
+            header = fh.read(ZIM_HEADER_SIZE)
+        # v3.3.1 field report: this used to read bytes 72..79 as a declared
+        # size WITHOUT re-checking the magic — and it is only ever reached
+        # after ``has_zim_signature`` already returned False, i.e. for files
+        # that failed the magic check. For any readable non-ZIM file of at
+        # least ``ZIM_HEADER_SIZE`` bytes those bytes are effectively random
+        # and almost always form a huge value, so a stray text file renamed
+        # ``.zim`` was reported as a truncated download and the user was told
+        # to re-fetch it. That is the opposite of the remedy they need, and it
+        # inverts the very distinction this warning exists to draw.
+        if header[: len(ZIM_MAGIC)] != ZIM_MAGIC:
+            return False
+        # The magic is right but the file is too short to even carry a
+        # header: a real archive always has all ``ZIM_HEADER_SIZE`` bytes, so
+        # this IS an interrupted download — it simply stopped early enough
+        # that there is no ``checksumPos`` to compare against.
+        if len(header) < ZIM_HEADER_SIZE:
+            return True
+        declared = _declared_zim_size(header)
+        if declared is None:
+            return False
+        return path.stat().st_size < declared
     except OSError:
         return False
+
+
+def has_zim_signature(path: Path) -> bool:
+    """Return whether ``path`` looks like an archive libzim could open.
+
+    A ``False`` result means the file is not an openable archive (plain
+    text, a truncated download, a stray file renamed ``.zim``). Two cheap
+    probes back that claim: the ZIM magic bytes, and — since a half-finished
+    download keeps those — the header's own declared total size against the
+    size on disk (see ``is_truncated_zim``). A ``True`` result remains only a
+    plausibility check: it does not verify the archive's integrity, which is
+    what ``Archive.check()`` is for. Read errors (permissions, vanished file)
+    count as unreadable; use ``zim_signature_error`` to tell those two apart.
+    """
+    try:
+        with open(path, "rb") as fh:
+            header = fh.read(ZIM_HEADER_SIZE)
+    except OSError:
+        return False
+    if header[: len(ZIM_MAGIC)] != ZIM_MAGIC:
+        return False
+    declared = _declared_zim_size(header)
+    if declared is None:
+        return True
+    try:
+        return path.stat().st_size >= declared
+    except OSError:
+        # The bytes read fine a moment ago; a stat that fails now says
+        # nothing about the archive, so keep the signature's verdict.
+        return True
+
+
+def unreadable_zim_warning(path: Path) -> str:
+    """The listing warning for a readable file ``has_zim_signature`` rejected.
+
+    Separates the two remedies: a truncated download must be fetched again,
+    while a file that never was an archive must be removed or replaced.
+    """
+    return TRUNCATED_ZIM_WARNING if is_truncated_zim(path) else UNREADABLE_ZIM_WARNING
 
 
 # ---------------------------------------------------------------------------
@@ -502,7 +601,19 @@ def zim_archive(
     except ArchiveOpenTimeoutError as e:
         raise OpenZimMcpArchiveError(str(e)) from e
     except Exception as e:
-        raise OpenZimMcpArchiveError(f"Failed to open ZIM archive: {file_path}") from e
+        # Carry libzim's own diagnosis into the message. Only the message
+        # reaches an MCP client — the ``__cause__`` chain stops at this
+        # process — and "Zim file(s) is of bad size or corrupted" vs
+        # "zim-file is too small to contain a header" is the difference
+        # between "re-download it" and "that is not an archive". Without it
+        # a half-download, a renamed text file and a header stub all read as
+        # one string. The path is already in the message, so nothing new is
+        # disclosed.
+        detail = " ".join(str(e).split())
+        suffix = f" ({detail})" if detail else ""
+        raise OpenZimMcpArchiveError(
+            f"Failed to open ZIM archive: {file_path}{suffix}"
+        ) from e
 
     logger.debug(f"Opened ZIM archive: {file_path}")
     try:
@@ -680,10 +791,13 @@ class ZimOperations(
                                 entry["warning"] = DENIED_ZIM_WARNING
                                 logger.warning(f"{file_path} cannot be read: {denied}")
                             else:
-                                entry["warning"] = UNREADABLE_ZIM_WARNING
+                                # Truncated download vs never-an-archive: the
+                                # remedies are opposite, so the warning says
+                                # which one this is.
+                                entry["warning"] = unreadable_zim_warning(file_path)
                                 logger.warning(
-                                    f"{file_path} is named .zim but lacks the ZIM "
-                                    "signature; listed as unreadable"
+                                    f"{file_path} cannot be opened as an archive; "
+                                    f"listed as unreadable: {entry['warning']}"
                                 )
                         all_zim_files.append(entry)
                     except OSError as e:

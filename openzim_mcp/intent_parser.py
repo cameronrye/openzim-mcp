@@ -807,6 +807,30 @@ def _extract_tell_me_about(query: str, params: Dict[str, Any]) -> None:
         ).strip()
         if topic == before:
             break
+    # D-T1: strip a trailing purpose / aspect qualifier. ``what is X
+    # good for?`` is one of the most common shapes of consumer-health
+    # question, and the tail rode into the topic: ``aspirin good for``
+    # put "Drugs beginning with G" at rank 1 on MedlinePlus and lost the
+    # "Aspirin: MedlinePlus Drug Information" article entirely, while
+    # the identical ``what is aspirin?`` resolved it first. The tail
+    # asks something ABOUT the topic; it is never part of the topic's
+    # name. Same class as the politeness tails swept above, and equally
+    # end-anchored. Guarded so a query that is ONLY the qualifier
+    # (``what is it good for``) keeps a non-empty topic for the
+    # downstream topic-required / filler checks to judge.
+    _purpose_stripped = safe_regex_sub(
+        r"\s+(?:"
+        r"(?:good|great|useful|helpful|used|prescribed|indicated|recommended)"
+        r"\s+for"
+        r"|(?:used|prescribed|indicated|recommended)\s+to\s+treat"
+        r"|made\s+(?:of|from|out\s+of)"
+        r")\s*$",
+        "",
+        topic,
+        flags=re.IGNORECASE,
+    ).strip()
+    if _purpose_stripped:
+        topic = _purpose_stripped
     # A16 post-a16 D2: strip orphan trailing chain connectors. ``tell
     # me about Apollo 11 also`` with no right-hand topic used to leave
     # ``Apollo 11 also`` as the search topic, where the fuzzy ranker
@@ -942,12 +966,39 @@ def _extract_get_section(query: str, params: Dict[str, Any]) -> None:
     if narrow_match:
         params["narrow"] = True
         query = query[narrow_match.end() :]
+    # Form A-quoted / B-quoted: an explicitly quoted section name is taken
+    # WHOLE, up to its closing quote, before the unquoted forms get a
+    # chance to split it. The docstring above promises exactly this
+    # ("Quoted names take precedence so a section called ``In the news``
+    # doesn't get parsed as ``In`` + `` the news`` of nothing"), but the
+    # unquoted forms only ever had an *optional* closing quote, so
+    # ``section "Table of Contents" of X`` still split at the first
+    # `` of `` and leaked the closing quote into the path
+    # (``entry_path='contents" of X'``). Requiring the closing quote —
+    # and matching the name greedily so the LAST quote before the
+    # connector closes it — restores the guarantee.
+    for quoted_pattern in (
+        rf"\b(?:the\s+)?section\s+{_QUOTE_OPEN}(.+){_QUOTE_OPEN}"
+        rf"\s+(?:of|in|from)\s+{_QUOTE_OPEN}?(.+?){_QUOTE_OPEN}?\s*\??\s*$",
+        rf"\bthe\s+{_QUOTE_OPEN}(.+){_QUOTE_OPEN}\s+section"
+        rf"\s+(?:of|in|from)\s+{_QUOTE_OPEN}?(.+?){_QUOTE_OPEN}?\s*\??\s*$",
+    ):
+        m = safe_regex_search(quoted_pattern, query, re.IGNORECASE)
+        if m:
+            params["section_name"] = m.group(1).strip()
+            params["entry_path"] = m.group(2).strip().rstrip("?.,;:!")
+            return
     # Form A: ``[the] section <name> of|in|from <path>``
-    # M8: ``{_QUOTE_NOT_APOS}`` lets a possessive section name keep its
-    # apostrophe (``section Earth's atmosphere of Earth``) instead of the
-    # capture aborting at the ``'``.
+    # M8: the name capture must tolerate an apostrophe (``section Earth's
+    # atmosphere of Earth``). It also has to tolerate the curly DOUBLE
+    # quotes an archive puts inside a heading it authored — ``section 2.
+    # Analytics or "Logic" of iep.utm.edu/aristotle/`` extracted nothing
+    # at all while ``_QUOTE_NOT_APOS`` excluded them, so a heading the
+    # tool itself printed was unreachable. The quoted forms above already
+    # peeled a *deliberately* quoted name, so an unrestricted class here
+    # can no longer swallow one.
     m = safe_regex_search(
-        rf"\b(?:the\s+)?section\s+{_QUOTE_OPEN}?({_QUOTE_NOT_APOS}+?){_QUOTE_OPEN}?"
+        r"\b(?:the\s+)?section\s+(.+?)"
         rf"\s+(?:of|in|from)\s+{_QUOTE_OPEN}?(.+?){_QUOTE_OPEN}?\s*\??\s*$",
         query,
         re.IGNORECASE,
@@ -958,7 +1009,7 @@ def _extract_get_section(query: str, params: Dict[str, Any]) -> None:
         return
     # Form B: ``the <name> section of|in|from <path>``
     m = safe_regex_search(
-        rf"\bthe\s+{_QUOTE_OPEN}?({_QUOTE_NOT_APOS}+?){_QUOTE_OPEN}?\s+section"
+        r"\bthe\s+(.+?)\s+section"
         rf"\s+(?:of|in|from)\s+{_QUOTE_OPEN}?(.+?){_QUOTE_OPEN}?\s*\??\s*$",
         query,
         re.IGNORECASE,

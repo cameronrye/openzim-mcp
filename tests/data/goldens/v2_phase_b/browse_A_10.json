@@ -1,8 +1,9 @@
 {
   "_meta": {
+    "reason": "namespace_not_iterable",
     "truncated": false
   },
-  "discovery_method": "full_iteration",
+  "discovery_method": "not_iterable",
   "done": true,
   "namespace": "A",
   "page_info": {

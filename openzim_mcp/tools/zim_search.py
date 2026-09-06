@@ -258,6 +258,8 @@ def register(server: "OpenZimMcpServer") -> None:
                     )
                 resolved_path = _resolve_path(server, zim_file_path)
                 if resolved_path is None:
+                    if _no_archives_loaded(server):
+                        return _no_archives_error()
                     return tool_error(
                         operation="missing_archive",
                         message=(
@@ -317,6 +319,48 @@ def _resolve_path(
     return auto_select_zim_file(server.zim_operations)
 
 
+def _no_archives_loaded(server: "OpenZimMcpServer") -> bool:
+    """Whether the allowed directories hold no ``.zim`` file at all.
+
+    Consulted only on a path that is already failing or already empty, so
+    the directory listing never lands on the success path.
+    """
+    try:
+        return not server.zim_operations.list_zim_files_data()
+    except Exception:  # pragma: no cover — defensive; a probe must not throw
+        return False
+
+
+def _no_archives_error() -> Any:
+    """The structured refusal for "there is nothing loaded to search".
+
+    v3.3.1 field report (fids 2/3). Two shapes of the same defect:
+
+    * ``cross_file=True`` over zero archives returned ``isError=false`` with
+      an empty ``results`` list — indistinguishable from a genuine miss, so
+      a model would rephrase the query forever. Simple mode has answered
+      this condition with "**No ZIM Archives Loaded**" all along
+      (``simple_tools._nothing_to_search_response``); the advanced tool
+      never applied it.
+    * ``_resolve_path`` returns ``None`` for two different worlds — zero
+      archives loaded and two-or-more loaded without one pinned — and the
+      ``missing_archive`` advice only fitted the second. On an empty server
+      all three of its steps are dead ends: there is no path to pass,
+      nothing to load, and ``cross_file=True`` returned the silent empty
+      page above.
+    """
+    from ..onboarding import acquisition_hint_line
+
+    return tool_error(
+        operation="no_archives_loaded",
+        message=(
+            "No ZIM archives are loaded: the allowed directories contain no "
+            "`.zim` files, so there is nothing to search. "
+            f"{acquisition_hint_line()}"
+        ),
+    )
+
+
 async def _handle_fulltext_mode(
     *,
     ops: Any,
@@ -351,10 +395,17 @@ async def _handle_fulltext_mode(
         payload = await ops.search_all_data(
             query, limit_per_file=limit if limit is not None else 5
         )
-        return _strip_next_cursor(payload)
+        # An empty fan-out is only "no hits" when there was something to fan
+        # out over. ``files_available`` comes straight off the payload, so
+        # this costs no extra directory listing.
+        if isinstance(payload, dict) and payload.get("files_available") == 0:
+            return _no_archives_error()
+        return _annotate_cross_file_paging(_strip_next_cursor(payload))
 
     resolved_path = _resolve_path(server, zim_file_path)
     if resolved_path is None:
+        if _no_archives_loaded(server):
+            return _no_archives_error()
         return tool_error(
             operation="missing_archive",
             message=(
@@ -378,7 +429,120 @@ async def _handle_fulltext_mode(
     payload = await ops.search_zim_file_data(
         resolved_path, query, limit=limit, offset=offset
     )
+    payload = await _splice_canonical_title_hit(
+        server, payload, resolved_path=resolved_path, query=query, offset=offset
+    )
     return _strip_next_cursor(payload)
+
+
+# ``_meta`` keys that describe the SOURCE rather than the rendered page, so
+# they survive a splice rewrite. Mirrors ``_PROMOTION_CARRIED_META_KEYS``
+# below; kept separate because the two rewrites carry different verdicts.
+_SPLICE_CARRIED_META_KEYS = (
+    "detected_type",
+    "detection_confidence",
+    "preset_applied",
+)
+
+
+async def _splice_canonical_title_hit(
+    server: "OpenZimMcpServer",
+    payload: Any,
+    *,
+    resolved_path: str,
+    query: str,
+    offset: int,
+) -> Any:
+    """Promote the canonical title-index hit onto a fulltext page.
+
+    v3.3.1 field report (fid 58): ``_splice_title_match_into_search`` — the
+    canonical-title promotion plus the list/catalog demote — was wired into
+    ``simple_tools`` only. ``zim_search(mode='fulltext')``, the tool whose
+    whole job is search, called the data layer raw. On the shipped philosophy
+    archive that put ``iep.utm.edu/epistemo/`` at rank 27 of 100 for the query
+    ``epistemology`` (and off a default-sized page entirely) behind seven
+    sub-topic articles, while ``zim_query`` answered the same query on the
+    same archive with that article at rank 1. The advanced tool a capable
+    model prefers was the one without the relevance machinery, and nothing in
+    the payload said so.
+
+    Reuses the simple-tools implementation rather than copying it, so the two
+    surfaces cannot drift. That method is already copy-on-write (an earlier
+    cache-poisoning defect forced it) and reads nothing off ``self`` but
+    ``zim_operations``, so it is safe to drive from here. It runs blocking
+    libzim probes — archive open, SuggestionSearcher, redirect walks — so it
+    is offloaded like every other data-layer touch.
+
+    Gated to the first page: the splice is a promotion, and re-injecting the
+    canonical at every ``offset`` would re-serve the same row forever.
+    """
+    if offset or not isinstance(payload, dict):
+        return payload
+    results = payload.get("results")
+    if not results:
+        return payload
+    handler = getattr(server, "simple_tools_handler", None)
+    if handler is None:  # pragma: no cover — registered in both tool modes
+        return payload
+    top_before = results[0].get("path") if isinstance(results[0], dict) else None
+    try:
+        spliced = await asyncio.to_thread(
+            handler._splice_title_match_into_search,
+            payload,
+            resolved_path,
+            query,
+        )
+    except Exception:  # pragma: no cover — defensive; never fail the search
+        return payload
+    if not isinstance(spliced, dict) or spliced.get("results") == results:
+        return payload
+    new_results = spliced.get("results") or []
+    top_after = (
+        new_results[0].get("path")
+        if new_results and isinstance(new_results[0], dict)
+        else None
+    )
+    _restamp_spliced_meta(
+        spliced,
+        dict(payload.get("_meta") or {}),
+        top_changed=top_after != top_before,
+    )
+    return spliced
+
+
+def _restamp_spliced_meta(out: dict, raw_meta: dict, *, top_changed: bool) -> None:
+    """Re-measure ``out`` after the splice rewrote ``results``.
+
+    The inherited envelope measured the pre-splice payload, so its ``chars``
+    / ``tokens_est`` described bytes that never went on the wire — the same
+    defect ``_refresh_promotion_meta`` fixes on the title path.
+
+    ``low_relevance`` is dropped when the splice changed rank 1, on the same
+    reasoning ``simple_tools`` applies: the verdict means "no hit
+    token-matches the query", and an exact title-index match is a hit that
+    does. Reporting it beside the answer would be its own lie.
+    """
+    from ..meta import attach_meta
+
+    carried = {
+        key: raw_meta[key]
+        for key in _SPLICE_CARRIED_META_KEYS
+        if raw_meta.get(key) is not None
+    }
+    reason = raw_meta.get("reason")
+    suggestions = raw_meta.get("suggestions") or None
+    if top_changed and reason == "low_relevance":
+        reason = None
+        suggestions = None
+    attach_meta(
+        out,
+        reason=reason,
+        suggestions=suggestions,
+        # The response-size budget is a property of the rows the data layer
+        # assembled; the splice adds one title-index row and cannot clear it.
+        truncated=bool((out.get("page_info") or {}).get("budget_truncated")),
+        **carried,
+    )
 
 
 def _strip_next_cursor(payload: Any) -> Any:
@@ -419,6 +583,42 @@ def _strip_next_cursor(payload: Any) -> Any:
             new_results.append(row)
         if changed:
             out["results"] = new_results
+    return out
+
+
+def _annotate_cross_file_paging(payload: Any) -> Any:
+    """Name the way out of an unfinished cross-archive page.
+
+    v3.3.1 field report (fid 66): a fan-out block would announce
+    ``done: false`` with 829 further hits and a ``next_cursor`` this tool
+    had just blanked, while ``offset`` and ``cursor`` are both rejected for
+    ``cross_file=True``. Every advertised continuation was refused and
+    nothing said what to do instead. The route exists — re-run pinned to
+    that archive, where ``offset`` does page — so say so, per archive that
+    actually has more.
+    """
+    if not isinstance(payload, dict):
+        return payload
+    unfinished = [
+        str(row.get("zim_file_path") or "")
+        for row in (payload.get("results") or [])
+        if isinstance(row, dict)
+        and isinstance(row.get("result"), dict)
+        and row["result"].get("done") is False
+    ]
+    unfinished = [p for p in unfinished if p]
+    if not unfinished:
+        return payload
+    meta = dict(payload.get("_meta") or {})
+    meta["hint"] = (
+        "Cross-archive pages are not resumable: `offset` and `cursor` are "
+        "rejected for `cross_file=True`. To page an archive that has more "
+        "hits, re-run pinned to it — "
+        + ", ".join(f"`zim_file_path={p}`" for p in unfinished[:3])
+        + " — with `offset`."
+    )
+    out = dict(payload)
+    out["_meta"] = meta
     return out
 
 
@@ -468,6 +668,11 @@ async def _handle_title_mode(
             cross_file=True,
             limit=effective_limit,
         )
+        # Same guard as the cross-file fulltext branch: a fan-out that
+        # searched nothing is not a miss, and a hint about per-archive
+        # promotion is noise on a server with nothing to promote.
+        if isinstance(raw, dict) and raw.get("files_searched") == 0:
+            return _no_archives_error()
         # Promotion is per-archive; surface the limitation so the
         # caller knows pinning a specific archive enables Z3/Z4/OPP-1.
         meta = raw.setdefault("_meta", {})
@@ -480,6 +685,8 @@ async def _handle_title_mode(
 
     resolved_path = _resolve_path(server, zim_file_path)
     if resolved_path is None:
+        if _no_archives_loaded(server):
+            return _no_archives_error()
         # Multiple archives loaded but none pinned — promotion cannot
         # run safely. Fall back to a clean error rather than guessing.
         return tool_error(

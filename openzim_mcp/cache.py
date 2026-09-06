@@ -40,6 +40,30 @@ CACHE_FILE_EXTENSION = ".json"
 _DEFAULT_PERSISTENCE_PATH = str(Path(CACHE.PERSISTENCE_PATH).expanduser())
 
 
+def _default_cache_directory() -> Path:
+    """``$XDG_CACHE_HOME`` if set, else ``~/.cache``.
+
+    M27 rewrote the default away from a CWD-relative directory, which
+    silently failed inside read-only Docker images run from ``/app``: the
+    save error was logged and the operator's cache warmup was lost with no
+    obvious feedback. ``XDG_CACHE_HOME`` is the well-known override an
+    operator sets under Docker/systemd to point the cache somewhere writable,
+    and honouring it is the whole point of that rewrite — but the branch that
+    read it sat behind ``if configured_path:``, and ``persistence_path`` has a
+    ``default_factory``, so it was never falsy and the branch was unreachable.
+    The lookup therefore lives here, on the path the default actually takes.
+    """
+    xdg = os.environ.get("XDG_CACHE_HOME")
+    return Path(xdg) if xdg else Path.home() / ".cache"
+
+
+def _is_package_default_path(configured_path: Any) -> bool:
+    """Whether ``configured_path`` is the untouched package default."""
+    if not configured_path:
+        return True
+    return str(Path(configured_path).expanduser()) == _DEFAULT_PERSISTENCE_PATH
+
+
 def _cache_config_fingerprint(config: CacheConfig) -> str:
     """Short stable digest of the cache-shaping settings in ``config``.
 
@@ -196,50 +220,52 @@ class OpenZimMcpCache:
 
         # Persistence settings
         self._persistence_enabled = getattr(config, "persistence_enabled", False)
+        # Why persistence is not working, when it is not. ``stats()`` reports
+        # it so ``zim_health`` can say so: an unwritable cache directory used
+        # to surface only as a WARNING on stderr at process exit, i.e. after
+        # the last moment anyone could react, while the health report went on
+        # saying "Server is running optimally".
+        self._persistence_error: Optional[str] = None
+        # Identity of the snapshot this instance last wrote, so an empty save
+        # can tell its own file from a peer's. See ``_save_to_disk``.
+        self._saved_snapshot_id: Optional[Tuple[int, int]] = None
         configured_path = getattr(config, "persistence_path", None)
-        if configured_path:
-            self._persistence_path = Path(configured_path).expanduser()
-            if str(self._persistence_path) == _DEFAULT_PERSISTENCE_PATH:
-                # The package default is a single per-user path, so every
-                # server process on the host writes the same file. stdio
-                # servers are spawned one per client and each saves from
-                # ``atexit``, which meant concurrent savers clobbered one
-                # another (and the empty-cache ``unlink()`` below could delete
-                # a peer's warm cache). Scope the DEFAULT by a fingerprint of
-                # the cache settings so differently-configured servers no
-                # longer share a file. Identically-configured peers still
-                # share one — for those the atomic ``os.replace`` in
-                # ``_save_to_disk`` bounds the damage to last-writer-wins
-                # rather than a truncated, unparseable file. An operator who
-                # needs strict per-instance isolation sets an explicit
-                # ``persistence_path``.
-                self._persistence_path = self._persistence_path.with_name(
-                    f"{self._persistence_path.name}-"
-                    f"{_cache_config_fingerprint(config)}"
-                )
+        if _is_package_default_path(configured_path):
+            # The package default is a single per-user path, so every server
+            # process on the host writes the same file. stdio servers are
+            # spawned one per client and each saves from ``atexit``, which
+            # meant concurrent savers clobbered one another. Scope the DEFAULT
+            # by a fingerprint of the cache settings so differently-configured
+            # servers no longer share a file. Identically-configured peers
+            # still share one — for those the atomic ``os.replace`` in
+            # ``_save_to_disk`` bounds the damage to last-writer-wins rather
+            # than a truncated, unparseable file, and the empty-save branch
+            # there refuses to delete a snapshot it did not write. An operator
+            # who needs strict per-instance isolation sets an explicit
+            # ``persistence_path``.
+            default_path = (
+                _default_cache_directory() / Path(_DEFAULT_PERSISTENCE_PATH).name
+            )
+            self._persistence_path = default_path.with_name(
+                f"{default_path.name}-{_cache_config_fingerprint(config)}"
+            )
+            if self._persistence_enabled:
+                # Ensure the parent dir exists; the file itself is written
+                # later by ``_save_to_disk``. Doing it here rather than only
+                # at save time is what turns "read-only container" from a
+                # warning nobody sees at exit into a startup fact the health
+                # report can carry.
+                try:
+                    self._persistence_path.parent.mkdir(parents=True, exist_ok=True)
+                except OSError as e:
+                    self._persistence_error = (
+                        f"cache directory {self._persistence_path.parent} could "
+                        f"not be created ({e}); persistence is disabled"
+                    )
+                    logger.warning("Cache persistence disabled: %s", e)
+                    self._persistence_enabled = False
         else:
-            # M27: default to an XDG-style cache directory rather than CWD.
-            # The previous default (``.openzim_mcp_cache`` relative to CWD)
-            # silently failed inside read-only Docker images that ran
-            # from ``/app`` with ``--chmod=555``; the save error was
-            # caught and logged but the user's cache warmup was lost
-            # without obvious feedback. ``XDG_CACHE_HOME`` is the
-            # well-known location and is writable in every standard
-            # Linux/macOS deployment.
-            xdg = os.environ.get("XDG_CACHE_HOME") or str(Path.home() / ".cache")
-            self._persistence_path = Path(xdg) / "openzim-mcp" / "cache.json"
-            # Ensure parent dir exists; the actual file is written
-            # later by ``_save_to_disk``.
-            try:
-                self._persistence_path.parent.mkdir(parents=True, exist_ok=True)
-            except OSError as e:
-                logger.warning(
-                    "Cache persistence default path %s parent could not "
-                    "be created (%s); persistence will be disabled.",
-                    self._persistence_path,
-                    e,
-                )
-                self._persistence_enabled = False
+            self._persistence_path = Path(str(configured_path)).expanduser()
 
         # Load persisted cache if enabled
         if config.enabled and self._persistence_enabled:
@@ -610,6 +636,16 @@ class OpenZimMcpCache:
                 stats["persistence_path"] = str(persistence_file)
                 stats["persistence_file_exists"] = persistence_file.exists()
 
+            # Only present when persistence is actually broken, so a health
+            # report can turn it into a warning instead of "running
+            # optimally". Reported whether or not persistence is still
+            # enabled: an unwritable directory disables it at startup, and
+            # silently reporting ``persistence_enabled: false`` for a server
+            # the operator configured with persistence on is the same silence
+            # in a different place.
+            if self._persistence_error is not None:
+                stats["persistence_error"] = self._persistence_error
+
             return stats
 
     def shutdown(self) -> None:
@@ -642,6 +678,49 @@ class OpenZimMcpCache:
         return self._persistence_path.with_name(
             self._persistence_path.name + CACHE_FILE_EXTENSION
         )
+
+    @staticmethod
+    def _snapshot_id(persistence_file: Path) -> Optional[Tuple[int, int]]:
+        """A cheap identity for the snapshot on disk: (mtime_ns, size)."""
+        try:
+            stat = persistence_file.stat()
+        except OSError:
+            return None
+        return (stat.st_mtime_ns, stat.st_size)
+
+    def _discard_own_empty_snapshot(self, persistence_file: Path) -> None:
+        """Remove the snapshot on disk, but only if this instance wrote it.
+
+        Deleting unconditionally made an *idle* peer destroy a warm cache.
+        Two MCP clients on one desktop each spawn their own stdio server with
+        identical default config, so they share one default snapshot path;
+        whichever one the user happened not to query saved nothing at exit and
+        unlinked the other's file, which is how an opt-in accelerator came to
+        do nothing at all for the multi-client setup it is aimed at.
+
+        Having nothing to save is not evidence that the file on disk is stale
+        — only that *this* process has nothing in it. So the file is removed
+        only when it is byte-for-byte the one this instance last wrote; a
+        snapshot we never wrote, or one a peer has replaced since, is left
+        alone and ages out through its own TTLs on load.
+        """
+        if self._saved_snapshot_id is None:
+            logger.debug(
+                "Empty cache: leaving %s alone, this instance never wrote it",
+                persistence_file,
+            )
+            return
+        if self._snapshot_id(persistence_file) != self._saved_snapshot_id:
+            logger.debug(
+                "Empty cache: leaving %s alone, another writer replaced it",
+                persistence_file,
+            )
+            return
+        # ``missing_ok``: a peer process saving the same file may have
+        # removed it between the check and the call.
+        persistence_file.unlink(missing_ok=True)
+        self._saved_snapshot_id = None
+        logger.debug("Removed empty cache persistence file")
 
     def _save_to_disk(self) -> None:
         """Save cache contents to disk for persistence.
@@ -684,11 +763,7 @@ class OpenZimMcpCache:
                 persistence_file = self._get_persistence_file()
 
                 if not entries_to_save:
-                    if persistence_file.exists():
-                        # ``missing_ok``: a peer process saving the same file
-                        # may have removed it between the check and the call.
-                        persistence_file.unlink(missing_ok=True)
-                        logger.debug("Removed empty cache persistence file")
+                    self._discard_own_empty_snapshot(persistence_file)
                     return
 
                 persistence_file.parent.mkdir(parents=True, exist_ok=True)
@@ -733,6 +808,9 @@ class OpenZimMcpCache:
                         os.fsync(f.fileno())
                     os.replace(temp_name, str(persistence_file))
                     replaced = True
+                    # Remember exactly what we published, so a later empty
+                    # save can tell our own snapshot from a peer's.
+                    self._saved_snapshot_id = self._snapshot_id(persistence_file)
                 finally:
                     # Never leave the unique temp behind on failure. ``finally``
                     # rather than ``except BaseException``: this must also clean
@@ -748,8 +826,13 @@ class OpenZimMcpCache:
                         with contextlib.suppress(OSError):
                             os.unlink(temp_name)
                 logger.debug(f"Saved {len(entries_to_save)} cache entries to disk")
+                self._persistence_error = None
 
         except Exception as e:
+            # Recorded as well as logged: the log line lands on stderr at
+            # process exit, which is after the last moment anyone could act
+            # on it, so ``stats()`` carries it to ``zim_health`` too.
+            self._persistence_error = f"cannot write {self._persistence_path} ({e})"
             logger.warning(f"Failed to save cache to disk: {e}")
 
     def _restore_entry(

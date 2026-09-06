@@ -166,6 +166,34 @@ class SearchDefaults:
     # caller at ``offset`` pagination instead. Generous (10x the legacy
     # cap) so no legitimate single-page request is affected.
     MAX_RESULT_LIMIT: int = 1000
+    # Ceiling on the assembled size (path + title + snippet chars) of ONE
+    # single-archive fulltext page, and on the wall-clock the per-result
+    # render loop may spend filling it.
+    #
+    # ``MAX_RESULT_LIMIT`` bounds the row COUNT but nothing bounded the
+    # product of that count and ``ContentDefaults.SNIPPET_LENGTH``. On the
+    # shipped corpora ``limit=1000`` (the documented maximum) returned
+    # 0.9-1.9 MB — 237 K to 452 K estimated tokens, more than most context
+    # windows — after 43-53 s of blocking compact-HTML render, and shipped
+    # it with ``_meta.truncated: false``. The cost is entirely the
+    # per-result render, so it scales with ARTICLE length rather than
+    # archive size: the 128 MB philosophy archive was the worse case.
+    #
+    # ``MAX_QUERY_LENGTH`` is enforced on the other side of the same tool
+    # for exactly this reason ("the query is a 1:1 response amplifier");
+    # these are the matching bound on the 1000x multiplier. Both are stop
+    # conditions on the fill loop, not a post-hoc trim, so a bounded page
+    # also costs bounded CPU. A page cut by either budget is reported
+    # honestly (``page_info.budget_truncated``, ``_meta.truncated``) and
+    # resumes at the usual ``offset + page_info.source_consumed``.
+    #
+    # 200 K chars is ~50 K tokens — roughly seven times the default
+    # ten-result page and above every measured ``limit<=100`` response, so
+    # no ordinary request is affected. The 20 s deadline mirrors
+    # ``search_all_total_timeout_seconds``, which already refuses to let
+    # the CHEAPER cross-archive fan-out run unbounded.
+    MAX_RESULT_CHARS: int = 200_000
+    RESULT_BUDGET_SECONDS: float = 20.0
 
 
 # Instantiate defaults for easy access

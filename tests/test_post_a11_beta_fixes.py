@@ -184,10 +184,17 @@ class TestEarlyReturnTelemetry:
         """Second-pass L1: empty / whitespace queries hit the
         ``Query Required`` early return — also missed by the first
         L1 fix.
+
+        D-Q1: the rejection class is still addressable without body
+        parsing, but it now travels as the envelope's ``operation``
+        rather than an inline ``<!-- intent= -->`` marker on a
+        success-path string — the same swap D51 and D58 made for the
+        cursor-mismatch and security-denial branches.
         """
         out = handler.handle_zim_query("", zim_file_path="/x.zim")
-        assert "**Query Required**" in out
-        assert "<!-- intent=query_required cert=" in out
+        assert isinstance(out, dict)
+        assert out["operation"] == "query_required"
+        assert "**Query Required**" in out["message"]
 
 
 # ---------------------------------------------------------------------------

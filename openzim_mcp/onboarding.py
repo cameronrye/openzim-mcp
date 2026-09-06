@@ -18,6 +18,7 @@ raw.githubusercontent URL, no account, nothing to install. Verified
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 from typing import Iterable
 
@@ -56,7 +57,15 @@ STARTER_ARCHIVE_SHA256 = (
 STARTER_ARCHIVE_SIZE = "13.6 MB"
 
 #: The download, as a single copy-pasteable line.
+#:
+#: The ``mkdir -p`` is not decoration: ``curl -o`` into a directory that
+#: does not exist yet aborts with ``curl: (23) Failure writing output to
+#: destination``, and this text is shown *only* to people whose archive
+#: situation is already broken, so it has to work on the first paste. The
+#: README has carried the ``mkdir`` line as a separate command since the
+#: block was written; the runtime copy did not.
 STARTER_ARCHIVE_COMMAND = (
+    f"mkdir -p {STARTER_ARCHIVE_DIR} && "
     f"curl -fsSL -o {STARTER_ARCHIVE_DIR}/{STARTER_ARCHIVE_FILENAME} "
     f"{STARTER_ARCHIVE_URL}"
 )
@@ -90,6 +99,47 @@ def has_zim_files(directories: Iterable[str]) -> bool:
     return False
 
 
+def unreadable_directories(directories: Iterable[str]) -> list[str]:
+    """The configured directories this process cannot list at all.
+
+    ``has_zim_files`` deliberately reports False for one of these — a
+    diagnostic that can abort a boot is worse than no diagnostic, and
+    ``Path.glob`` swallows the ``PermissionError`` on its own besides. But
+    "0 ZIM files found, here is how to download one" is the opposite of
+    the advice that fixes it: the archive is already there, the directory
+    just cannot be opened. Downloading a second copy into it fails
+    identically, which is the shape a Docker bind mount with the wrong
+    ownership, a NAS mount, or macOS Full Disk Access takes.
+
+    Probes with ``scandir`` rather than the ``glob`` walk because that
+    walk is exactly what hides the failure. Never raises, for the same
+    reason ``has_zim_files`` never raises; anything unexpected is simply
+    not reported as a permission problem.
+    """
+    blocked: list[str] = []
+    for directory in directories:
+        try:
+            path = Path(directory)
+            if not path.is_dir():
+                continue
+            with os.scandir(path):
+                pass
+        except PermissionError as exc:
+            # v3.3.1 field report follow-up: this used to catch bare ``OSError``
+            # while the caller's message hardcodes "Permission denied", so any
+            # unrelated OS failure (a stale NFS handle, ENOTDIR on a race) was
+            # reported to the user as a permissions problem and sent them to
+            # chmod something that was never the cause. Narrow the catch to the
+            # one errno the wording actually describes; everything else falls
+            # through to the debug-logged catch-all below and is simply not
+            # claimed as a permission fault.
+            logger.debug("ZIM directory %s is unreadable: %s", directory, exc)
+            blocked.append(directory)
+        except Exception as exc:  # noqa: BLE001 — a hint must never abort boot
+            logger.debug("ZIM directory probe failed for %s: %s", directory, exc)
+    return blocked
+
+
 def acquisition_hint_line() -> str:
     """The guidance as one plain-text line, for logs and JSON string fields.
 
@@ -109,13 +159,26 @@ def no_archives_log_message(directories: Iterable[str]) -> str:
     Emitted through the logger — and therefore stderr — never ``print``:
     under the default stdio transport stdout carries the JSON-RPC stream,
     and prose written there corrupts it for every stdio client.
+
+    A directory that could not be read is named first, before the download
+    command, because for that operator the download command is the wrong
+    advice: it succeeds, lands the archive in a directory the server still
+    cannot open, and reports "0 ZIM files" again.
     """
+    directories = list(directories)
     listed = ", ".join(directories) or "(none)"
-    return (
+    message = (
         "0 ZIM files found in the allowed directories (%s) — the server will "
-        "start but every query will come back empty. %s"
-        % (listed, acquisition_hint_line())
+        "start but every query will come back empty. " % listed
     )
+    blocked = unreadable_directories(directories)
+    if blocked:
+        message += (
+            "Permission denied reading %s — an archive already in there is "
+            "invisible to the server, so fix that directory's permissions "
+            "before downloading anything. " % ", ".join(blocked)
+        )
+    return message + acquisition_hint_line()
 
 
 def acquisition_hint_markdown() -> str:

@@ -177,6 +177,40 @@ def _invalid_params(message: str, **data: Any) -> MCPError:
     return MCPError(code=INVALID_PARAMS, message=message, data=data)
 
 
+def _unknown_tool_error(name: str, available: list[str]) -> dict:
+    """The ``unknown_tool`` envelope for a tool name that is not registered.
+
+    The SDK answers an unregistered name with ``ToolError("Unknown tool: X")``,
+    which reaches the client as four words of plain text: no ``error`` flag in
+    the body, no ``operation``, no recovery advice — the one shape the
+    ``instructions`` block promises every rejection carries. The argument path
+    beside it already returns the full envelope, difflib suggestion included,
+    so the break happens exactly where a small model is most likely to be
+    wrong.
+
+    ``available`` comes from the tool manager, which holds only the tools this
+    *mode* registered, so the advice can never name a tool the client cannot
+    call. Simple mode is the sharp case: the model has ``zim_query`` and
+    nothing else, and the names it will invent are the seven advanced tools
+    printed in the README.
+    """
+    match = difflib.get_close_matches(name.casefold(), available, n=1, cutoff=0.6)
+    hint = f" Did you mean {match[0]!r}?" if match else ""
+    extras: dict[str, Any] = {"available_tools": available}
+    if match:
+        extras["closest_match"] = match[0]
+    return dict(
+        tool_error(
+            operation="unknown_tool",
+            message=(
+                f"No tool named {name!r}.{hint} "
+                f"Available tools: {', '.join(available) or 'none'}."
+            ),
+            extras=extras,
+        )
+    )
+
+
 def _argument_field(loc: tuple[Any, ...], declared: set[str]) -> str:
     """The argument name a pydantic error location points at.
 
@@ -556,13 +590,23 @@ class EnvelopeAwareMCPServer(MCPServer):
             context = Context(mcp_server=self, subscriptions=self._subscriptions)
         # Reject argument names the tool does not declare before dispatching:
         # pydantic drops them silently, so this is the only place the stray key
-        # is still visible. ``get_tool`` returning ``None`` falls through, so an
-        # unknown *tool* name keeps raising the SDK's ``ToolError`` as before.
+        # is still visible.
         tool = self._tool_manager.get_tool(name)
-        if tool is not None:
-            rejected = _unknown_argument_error(tool, name, arguments)
-            if rejected is not None:
-                return error_result(rejected)
+        if tool is None:
+            # An unknown *tool* name used to fall through to the SDK's
+            # ``ToolError``, which reaches the client as the bare text
+            # "Unknown tool: X" — no envelope, no did-you-mean, and in simple
+            # mode no hint that ``zim_query`` is the one tool there is. It is
+            # answered here instead, in the vocabulary every other rejection
+            # already uses. See :func:`_unknown_tool_error`.
+            return error_result(
+                _unknown_tool_error(
+                    name, sorted(t.name for t in self._tool_manager.list_tools())
+                )
+            )
+        rejected = _unknown_argument_error(tool, name, arguments)
+        if rejected is not None:
+            return error_result(rejected)
         # convert_result=False so the raw return value is still inspectable;
         # the success path is then converted by the same
         # ``fn_metadata.convert_result`` the base class would have used, which
@@ -576,8 +620,9 @@ class EnvelopeAwareMCPServer(MCPServer):
             # wrong type, missing required) fails inside pydantic, which the
             # SDK stringifies into a bare text block. Convert it to the same
             # envelope every other rejected argument gets. An unknown *tool*
-            # name also arrives as ``ToolError`` but carries no
-            # ``ValidationError``, so it keeps raising as before.
+            # name never reaches here any more — it is answered above — so a
+            # ``ToolError`` with no ``ValidationError`` really is ours, and
+            # keeps raising.
             validation_error = _validation_error_in_chain(exc)
             if validation_error is None:
                 raise
@@ -588,8 +633,6 @@ class EnvelopeAwareMCPServer(MCPServer):
         if is_tool_error_envelope(result):
             return error_result(result)
 
-        if tool is None:  # pragma: no cover - call_tool raises on unknown names
-            return result  # type: ignore[no-any-return]
         converted: CallToolResult | InputRequiredResult = (
             tool.fn_metadata.convert_result(result)
         )

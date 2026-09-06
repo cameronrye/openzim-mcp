@@ -12,6 +12,7 @@ shim's symbols continue to work without changes.
 import base64
 import json
 import logging
+import re
 from pathlib import Path
 from typing import (
     TYPE_CHECKING,
@@ -314,6 +315,26 @@ def _select_summary_section_md(
 # log-based abuse detection has a clean signal and the response carries a
 # security-flavoured message instead of the generic "entry not found"
 # remediation advice.
+
+
+def _truncate_markdown_words(text: str, max_words: int) -> str:
+    """Cut ``text`` after its ``max_words``-th word, KEEPING its whitespace.
+
+    ``" ".join(text.split()[:max_words])`` counts the same words but flattens
+    every newline, and ``view="summary"`` truncates on any article long
+    enough to be worth summarising — so the common case shipped one blob with
+    ``##``/``###``/``*`` markers stranded mid-line, which no markdown renderer
+    can lay out. Slice by character offset instead: the word budget is
+    identical, the line structure survives.
+    """
+    if max_words <= 0:
+        return ""
+    seen = 0
+    for match in re.finditer(r"\S+", text):
+        seen += 1
+        if seen == max_words:
+            return text[: match.end()].rstrip()
+    return text.rstrip()
 
 
 def _looks_like_path_traversal(entry_path: str) -> bool:
@@ -2137,7 +2158,7 @@ class _ContentMixin:
                 words = summary_md.split()
                 is_truncated = len(words) > max_words
                 if is_truncated:
-                    summary_md = " ".join(words[:max_words])
+                    summary_md = _truncate_markdown_words(summary_md, max_words)
 
                 return {
                     "path": bundle["entry_path"],

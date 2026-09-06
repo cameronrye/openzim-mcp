@@ -82,6 +82,26 @@ _KNOWN_NAMESPACE_LETTERS = frozenset(
 )
 
 
+# Upper bound on a browse-row ``preview``. Deliberately far below the
+# configured ``snippet_length`` (3000): a browse row exists to help a
+# caller choose a path, and a page of 50 rows should stay a navigation
+# response rather than becoming 40 KB of article leads.
+_PREVIEW_MAX_CHARS = 200
+
+
+def _evenly_spaced(items: List[Any], count: int) -> List[Any]:
+    """Return ``count`` items spread evenly across ``items`` (order kept).
+
+    Shorter inputs are returned whole. The indices are computed with
+    integer division so they are strictly increasing whenever
+    ``len(items) >= count`` — no duplicate picks.
+    """
+    n = len(items)
+    if n <= count or count <= 1:
+        return list(items[:count]) if count > 0 else []
+    return [items[i * (n - 1) // (count - 1)] for i in range(count)]
+
+
 def _entry_mimetype(entry: "Any") -> Optional[str]:
     """Best-effort per-row mimetype for the asset filter.
 
@@ -307,13 +327,20 @@ class _NamespaceMixin:
         # does, so a persisted snapshot would keep serving pre-fix listings
         # (random ``sample_entries``, no ``I`` bucket, per-namespace counts
         # summing above ``total_entries``) until TTL expiry.
+        # Bumped again to v2d when ``sample_entries`` changed from the
+        # first five rows recorded to an evenly-spread, article-preferring
+        # pick, and the M bucket on OLD-scheme archives changed from a
+        # sampled estimate to the exact ``metadata_keys`` enumeration. Same
+        # argument as the v2c bump: neither depends on the archive, so a
+        # persisted snapshot would keep serving the pre-fix listing
+        # (five adjacent JPEGs, M under-reported 2x) until TTL expiry.
         # The stat token (mtime_ns:size) invalidates the listing when the
         # archive is replaced in place (archive_stat_token contract, which
         # names namespace listings explicitly).
         from openzim_mcp.bundle import archive_stat_token
 
         cache_key = (
-            f"namespaces_data:v2c:{validated_path}:"
+            f"namespaces_data:v2d:{validated_path}:"
             f"{archive_stat_token(validated_path)}"
         )
         cached_result = self.cache.get(cache_key)
@@ -379,6 +406,7 @@ class _NamespaceMixin:
             self._sample_entries(archive, total_entries, record)
             self._probe_known_namespaces(archive, seen_entries, record)
             self._finalise_sampled(namespaces, total_entries)
+        self._publish_sample_entries(namespaces)
 
         # In new-scheme archives, M, W, X are reached via dedicated APIs, not
         # via the entry iterator. Surface them explicitly so callers see the
@@ -399,6 +427,23 @@ class _NamespaceMixin:
                 namespaces["C"]["total"] = total_entries
                 namespaces["C"]["estimated_total"] = total_entries
                 namespaces["C"]["is_authoritative"] = True
+        else:
+            # ``metadata_keys`` is exhaustive on OLD-scheme archives too —
+            # the gate above used to keep this branch new-scheme-only, so
+            # any legacy archive over ``NAMESPACE_MAX_SAMPLE_SIZE`` fell
+            # through to the 1000-draw sampler for a namespace libzim can
+            # enumerate exactly and for free. On the zim-testing-suite
+            # 20,565-entry archive that published M as an estimated 6
+            # while ``zim_browse(mode="walk")`` returned all 12 seconds
+            # later on the same server. Old-scheme M entries are ordinary
+            # iterable entries and browse/walk surface every one of them
+            # (the binary ``Illustration_*`` blob included), so the
+            # human-readable filter — which exists to keep the new-scheme
+            # aggregators agreeing with each other — is NOT applied here;
+            # applying it would trade a 2x under-report for an off-by-one.
+            self._add_metadata_namespace_from_keys(
+                archive, namespaces, filter_binary_keys=False
+            )
 
         # P3-D3 / Op2: surface both documented archive totals so the
         # per-namespace-sum-vs-total relationship is legible to readers.
@@ -430,6 +475,34 @@ class _NamespaceMixin:
         ``get_metadata_item``. Without this, list_namespaces would silently
         omit M for every modern archive.
         """
+        _NamespaceMixin._add_metadata_namespace_from_keys(
+            archive, namespaces, filter_binary_keys=True
+        )
+
+    @staticmethod
+    def _add_metadata_namespace_from_keys(
+        archive: Archive,
+        namespaces: Dict[str, Dict[str, Any]],
+        *,
+        filter_binary_keys: bool,
+    ) -> None:
+        """Populate the M bucket from ``archive.metadata_keys``.
+
+        ``metadata_keys`` enumerates M exhaustively on BOTH namespace
+        schemes, so the bucket it produces is authoritative and needs no
+        sampling.
+
+        ``filter_binary_keys`` selects which surface we have to agree
+        with. On new-scheme archives M is reachable only through the
+        metadata APIs and the sibling aggregators (``walk namespace M``,
+        ``metadata for <file>``) run every key through
+        :func:`is_human_readable_metadata_key`, so this surface must too
+        or the three disagree (13 vs 12). On old-scheme archives M
+        entries are ordinary iterable entries; browse and walk return the
+        binary ``Illustration_*`` blob along with the rest, so filtering
+        here would re-introduce the same disagreement in the opposite
+        direction.
+        """
         try:
             raw_keys = list(getattr(archive, "metadata_keys", []) or [])
         except Exception as e:
@@ -441,7 +514,11 @@ class _NamespaceMixin:
         # the ``Illustration_*`` binary entry) while the other two reported
         # M=12. The a12 M1 fix plumbed the predicate to walk + metadata-for
         # but missed this third surface.
-        keys = [k for k in raw_keys if is_human_readable_metadata_key(k)]
+        keys = (
+            [k for k in raw_keys if is_human_readable_metadata_key(k)]
+            if filter_binary_keys
+            else raw_keys
+        )
         if not keys:
             return
         # ``metadata_keys`` is an exhaustive enumeration of M, so the
@@ -538,6 +615,7 @@ class _NamespaceMixin:
                         namespace, f"Namespace '{namespace}'"
                     ),
                     "sample_entries": [],
+                    "_sample_pool": [],
                     "_probed_count": 0,
                     "_sampled_count": 0,
                 },
@@ -547,10 +625,47 @@ class _NamespaceMixin:
             else:
                 ns_info["_sampled_count"] += 1
             ns_info["total"] += 1
-            if len(ns_info["sample_entries"]) < 5:
-                ns_info["sample_entries"].append({"path": path, "title": title or path})
+            # Collect every candidate; :meth:`_publish_sample_entries` picks
+            # the five that ship. The recorder used to keep the first five
+            # rows it saw, which is a contiguous slice of a path-ordered
+            # walk: on both real corpus archives that made all five
+            # published examples media files (``wp-content/media/*``,
+            # ``ency/images/ency/fullsize/*.jpg``) under the description
+            # "User content entries (articles, main content)". The 1000-draw
+            # sample already spans the archive; only the publishing step
+            # threw the spread away. The pool is bounded by the sampler
+            # itself (``NAMESPACE_MAX_SAMPLE_SIZE`` draws, or an exhaustive
+            # walk that only runs below that same threshold).
+            ns_info["_sample_pool"].append({"path": path, "title": title or path})
 
         return _record
+
+    def _publish_sample_entries(self, namespaces: Dict[str, Dict[str, Any]]) -> None:
+        """Choose the five ``sample_entries`` each bucket publishes.
+
+        Two rules, both aimed at the one job the field has — teaching a
+        caller what an entry path in this archive looks like:
+
+        * spread the picks evenly across the recorded candidates instead
+          of taking a head slice, and
+        * prefer rows that are not ``_is_non_article_target`` assets, so
+          a media-heavy scrape does not advertise itself as a pile of
+          JPEGs. Buckets with fewer than five non-asset candidates fall
+          back to the full pool rather than publishing less.
+        """
+        # Imported from the structure mixin rather than reached through
+        # ``self`` so the choice stays available to callers that compose
+        # only this mixin (the concrete coordinator inherits both).
+        from openzim_mcp.zim.structure import _StructureMixin
+
+        is_asset = _StructureMixin._is_non_article_target
+        for ns_info in namespaces.values():
+            pool = ns_info.pop("_sample_pool", None)
+            if not pool:
+                continue
+            articles = [entry for entry in pool if not is_asset(entry["path"])]
+            source = articles if len(articles) >= 5 else pool
+            ns_info["sample_entries"] = _evenly_spaced(source, 5)
 
     @staticmethod
     def _iterate_all_entries(archive: Archive, total_entries: int, record: Any) -> None:
@@ -888,12 +1003,21 @@ class _NamespaceMixin:
         # pre-fix pages (a different random population per page, and an empty
         # result for every namespace the article index cannot reach) until TTL
         # expiry.
+        # Bumped again v2f -> v2g for three payload changes that are all
+        # independent of the archive: row ``preview`` now renders the
+        # main-content landmark (rather than the site chrome),
+        # ``results_may_be_incomplete`` reports sampledness (rather than
+        # sample-cap saturation), and a namespace that is not on the
+        # iterable surface reports ``discovery_method: "not_iterable"``
+        # (rather than a fabricated ``full_iteration``). A persisted
+        # snapshot would keep serving all three pre-fix values until TTL
+        # expiry.
         # The stat token (mtime_ns:size) invalidates the page when the
         # archive is replaced in place (archive_stat_token contract).
         from openzim_mcp.bundle import archive_stat_token
 
         cache_key = (
-            f"browse_ns_data:v2f:{validated_path}:"
+            f"browse_ns_data:v2g:{validated_path}:"
             f"{archive_stat_token(validated_path)}:{namespace}:"
             f"{limit}:{offset}:assets={include_assets}"
         )
@@ -1021,6 +1145,12 @@ class _NamespaceMixin:
             # ``walk_namespace`` for exhaustive iteration. The footer
             # renderer surfaces this as actionable prose.
             reason = "sample_only" if sample_exhausted else None
+            # The namespace exists in the ZIM spec but is not on this
+            # archive's iterable surface (see ``_browse_namespace_entries``).
+            # Carry the reason so a machine consumer can tell "nothing there"
+            # apart from "nothing reachable this way".
+            if discovery_method == "not_iterable":
+                reason = "namespace_not_iterable"
             with_meta = attach_meta(payload, reason=reason)
             self.cache.set(cache_key, with_meta)
             logger.info(
@@ -1102,6 +1232,32 @@ class _NamespaceMixin:
             return self._browse_new_scheme_w_paginated(
                 archive, namespace, limit, offset
             )
+        # Every remaining spec-legal letter (I, X, A, -, B, J, U, V) is a
+        # namespace a new-scheme archive simply does not expose: C holds
+        # every iterable entry, M is reached through the metadata API and W
+        # through the probes above. The empty listing is the CORRECT answer
+        # — but it used to be published as
+        # ``discovery_method: "full_iteration"``, a provenance claim for a
+        # scan that never ran, alongside ``results_may_be_incomplete: false``
+        # and no reason code. A model asking "does this archive have images"
+        # got a maximally confident zero in 3 ms with nothing pointing at
+        # ``include_assets=True`` under C, where the images actually live.
+        # Name the real reason; keep the (correct) zero.
+        if has_new_scheme and namespace != "M":
+            return {
+                "namespace": namespace,
+                "total_in_namespace": 0,
+                "total_in_namespace_is_lower_bound": False,
+                "offset": offset,
+                "limit": limit,
+                "returned_count": 0,
+                "scanned_count": 0,
+                "entries": [],
+                "sampling_based": False,
+                "discovery_method": "not_iterable",
+                "is_total_authoritative": True,
+                "results_may_be_incomplete": False,
+            }
 
         # Discover entries in the namespace. The full listing is cached
         # separately from the per-page JSON (cache_key in browse_namespace),
@@ -1149,14 +1305,19 @@ class _NamespaceMixin:
         # ``browse_namespace_data`` (the sole caller) rebuilds both fields
         # itself using ``Cursor.encode(tool="browse_namespace", ...)``.
 
-        # When the sample hits NAMESPACE_MAX_ENTRIES, total_in_namespace is a
-        # sample-bound, not the true count. has_more=False just means the sample
-        # is exhausted; the real namespace may be larger. Full iteration on
-        # small archives produces an authoritative count.
-        if full_iteration:
-            results_may_be_incomplete = False
-        else:
-            results_may_be_incomplete = total_in_namespace >= NAMESPACE_MAX_ENTRIES
+        # A sampled listing is incomplete, full stop. The predicate used to
+        # read ``total_in_namespace >= NAMESPACE_MAX_ENTRIES``, so it could
+        # only ever trip when the sample saturated the 200-row cap: every
+        # sampled bucket smaller than that self-certified as exhaustive.
+        # On the old-scheme zim-testing-suite archive that made browse
+        # report M as 6 entries, ``done: true``,
+        # ``results_may_be_incomplete: false`` — while walk on the same
+        # server returned all 12. ``results_may_be_incomplete`` is the
+        # plainest-English completeness field in the payload and must agree
+        # with its siblings (``sampling_based``, ``discovery_method``,
+        # ``page_info.total_is_lower_bound``), which all already said
+        # "sampled". Full iteration still reports False.
+        results_may_be_incomplete = not full_iteration
 
         result = {
             "namespace": namespace,
@@ -1511,16 +1672,54 @@ class _NamespaceMixin:
         }
 
     def _render_entry_preview(self, entry: Any, entry_path: str) -> Tuple[str, str]:
-        """Return (preview_text, content_type) for a regular entry."""
+        """Return (preview_text, content_type) for a regular entry.
+
+        The render is scoped to the page's main-content landmark, exactly
+        as the search-snippet path does (:meth:`_ContentMixin.
+        get_content_snippet`). warc2zim / ZIMIT scrapes keep the site
+        chrome — cookie banner, masthead, in-page nav — OUTSIDE the
+        ``<article>`` landmark, so an unscoped render hands
+        ``create_snippet`` the banner as the document's first paragraph:
+        on a MedlinePlus scrape every browse row previewed as "An
+        official website of the United States government", and on an IEP
+        scrape every row previewed as ``""`` (its lead paragraph is the
+        bare site-logo link, which ``_strip_snippet_render_junk``
+        empties). ``preview`` and ``content_type`` are the only two
+        fields page mode adds over walk mode, so a constant preview made
+        the whole per-row render cost buy nothing — and made every row
+        look identical to a ranker.
+
+        With no landmark ``select_main_content`` returns the whole
+        document, so chrome-free (Wikipedia / mwoffliner) archives render
+        exactly as before.
+
+        The entry title is passed to ``create_snippet`` for the same
+        reason the search path passes it: the scoped body opens with the
+        page's ``<h1>``, and the row already carries that text in its
+        ``title`` field, so repeating it would spend the preview budget
+        on the row header.
+
+        The snippet is capped at ``_PREVIEW_MAX_CHARS`` rather than the
+        configured ``snippet_length`` (3000 by default). A browse row is
+        an orientation aid, not a read: at the configured length a
+        50-row page of long scholarly articles rendered 30-40 KB of lead
+        paragraphs. The cap keeps a page the size it was when the field
+        was boilerplate, but spends it on the article.
+        """
         try:
             item = entry.get_item()
             content_type = item.mimetype or "unknown"
             if item.mimetype and item.mimetype.startswith("text/"):
                 content = self.content_processor.process_mime_content(
-                    bytes(item.content), item.mimetype
+                    bytes(item.content), item.mimetype, scope_main_content=True
                 )
                 preview = self.content_processor.create_snippet(
-                    content, max_paragraphs=1
+                    content,
+                    max_paragraphs=1,
+                    title=getattr(entry, "title", None) or "",
+                    snippet_length=min(
+                        self.content_processor.snippet_length, _PREVIEW_MAX_CHARS
+                    ),
                 )
             else:
                 preview = f"({content_type} content)"
@@ -1991,6 +2190,17 @@ class _NamespaceMixin:
                 # C. Old-scheme or non-C walks (e.g. the ``I`` image namespace)
                 # must still surface their assets, so they are never filtered.
                 filter_assets = has_new_scheme and namespace == "C"
+                # Count what the filter withheld. Both numbers a walk page
+                # carries that could serve as a denominator
+                # (``archive_entry_count`` and, for new-scheme C,
+                # ``namespace_entry_count``) describe the UNFILTERED
+                # surface, so an exhaustive walk that ended
+                # ``done=True, next_cursor=None`` having returned 1,733 of
+                # a stated 3,178 entries read as truncated or lossy — with
+                # nothing in the payload naming the 1,445 filtered assets.
+                # Page mode has emitted ``page_info.assets_filtered`` since
+                # the filter landed; the signal simply never reached walk.
+                assets_skipped = 0
                 while entry_id < archive_entry_count and len(entries) < limit:
                     try:
                         entry = archive._get_entry_by_id(entry_id)
@@ -2000,19 +2210,22 @@ class _NamespaceMixin:
                                 path, has_new_scheme=has_new_scheme
                             )
                             == namespace
-                        ) and not (
-                            filter_assets
-                            and not include_assets
-                            and self._is_non_article_target(
-                                path, _entry_mimetype(entry)
-                            )
                         ):
-                            entries.append(
-                                {
-                                    "path": path,
-                                    "title": entry.title or path,
-                                }
-                            )
+                            if (
+                                filter_assets
+                                and not include_assets
+                                and self._is_non_article_target(
+                                    path, _entry_mimetype(entry)
+                                )
+                            ):
+                                assets_skipped += 1
+                            else:
+                                entries.append(
+                                    {
+                                        "path": path,
+                                        "title": entry.title or path,
+                                    }
+                                )
                     except Exception as e:
                         logger.debug(f"walk_namespace: entry {entry_id} skipped: {e}")
                     entry_id += 1
@@ -2077,6 +2290,7 @@ class _NamespaceMixin:
                             next_cursor=next_cursor,
                             archive_entry_count=archive_entry_count,
                             namespace_entry_count=ns_count_c,
+                            assets_skipped=assets_skipped,
                         )
                     ),
                 )
@@ -2098,6 +2312,7 @@ class _NamespaceMixin:
         next_cursor: Optional[str],
         archive_entry_count: int,
         namespace_entry_count: Optional[int] = None,
+        assets_skipped: int = 0,
     ) -> Dict[str, Any]:
         """Assemble the walk_namespace v2 contract result dict.
 
@@ -2118,19 +2333,33 @@ class _NamespaceMixin:
 
         ``archive_entry_count`` is the file-level entry count, distinct
         from the (unknown for C, known for M/W) namespace count.
+
+        ``assets_skipped`` is how many in-namespace rows the non-article
+        asset filter withheld on THIS page. It surfaces as
+        ``page_info.assets_filtered`` / ``page_info.assets_skipped`` —
+        the same field page mode emits — only when it is non-zero, so the
+        signal keeps meaning "rows were withheld" rather than becoming a
+        constant. Because new-scheme C holds every iterable entry,
+        ``returned_count + assets_skipped == scanned_count`` there, which
+        is what lets a caller reconcile an exhaustive walk against the
+        unfiltered ``namespace_entry_count``.
         """
         returned_count = len(entries)
+        page_info: Dict[str, Any] = {
+            "offset": scan_at,
+            "limit": limit,
+            "returned_count": returned_count,
+        }
+        if assets_skipped:
+            page_info["assets_filtered"] = True
+            page_info["assets_skipped"] = assets_skipped
         payload: Dict[str, Any] = {
             "namespace": namespace,
             "results": entries,
             "next_cursor": next_cursor,
             "total": None,
             "done": done,
-            "page_info": {
-                "offset": scan_at,
-                "limit": limit,
-                "returned_count": returned_count,
-            },
+            "page_info": page_info,
             "scanned_count": scanned_count,
             "scanned_through_id": scanned_through_id,
             "archive_entry_count": archive_entry_count,

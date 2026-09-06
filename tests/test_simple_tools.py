@@ -471,9 +471,19 @@ class TestSimpleToolsHandler:
         """Empty/whitespace-only queries must surface a validation message.
 
         Without this, the router silently falls through to a no-op search.
+
+        D-Q1: the message now rides in the structured ``query_required``
+        error envelope instead of a plain string on the success path —
+        ``query=null`` / ``123`` already returned an ``isError`` envelope
+        for the same argument, so ``""`` handing back prose meant one
+        parameter gave opposite machine signals for two bad values.
         """
         result = handler.handle_zim_query(empty_query)
-        assert "Query Required" in result
+        assert isinstance(result, dict)
+        assert result["error"] is True
+        assert result["operation"] == "query_required"
+        assert result["invalid_arguments"] == ["query"]
+        assert "Query Required" in result["message"]
         # And no underlying op should have been invoked.
         mock_zim_operations.list_zim_files.assert_not_called()
         mock_zim_operations.search_zim_file.assert_not_called()

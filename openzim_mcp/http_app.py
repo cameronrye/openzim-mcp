@@ -575,7 +575,242 @@ def _accepts_json_and_sse(scope: Scope) -> bool:
 
 
 class _BodyTooLarge(Exception):
-    """A buffered sessionless body crossed the request-size cap mid-stream."""
+    """A buffered request body crossed the request-size cap mid-stream."""
+
+
+def _sdk_request_body_cap() -> int:
+    """The SDK's own maximum request body size.
+
+    The cap lives in ``transport_security`` from mcp 2.1.0 (upstream #3336);
+    ``streamable_http_manager`` still re-exports it, but a compatibility
+    re-export is exactly the sort of thing a minor drops.
+    """
+    from mcp.server.transport_security import DEFAULT_MAX_REQUEST_BODY_SIZE
+
+    return int(DEFAULT_MAX_REQUEST_BODY_SIZE)
+
+
+async def _buffer_request_body(
+    receive: Receive, max_body_size: int
+) -> "tuple[deque[Message], Optional[bytes]]":
+    """Drain the request body, keeping the raw messages for replay.
+
+    Returns the buffered messages and the complete body, or ``None`` for the
+    body when the client disconnected before finishing it. Raises
+    ``_BodyTooLarge`` the moment the running total crosses the cap.
+    """
+    cached: "deque[Message]" = deque()
+    body = bytearray()
+    while True:
+        message = await receive()
+        if message["type"] != "http.request":
+            return cached, None
+        chunk = message.get("body", b"")
+        if len(body) + len(chunk) > max_body_size:
+            raise _BodyTooLarge()
+        body.extend(chunk)
+        cached.append(message)
+        if not message.get("more_body", False):
+            return cached, bytes(body)
+
+
+def _declares_oversized_body(headers: Headers, max_body_size: int) -> bool:
+    """Whether ``Content-Length`` already promises more than the body cap."""
+    declared = headers.get("content-length")
+    if declared is None:
+        return False
+    try:
+        return int(declared) > max_body_size
+    except ValueError:
+        # A non-numeric Content-Length is not a gate's to police: treat it as
+        # undeclared and let the chunked read enforce the cap.
+        return False
+
+
+def _replaying_receive(cached: "deque[Message]", receive: Receive) -> Receive:
+    """A ``receive`` that hands back the buffered messages, then the real one."""
+
+    async def replay() -> Message:
+        if cached:
+            return cached.popleft()
+        return await receive()
+
+    return replay
+
+
+def _jsonrpc_error_response(
+    error: Any, status_code: int, extra_headers: Optional[Mapping[str, str]] = None
+) -> Response:
+    """A JSON body carrying ``error``, exactly as the SDK transport shapes it."""
+    return Response(
+        error.model_dump_json(by_alias=True, exclude_unset=True),
+        status_code=status_code,
+        headers=dict(extra_headers or {}),
+        media_type="application/json",
+    )
+
+
+class JsonRpcFrameGateMiddleware:
+    """Answer a POST body the SDK would drop, or misdescribe, before it reaches it.
+
+    Two failures share this one seam, and both are invisible to a test that
+    only exercises stdio:
+
+    * A request id that is not a string or a non-``bool`` int — ``null``,
+      ``3.0``, ``1e21``, ``true``, ``[1]``, ``{"a": 1}`` — validates as a
+      *notification* under the SDK's adapter. Over HTTP that is answered
+      ``202 Accepted`` with an empty body and then dropped, so the client is
+      told the server took a request it will never answer and blocks forever.
+      ``id: null`` is the exact shape ``sdk_compat`` was written to catch, and
+      it fell through here because that guard lives only in the stdio reader.
+    * A batch array, a bare JSON scalar, or an object missing ``jsonrpc``
+      draws ``-32602`` ("Invalid params" — the frame never got as far as
+      params) plus a ~1.2 KB pydantic union dump, where stdio answers
+      ``-32600`` and one actionable sentence.
+
+    Classification lives in ``sdk_compat.rejection_for_http_body``, which is
+    the same judgement the stdio relay applies, so the two transports answer
+    a malformed frame with one vocabulary. It claims only shapes the SDK
+    already refuses or silently drops, so nothing the transport would have
+    served is turned away here.
+
+    A pure ASGI middleware rather than ``BaseHTTPMiddleware`` so the body
+    replay is explicit and bounded by the SDK's own request-size cap.
+    """
+
+    def __init__(
+        self,
+        app: ASGIApp,
+        max_body_size: Optional[int] = None,
+        mcp_path: str = MCP_PATH,
+    ) -> None:
+        """Wrap ``app``; ``max_body_size`` defaults to the SDK's request cap."""
+        self.app = app
+        self._mcp_path = mcp_path
+        self._max_body_size = (
+            max_body_size if max_body_size is not None else _sdk_request_body_cap()
+        )
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        """Classify an MCP POST body; pass everything else through untouched."""
+        if (
+            scope["type"] != "http"
+            or scope["path"] != self._mcp_path
+            or scope["method"] != "POST"
+        ):
+            await self.app(scope, receive, send)
+            return
+        if _declares_oversized_body(Headers(scope=scope), self._max_body_size):
+            # Already promised more than the cap: hand it on unread so the
+            # SDK's own body-limit middleware answers it with its 413.
+            await self.app(scope, receive, send)
+            return
+
+        try:
+            cached, body = await _buffer_request_body(receive, self._max_body_size)
+        except _BodyTooLarge:
+            # The body has been partly consumed, so passing it on would hand
+            # the SDK a truncated frame instead of the 413 it owes. Answer
+            # here, in the same words the sibling gate uses.
+            response = Response("Request body too large", status_code=413)
+            await response(scope, receive, send)
+            return
+        replay = _replaying_receive(cached, receive)
+        if body is None:
+            await self.app(scope, replay, send)
+            return
+
+        from .sdk_compat import rejection_for_http_body
+
+        rejection = rejection_for_http_body(body)
+        if rejection is None:
+            await self.app(scope, replay, send)
+            return
+        logger.warning(
+            "rejected a malformed HTTP frame with %d: %s",
+            rejection.error.code,
+            rejection.error.message,
+        )
+        response = _jsonrpc_error_response(rejection, 400)
+        await response(scope, replay, send)
+
+
+class UnsupportedResumeHeaderMiddleware:
+    """Make ``Last-Event-ID`` on the GET stream open a fresh stream, not a 500.
+
+    The SDK's streamable-HTTP GET handler branches on the header and returns
+    straight after ``_replay_events``, whose first line is ``if not
+    event_store: return``. This server configures no event store — it never
+    emits SSE ``id:`` fields either, so there is nothing to resume from — so
+    that empty branch is the *only* branch it can take: the ASGI app returns
+    having sent no response at all, and Starlette's ``BaseHTTPMiddleware``
+    turns that into ``RuntimeError("No response returned.")`` and a 500 with a
+    traceback. Every non-empty header value hit it.
+
+    The header is advertised rather than disclaimed — it is in
+    ``CORS_ALLOW_HEADERS`` so that a browser client may resume a dropped
+    stream — and a 500 tells every client, proxy and health checker that the
+    *server* faulted. Dropping the header instead degrades to the honest
+    answer: a fresh stream, which is what a resume against a server with no
+    event log means anyway, and what ``EventSource`` reconnection expects.
+    """
+
+    def __init__(self, app: ASGIApp, mcp_path: str = MCP_PATH) -> None:
+        """Wrap ``app``, watching the one route that serves the GET stream."""
+        self.app = app
+        self._mcp_path = mcp_path
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        """Strip a resume header this server can only fault on."""
+        if (
+            scope["type"] != "http"
+            or scope["path"] != self._mcp_path
+            or scope["method"] != "GET"
+        ):
+            await self.app(scope, receive, send)
+            return
+        headers = scope.get("headers") or []
+        kept = [(name, value) for name, value in headers if name != b"last-event-id"]
+        if len(kept) != len(headers):
+            logger.debug(
+                "ignoring Last-Event-ID: this server keeps no event store, so "
+                "the stream is resumed by opening a fresh one"
+            )
+            scope = {**scope, "headers": kept}
+        await self.app(scope, receive, send)
+
+
+class TrailingSlashMcpPathMiddleware:
+    """Serve the MCP endpoint at ``/mcp/`` as well as ``/mcp``.
+
+    Starlette's ``redirect_slashes`` answers ``/mcp/`` with a bodyless
+    ``307``. Real MCP clients do not follow it: the official SDK client dies
+    with ``MCPError: Unexpected content type: `` (empty value), which names
+    neither the URL nor the redirect, while the identical script one character
+    away works end to end. A trailing slash is what a browser address bar
+    adds and what copy-paste produces, and with a bearer token configured the
+    misdiagnosis compounds — auth runs ahead of routing, so probing a mistyped
+    path returns 401 and the operator goes hunting for a token problem.
+
+    Rewriting the path is preferred to turning ``redirect_slashes`` off (which
+    would swap the 307 for an equally unhelpful 404). It runs outside the
+    gates below so every path-matching consumer sees the canonical form.
+    """
+
+    def __init__(self, app: ASGIApp, mcp_path: str = MCP_PATH) -> None:
+        """Wrap ``app``, canonicalising the one path it is asked about."""
+        self.app = app
+        self._mcp_path = mcp_path
+        self._slashed = mcp_path + "/"
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        """Canonicalise ``/mcp/`` to ``/mcp``; leave every other path alone."""
+        if scope["type"] == "http" and scope.get("path") == self._slashed:
+            scope = {**scope, "path": self._mcp_path}
+            raw_path = scope.get("raw_path")
+            if isinstance(raw_path, bytes) and raw_path.endswith(b"/"):
+                scope["raw_path"] = raw_path[:-1]
+        await self.app(scope, receive, send)
 
 
 class SessionlessRequestGateMiddleware:
@@ -614,20 +849,11 @@ class SessionlessRequestGateMiddleware:
         max_body_size: Optional[int] = None,
         mcp_path: str = MCP_PATH,
     ) -> None:
-        """Wrap ``app``; ``max_body_size`` defaults to the SDK's request cap.
-
-        The cap lives in ``transport_security`` from mcp 2.1.0 (upstream
-        #3336); ``streamable_http_manager`` still re-exports it, but a
-        compatibility re-export is exactly the sort of thing a minor drops.
-        """
-        from mcp.server.transport_security import DEFAULT_MAX_REQUEST_BODY_SIZE
-
+        """Wrap ``app``; ``max_body_size`` defaults to the SDK's request cap."""
         self.app = app
         self._mcp_path = mcp_path
         self._max_body_size = (
-            max_body_size
-            if max_body_size is not None
-            else DEFAULT_MAX_REQUEST_BODY_SIZE
+            max_body_size if max_body_size is not None else _sdk_request_body_cap()
         )
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
@@ -651,14 +877,14 @@ class SessionlessRequestGateMiddleware:
                 extra_headers={"Allow": "GET, POST, DELETE"},
             )
             return
-        if self._declares_oversized_body(Headers(scope=scope)):
+        if _declares_oversized_body(Headers(scope=scope), self._max_body_size):
             # The SDK's own body-limit middleware rejects this with 413
             # before its session code runs; no need to read it.
             await self.app(scope, receive, send)
             return
 
         try:
-            cached, body = await self._buffer_body(receive)
+            cached, body = await _buffer_request_body(receive, self._max_body_size)
         except _BodyTooLarge:
             response = Response("Request body too large", status_code=413)
             await response(scope, receive, send)
@@ -683,12 +909,7 @@ class SessionlessRequestGateMiddleware:
             )
             return
 
-        async def replay() -> Message:
-            if cached:
-                return cached.popleft()
-            return await receive()
-
-        await self.app(scope, replay, send)
+        await self.app(scope, _replaying_receive(cached, receive), send)
 
     def _never_mints(self, scope: Scope) -> bool:
         """Whether the SDK serves this HTTP request without minting a session.
@@ -715,41 +936,6 @@ class SessionlessRequestGateMiddleware:
             and protocol_version not in HANDSHAKE_PROTOCOL_VERSIONS
         )
 
-    def _declares_oversized_body(self, headers: Headers) -> bool:
-        """Whether ``Content-Length`` already promises more than the body cap."""
-        declared = headers.get("content-length")
-        if declared is None:
-            return False
-        try:
-            return int(declared) > self._max_body_size
-        except ValueError:
-            # A non-numeric Content-Length is not this gate's to police:
-            # treat it as undeclared and let the chunked read enforce the cap.
-            return False
-
-    async def _buffer_body(
-        self, receive: Receive
-    ) -> "tuple[deque[Message], Optional[bytes]]":
-        """Drain the request body, keeping the raw messages for replay.
-
-        Returns the buffered messages and the complete body, or ``None`` for
-        the body when the client disconnected before finishing it. Raises
-        ``_BodyTooLarge`` the moment the running total crosses the cap.
-        """
-        cached: "deque[Message]" = deque()
-        body = bytearray()
-        while True:
-            message = await receive()
-            if message["type"] != "http.request":
-                return cached, None
-            chunk = message.get("body", b"")
-            if len(body) + len(chunk) > self._max_body_size:
-                raise _BodyTooLarge()
-            body.extend(chunk)
-            cached.append(message)
-            if not message.get("more_body", False):
-                return cached, bytes(body)
-
     async def _reject_missing_session(
         self, scope: Scope, receive: Receive, send: Send
     ) -> None:
@@ -774,12 +960,7 @@ class SessionlessRequestGateMiddleware:
             id=None,
             error=ErrorData(code=INVALID_REQUEST, message=message),
         )
-        response = Response(
-            error.model_dump_json(by_alias=True, exclude_unset=True),
-            status_code=status_code,
-            headers=dict(extra_headers or {}),
-            media_type="application/json",
-        )
+        response = _jsonrpc_error_response(error, status_code, extra_headers)
         await response(scope, receive, send)
 
 
@@ -828,9 +1009,15 @@ def serve_streamable_http(
     # layer so 401 responses from the inner auth middleware still carry
     # Access-Control-Allow-Origin headers (otherwise browser JS clients
     # see an opaque CORS error instead of "401 unauthorized").
-    # Added FIRST, so it is the INNERMOST layer: everything else answers
-    # before it, and only a request that cleared auth and Host/Origin has its
-    # body read. It is the last line between a sessionless request and the
+    # Added FIRST, so it is the INNERMOST layer: nothing else has looked at
+    # the frame by the time it runs, and everything above has already had its
+    # say. See JsonRpcFrameGateMiddleware.
+    app.add_middleware(JsonRpcFrameGateMiddleware)
+    # Next: the GET stream's resume header, dropped before the SDK can fault
+    # on it. See UnsupportedResumeHeaderMiddleware.
+    app.add_middleware(UnsupportedResumeHeaderMiddleware)
+    # Next: only a request that cleared auth and Host/Origin has its body
+    # read here. It is the last line between a sessionless request and the
     # SDK's session-minting code. See SessionlessRequestGateMiddleware.
     app.add_middleware(SessionlessRequestGateMiddleware)
     # Next-innermost: auth and CORS still get to answer first, but a request
@@ -841,6 +1028,10 @@ def serve_streamable_http(
             TransportSecurityGateMiddleware, security=server._transport_security
         )
     app.add_middleware(BearerTokenAuthMiddleware, config=server.config)
+    # Outside every path-matching layer above, so a request to ``/mcp/``
+    # reaches them — and the router — in the canonical form rather than as a
+    # 307 no MCP client follows. See TrailingSlashMcpPathMiddleware.
+    app.add_middleware(TrailingSlashMcpPathMiddleware)
     apply_cors_middleware(app, server.config)
 
     # Wire the resource-change watcher when subscriptions are enabled (the bus
