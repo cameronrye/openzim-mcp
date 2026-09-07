@@ -622,6 +622,54 @@ def zim_archive(
         logger.debug(f"Releasing ZIM archive: {file_path}")
 
 
+def _link_graph_report(archive_path: Any, live_uuid: str) -> Dict[str, Any]:
+    """Describe the archive's link-graph sidecar for ``zim_health``.
+
+    v3.3.1 field report (fid 91): nothing on any surface said whether an
+    archive had a link graph, so the only way to find out was to issue an
+    inbound call and read the failure. Every number here is already stored
+    in the sidecar's own meta table, which the reader opens and discards.
+
+    ``is_stale`` is the load-bearing part. Presence is not usability: a
+    sidecar built for a different archive revision or an older schema
+    refuses every inbound query, and a planner that saw only
+    ``has_link_graph: true`` would keep issuing them. The staleness test
+    repeats ``LinkGraphReader.open_for``'s two gates rather than calling it,
+    because that function returns ``None`` for a stale sidecar and a stale
+    one is exactly what this has to be able to describe.
+    """
+    try:
+        from openzim_mcp.linkgraph.reader import read_sidecar_meta
+        from openzim_mcp.linkgraph.schema import SCHEMA_VERSION
+
+        meta = read_sidecar_meta(str(archive_path))
+    except Exception:  # pragma: no cover — a probe must not fail a health call
+        return {"has_link_graph": False}
+    if meta is None:
+        return {"has_link_graph": False}
+
+    def _as_int(key: str) -> Optional[int]:
+        try:
+            return int(meta[key])
+        except (KeyError, TypeError, ValueError):
+            return None
+
+    return {
+        "has_link_graph": True,
+        "link_graph": {
+            "built_at": meta.get("built_at"),
+            "builder_version": meta.get("builder_version"),
+            "schema_version": meta.get("schema_version"),
+            "node_count": _as_int("node_count"),
+            "edge_count": _as_int("edge_count"),
+            "is_stale": (
+                meta.get("schema_version") != str(SCHEMA_VERSION)
+                or meta.get("archive_uuid") != live_uuid
+            ),
+        },
+    }
+
+
 class ZimOperations(
     _ArchiveAccessMixin, _SearchMixin, _ContentMixin, _StructureMixin, _NamespaceMixin
 ):
@@ -1070,6 +1118,7 @@ class ZimOperations(
                     "uuid": str(archive.uuid),
                     "is_multipart": bool(archive.is_multipart),
                 }
+                data.update(_link_graph_report(validated_path, str(archive.uuid)))
 
             with_meta = attach_meta(data)
             self.cache.set(cache_key, with_meta)

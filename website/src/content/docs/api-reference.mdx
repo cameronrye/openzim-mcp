@@ -596,11 +596,22 @@ The three blocks are built independently. If the health or configuration builder
   "uuid": "<archive uuid>",
   "is_multipart": false,
   "path": "...archive.zim",
-  "name": "archive.zim"
+  "name": "archive.zim",
+  "has_link_graph": true,
+  "link_graph": {
+    "built_at": "2026-09-04T16:05:54Z",
+    "builder_version": "<openzim-mcp version that built it>",
+    "schema_version": "3",
+    "node_count": 15990,
+    "edge_count": 422722,
+    "is_stale": false
+  }
 }
 ```
 
 `is_valid` is the result of libzim's `Archive.check()` structural-integrity probe — a quick way to tell a valid archive from a corrupt or truncated one. A non-indexed archive reports `has_fulltext_index: false`; full-text `zim_search` against it then degrades gracefully to a `no_xapian_index` reason instead of erroring.
+
+`has_link_graph` answers, without a trial call, whether `zim_links(direction="inbound")` can be served for this archive — previously the only way to find out was to issue one and read the failure. When a sidecar is present, `link_graph` carries its own meta table alongside it. Read **`is_stale`**, not just presence: a sidecar built for a different archive revision or an older schema is on disk but refuses every inbound query, and rebuilding it is `openzim-mcp build link-graph <archive> --force`. `has_link_graph: false` means no sidecar file at all.
 
 ---
 

@@ -810,22 +810,35 @@ class _StructureMixin:
                 "path": bundle["entry_path"],
                 "content_type": bundle["content_type"],
                 "kind": kind,
-                "results": page,
-                "next_cursor": next_cursor,
-                "total": total_for_kind,
-                "done": done,
-                "page_info": {
-                    "offset": offset,
-                    "limit": limit,
-                    "returned_count": returned_count,
-                },
-                "category_totals": {
-                    "internal": len(buckets.internal),
-                    "external": len(buckets.external),
-                    "media": len(buckets.media),
-                    "anchor": buckets.anchor_count,
-                },
             }
+            if bundle["entry_path"] != entry_path:
+                # v3.3.1 field report (fid 90), second half: outbound rewrote
+                # ``path`` to the redirect target and said nothing, so a
+                # caller correlating a response with its request had no
+                # handle on it. ``zim_get`` and ``direction="inbound"`` both
+                # echo the spelling that was asked for. Present only when a
+                # rewrite happened — an echo on every response is noise, and
+                # its absence is the signal that nothing moved.
+                payload["requested_path"] = entry_path
+            payload.update(
+                {
+                    "results": page,
+                    "next_cursor": next_cursor,
+                    "total": total_for_kind,
+                    "done": done,
+                    "page_info": {
+                        "offset": offset,
+                        "limit": limit,
+                        "returned_count": returned_count,
+                    },
+                    "category_totals": {
+                        "internal": len(buckets.internal),
+                        "external": len(buckets.external),
+                        "media": len(buckets.media),
+                        "anchor": buckets.anchor_count,
+                    },
+                }
+            )
             # ``LinksResponse.message`` is documented as set for non-HTML
             # entries, and the sibling TOC payload sets it; without it an
             # image entry's empty result was indistinguishable from an
@@ -1655,13 +1668,31 @@ class _StructureMixin:
                 raise _entry_not_found_error(
                     entry_path, tool_mode=self.config.tool_mode
                 )
+            # v3.3.1 field report (fid 92): this was the one runtime message
+            # that offered a client nothing. Building a sidecar is an
+            # operator action — the caller reading this cannot run a shell
+            # command — so the operator sentence stays (an operator may be
+            # reading the transcript) and a clause the CLIENT can act on now
+            # follows it. Mode-aware for the same reason
+            # ``_entry_not_found_error`` above is: naming a tool the client
+            # cannot call is worse than naming none, and in simple mode
+            # ``zim_query`` is the only tool there is.
+            advanced = self.config.tool_mode == "advanced"
+            fallback = (
+                "Meanwhile `zim_links(direction='related')` gives "
+                "outbound-overlap neighbours and `zim_search` finds pages "
+                "that mention it."
+                if advanced
+                else "Meanwhile ask for `related articles for <path>`, or "
+                "search for the article's title to find pages that mention it."
+            )
             raise LinkGraphUnavailable(
                 "Inbound links require a link-graph sidecar for this archive. "
                 f"Run `openzim-mcp build link-graph {validated_str}`. "
                 "If a sidecar file is already present it is stale — built for "
                 "a different archive revision or an older schema, which 3.0.0 "
                 "makes true of every sidecar built before it — and the build "
-                "refuses to overwrite without `--force`."
+                "refuses to overwrite without `--force`. " + fallback
             )
         try:
             page = reader.query_inbound(lookup_path, limit=limit, offset=offset)

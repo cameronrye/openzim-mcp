@@ -148,8 +148,10 @@ class FileSummary(TypedDict):
     size: str
     size_bytes: int
     modified: str
-    # Whether the file carries the ZIM signature (cheap probe, not a full
-    # integrity check). ``warning`` accompanies ``readable: False`` so a
+    # Whether the file opens as a ZIM archive. Not just the signature check
+    # any more: a file that carries the magic bytes but is shorter than its
+    # own header declares is a truncated download, and reads False (still a
+    # cheap probe, not a full integrity check). ``warning`` accompanies ``readable: False`` so a
     # garbage file named ``.zim`` is visibly flagged rather than presented
     # as a loaded archive.
     readable: NotRequired[bool]
@@ -852,6 +854,15 @@ class ArchiveValidationResponse(TypedDict):
     has_title_index: bool
     uuid: str
     is_multipart: bool
+    # v3.3.1 field report (fid 91): whether an inbound-link query can be
+    # answered for this archive. Previously the only way to find out was to
+    # issue one and read the failure. ``link_graph`` rides alongside when
+    # there is a sidecar, carrying its own meta table (built_at,
+    # builder_version, schema_version, node_count, edge_count) plus
+    # ``is_stale`` — presence is not usability, and a sidecar built for
+    # another archive revision refuses every inbound call.
+    has_link_graph: bool
+    link_graph: NotRequired[dict[str, Any]]
     _meta: MetaEnvelope
 
 

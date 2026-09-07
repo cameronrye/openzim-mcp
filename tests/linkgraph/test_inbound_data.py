@@ -12,6 +12,7 @@ deterministic).
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Iterator, List, Tuple, cast
 from unittest.mock import MagicMock
 
@@ -32,8 +33,13 @@ class _StubSelf:
     fallback).
     """
 
-    def __init__(self, archive_path: Path) -> None:
+    def __init__(self, archive_path: Path, tool_mode: str = "advanced") -> None:
         self._archive_path = archive_path
+        # The method's recovery messages are mode-aware — both the
+        # entry-not-found raise and (since fid 92) the sidecar-unavailable
+        # one, which now offers a client-issuable fallback alongside the
+        # operator's build command.
+        self.config = SimpleNamespace(tool_mode=tool_mode)
 
     def _validate_zim_path(self, zim_file_path: str) -> Path:
         return self._archive_path

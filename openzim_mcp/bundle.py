@@ -196,6 +196,27 @@ def _resolve_entry_html(
     # this must not branch on it).
     served = getattr(item, "path", None)
     resolved_path = served if isinstance(served, str) and served else entry_path
+    if resolved_path != entry_path:
+        # v3.3.1 field report (fid 90). ``get_item()`` follows the redirect,
+        # so ``resolved_path`` names the article actually served — but
+        # ``title`` was read off the STUB, which is a different article. The
+        # header then read ``title: "10-year flood"`` beside ``path:
+        # "A/100-year_flood"``, and on zimit archives, where a stub's title
+        # is its own path string, it read as a raw path. ``zim_get`` and
+        # ``direction="inbound"`` both resolve this already;
+        # ``_resolve_outbound_titles`` does it for the ROWS and says why
+        # ("succeeded with junk"). Only the header was left behind.
+        #
+        # Best-effort: a failure here means keeping the stub's title, which
+        # is what shipped before, so a lookup that throws must not fail the
+        # whole fetch.
+        try:
+            canonical = archive.get_entry_by_path(resolved_path)
+            canonical_title = getattr(canonical, "title", None)
+            if isinstance(canonical_title, str) and canonical_title:
+                title = canonical_title
+        except Exception:  # pragma: no cover — defensive
+            pass
     return title, mime, html, resolved_path
 
 
