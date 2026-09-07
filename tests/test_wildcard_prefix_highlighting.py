@@ -260,10 +260,16 @@ class TestSynthesizePathNormalisesTheQuery:
         assert "**AND**" not in snippet
 
     def test_title_match_hit_keeps_its_raw_title(self, tmp_path) -> None:
-        """A title is not a query — ``and`` in it is a word, not an operator.
+        """A title is not a query — ``near`` in it is a word, not an operator.
 
         Pinned so a later sweep does not "fix" ``title_match_hit`` by
         routing it through ``_snippet_query`` too.
+
+        The witness word is ``near`` rather than ``and``: both are Xapian
+        operators that ``_snippet_query`` would strip, but v3.3.2's fid-68
+        fix stopped bolding function words, so ``and`` can no longer tell
+        the two code paths apart — it is now unbolded either way. ``near``
+        is an operator that is not a function word, so it still can.
         """
         from unittest.mock import MagicMock, patch
 
@@ -274,17 +280,20 @@ class TestSynthesizePathNormalisesTheQuery:
         def _entry(eid: str) -> MagicMock:
             entry = MagicMock()
             entry.path = eid
-            entry.title = "Sense and Sensibility"
+            entry.title = "Near Dark"
             entry.is_redirect = False
             item = MagicMock()
             item.mimetype = "text/html"
-            item.content = b"<p>Sense and Sensibility is a novel by Jane Austen.</p>"
+            item.content = (
+                b"<p>Near Dark is a 1987 vampire film by Kathryn Bigelow.</p>"
+            )
             entry.get_item.return_value = item
             return entry
 
         archive = make_archive_stub(_entry)
-        with patch.object(ops, "_find_entry_fast_path", return_value=_entry("A/Sense")):
-            hit = ops.title_match_hit(archive, "Sense and Sensibility")
+        with patch.object(ops, "_find_entry_fast_path", return_value=_entry("A/Near")):
+            hit = ops.title_match_hit(archive, "Near Dark")
 
         assert hit is not None
-        assert "**and**" in hit["snippet"], hit["snippet"]
+        assert "**Near**" in hit["snippet"], hit["snippet"]
+        assert "**Dark**" in hit["snippet"], hit["snippet"]

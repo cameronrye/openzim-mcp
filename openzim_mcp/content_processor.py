@@ -308,8 +308,9 @@ def _keep_anchorable_terms(
     question anchored on whichever paragraph first said "what" — for
     ``what causes migraines`` that was an article's lead sentence about
     "becoming what one is", 11k chars above the paragraph that actually
-    discussed migraines. Highlighting keeps the full term set; only the
-    anchor decision drops function words.
+    discussed migraines. Highlighting applies the same filter (fid 68):
+    emphasis on a function word is not neutral, it asserts that the entry
+    matched on an article.
 
     Falls back to ``typed`` when filtering empties the list, so an
     all-function-word query keeps its previous behavior instead of
@@ -770,6 +771,24 @@ def _highlight_terms(text: str, query: str, *, max_hits: int) -> str:
     typed = _keep_highlightable_terms(query)
     if not typed:
         return text
+    # v3.3.1 field report (fid 68). Function words are dropped here for the
+    # same reason the anchor decision drops them: bolding ``the`` tells a
+    # reader the entry matched on an article, which is worse than no
+    # emphasis at all. ``what is the trolley problem`` spent all eight of
+    # its bold spans on ``the`` and none on either content word.
+    #
+    # An earlier attempt rationed ``max_hits`` per term instead. It cannot
+    # reach this case: four terms give ``per_term_cap = max(1, 5 // 4) = 1``,
+    # so ``the`` takes its rationed slot and the four leftovers are refilled
+    # left to right from the runners-up — which, in a snippet holding
+    # neither content word, are more occurrences of ``the``. The rationing
+    # is kept because it does bound a term that IS present; it is just not
+    # what this defect needed.
+    #
+    # ``_keep_anchorable_terms`` falls back to the unfiltered list when
+    # filtering would empty it, so an all-function-word query ("the who")
+    # keeps its previous behaviour.
+    typed = _keep_anchorable_terms(typed)
     # Only ``m.start()``/``m.end()`` are read off the compiled pattern.
     pattern = _term_pattern(typed)
     folded, index_map = _fold_with_index_map(text)
