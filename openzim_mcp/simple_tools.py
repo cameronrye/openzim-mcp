@@ -711,6 +711,7 @@ class SimpleToolsHandler(
                     query,
                     zim_file_path,
                     compact=bool(options.get("compact", False)),
+                    top_n=options.get("limit"),
                 )
             except Exception as e:
                 logger.error(
@@ -4694,12 +4695,32 @@ class SimpleToolsHandler(
         "get_section": _handle_get_section,
     }
 
+    def _synthesize_config(self, top_n: Optional[int]) -> Any:
+        """The configured synthesize tunables, with ``limit`` applied.
+
+        v3.3.1 field report (fid 130): ``limit`` was validated by the tool
+        and then never reached the pipeline, so ``limit=50`` and
+        ``limit=1000`` produced byte-identical payloads. ``top_n`` is the
+        pipeline's own count of cited passages, which is what a caller
+        asking for a different number of results means here.
+
+        The tool layer refuses anything above the field's own ceiling
+        before this is reached, so no clamp is applied — a value that
+        arrives here is one the model can serve. ``None`` leaves the
+        configured default alone.
+        """
+        base = self.zim_operations.config.synthesize
+        if top_n is None:
+            return base
+        return base.model_copy(update={"top_n": top_n})
+
     def _handle_synthesize_query(
         self,
         query: str,
         zim_file_path: Optional[str],
         *,
         compact: bool = False,
+        top_n: Optional[int] = None,
     ) -> Union[SynthesizeResponse, ToolErrorPayload]:
         """Phase C: dispatch query to the synthesize pipeline.
 
@@ -4776,7 +4797,7 @@ class SimpleToolsHandler(
                 search_handler=self.zim_operations,
                 cache=self.zim_operations.cache,
                 content_processor=self.zim_operations.content_processor,
-                config=self.zim_operations.config.synthesize,
+                config=self._synthesize_config(top_n),
                 # Phase D sub-D-1: pass the reranker config so the
                 # synthesize pipeline can rerank passage candidates
                 # before section attribution. Passage ordering pays

@@ -2509,6 +2509,7 @@ class TestZimPathHallucinationHandling:
             "berlin",
             "/var/lib/zim/wikipedia_en_all_maxi.zim",
             compact=False,
+            top_n=None,
         )
 
     def test_synthesize_bare_filename_no_match_triggers_auto_select(
@@ -2536,6 +2537,7 @@ class TestZimPathHallucinationHandling:
             "May Erlewine",
             "/var/lib/zim/wikipedia_en_all_maxi.zim",
             compact=False,
+            top_n=None,
         )
 
     def test_synthesize_slashed_unmatched_path_single_archive_auto_selects(
@@ -2578,6 +2580,7 @@ class TestZimPathHallucinationHandling:
             "berlin",
             "/var/lib/zim/wikipedia_en_all_maxi.zim",
             compact=False,
+            top_n=None,
         )
 
     def test_synthesize_slashed_unmatched_path_multi_archive_preserved(
@@ -2619,7 +2622,7 @@ class TestZimPathHallucinationHandling:
         # candidate preserved. H14 still holds when there's something
         # to disambiguate against.
         mock_synth.assert_called_once_with(
-            "berlin", "/some/other/ghost.zim", compact=False
+            "berlin", "/some/other/ghost.zim", compact=False, top_n=None
         )
 
     def test_synthesize_no_path_skips_resolver(self, handler, mock_zim_operations):
@@ -2641,7 +2644,7 @@ class TestZimPathHallucinationHandling:
                 zim_file_path=None,
                 options={"synthesize": True},
             )
-        mock_synth.assert_called_once_with("berlin", None, compact=False)
+        mock_synth.assert_called_once_with("berlin", None, compact=False, top_n=None)
 
 
 class TestLowConfidenceNoteAppendedConsistently:

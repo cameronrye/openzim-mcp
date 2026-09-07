@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 from typing import TYPE_CHECKING, Any, Dict, Optional, Union
 
+from ..config import SYNTHESIZE_MAX_PASSAGES
 from ..constants import MAX_QUERY_LENGTH, MAX_SEARCH_RESULT_LIMIT
 from ..responses import tool_error
 from ._common import (
@@ -136,6 +137,54 @@ def register(server: "OpenZimMcpServer") -> None:
                         f"(provided: {max_content_length})."
                     ),
                 )
+
+            # v3.3.1 field report (fid 130). `limit`, `offset`,
+            # `content_offset` and `cursor` were range-checked here and then
+            # dropped: `_handle_synthesize_query` never received them, so
+            # `limit=50` and `limit=1000` returned byte-identical payloads
+            # while `limit=1001` was rejected — the tool validating an
+            # argument on a path that ignores it.
+            #
+            # `limit` maps onto the pipeline's own passage count
+            # (`SynthesizeConfig.top_n`, bounded 1..50), so it is honoured
+            # below. Past that bound there is nothing to honour, and a
+            # silent clamp would be the same defect one size down. The
+            # pipeline fuses a single ranked set and does not paginate at
+            # all, so the paging arguments are refused rather than mapped
+            # onto something that does not exist.
+            if synthesize:
+                if limit is not None and limit > SYNTHESIZE_MAX_PASSAGES:
+                    return tool_error(
+                        operation="invalid_limit",
+                        message=(
+                            "`limit` must not exceed "
+                            f"{SYNTHESIZE_MAX_PASSAGES} with `synthesize=True` "
+                            f"(provided: {limit}) — it selects the number of "
+                            "cited passages, not a page size. Re-run at or "
+                            "below the cap."
+                        ),
+                    )
+                unpaginated = [
+                    name
+                    for name, value in (
+                        ("offset", offset),
+                        ("content_offset", content_offset),
+                        ("cursor", cursor),
+                    )
+                    if value
+                ]
+                if unpaginated:
+                    named = " and ".join(f"`{n}`" for n in unpaginated)
+                    return tool_error(
+                        operation="invalid_combination",
+                        message=(
+                            f"{named} cannot be used with `synthesize=True`: "
+                            "the synthesize pipeline fuses one ranked set "
+                            "across every archive and has no next page. Drop "
+                            f"{'them' if len(unpaginated) > 1 else 'it'}, or "
+                            "use `synthesize=False` to page a search."
+                        ),
+                    )
 
             # Simple-mode defaults: 3 results × 4 000-char bodies fit
             # comfortably in an 8B Q4 model's agentic prompt window.

@@ -259,6 +259,8 @@ evidence bundle to hand your own LLM, not as an answer to display.
 
 The pipeline: per-archive search → RRF fusion across archives → passage extraction → optional cross-encoder rerank (only with the `[reranker]` extra) → section attribution and heading-affinity boost → budget enforcement → answer rendering → citation building.
 
+**Arguments this mode reads, and the ones it refuses.** `limit` selects the number of cited passages (`SynthesizeConfig.top_n`), so it is capped at **50** here rather than at the 1,000 the search path allows — a larger value is refused with `invalid_limit` rather than clamped. `offset`, `content_offset` and `cursor` are refused with `invalid_combination`: the pipeline fuses a single ranked set across every archive and has no next page. Pass `synthesize=False` to page a search instead.
+
 **Response** (`SynthesizeResponse`):
 
 | Key | Meaning |
