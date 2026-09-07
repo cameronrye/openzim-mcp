@@ -29,7 +29,7 @@ from .onboarding import acquisition_hint_line
 from .responses import ToolErrorPayload, tool_error
 from .security import redact_paths_in_message, sanitize_path_for_error
 from .tool_schemas import HealthStatus, ServerConfigurationResponse
-from .zim.archive import has_zim_signature, zim_signature_error
+from .zim.archive import has_zim_signature, is_truncated_zim, zim_signature_error
 
 if TYPE_CHECKING:
     from .server import OpenZimMcpServer
@@ -93,6 +93,16 @@ def _readable_zim_files(
         redacted = sanitize_path_for_error(str(bad))
         if bad in denied:
             warnings.append(f"Cannot read .zim file: {redacted}")
+        elif is_truncated_zim(bad):
+            # v3.3.1 field report (fid 0's residual). A truncated download
+            # DOES carry the signature — that is why the per-archive
+            # ``loaded_archives[].warning`` calls it truncated and says to
+            # re-download it. This line kept calling it a missing signature,
+            # contradicting that verdict three lines up in the same payload
+            # and pointing the operator at replacing a file whose bytes are
+            # fine as far as they go. The two remedies differ, so the two
+            # verdicts have to.
+            warnings.append(f"Truncated .zim file (re-download it): {redacted}")
         else:
             warnings.append(f"Unreadable .zim file (missing ZIM signature): {redacted}")
     if denied:

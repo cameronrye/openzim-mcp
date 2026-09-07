@@ -35,7 +35,7 @@ from .exceptions import (
 )
 from .intent_parser import IntentParser, _strip_quote_pair, safe_regex_sub
 from .linkgraph.reader import LinkGraphUnavailable
-from .meta import build_meta, format_footer
+from .meta import build_meta, format_footer, remeasure
 from .onboarding import acquisition_hint_markdown
 from .pagination import archive_identity
 from .rerank import (
@@ -4775,6 +4775,14 @@ class SimpleToolsHandler(
 
         with ExitStack() as stack:
             archives: list = []
+            # v3.3.1 field report (fid 4): an archive that fails to open was
+            # dropped with a stderr line and nothing else. The briefing then
+            # claimed coverage — ``archives_searched`` lists the survivors —
+            # that the caller had no way to audit, on a surface whose whole
+            # selling point is answering across EVERY archive. ``search_all``
+            # has always reported its per-file errors; this is the same
+            # promise on the path that makes the stronger claim.
+            failed: List[Dict[str, str]] = []
             for vp in archives_to_open:
                 try:
                     archive = stack.enter_context(_zim_ops_mod.zim_archive(vp))
@@ -4783,6 +4791,7 @@ class SimpleToolsHandler(
                     logger.warning(
                         "Could not open archive %s for synthesize: %s", vp, e
                     )
+                    failed.append({"archive": Path(str(vp)).stem, "error": str(e)})
                     continue
 
             if not archives:
@@ -4791,7 +4800,7 @@ class SimpleToolsHandler(
                     message="No ZIM archives could be opened for synthesize.",
                 )
 
-            return synthesize_query(
+            response = synthesize_query(
                 search_query,
                 archives=archives,
                 search_handler=self.zim_operations,
@@ -4818,6 +4827,13 @@ class SimpleToolsHandler(
                 omit_passage_text=compact,
                 strip_links=compact,
             )
+            if failed:
+                # Present only when something failed: a key that is always
+                # there is one a reader stops looking at, and its absence
+                # is the "every archive was searched" signal.
+                response["archives_failed"] = failed
+                remeasure(cast(Dict[str, Any], response))
+            return response
 
     def _synthesize_reject_meta_or_chained(
         self, query: str

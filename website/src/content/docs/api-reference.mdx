@@ -270,6 +270,7 @@ The pipeline: per-archive search → RRF fusion across archives → passage extr
 | `passages` | `{cite_id, text_markdown, rank, score}` per passage. Dropped in compact mode, which moves `rank`/`score` onto the citations instead |
 | `citations` | `{cite_id, archive, entry_path, title, section_id, section_title, rank, score}` — `entry_path` is what you pass to `zim_get` |
 | `archives_searched` | Which archives actually contributed |
+| `archives_failed` | `{archive, error}` per archive that could not be opened. **Present only when at least one failed** — this is the only cross-archive answering path, so its coverage claim is auditable rather than implied. A failure degrades the briefing rather than refusing it: the answer is still built from the archives that did open |
 | `fallback_used` | The fusion stage that ordered the hits: `rrf_fusion` (multiple archives) or `xapian_score` (single archive, or fusion unavailable). **Not an error**, and not a reranker signal — the cross-encoder runs after fusion and never changes this field, so the schema's third literal `reranker` is never emitted |
 | `total_chars` / `total_words` | Size of the assembled answer |
 | `considered_articles` / `considered_sections` | Pivot handles for a follow-up turn without re-running the search: the other top hits minus the top passage's own article, and that article's other sections. Only the top passage's article and section are excluded, so lower-ranked cited articles still appear here. Empty when there was no candidate space |

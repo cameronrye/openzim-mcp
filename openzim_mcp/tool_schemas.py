@@ -679,6 +679,12 @@ class SynthesizeResponse(TypedDict, total=False):
     passages: list[SynthesizePassage]
     citations: list[Citation]
     archives_searched: list[str]
+    # v3.3.1 field report (fid 4): archives that could NOT be opened, as
+    # ``{archive, error}`` rows. Present only when at least one failed —
+    # this surface claims coverage across every allowed archive, so a
+    # silently shortened list is a claim the caller cannot audit, and a key
+    # that is always there is one a reader stops checking.
+    archives_failed: list[dict[str, str]]
     fallback_used: Literal["xapian_score", "rrf_fusion", "reranker"]
     total_chars: int
     total_words: int
