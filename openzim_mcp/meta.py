@@ -375,6 +375,42 @@ def format_footer(
     return "> " + " · ".join(parts)
 
 
+def remeasure(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Recompute an existing ``_meta``'s size fields after a late edit.
+
+    ``chars`` and ``tokens_est`` are the only entries ``build_meta`` derives
+    from the payload; everything else there is a verdict the caller supplied.
+    So a tool that adds a field to a payload the data layer already measured
+    can restate the size without having to reconstruct — and risk dropping —
+    ``reason``, ``suggestions``, ``detected_type`` and the rest.
+
+    This repo has fixed the stale-envelope bug twice by hand already
+    (``_refresh_promotion_meta`` on the title path, ``_restamp_spliced_meta``
+    on the splice path), each rebuilding the whole envelope from a
+    hand-copied list of carried keys. A third open-coded copy is how one of
+    those lists goes stale.
+
+    A payload with no ``_meta`` is left alone: absence means the tool never
+    published a size, not that it published a wrong one.
+    """
+    meta = payload.get("_meta")
+    if not isinstance(meta, dict):
+        return payload
+    rendered = _json.dumps(
+        {k: v for k, v in payload.items() if k != "_meta"},
+        ensure_ascii=False,
+    )
+    meta["chars"] = len(rendered)
+    raw_tokens = _raw_tokens_est(rendered)
+    if raw_tokens is None:
+        meta.pop("tokens_est", None)
+    elif raw_tokens == 0 and not rendered:
+        meta["tokens_est"] = 0
+    else:
+        meta["tokens_est"] = int(raw_tokens * 1.05) + 1
+    return payload
+
+
 def attach_meta(
     payload: Dict[str, Any],
     *,

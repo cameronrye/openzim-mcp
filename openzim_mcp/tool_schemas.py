@@ -205,6 +205,12 @@ class SearchResponse(TypedDict):
     _meta: MetaEnvelope
     # Tool-specific extras
     query: str
+    # The archive this page was read from, echoed so a hit can be handed
+    # straight to the five tools that REQUIRE ``zim_file_path``. Present on
+    # single-archive fulltext responses, where the server may have chosen the
+    # archive itself; absent from the cross-archive fan-out, whose rows carry
+    # their own per-file identity. See ``tools/zim_search._name_the_archive``.
+    zim_file_path: NotRequired[str]
 
 
 class _SearchAllPerFile(TypedDict, total=False):

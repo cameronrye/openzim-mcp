@@ -429,7 +429,7 @@ async def _handle_fulltext_mode(
             limit=limit,
             offset=offset,
         )
-        return _strip_next_cursor(payload)
+        return _name_the_archive(_strip_next_cursor(payload), resolved_path)
 
     payload = await ops.search_zim_file_data(
         resolved_path, query, limit=limit, offset=offset
@@ -437,7 +437,45 @@ async def _handle_fulltext_mode(
     payload = await _splice_canonical_title_hit(
         server, payload, resolved_path=resolved_path, query=query, offset=offset
     )
-    return _strip_next_cursor(payload)
+    return _name_the_archive(_strip_next_cursor(payload), resolved_path)
+
+
+def _name_the_archive(payload: Any, resolved_path: str) -> Any:
+    """Stamp the resolved archive onto a single-archive fulltext response.
+
+    v3.3.1 field report (fid 27): ``zim_file_path`` is optional on
+    ``zim_search`` and required on ``zim_get`` / ``zim_get_section`` /
+    ``zim_links`` / ``zim_browse`` / ``zim_metadata``. On the one-archive
+    deployment the README quickstart describes, the caller omits it, the
+    server auto-selects — and then nothing in the fulltext page says which
+    archive answered, so the obvious next call is rejected for a field the
+    caller has no way to fill. ``mode='title'`` had carried ``zim_file`` on
+    every hit all along, which made the gap worse than a plain omission: it
+    taught the shape and then broke it.
+
+    Stamped once at the top level rather than onto every row. The rows are
+    what the response budget is spent on (``SEARCH.MAX_RESULT_CHARS``, which
+    counts ``path``/``title``/``snippet``), so repeating one absolute path
+    across a 1000-row page would have added six figures of payload that the
+    budget does not see — the exact shape of the caps defect this same
+    report opened with.
+
+    Applied unconditionally, including when the caller pinned the path.
+    A field that appears only on auto-selected pages is one more thing for
+    a model to branch on, and asymmetry between two ways of asking the same
+    question is what this finding is.
+    """
+    if isinstance(payload, dict) and not payload.get("error"):
+        from ..meta import remeasure
+
+        payload["zim_file_path"] = resolved_path
+        # The data layer measured the payload before this field existed, so
+        # ``_meta.chars`` would under-report the body by exactly the path it
+        # now carries. Same defect as the splice's stale envelope, and the
+        # same reason it matters: a size a caller budgets against has to be
+        # the size that ships.
+        remeasure(payload)
+    return payload
 
 
 # ``_meta`` keys that describe the SOURCE rather than the rendered page, so

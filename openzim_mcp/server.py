@@ -359,6 +359,7 @@ class OpenZimMcpServer:
             subscriptions=self.subscription_bus,
             cache_hints=_cache_hints(config),
             archive_read_ttl_ms=config.resource_cache_ttl_seconds * 1000,
+            sole_archive=self._sole_loaded_archive,
         )
         if self.subscription_bus is None:
             # Withholding the bus is not enough to withhold the capability:
@@ -449,6 +450,21 @@ class OpenZimMcpServer:
             details=base_message,
             tool_mode=self.config.tool_mode,
         )
+
+    def _sole_loaded_archive(self) -> Optional[str]:
+        """The single loaded archive's path, or ``None`` when it is a guess.
+
+        Handed to ``EnvelopeAwareMCPServer`` so a ``zim_file_path: Field
+        required`` rejection can name the archive the caller obviously meant.
+        v3.3.1 field report (fid 27 / fid 11): ``zim_search`` auto-selects a
+        lone archive and ``zim_get`` does not, so the quickstart deployment's
+        most common two-call sequence dead-ended on a field the caller had no
+        way to fill. Returns ``None`` for zero or several archives — with two
+        loaded there is no archive the caller "obviously meant".
+        """
+        from .topic_preprocessing import auto_select_zim_file
+
+        return auto_select_zim_file(self.zim_operations)
 
     def _register_tools(self) -> None:
         """Register MCP tools via the Phase F orchestrator.

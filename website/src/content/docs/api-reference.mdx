@@ -372,6 +372,8 @@ zim_search(
 
 **Returns:** mode-shaped response — `SearchResponse` / `SearchAllResponse` / `SearchWithFiltersResponse` / `FindEntryResponse` / `SearchSuggestionsResponse` — or `ToolErrorPayload` on validation failure. Every `next_cursor` in these responses is nulled; page with `offset`.
 
+Single-archive `fulltext` responses carry a top-level **`zim_file_path`** naming the archive that answered — including when the server auto-selected it because only one is loaded. Hand it straight to `zim_get`, `zim_get_section`, `zim_links`, `zim_browse` or `zim_metadata`, all of which require the field. (`mode="title"` states the same fact per hit, as `zim_file`; the cross-archive fan-out states it per file.) If you get a `zim_file_path: Field required` rejection anyway, it names the archive for you whenever exactly one is loaded.
+
 ---
 
 ### `zim_get`

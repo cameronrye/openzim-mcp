@@ -52,7 +52,7 @@ from __future__ import annotations
 
 import difflib
 import json
-from typing import Any, Callable
+from typing import Any, Callable, Optional
 
 import pydantic_core
 from mcp.server.mcpserver import Context, MCPServer
@@ -234,7 +234,10 @@ def _argument_field(loc: tuple[Any, ...], declared: set[str]) -> str:
 
 
 def _argument_validation_error(
-    name: str, exc: ValidationError, declared: set[str]
+    name: str,
+    exc: ValidationError,
+    declared: set[str],
+    sole_archive: Optional[str] = None,
 ) -> dict:
     """The ``invalid_argument`` envelope for a schema-level rejection.
 
@@ -250,6 +253,17 @@ def _argument_validation_error(
     pydantic's own ``msg`` is kept verbatim: for the enum case it already
     spells out the legal values ("Input should be 'fulltext', 'title' or
     'suggest'"), which is exactly what the caller needs to retry.
+
+    ``sole_archive`` closes the v3.3.1 field report's fid 27 / fid 11 from
+    the rejection side. ``zim_file_path`` is optional on ``zim_search`` and
+    required on the five tools a search hit is normally handed to, so on the
+    one-archive deployment the README quickstart describes the caller omits
+    it, the search auto-selects, and the follow-up call is refused for a
+    field the caller was never told the value of. Naming the archive is only
+    honest when there is exactly one — with two loaded, picking one would be
+    guessing on the caller's behalf, so the caller gets the unadorned
+    rejection and the pointer at ``zim_health()`` that the archive-path
+    vocabulary in ``error_messages.py`` already carries.
     """
     fields: list[str] = []
     details: list[str] = []
@@ -266,12 +280,16 @@ def _argument_validation_error(
             seen_details.add(detail)
             details.append(detail)
 
+    message = f"`{name}` received invalid argument(s): " + "; ".join(details) + "."
+    if sole_archive and "zim_file_path" in fields:
+        message += (
+            f" Exactly one archive is loaded — retry with "
+            f"`zim_file_path={sole_archive!r}`."
+        )
     return dict(
         tool_error(
             operation="invalid_argument",
-            message=(
-                f"`{name}` received invalid argument(s): " + "; ".join(details) + "."
-            ),
+            message=message,
             extras={"invalid_arguments": fields},
         )
     )
@@ -385,12 +403,36 @@ class EnvelopeAwareMCPServer(MCPServer):
         archive_read_ttl_ms: TTL stamped on reads of archive-backed ``zim://``
             URIs. ``0`` leaves the result alone, so those reads fall back to
             the server-wide ``resources/read`` hint.
+        sole_archive: Zero-argument probe returning the single loaded
+            archive's path, or ``None`` when zero or several are loaded. Read
+            only while building a rejection, never on the success path, so it
+            costs a directory listing on calls that already failed.
     """
 
-    def __init__(self, *args: Any, archive_read_ttl_ms: int = 0, **kwargs: Any) -> None:
-        """Capture the archive TTL, then defer to the SDK constructor."""
+    def __init__(
+        self,
+        *args: Any,
+        archive_read_ttl_ms: int = 0,
+        sole_archive: Optional[Callable[[], Optional[str]]] = None,
+        **kwargs: Any,
+    ) -> None:
+        """Capture the archive TTL and probe, then defer to the SDK constructor."""
         super().__init__(*args, **kwargs)
         self._archive_read_ttl_ms = archive_read_ttl_ms
+        self._sole_archive = sole_archive
+
+    def _sole_archive_path(self) -> Optional[str]:
+        """The lone loaded archive, or ``None`` — never raising.
+
+        A probe that throws while the server is already answering an error
+        must not turn a clear rejection into a stack trace.
+        """
+        if self._sole_archive is None:
+            return None
+        try:
+            return self._sole_archive()
+        except Exception:  # pragma: no cover — defensive; a probe must not throw
+            return None
 
     def add_tool(
         self,
@@ -628,7 +670,9 @@ class EnvelopeAwareMCPServer(MCPServer):
                 raise
             declared = set((tool.parameters.get("properties") or {}) if tool else {})
             return error_result(
-                _argument_validation_error(name, validation_error, declared)
+                _argument_validation_error(
+                    name, validation_error, declared, self._sole_archive_path()
+                )
             )
         if is_tool_error_envelope(result):
             return error_result(result)
