@@ -505,8 +505,61 @@ class TestMalformedFramesShareOneVocabulary:
                 body,
             ],
         )
-        messages = [r["error"]["message"] for r in responses if "error" in r]
-        assert any(expected_message in message for message in messages), responses
+        errors = [r for r in responses if "error" in r]
+        matched = [r for r in errors if expected_message in r["error"]["message"]]
+        assert matched, responses
+        # The HTTP half checks the code and the echoed id; this one asserted
+        # only a substring, so stdio could have answered the right sentence
+        # under the wrong code and nothing would have said so.
+        assert matched[0]["error"]["code"] == -32600, matched[0]
+        assert matched[0].get("id") == echoed_id, matched[0]
+
+    @pytest.mark.parametrize(("body", "expected_message", "echoed_id"), CASES)
+    def test_the_two_transports_send_the_same_sentence(
+        self,
+        mcp_session: "tuple[TestClient, str]",
+        tmp_path: Path,
+        body: str,
+        expected_message: str,
+        echoed_id: "int | None",
+    ) -> None:
+        """The property this class is named for, actually asserted.
+
+        Audit residue on fid 109: the two halves above each checked their own
+        transport against an independently chosen substring and were never
+        compared to each other, so the wordings could drift apart silently —
+        proven by replacing the shared ``_BATCH_UNSUPPORTED`` constant in the
+        HTTP branch with a divergent sentence and watching all six pass. One
+        vocabulary is the whole point: a client that learns a rejection on
+        stdio must recognise the same rejection over HTTP.
+        """
+        client, session_id = mcp_session
+        http = client.post(
+            "/mcp",
+            headers={**_HANDSHAKE_HEADERS, "Mcp-Session-Id": session_id},
+            content=body,
+        ).json()
+
+        responses = _one_shot_stdio_frames(
+            tmp_path,
+            [
+                _INITIALIZE,
+                '{"jsonrpc":"2.0","method":"notifications/initialized"}',
+                body,
+            ],
+        )
+        stdio = next(
+            r
+            for r in responses
+            if "error" in r and expected_message in r["error"]["message"]
+        )
+
+        assert http["error"]["message"] == stdio["error"]["message"], (
+            http["error"]["message"],
+            stdio["error"]["message"],
+        )
+        assert http["error"]["code"] == stdio["error"]["code"]
+        assert http["id"] == stdio.get("id")
 
 
 class TestTrailingSlashEndpointIsServed:
@@ -889,3 +942,62 @@ class TestUnknownToolGetsAnEnvelope:
         result = asyncio.run(server.mcp.call_tool("zim_health", {}))
 
         assert not result.is_error, result
+
+
+class TestNothingClaimsStreamResumptionWorks:
+    """fid 108's audit residue — the fix falsified text it left behind.
+
+    ``UnsupportedResumeHeaderMiddleware`` strips ``Last-Event-ID``
+    unconditionally, so resumption is now a deliberate, permanent, silent
+    no-op. Before the fix a client that believed the docs got a loud 500;
+    after it, the same client gets a silently fresh stream. Five places
+    still told a reader otherwise, including a comment in the very file the
+    fix edits and the docstring of the test the finding named as unable to
+    see the defect.
+    """
+
+    #: Prose that asserts the header does something it does not do.
+    CLAIMS = (
+        "resume a dropped stream",
+        "resume dropped streams",
+        "resume interrupted streams",
+        "resume an interrupted stream",
+    )
+
+    def _sources(self):
+        repo = Path(__file__).resolve().parent.parent
+        for pattern in ("openzim_mcp/**/*.py", "tests/**/*.py"):
+            yield from repo.glob(pattern)
+        yield from (repo / "website/src/content/docs").glob("*.mdx")
+        yield repo / "README.md"
+
+    def test_no_file_says_last_event_id_resumes_anything(self) -> None:
+        offenders = []
+        for path in self._sources():
+            if not path.is_file():
+                continue
+            for lineno, line in enumerate(
+                path.read_text(encoding="utf-8").splitlines(), 1
+            ):
+                if "Last-Event-ID" not in line:
+                    continue
+                for claim in self.CLAIMS:
+                    if claim in line:
+                        offenders.append(f"{path.name}:{lineno}: {claim!r}")
+
+        assert not offenders, (
+            "Last-Event-ID is stripped by UnsupportedResumeHeaderMiddleware "
+            "and this server keeps no event store, so nothing resumes: "
+            + "; ".join(offenders)
+        )
+
+    def test_the_header_is_still_allowed_by_cors(self) -> None:
+        """Paired with the test above so "says nothing about it" cannot be
+        satisfied by removing the header from the allow-list — a browser
+        client that sends it must not be blocked, it just must not be
+        promised a resume."""
+        from openzim_mcp.http_app import CORS_ALLOW_HEADERS
+
+        assert any(
+            h.lower() == "last-event-id" for h in CORS_ALLOW_HEADERS
+        ), CORS_ALLOW_HEADERS

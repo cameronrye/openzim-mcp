@@ -426,11 +426,18 @@ def apply_cors_middleware(app: Starlette, config: object) -> None:
         # The SDK serves both protocol eras on this one endpoint, so the
         # allow-list is the union of what each needs rather than just the
         # 2026-07-28 set. A 2025-era client still opens a session (GET stream,
-        # DELETE to terminate, Mcp-Session-Id on every subsequent request,
-        # Last-Event-ID to resume a dropped stream); a 2026-era client is
-        # stateless and uses none of them. Dropping the legacy entries here
-        # would break browser-based legacy clients while the deprecation
-        # window is still open.
+        # DELETE to terminate, Mcp-Session-Id on every subsequent request);
+        # a 2026-era client is stateless and uses none of them. Dropping the
+        # legacy entries here would break browser-based legacy clients while
+        # the deprecation window is still open.
+        #
+        # ``Last-Event-ID`` stays in the allow-list but does NOT resume
+        # anything: this server configures no event store and never emits SSE
+        # ``id:`` fields, so there is nothing to resume from, and
+        # ``UnsupportedResumeHeaderMiddleware`` strips the header so the
+        # request opens a fresh stream instead of faulting. It is allowed
+        # because a browser client that sends it must not be blocked by CORS,
+        # not because resumption works.
         allow_methods=["GET", "POST", "OPTIONS", "DELETE"],
         # MCP-Protocol-Version is sent by legacy clients post-initialize; the
         # 2026-07-28 revision also defines it as the header form of the

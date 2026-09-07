@@ -181,7 +181,7 @@ Owns streamable-HTTP and legacy-SSE concerns so `server.py` stays focused on MCP
 
 - **Starlette app** with `/healthz` (liveness — always 200) and `/readyz` (returns 503 if no allowed directory is readable).
 - **`BearerTokenAuthMiddleware`** — timing-safe `hmac.compare_digest`; never logs the attempted token; `OPTIONS` is *not* exempt; `/healthz`/`/readyz` are.
-- **CORS** — explicit allow-list via `apply_cors_middleware`; wildcard `*` rejected at config-load time. The header allow-list is the union of both protocol eras the endpoint serves: `Mcp-Session-Id` and `Last-Event-ID` are kept for browser-based handshake-era clients (2026-07-28 removed sessions and stream resumption), while `Mcp-Method` and `Mcp-Name` are what a 2026-07-28 client must send on every POST.
+- **CORS** — explicit allow-list via `apply_cors_middleware`; wildcard `*` rejected at config-load time. The header allow-list is the union of both protocol eras the endpoint serves: `Mcp-Session-Id` and `Last-Event-ID` are kept for browser-based handshake-era clients (2026-07-28 removed sessions and stream resumption) — though `Last-Event-ID` resumes nothing here either: with no event store configured it is stripped and the request opens a fresh stream, while `Mcp-Method` and `Mcp-Name` are what a 2026-07-28 client must send on every POST.
 - **`check_safe_startup`** — refuses to bind a non-loopback host without an auth token (HTTP) or any non-loopback host (SSE has no auth middleware).
 - **Lifespan wrapping** — the subscription watcher is started/stopped via a wrapper around the SDK's own lifespan context (`streamable_http_app()` supplies its own custom lifespan, which means `add_event_handler('startup', …)` is silently a no-op).
 

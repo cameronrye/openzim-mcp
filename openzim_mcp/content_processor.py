@@ -1107,10 +1107,23 @@ def _strip_furniture_sections(soup: BeautifulSoup) -> None:
         # ``find_next_siblings``) also yields bare NavigableString nodes, so
         # loose furniture text between headings is removed too.
         doomed: List[Any] = [root]
-        for sibling in list(root.next_siblings):
-            if _opens_peer_section(sibling, target, level):
-                break
-            doomed.append(sibling)
+        # The sibling walk applies ONLY to the flat layout, where the
+        # heading's body really is a run of following siblings. A promoted
+        # root is a wrapper that already contains the whole section — that
+        # is the entire reason for promoting to it — so continuing to walk
+        # past it collects the page's own content instead.
+        #
+        # Audit residue on the v3.3.1 fid-114 fix: with the walk running on
+        # both, a furniture block not followed by a peer heading took every
+        # remaining sibling with it. Invisible on the shipped MedlinePlus
+        # pages, where furniture always sits last, and so invisible to a
+        # 390-page corpus sweep; an article with real prose after a
+        # furniture block lost it.
+        if root is target:
+            for sibling in list(root.next_siblings):
+                if _opens_peer_section(sibling, target, level):
+                    break
+                doomed.append(sibling)
         for node in doomed:
             if isinstance(node, Tag):
                 node.decompose()

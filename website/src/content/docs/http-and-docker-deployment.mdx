@@ -101,7 +101,7 @@ export OPENZIM_MCP_CORS_ORIGINS='["https://app.example.com","https://other.examp
 ```
 
 - Wildcard `"*"` is **rejected at startup** — including whitespace-padded variants like `" * "`. There is no opt-out. Wildcard CORS combined with bearer-token auth is the canonical recipe for token theft via a malicious site.
-- The allowed headers cover both protocol eras the endpoint serves. `Mcp-Session-Id` and `Last-Event-ID` are there for browser clients still on the `initialize` handshake, which hold a session and resume dropped streams; `Mcp-Method` and `Mcp-Name` are the headers a 2026-07-28 client must send on every POST. `Mcp-Session-Id` is also in `expose_headers` so a handshake-era browser client can read the id the server issued.
+- The allowed headers cover both protocol eras the endpoint serves. `Mcp-Session-Id` and `Last-Event-ID` are there for browser clients still on the `initialize` handshake, which hold a session; `Mcp-Method` and `Mcp-Name` are the headers a 2026-07-28 client must send on every POST. `Mcp-Session-Id` is also in `expose_headers` so a handshake-era browser client can read the id the server issued. `Last-Event-ID` is accepted so a browser client sending it is not blocked by CORS, but this server keeps no event store and never emits SSE `id:` fields, so nothing is resumable: the header is stripped and the request opens a fresh stream.
 - CORS is the *outer* middleware layer (LIFO add order) so a 401 from auth still carries `Access-Control-Allow-Origin` headers — browsers see "401 unauthorized" instead of an opaque CORS error.
 - Allowed methods: `GET`, `POST`, `OPTIONS`, `DELETE` (`DELETE` is the handshake-era session-termination method; a 2026-07-28 client only POSTs).
 

@@ -989,6 +989,24 @@ def _extract_get_section(query: str, params: Dict[str, Any]) -> None:
             params["entry_path"] = m.group(2).strip().rstrip("?.,;:!")
             return
     # Form A: ``[the] section <name> of|in|from <path>``
+    #
+    # v3.3.1 field report: the lazy name capture split at the FIRST
+    # connector, so every heading with "of" in it was unreachable —
+    # including "Table of Contents", which the tool's own ``view='toc'``
+    # prints unquoted and thereby invites a caller to type back. Quoting it
+    # worked; typing it did not.
+    #
+    # Neither end of the string is reliably right. Last-wins breaks
+    # ``section History of A/The History of Rome``, where the second " of "
+    # belongs to the PATH; first-wins breaks the reported case. So the split
+    # is chosen by which tail actually looks like an entry path, and falls
+    # back to the historical first-connector reading when none does — a
+    # genuinely ambiguous ``section Symptoms of Diabetes`` keeps the answer
+    # it has always given.
+    split = _split_section_name_and_path(query)
+    if split is not None:
+        params["section_name"], params["entry_path"] = split
+        return
     # M8: the name capture must tolerate an apostrophe (``section Earth's
     # atmosphere of Earth``). It also has to tolerate the curly DOUBLE
     # quotes an archive puts inside a heading it authored — ``section 2.
@@ -1033,6 +1051,62 @@ def _extract_get_section(query: str, params: Dict[str, Any]) -> None:
     if m:
         params["entry_path"] = m.group(1).strip().rstrip("?.,;:!")
         params["section_name"] = m.group(2).strip()
+
+
+# A tail that reads as an entry path rather than as more prose: it carries a
+# path separator, names an HTML file, or is a single token holding a dot or
+# underscore (``A/Page``, ``medlineplus.gov/asthma.html``,
+# ``wikipedia_en_all``). Deliberately NOT "any single word": ``Rome`` is a
+# perfectly good article title, and treating it as path-shaped would split
+# ``section History of A/The History of Rome`` in the middle of its path.
+_PATH_SHAPED_RE = re.compile(r"(?:/|\.html?$)|^[^\s]*[._][^\s]*$", re.IGNORECASE)
+
+# ``[the] section`` prefix, and the of/in/from connector, for the Form A
+# split. An optional leading verb is consumed so ``get section X of Y`` is
+# read the same way as ``section X of Y`` — the pattern this replaces used a
+# bare ``\b`` and so matched mid-string for free.
+_SECTION_PREFIX_RE = re.compile(
+    r"^\s*(?:(?:get|show|read|display|fetch|open)\s+)?(?:the\s+)?section\s+",
+    re.IGNORECASE,
+)
+_SECTION_CONNECTOR_RE = re.compile(r"\s+(?:of|in|from)\s+", re.IGNORECASE)
+
+
+def _split_section_name_and_path(query: str) -> Optional[Tuple[str, str]]:
+    """``section <name> of <path>`` -> ``(name, path)``, or ``None``.
+
+    Picks among the connectors rather than assuming the first or the last:
+    the LAST one whose tail is path-shaped wins, because the path is the
+    tail and a section name may legitimately contain "of". When no tail is
+    path-shaped the first connector wins, which is what this parser has
+    always done and the only defensible reading of ``section Symptoms of
+    Diabetes``.
+
+    Returns ``None`` when the query is not Form A at all, leaving the
+    remaining forms to try.
+    """
+    prefix = _SECTION_PREFIX_RE.match(query)
+    if not prefix:
+        return None
+    remainder = query[prefix.end() :].strip().rstrip("?")
+    connectors = list(_SECTION_CONNECTOR_RE.finditer(remainder))
+    if not connectors:
+        return None
+
+    def _clean(text: str) -> str:
+        return text.strip().strip("\"'\u201c\u201d\u2018\u2019").strip()
+
+    chosen = connectors[0]
+    for match in reversed(connectors):
+        tail = remainder[match.end() :].strip()
+        if tail and _PATH_SHAPED_RE.search(tail):
+            chosen = match
+            break
+    name = remainder[: chosen.start()].strip()
+    path = remainder[chosen.end() :].strip().rstrip("?.,;:!")
+    if not name or not path:
+        return None
+    return _clean(name), _clean(path)
 
 
 # Post-v2.0.0 D-B: filename hint extractor for the ``metadata`` intent.

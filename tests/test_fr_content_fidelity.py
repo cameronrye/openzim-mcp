@@ -832,3 +832,93 @@ def test_stacked_truth_table_cells_stay_on_their_row(
     # Negative: no cell's values are split across lines any more.
     assert "\nT  \n" not in content
     assert "\n F  \n" not in content
+
+
+# ---------------------------------------------------------------------------
+# 114's blast radius — audit residue
+# ---------------------------------------------------------------------------
+
+# The same wrapped shape, but with real article prose AFTER the furniture
+# section instead of before it. On the shipped MedlinePlus pages every
+# furniture block sits at the end, which is why a 390-page corpus sweep saw
+# no harm — and why nothing tested this.
+FURNITURE_FOLLOWED_BY_PROSE = """\
+<html><body><article>
+  <div class="main">
+    <h1>Asthma</h1>
+    <p>Asthma is a chronic disease that affects your airways.</p>
+    <section id="cat_69_section">
+      <div class="section">
+        <div class="section-header"><div class="section-title">
+          <h2>Patient Handouts</h2>
+        </div></div>
+        <div class="section-body"><ul><li><a href="x">How to use a nebulizer</a></li></ul></div>
+      </div>
+    </section>
+    <p>REAL PROSE THAT MUST SURVIVE.</p>
+    <div class="also"><p>ANOTHER REAL PARAGRAPH.</p></div>
+  </div>
+</article></body></html>
+"""
+
+
+def test_promoting_a_furniture_wrapper_does_not_eat_what_follows_it() -> None:
+    """Audit residue on 114: the promotion widened what gets deleted.
+
+    Before promotion, the extent was the heading plus the heading's own
+    siblings — inside ``div.section-title`` that is nothing. After it, the
+    extent is the promoted ``<section>`` PLUS every following sibling up to
+    the next peer heading — and when the furniture block is not followed by
+    one, that is the rest of the article.
+
+    A promoted wrapper already contains the whole section (heading and
+    body), which is the entire reason for promoting to it, so the sibling
+    walk has nothing left to collect there and only risk to add.
+
+    Measured on the shipped MedlinePlus archive: over 250 wrapped pages the
+    walk removed nothing the promotion had not already removed — furniture
+    leakage is identical with and without it — while 165 pages recover 29
+    characters each and none gets shorter. Those 29 characters are the
+    "Learn how to cite this page" footer, i.e. chrome that was being
+    deleted as collateral rather than by any rule. Removing chrome by
+    accident is not a behaviour worth preserving: the same accident is what
+    ate the prose below.
+    """
+    from openzim_mcp.content_processor import ContentProcessor
+
+    rendered = ContentProcessor().process_mime_content(
+        FURNITURE_FOLLOWED_BY_PROSE.encode(), "text/html", scope_main_content=True
+    )
+
+    # Positive: the article's own prose is still there, both paragraphs.
+    assert "REAL PROSE THAT MUST SURVIVE." in rendered, rendered
+    assert "ANOTHER REAL PARAGRAPH." in rendered, rendered
+    # Negative: and the furniture it follows is still gone.
+    assert "Patient Handouts" not in rendered, rendered
+    assert "nebulizer" not in rendered, rendered
+
+
+def test_the_flat_layout_still_uses_the_sibling_walk() -> None:
+    """Control. Where the heading is NOT wrapped, its body really is a set
+    of following siblings, and dropping the walk there would leave the
+    furniture body behind under the previous section's title — which is the
+    defect 114 was filed for."""
+    from openzim_mcp.content_processor import ContentProcessor
+
+    flat = (
+        "<html><body><article>"
+        "<h1>Asthma</h1><p>Lead prose.</p>"
+        "<h2>Patient Handouts</h2>"
+        "<ul><li><a href='x'>How to use a nebulizer</a></li></ul>"
+        "<h2>Diagnosis</h2><p>Real section body.</p>"
+        "</article></body></html>"
+    )
+
+    rendered = ContentProcessor().process_mime_content(
+        flat.encode(), "text/html", scope_main_content=True
+    )
+
+    assert "Patient Handouts" not in rendered, rendered
+    assert "nebulizer" not in rendered, rendered
+    assert "Real section body." in rendered, rendered
+    assert "Lead prose." in rendered, rendered
