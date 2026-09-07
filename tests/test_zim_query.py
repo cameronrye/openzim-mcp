@@ -36,7 +36,7 @@ def server() -> MagicMock:
     # itself a decorator factory returning the wrapped function unchanged.
     tools_store: dict[str, Any] = {}
 
-    def _tool(*, description: str = ""):
+    def _tool(*, description: str = "", **_kw: object):
         def decorate(fn: Any) -> Any:
             tools_store[fn.__name__] = (fn, description)
             return fn

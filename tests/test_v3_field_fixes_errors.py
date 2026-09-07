@@ -368,7 +368,7 @@ def _register_with_fake_mcp(register, server):
     captured = {}
 
     class _FakeMcp:
-        def tool(self, description=None):
+        def tool(self, description=None, **_kw):
             def deco(fn):
                 captured["fn"] = fn
                 return fn

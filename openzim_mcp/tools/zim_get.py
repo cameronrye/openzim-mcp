@@ -53,6 +53,7 @@ from ..constants import MAX_BATCH_SIZE
 from ..defaults import RATE_LIMIT_COSTS
 from ..responses import tool_error
 from ._common import (
+    READ_ONLY_ANNOTATIONS,
     _clamp_cost_to_capacity,
     enforce_rate_limit,
     load_description,
@@ -101,7 +102,7 @@ def register(server: "OpenZimMcpServer") -> None:
 
     ops = AsyncZimOperations(server.zim_operations)
 
-    @server.mcp.tool(description=_DESCRIPTION)
+    @server.mcp.tool(description=_DESCRIPTION, annotations=READ_ONLY_ANNOTATIONS)
     async def zim_get(
         zim_file_path: str,
         entry_path: Optional[str] = None,

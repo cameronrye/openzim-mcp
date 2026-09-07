@@ -5,6 +5,8 @@ from __future__ import annotations
 import pathlib
 from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple
 
+from mcp.types import ToolAnnotations
+
 from ..constants import MAX_SEARCH_RESULT_LIMIT
 from ..exceptions import (
     OpenZimMcpEntryNotFoundError,
@@ -20,6 +22,22 @@ if TYPE_CHECKING:
     from ..server import OpenZimMcpServer
 
 _DESCRIPTIONS_DIR = pathlib.Path(__file__).parent
+
+# Every tool on this surface reads a local archive and writes nothing, and
+# none of them reaches the network. Both facts are free signal for a client
+# deciding whether a call needs human approval (``readOnlyHint``) or whether
+# its result can be cached and replayed (``openWorldHint``) — the v3.3.1
+# field report found the whole 8-tool surface publishing neither.
+#
+# ``openWorldHint`` is the one that has to be stated rather than left out:
+# the MCP spec defaults it to *true*, so silence advertises the opposite of
+# what an offline-first server does. ``destructiveHint`` and
+# ``idempotentHint`` are deliberately absent — the spec defines both as
+# meaningful only when ``readOnlyHint`` is false, so here they would be two
+# more fields per tool that a correct client must ignore, charged against a
+# schema budget with a hard cap. Pinned by
+# ``tests/test_fr_tool_annotations.py``.
+READ_ONLY_ANNOTATIONS = ToolAnnotations(read_only_hint=True, open_world_hint=False)
 
 # A caller mistake is not a server fault. Every family here means "the request
 # was wrong and the same request will always be wrong": the process is healthy

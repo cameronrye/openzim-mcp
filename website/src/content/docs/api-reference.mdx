@@ -333,6 +333,15 @@ there.
 
 ## Advanced tools (8)
 
+Every tool on this surface — in both modes — is published with the MCP
+annotations `readOnlyHint: true` and `openWorldHint: false`. Nothing here
+writes to an archive and nothing reaches the network, so a client that gates
+auto-approval on `readOnlyHint` can run the whole surface without prompting,
+and one that caches on `openWorldHint` can treat a repeated call as
+replayable. `destructiveHint` and `idempotentHint` are deliberately not
+published: the MCP spec defines both as meaningful only when `readOnlyHint`
+is false.
+
 ### `zim_search`
 
 Full-text / title / suggest search dispatch. Collapses five v1 search tools (`search_zim_file`, `search_all`, `search_with_filters`, `find_entry_by_title`, `get_search_suggestions`) into one.

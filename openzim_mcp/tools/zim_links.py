@@ -13,6 +13,7 @@ from ..exceptions import OpenZimMcpCursorMismatchError
 from ..linkgraph.reader import LinkGraphUnavailable
 from ..responses import tool_error
 from ._common import (
+    READ_ONLY_ANNOTATIONS,
     cursor_context_mismatch,
     decode_cursor_state,
     effective_limit,
@@ -36,7 +37,7 @@ def register(server: "OpenZimMcpServer") -> None:
 
     ops = AsyncZimOperations(server.zim_operations)
 
-    @server.mcp.tool(description=_DESCRIPTION)
+    @server.mcp.tool(description=_DESCRIPTION, annotations=READ_ONLY_ANNOTATIONS)
     async def zim_links(
         zim_file_path: str,
         entry_path: str,

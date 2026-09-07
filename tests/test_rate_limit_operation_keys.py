@@ -33,7 +33,7 @@ def spy_server() -> MagicMock:
     tools_store: Dict[str, Any] = {}
     calls: List[Tuple[str, Any]] = []
 
-    def _tool(*, description: str = ""):
+    def _tool(*, description: str = "", **_kw: object):
         def decorate(fn: Any) -> Any:
             tools_store[fn.__name__] = fn
             return fn
@@ -293,7 +293,7 @@ def live_limiter_server(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
     srv = MagicMock()
     tools_store: Dict[str, Any] = {}
 
-    def _tool(*, description: str = ""):
+    def _tool(*, description: str = "", **_kw: object):
         def decorate(fn: Any) -> Any:
             tools_store[fn.__name__] = fn
             return fn
