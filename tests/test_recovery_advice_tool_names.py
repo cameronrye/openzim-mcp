@@ -111,6 +111,7 @@ ADVICE_REASONS = (
     "sample_only",
     "archive_unavailable",
     "search_all_budget_exceeded",
+    "namespace_not_iterable",
 )
 
 # Backticked bare identifiers that are deliberately NOT tool calls: tool

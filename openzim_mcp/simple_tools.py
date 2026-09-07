@@ -106,6 +106,26 @@ class _HandlerResult:
     suggestions: Optional[List[Dict[str, str]]] = field(default=None)
 
 
+def _carry_reason(body: str, payload: Any) -> Union[str, _HandlerResult]:
+    """Lift a compact-rendered payload's ``_meta.reason`` onto the result.
+
+    The compact renderers turn a structured payload into markdown, which is
+    where ``_meta`` stops existing — so a handler that returns their output
+    directly silently discards any verdict the data layer computed. Handlers
+    that return a plain ``str`` are unaffected; this only wraps when there is
+    something to carry, so the footer step sees a reason exactly when one was
+    stamped.
+    """
+    if isinstance(payload, dict):
+        meta = payload.get("_meta")
+        if isinstance(meta, dict):
+            reason = meta.get("reason")
+            if isinstance(reason, str) and reason:
+                suggestions = meta.get("suggestions") or None
+                return _HandlerResult(body=body, reason=reason, suggestions=suggestions)
+    return body
+
+
 @dataclass(frozen=True)
 class _TellMeAboutSearch:
     """Continue-state from ``_handle_tell_me_about``'s search/recover phase.
@@ -4252,7 +4272,7 @@ class SimpleToolsHandler(
         zim_file_path: str,
         params: Dict[str, Any],
         options: Dict[str, Any],
-    ) -> Union[str, ToolErrorPayload]:
+    ) -> Union[str, "_HandlerResult", ToolErrorPayload]:
         # A15 post-a15 P4-D3: ``walk namespace`` with a malformed
         # argument (multi-char ``AB``, digit ``1``, special ``_``, or
         # missing entirely) previously fell through to
@@ -4337,7 +4357,20 @@ class SimpleToolsHandler(
                     cursor_state=cursor_state,
                     limit=limit,
                 )
-                return compact_renderers.render_walk_namespace(data)
+                # v3.3.1 field report (fid 52). ``walk_namespace_data``
+                # already stamps ``_meta.reason`` — the same
+                # ``bad_namespace`` code ``browse`` uses, which
+                # ``meta.format_footer`` already has mode-aware recovery
+                # prose for. The compact renderer produces markdown and
+                # drops ``_meta``, so returning its string bare threw the
+                # verdict away and ``walk namespace Q`` rendered as
+                # "no entries" — indistinguishable from a namespace that
+                # exists and is empty. Same defect shape as the
+                # ``low_relevance`` drop on the search path: the plumbing
+                # was there, the has-results branch just never used it.
+                return _carry_reason(
+                    compact_renderers.render_walk_namespace(data), data
+                )
             return self.zim_operations.walk_namespace(
                 zim_file_path,
                 namespace,

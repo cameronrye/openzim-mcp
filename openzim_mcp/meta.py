@@ -260,6 +260,7 @@ def format_footer(
         "sample_only",
         "archive_unavailable",
         "search_all_budget_exceeded",
+        "namespace_not_iterable",
     }:
         suggestions = meta.get("suggestions") or []
         visible = suggestions[:3]
@@ -289,6 +290,26 @@ def format_footer(
                         else "ask again without the `content_type` filter. "
                         "This tool cannot discover assets, but `get binary "
                         "content of <path>` fetches one you can already name."
+                    )
+                )
+            if reason == "namespace_not_iterable":
+                # v3.3.1 field report (fid 80 audit residue). The data layer
+                # separates "this namespace holds nothing" from "this
+                # namespace is real but not on this archive's iterable
+                # surface" — and then this footer, gating on a closed set
+                # this code was never added to, rendered both as the same
+                # token-budget line. A verdict nothing renders is a verdict
+                # nobody acts on. Distinct prose from ``bad_namespace``: the
+                # namespace is not the caller's mistake here.
+                return (
+                    "> That namespace exists but this archive does not "
+                    "enumerate it. "
+                    + (
+                        "Try `zim_browse(mode='walk')`, which scans entry ids "
+                        "directly."
+                        if advanced
+                        else "Ask for `walk namespace <namespace>`, which "
+                        "scans entry ids directly."
                     )
                 )
             if reason == "sample_only":
