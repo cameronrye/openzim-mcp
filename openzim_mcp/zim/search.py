@@ -315,6 +315,36 @@ _QUERY_OPERATOR_WORDS = frozenset({"and", "or", "not", "xor", "near", "adj"})
 _QUERY_FIELD_PREFIXES = frozenset({"title", "path"})
 
 
+def _paging_span(*, offset: int, shown: int, next_offset: int, total_text: str) -> str:
+    """The "Showing …" clause, in ONE coordinate system.
+
+    v3.3.1 field report (fid 50). ``offset`` is a position in the ranked
+    stream; the range counts RENDERED rows. They differ exactly when the
+    canonical dedup collapsed query-string twins inside the page — on the
+    shipped MedlinePlus archive, ``asthma`` renders 10 rows out of 12
+    consumed and then recommends ``offset=12``. A caller who reads
+    "Showing 1-10" and pages by ``offset=10`` — the only arithmetic that
+    sentence supports — gets two rows it has already seen.
+
+    fid 67 made the recommendation correct. This makes the sentence around
+    it explain the number, by naming the scan span and the collapse
+    alongside the rendered range. When nothing collapsed the two systems
+    coincide and the wording is byte-identical to what it always was: a
+    clause reconciling a discrepancy that does not exist is its own kind of
+    noise.
+    """
+    shown_range = f"{offset + 1}-{offset + shown}"
+    collapsed = (next_offset - offset) - shown
+    if collapsed <= 0:
+        return f"Showing {shown_range} of {total_text}"
+    plural = "" if collapsed == 1 else "s"
+    return (
+        f"Showing {shown_range} of {total_text} "
+        f"(scanned through {next_offset}; {collapsed} duplicate path{plural} "
+        f"collapsed)"
+    )
+
+
 def _snippet_query(query: str) -> Optional[str]:
     """``query`` without Boolean-operator words, for snippet selection.
 
@@ -506,9 +536,13 @@ def _format_filtered_response(
             resume_offset if resume_offset is not None else scan.filtered_count
         )
         parts.append(
-            f"Showing {offset + 1}-{offset + len(results)} "
-            f"of {total_filtered_text} — "
-            f"pass `offset={next_offset}` for the next page\n"
+            _paging_span(
+                offset=offset,
+                shown=len(results),
+                next_offset=next_offset,
+                total_text=total_filtered_text,
+            )
+            + f" — pass `offset={next_offset}` for the next page\n"
         )
         # A14: when the result set is much larger than a small model can
         # productively page through, nudge toward refining the query
@@ -1478,9 +1512,13 @@ class _SearchMixin:
                 else:
                     next_offset = offset + limit
             result_text += (
-                f"Showing {offset + 1}-{offset + len(results)} "
-                f"of {total_text} — "
-                f"pass `offset={next_offset}` for the next page\n"
+                _paging_span(
+                    offset=offset,
+                    shown=len(results),
+                    next_offset=next_offset,
+                    total_text=total_text,
+                )
+                + f" — pass `offset={next_offset}` for the next page\n"
             )
             # A14: see ``_format_filtered_response`` for the rationale —
             # nudge toward query refinement when the total is much
