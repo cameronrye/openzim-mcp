@@ -406,6 +406,83 @@ def reject_path_traversal(entry_path: str) -> None:
         )
 
 
+# The shortest stored title worth completing from a body heading. "A"
+# prefixes almost any sentence, so a one- or two-character title would let
+# the page's typography overwrite the archive's naming on a coincidence.
+_MIN_COMPLETABLE_TITLE = 3
+
+_LEADING_H1_RE = re.compile(r"^\s*#\s+(.+?)\s*$", re.MULTILINE)
+
+
+def snippet_render_key(validated_path: Optional[str], entry_path: str) -> Optional[str]:
+    """Cache key for one entry's rendered markdown, or ``None``.
+
+    Factored out so the search row can read back the very render its own
+    snippet just produced (see ``completed_title``) without re-deriving the
+    key — two spellings of one key is how a cache silently stops hitting.
+    """
+    if not validated_path or not entry_path:
+        return None
+    try:
+        from openzim_mcp.bundle import archive_stat_token
+
+        return (
+            f"snippet_render:v1:{validated_path}:"
+            f"{archive_stat_token(Path(validated_path))}:"
+            f"{entry_path}"
+        )
+    except Exception:
+        return None
+
+
+def leading_h1(rendered_markdown: str) -> str:
+    """The document's opening ``# `` heading, or ``""``.
+
+    Read from the RENDERED markdown, which every search row already
+    produces to build its snippet and which is cached per entry — so this
+    costs a string scan, not a second body read. The render is
+    query-independent (highlighting happens later, per query in
+    ``create_snippet``), so the text here carries no emphasis markers.
+
+    Only a heading that OPENS the document counts: a ``##`` further down is
+    a section, and a page whose first heading is not an ``h1`` has no title
+    heading to offer.
+    """
+    if not rendered_markdown:
+        return ""
+    # ``match`` (not ``search``) is what makes this "leading": it anchors at
+    # position 0, so a ``# `` further down the document cannot answer, and
+    # ``#\s+`` cannot match ``##`` because the second hash is not
+    # whitespace. An explicit startswith guard here would be unreachable.
+    match = _LEADING_H1_RE.match(rendered_markdown.lstrip())
+    return match.group(1).strip() if match else ""
+
+
+def completed_title(stored_title: str, body_h1: str) -> str:
+    """``stored_title``, completed from ``body_h1`` when it was truncated.
+
+    v3.3.1 field report (fid 70). warc2zim cuts a scraped ``<title>`` at a
+    curly apostrophe, so MedlinePlus stores "Alzheimer" for a page whose
+    own ``<h1>`` reads "Alzheimer's Disease" — and four unrelated pages
+    then carry one indistinguishable title in a result list. The same
+    truncation scores an exact 1.0 title match, so "Sartre" (really
+    "Sartre's Political Philosophy") outranked the real overview article.
+
+    Strictly a PREFIX repair, never a preference. A stored title that
+    merely differs from the heading is the archive's own editorial choice,
+    and overriding it would replace that choice with the page's
+    typography; a stored title LONGER than the heading is already the
+    fuller of the two.
+    """
+    stored = (stored_title or "").strip()
+    h1 = (body_h1 or "").strip()
+    if len(stored) < _MIN_COMPLETABLE_TITLE or len(h1) <= len(stored):
+        return stored_title
+    if not h1.lower().startswith(stored.lower()):
+        return stored_title
+    return h1
+
+
 class _ContentMixin:
     """Entry-content retrieval methods for ZimOperations.
 
@@ -481,19 +558,9 @@ class _ContentMixin:
             # so cache the rendered markdown per (path, entry, stat token) when
             # the caller supplies ``validated_path``; create_snippet then runs
             # per-query over the cached text.
-            render_cache_key: Optional[str] = None
-            entry_path_attr = getattr(entry, "path", "") or ""
-            if validated_path and entry_path_attr:
-                try:
-                    from openzim_mcp.bundle import archive_stat_token
-
-                    render_cache_key = (
-                        f"snippet_render:v1:{validated_path}:"
-                        f"{archive_stat_token(Path(validated_path))}:"
-                        f"{entry_path_attr}"
-                    )
-                except Exception:
-                    render_cache_key = None
+            render_cache_key = snippet_render_key(
+                validated_path, getattr(entry, "path", "") or ""
+            )
             cached_content = (
                 # One lookup per search RESULT, so this is the traffic that
                 # used to swamp the reported hit rate (fid 127).

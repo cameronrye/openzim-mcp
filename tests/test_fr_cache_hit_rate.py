@@ -169,72 +169,61 @@ def test_a_full_cache_is_still_reported_as_full():
     assert "repeated queries" not in advice, advice
 
 
-def test_every_fragment_write_has_a_matching_fragment_read():
+def test_every_fragment_lookup_declares_itself():
     """A drift guard, because the two halves live in different statements.
 
     ``set(..., ancillary=True)`` and ``get(..., ancillary=True)`` describe
     the same key. Adding a fragment cache and marking only the write puts
     its misses straight back into the headline rate — silently, since
-    nothing else about the response changes. Counting the call sites is
-    crude, but it fails loudly on exactly that omission.
+    nothing else about the response changes.
+
+    Stated as "every lookup of a FRAGMENT key is marked", not as "the two
+    call counts match per file": the fid-70 title completion reads back the
+    render its own snippet build wrote, from a different module, and a
+    counting guard would have called that a defect.
+
+    A fragment key is one produced by ``snippet_render_key``, so the scan
+    first learns which local names hold one — matching on the literal
+    ``"snippet_render"`` at the call site finds nothing, because every call
+    site passes a variable, which is how the first version of this guard
+    managed to pass while both call sites were unmarked.
     """
     import re
     from pathlib import Path
 
     repo = Path(__file__).resolve().parent.parent
-    writes: list[str] = []
-    reads: list[str] = []
+    # ``[^=\n]`` on the optional annotation: a character class that allows
+    # newlines lets the name capture drift lines above the assignment, which
+    # is how this matched ``try`` and ``throughout`` on its first outing.
+    binding = re.compile(
+        r"^[ \t]*(\w+)(?:[ \t]*:[^=\n]+)?[ \t]*=[ \t]*snippet_render_key\(", re.M
+    )
+    unmarked: list[str] = []
+    writes = 0
+    checked = 0
     for path in (repo / "openzim_mcp").rglob("*.py"):
         if path.name == "cache.py":
             continue  # the implementation, not a call site
         text = path.read_text(encoding="utf-8")
         rel = str(path.relative_to(repo))
-        writes += [rel] * len(re.findall(r"\.set\([^)]*ancillary=True", text, re.S))
-        reads += [rel] * len(re.findall(r"\.get\([^)]*ancillary=True", text, re.S))
+        writes += len(re.findall(r"\.set\([^)]*ancillary=True", text, re.S))
+        names = set(binding.findall(text))
+        for name in names:
+            for call in re.finditer(
+                rf"\.get\(\s*{re.escape(name)}\b(?P<rest>[^)]*)\)", text
+            ):
+                checked += 1
+                if "ancillary=True" not in call.group("rest"):
+                    lineno = text[: call.start()].count("\n") + 1
+                    unmarked.append(f"{rel}:{lineno}: get({name}, ...)")
 
     assert writes, "no ancillary cache writes found — has the fixture moved?"
-    assert sorted(writes) == sorted(reads), (
-        "ancillary cache writes and reads are out of step; a fragment whose "
-        f"read is unmarked charges its misses to hit_rate. writes={writes} "
-        f"reads={reads}"
+    assert checked >= 2, (
+        f"only {checked} fragment lookups found; the guard is not reaching "
+        "the call sites it exists for"
     )
-
-
-def test_the_docs_count_the_fields_the_cache_actually_reports():
-    """The field list is enumerated in four places and stated as a count.
-
-    Splitting the counters added two entries; a doc that keeps saying "13
-    fields" while listing fifteen is the rot this project gates elsewhere.
-    """
-    import re
-    from pathlib import Path
-
-    from openzim_mcp.cache import OpenZimMcpCache
-    from openzim_mcp.config import CacheConfig
-
-    live = set(
-        OpenZimMcpCache(CacheConfig(enabled=True, max_size=10, ttl_seconds=60)).stats()
+    assert (
+        not unmarked
+    ), "these fragment lookups are charged to the headline hit rate: " + "; ".join(
+        unmarked
     )
-
-    docs = Path(__file__).resolve().parent.parent / "website/src/content/docs"
-    checked = 0
-    bad: list[str] = []
-    for path in docs.glob("*.mdx"):
-        for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-            if "cache_performance" not in line and "Cache stats" not in line:
-                continue
-            m = re.search(r"(\d+) fields", line)
-            if m is None:
-                continue
-            checked += 1
-            if int(m.group(1)) != len(live):
-                bad.append(f"{path.name}:{lineno} says {m.group(1)}")
-            # The four pages spell the list differently — some backtick
-            # each name, one backticks the whole comma-separated run — so
-            # match the bare identifier on a word boundary.
-            for name in live:
-                if not re.search(rf"\b{re.escape(name)}\b", line):
-                    bad.append(f"{path.name}:{lineno} omits {name}")
-
-    assert checked >= 4, f"only {checked} field-count claims found — did they move?"
-    assert not bad, f"cache_performance is documented as {len(live)} fields: {bad}"

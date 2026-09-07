@@ -1284,7 +1284,20 @@ class _SearchMixin:
                 max_paragraphs=max_paragraphs,
                 validated_path=str(validated_path) if validated_path else None,
             )
-            return {"path": entry_id, "title": title, "snippet": snippet}
+            # v3.3.1 field report (fid 70): warc2zim truncates a scraped
+            # <title> at a curly apostrophe, so MedlinePlus stores
+            # "Alzheimer" for a page whose own <h1> says "Alzheimer's
+            # Disease" — and four unrelated pages then share one
+            # indistinguishable title on a result page. The snippet above
+            # has just rendered (and cached) this entry's markdown, whose
+            # first line IS that heading, so completing the title costs a
+            # cache read rather than the second body read that kept this
+            # open. A miss simply leaves the stored title alone.
+            return {
+                "path": entry_id,
+                "title": self._completed_row_title(title, entry_id, validated_path),
+                "snippet": snippet,
+            }
         except Exception as e:
             logger.warning(f"Error processing search result {entry_id}: {e}")
             return {
@@ -1292,6 +1305,35 @@ class _SearchMixin:
                 "title": f"Entry {rank}",
                 "snippet": f"(Error getting entry details: {e})",
             }
+
+    def _completed_row_title(
+        self, title: str, entry_id: str, validated_path: Optional[Path]
+    ) -> str:
+        """``title``, completed from the entry's rendered leading heading.
+
+        Reads the ``snippet_render:v1:`` entry the snippet build just wrote,
+        so this is an ancillary cache hit and never a render. Best-effort
+        throughout: any miss, any failure, and the archive's own title
+        stands — a result row must not be lost to a cosmetic upgrade.
+        """
+        from openzim_mcp.zim.content import (
+            completed_title,
+            leading_h1,
+            snippet_render_key,
+        )
+
+        key = snippet_render_key(
+            str(validated_path) if validated_path else "", entry_id
+        )
+        if not key:
+            return title
+        try:
+            rendered = self.cache.get(key, ancillary=True)
+        except Exception:  # pragma: no cover — cache is best-effort
+            return title
+        if not isinstance(rendered, str):
+            return title
+        return completed_title(title, leading_h1(rendered))
 
     def _format_search_text(
         self,
