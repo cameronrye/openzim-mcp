@@ -211,6 +211,15 @@ class OpenZimMcpCache:
         self._lru_heap: List[Tuple[int, str]] = []
         self._hits: int = 0
         self._misses: int = 0
+        # v3.3.1 field report (fid 127): per-item fragment lookups are
+        # counted apart from response lookups. ``_get_entry_snippet``
+        # consults one ``snippet_render:v1:`` key per search RESULT, so a
+        # 50-row search charged 50 lookups to a rate a human reads as "how
+        # often did the server avoid repeating work for a client" — making
+        # the reported hit rate, and zim_health's verdict on it, a function
+        # of the caller's ``limit`` rather than of the cache.
+        self._ancillary_hits: int = 0
+        self._ancillary_misses: int = 0
         self._lock = threading.RLock()  # Reentrant lock for thread safety
 
         # Background cleanup thread
@@ -348,12 +357,21 @@ class OpenZimMcpCache:
                 # Log but don't crash the cleanup thread
                 logger.debug(f"Error in cache cleanup thread: {e}")
 
-    def get(self, key: str) -> Optional[Any]:
+    def get(self, key: str, *, ancillary: bool = False) -> Optional[Any]:
         """
         Get value from cache (thread-safe).
 
         Args:
             key: Cache key
+            ancillary: Mark this as a per-item fragment lookup (e.g. one
+                entry's rendered markdown) rather than a response lookup, so
+                it lands in the ancillary counters instead of the headline
+                hit rate. The CALL SITE has to say so: ``set`` can infer it
+                from ``_ancillary_keys`` because the key is present, but a
+                miss is precisely the case where it is not — and in the
+                workload fid 127 reported, essentially every polluting
+                lookup was a first-time miss, so a hit-side-only split would
+                have fixed nothing.
 
         Returns:
             Cached value or None if not found/expired
@@ -363,7 +381,7 @@ class OpenZimMcpCache:
 
         with self._lock:
             if key not in self._cache:
-                self._misses += 1
+                self._count_miss(ancillary)
                 return None
 
             entry = self._cache[key]
@@ -371,14 +389,24 @@ class OpenZimMcpCache:
             # Check if expired
             if entry.is_expired():
                 self._remove(key)
-                self._misses += 1
+                self._count_miss(ancillary)
                 logger.debug(f"Cache entry expired: {key}")
                 return None
 
             self._touch(key)
-            self._hits += 1
+            if ancillary:
+                self._ancillary_hits += 1
+            else:
+                self._hits += 1
             logger.debug(f"Cache hit: {key}")
             return entry.value
+
+    def _count_miss(self, ancillary: bool) -> None:
+        """Charge a miss to the right counter (lock held)."""
+        if ancillary:
+            self._ancillary_misses += 1
+        else:
+            self._misses += 1
 
     def _counts_toward_cap(self, ancillary: bool) -> bool:
         """Whether an entry flagged ``ancillary`` is charged to ``max_size``.
@@ -600,6 +628,8 @@ class OpenZimMcpCache:
             self._total_bytes = 0
             self._hits = 0
             self._misses = 0
+            self._ancillary_hits = 0
+            self._ancillary_misses = 0
         logger.info("Cache cleared")
 
     def stats(self) -> Dict[str, Any]:
@@ -621,9 +651,18 @@ class OpenZimMcpCache:
                 "size_bytes": self._total_bytes,
                 "max_bytes": getattr(self.config, "max_bytes", 0),
                 "ttl_seconds": self.config.ttl_seconds,
+                # Response lookups only — see ``get(ancillary=...)``. What
+                # a reader (and ``_append_cache_recommendations``) means by
+                # "hit rate" is whether repeating work was avoided for a
+                # client, and a fragment lookup is not a client asking twice.
                 "hits": self._hits,
                 "misses": self._misses,
                 "hit_rate": round(hit_rate, 4),
+                # Kept visible rather than discarded: the fragment cache is a
+                # real cache whose behaviour is worth seeing, it is just not
+                # the number the recommendation is about.
+                "ancillary_hits": self._ancillary_hits,
+                "ancillary_misses": self._ancillary_misses,
                 "background_cleanup": (
                     self._cleanup_thread is not None and self._cleanup_thread.is_alive()
                 ),

@@ -495,7 +495,11 @@ class _ContentMixin:
                 except Exception:
                     render_cache_key = None
             cached_content = (
-                self.cache.get(render_cache_key) if render_cache_key else None
+                # One lookup per search RESULT, so this is the traffic that
+                # used to swamp the reported hit rate (fid 127).
+                self.cache.get(render_cache_key, ancillary=True)
+                if render_cache_key
+                else None
             )
             if isinstance(cached_content, str):
                 entry_title = getattr(entry, "title", None) or ""

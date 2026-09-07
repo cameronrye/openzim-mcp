@@ -208,7 +208,7 @@ Polling-based mtime watcher, plus the mapping from its change kinds onto MCP not
 
 Single LRU+TTL cache shared across all tools and the smart-retrieval path-mapping store. Backed by an in-memory `dict` plus a heap for O(log n) LRU eviction (a monotonic access counter, not a timestamp, so coarse platform clock resolution cannot break the ordering); optional disk persistence (off by default) at `~/.cache/openzim-mcp-<config-fingerprint>.json`, or an explicit `OPENZIM_MCP_CACHE__PERSISTENCE_PATH`.
 
-Cache stats: 13 fields — `enabled`, `size`, `max_size`, `ancillary_entries`, `total_entries`, `size_bytes`, `max_bytes`, `ttl_seconds`, `hits`, `misses`, `hit_rate`, `background_cleanup`, `persistence_enabled` — plus `persistence_path` and `persistence_file_exists` when persistence is on. Surfaced inside `zim_health` under `.health.cache_performance`; there are no separate management tools. Restarting flushes the cache only when `CACHE__PERSISTENCE_ENABLED` is off; with persistence on it is saved at exit and reloaded at start.
+Cache stats: 15 fields — `enabled`, `size`, `max_size`, `ancillary_entries`, `total_entries`, `size_bytes`, `max_bytes`, `ttl_seconds`, `hits`, `misses`, `hit_rate`, `ancillary_hits`, `ancillary_misses`, `background_cleanup`, `persistence_enabled` — plus `persistence_path` and `persistence_file_exists` when persistence is on. Surfaced inside `zim_health` under `.health.cache_performance`; there are no separate management tools. Restarting flushes the cache only when `CACHE__PERSISTENCE_ENABLED` is off; with persistence on it is saved at exit and reloaded at start.
 
 ### Rate limiter (`rate_limiter.py`)
 
