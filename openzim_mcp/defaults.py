@@ -47,6 +47,15 @@ class ContentDefaults:
     MAX_CONTENT_LENGTH: int = 100000
     SEARCH_LIMIT: int = 10
     MAX_BINARY_SIZE: int = 10_000_000  # 10MB
+    # Hard ceiling on ``max_content_length`` for a binary fetch. Unlike the
+    # text branches — where the cap sizes a paginable window ``content_offset``
+    # can walk — a binary payload ships whole, as one base64 line, with no
+    # continuation. Lives here rather than in ``tools/zim_get.py`` because the
+    # data layer's oversize message has to know it: an entry larger than this
+    # can never be fetched, so telling its caller to "raise max_content_length
+    # to at least <size>" sends them into a refusal and back again. See
+    # ``tests/test_fr_binary_advice_loop.py``.
+    MAX_BINARY_CONTENT_LENGTH: int = 25_000_000  # 25MB
     MAIN_PAGE_TRUNCATION: int = 5000  # Characters for main page display
     # Maximum redirect chain length before bailing out. Real ZIM redirects
     # rarely chain more than once or twice; ten is well above any legitimate

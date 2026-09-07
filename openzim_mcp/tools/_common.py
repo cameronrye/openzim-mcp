@@ -249,6 +249,69 @@ def decode_cursor_state(
     return state, None
 
 
+def limit_out_of_range(
+    limit: Optional[int], *, maximum: int, qualifier: str = ""
+) -> Optional[ToolErrorPayload]:
+    """The ``invalid_limit`` envelope, or ``None`` when ``limit`` is legal.
+
+    v3.3.1 field report (fid 105). Every tool on this surface bounds its
+    ``limit``, but only some of them said so in a shape a client can branch
+    on: ``zim_search`` / ``zim_get`` emitted ``{"operation":
+    "invalid_limit", "message": "`limit` must not exceed 50 …"}`` while
+    ``zim_browse`` and ``zim_links`` let the range check happen one layer
+    down, in the data layer, where it raises the generic validation type and
+    reaches the caller as a 635-character markdown troubleshooting blob with
+    the actual cap under "Technical Details".
+
+    The data-layer checks stay: they are the ones that make the bound true
+    for every caller of ``browse_namespace_data`` and friends, tool wrapper
+    or not. This one runs first so the *tool* answers in the tool surface's
+    vocabulary, which is the same division of labour ``zim_search`` already
+    uses. ``qualifier`` names the mode or direction whose cap is being
+    quoted, because both tools carry more than one.
+    """
+    if limit is None:
+        return None
+    if 1 <= limit <= maximum:
+        return None
+    scope = f" for {qualifier}" if qualifier else ""
+    return tool_error(
+        operation="invalid_limit",
+        message=(
+            f"`limit` must be between 1 and {maximum}{scope} " f"(provided: {limit})."
+        ),
+    )
+
+
+def blank_archive_path(zim_file_path: Optional[str]) -> Optional[ToolErrorPayload]:
+    """The ``invalid_argument`` envelope for an archive path that is blank.
+
+    v3.3.1 field report (fid 32). An empty string satisfies the ``str``
+    annotation, so pydantic passes it through and it fails several layers
+    down in ``PathValidator.validate_path``, which does not know which
+    parameter it was handed: "Path must be a non-empty string". The wrapper
+    then labels that envelope with the argument it *does* know —
+    ``Context: Path: iep.utm.edu/stoicism/`` — so the only concrete string
+    in the whole rejection, printed twice, is the argument that was correct.
+
+    Omitting the same argument produces ``invalid_argument`` with
+    ``invalid_arguments: ["zim_file_path"]``, from the envelope layer's
+    pydantic mapping. Both are "you did not give me an archive", so both
+    answer the same way. Whitespace counts as blank: it reaches the identical
+    raise one layer down.
+    """
+    if zim_file_path is None or zim_file_path.strip():
+        return None
+    return tool_error(
+        operation="invalid_argument",
+        message=(
+            "`zim_file_path` must be a non-empty archive path. Use "
+            "`zim_health()` and pass a `loaded_archives[].path` value verbatim."
+        ),
+        extras={"invalid_arguments": ["zim_file_path"]},
+    )
+
+
 def effective_limit(
     limit: Optional[int], state: Optional[Dict[str, Any]], default: int
 ) -> int:

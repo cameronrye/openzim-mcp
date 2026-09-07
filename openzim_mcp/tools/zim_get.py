@@ -50,11 +50,12 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, List, Literal, Optional, Union
 
 from ..constants import MAX_BATCH_SIZE
-from ..defaults import RATE_LIMIT_COSTS
+from ..defaults import CONTENT, RATE_LIMIT_COSTS
 from ..responses import tool_error
 from ._common import (
     READ_ONLY_ANNOTATIONS,
     _clamp_cost_to_capacity,
+    blank_archive_path,
     enforce_rate_limit,
     load_description,
     tool_error_response,
@@ -86,7 +87,7 @@ _VALID_VIEWS = {"full", "summary", "toc", "structure"}
 # reported event. Anything above it is refused BEFORE the entry is read, so
 # the request costs nothing, rather than clamped — a silent clamp would hand
 # back a short file the caller believes is whole.
-MAX_BINARY_CONTENT_LENGTH = 25_000_000
+MAX_BINARY_CONTENT_LENGTH = CONTENT.MAX_BINARY_CONTENT_LENGTH
 
 # Shared by ``_validate_branch_combination`` and the unreachable-branch guards
 # in the handler. Both must produce the identical envelope: the guards exist
@@ -158,6 +159,9 @@ def register(server: "OpenZimMcpServer") -> None:
             rl = enforce_rate_limit(server, _rl_op)
             if rl is not None:
                 return rl
+            blank = blank_archive_path(zim_file_path)
+            if blank is not None:
+                return blank
             # Post-v2.0.0 D-F (sibling fix from pass-4): mirror the
             # input-validation envelopes ``zim_query`` adopted in pass-3.
             # Pre-fix this advanced surface silently passed

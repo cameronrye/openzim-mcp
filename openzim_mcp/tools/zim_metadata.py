@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any
 
 from ._common import (
     READ_ONLY_ANNOTATIONS,
+    blank_archive_path,
     enforce_rate_limit,
     load_description,
     tool_error_response,
@@ -37,6 +38,9 @@ def register(server: "OpenZimMcpServer") -> None:
             rl = enforce_rate_limit(server, "get_metadata")
             if rl is not None:
                 return rl
+            blank = blank_archive_path(zim_file_path)
+            if blank is not None:
+                return blank
             return await ops.get_archive_metadata_data(zim_file_path)
         except Exception as e:  # noqa: BLE001 — broad catch matches b13 envelope
             return tool_error_response(

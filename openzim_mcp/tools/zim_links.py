@@ -14,10 +14,12 @@ from ..linkgraph.reader import LinkGraphUnavailable
 from ..responses import tool_error
 from ._common import (
     READ_ONLY_ANNOTATIONS,
+    blank_archive_path,
     cursor_context_mismatch,
     decode_cursor_state,
     effective_limit,
     enforce_rate_limit,
+    limit_out_of_range,
     load_description,
     tool_error_response,
 )
@@ -85,6 +87,19 @@ def register(server: "OpenZimMcpServer") -> None:
                         "switch to `direction='outbound'`."
                     ),
                 )
+
+            blank = blank_archive_path(zim_file_path)
+            if blank is not None:
+                return blank
+            # outbound walks the page's own link list (500); inbound and
+            # related read the sidecar's ranked neighbours (100 each).
+            bad_limit = limit_out_of_range(
+                limit,
+                maximum=500 if direction == "outbound" else 100,
+                qualifier=f"direction={direction!r}",
+            )
+            if bad_limit is not None:
+                return bad_limit
 
             if direction == "outbound":
                 if kind not in _VALID_KINDS:

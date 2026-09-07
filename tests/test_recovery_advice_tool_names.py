@@ -209,6 +209,12 @@ ADVANCED_ONLY_ADVICE: Dict[Tuple[str, str, str], str] = {
     ("openzim_mcp/zim/structure.py", "_StructureMixin._get_section_data", "zim_get"): (
         "section-miss payloads; simple mode renders its own body instead"
     ),
+    ("openzim_mcp/tools/_common.py", "blank_archive_path", "zim_health"): (
+        "reached only from the five wrappers that REQUIRE zim_file_path "
+        "(zim_get, zim_get_section, zim_links, zim_browse, zim_metadata), "
+        "none of which is registered in simple mode — zim_query resolves its "
+        "own archive and never passes a blank one down"
+    ),
 }
 
 # A backticked span is read as a tool reference when it is a bare snake_case

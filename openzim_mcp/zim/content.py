@@ -1976,12 +1976,35 @@ class _ContentMixin:
                 # ``max_content_length`` onto this byte cap and never exposes
                 # ``include_data`` / ``max_size_bytes``, so the old hint sent
                 # callers to parameters the tool silently ignores.
-                result["message"] = (
+                #
+                # ...but only when turning it would work. ``zim_get`` refuses
+                # a ``max_content_length`` above
+                # ``CONTENT.MAX_BINARY_CONTENT_LENGTH``, so for a bigger entry
+                # this used to name a number the very next call rejects, whose
+                # rejection sends the caller back to a cap that produces this
+                # message again — a closed loop of the server's own advice.
+                # Past the ceiling there is no in-protocol fetch to advertise,
+                # so say that instead of inventing one.
+                from ..defaults import CONTENT as _CONTENT
+
+                head = (
                     f"Content size ({self._format_size(size)}) exceeds the "
                     f"{self._format_size(max_size_bytes)} byte cap. The metadata "
-                    f"above is complete; raise max_content_length to at least "
-                    f"{size} to fetch the bytes."
+                    f"above is complete; "
                 )
+                if size > _CONTENT.MAX_BINARY_CONTENT_LENGTH:
+                    result["message"] = head + (
+                        "this entry is past the "
+                        f"{_CONTENT.MAX_BINARY_CONTENT_LENGTH:,}-byte ceiling on "
+                        "a binary fetch, which ships as one base64 line with no "
+                        "continuation, so no `max_content_length` will return "
+                        "it — read the file outside the MCP surface."
+                    )
+                else:
+                    result["message"] = head + (
+                        f"raise max_content_length to at least {size} to fetch "
+                        "the bytes."
+                    )
         else:
             result["encoding"] = None
             result["data"] = None
