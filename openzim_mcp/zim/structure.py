@@ -24,7 +24,7 @@ from typing import (
     Union,
     cast,
 )
-from urllib.parse import unquote
+from urllib.parse import unquote, urlparse
 
 from libzim.reader import Archive  # type: ignore[import-untyped]
 
@@ -221,6 +221,63 @@ class _OutboundLinkBuckets(NamedTuple):
         if kind == "media":
             return self.media
         return self.external
+
+
+def _self_host(entry_path: str) -> Optional[str]:
+    """The archive's own host, when its entry paths carry one.
+
+    warc2zim/zimit store a scraped site under its hostname
+    (``iep.utm.edu/aristotle/``); mwoffliner stores ``A/Aristotle``. The
+    first segment is read as a host only when it looks like one — a dot, no
+    whitespace, and no ``%`` (an escaped asset name) — so an mwoffliner
+    archive, whose first segment is a single namespace letter, never yields
+    one and nothing downstream can fire on it.
+
+    Deliberately derived from the entry path rather than from ``M/Source``:
+    the entry path is what a link has to be rewritten INTO, and on archives
+    where the two disagree (a redirect-following scrape, a site served under
+    several names) the metadata would send the rewrite somewhere the archive
+    does not store.
+    """
+    head = entry_path.split("/", 1)[0]
+    if "." not in head or "%" in head:
+        return None
+    if any(ch.isspace() for ch in head) or head.startswith("."):
+        return None
+    return head.lower()
+
+
+def _self_absolute_target(url: str, self_host: str) -> Optional[str]:
+    """``https://www.iep.utm.edu/aris-log/`` -> ``iep.utm.edu/aris-log/``.
+
+    Returns ``None`` unless ``url`` is an http(s) or protocol-relative URL
+    whose host IS the archive's own — matched with and without a leading
+    ``www.``, because warc2zim stores the host the scrape resolved while the
+    page's own links commonly carry the ``www`` alias.
+
+    The result is a CANDIDATE. It is a path shaped like one the archive
+    could hold, not one it does; the caller verifies before promoting
+    anything, because an unverified promotion would replace an under-report
+    with a row claiming a ``path`` that fetches nothing.
+    """
+    if url.startswith("//"):
+        url = "https:" + url
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return None
+    if parsed.scheme.lower() not in ("http", "https") or not parsed.netloc:
+        return None
+    host = parsed.netloc.lower().split("@")[-1].split(":")[0]
+    if host != self_host and host.removeprefix("www.") != self_host:
+        return None
+    path = parsed.path.lstrip("/")
+    # A bare ``https://host/`` names the site root, which is the archive's
+    # main page rather than an article; leave it external rather than
+    # inventing a path for it.
+    if not path:
+        return None
+    return f"{self_host}/{path}"
 
 
 def _entry_content_type(entry: Any) -> str:
@@ -620,7 +677,63 @@ class _StructureMixin:
         """Entry path a media/anchor row's href resolves to, or ``None``."""
         return self._resolve_link_to_entry_path(str(link.get("url", "")), entry_path)
 
-    def _bucket_outbound_links(self, bundle: Any) -> _OutboundLinkBuckets:
+    def _promote_self_absolute_links(
+        self, archive: Any, entry_path: str, external: List[Any]
+    ) -> Tuple[List[Any], List[Any]]:
+        """Split ``external`` into (still external, now internal).
+
+        v3.3.1 field report (fid 17). ``_classify_anchor`` decides
+        internal-vs-external on the SCHEME alone, so on a warc2zim archive —
+        which keeps the scraped site's own links absolute — six of one IEP
+        page's ten "external" rows were ``https://www.iep.utm.edu/…``, every
+        one of them resolvable inside that very archive. They shipped with no
+        ``path``, so a model had to guess the URL-to-path transform, and the
+        transform it was told to guess was wrong (the same report's fid 18).
+        Reported internal links were a third of the real count.
+
+        Only a row the archive can actually serve moves. Promoting an
+        unresolvable same-host link would trade an under-report for a row
+        asserting a ``path`` that fetches nothing, which is worse: a caller
+        can see that a link is external, but cannot see that a ``path`` is
+        fiction. ``_canonical_entry`` returning ``None`` for the entry is
+        exactly that test, and it follows redirects on the way, so
+        ``/ibnrushd/`` promotes with the path it actually serves.
+        """
+        self_host = _self_host(entry_path)
+        if not self_host:
+            return external, []
+        stays: List[Any] = []
+        promoted: List[Any] = []
+        for link in external:
+            candidate = (
+                _self_absolute_target(str(link.get("url", "")), self_host)
+                if isinstance(link, dict)
+                else None
+            )
+            if candidate is None:
+                stays.append(link)
+                continue
+            try:
+                entry, spelling = _canonical_entry(archive, candidate)
+            except Exception as e:  # pragma: no cover — defensive
+                logger.debug(f"self-absolute probe for {candidate} failed: {e}")
+                entry = None
+                spelling = candidate
+            if entry is None:
+                stays.append(link)
+                continue
+            row = {k: v for k, v in link.items() if k != "domain"}
+            row["type"] = "internal"
+            # Resolved here rather than left to ``_resolve_page_paths``:
+            # ``_resolve_link_to_entry_path`` refuses anything carrying
+            # ``://`` by design, and this row's ``url`` still does.
+            row["path"] = spelling
+            promoted.append(row)
+        return stays, promoted
+
+    def _bucket_outbound_links(
+        self, bundle: Any, archive: Any = None
+    ) -> _OutboundLinkBuckets:
         """Split the bundle's raw link lists into the reported categories.
 
         BUG #6: the bundle 'internal' bucket carries BOTH real
@@ -682,9 +795,15 @@ class _StructureMixin:
                 anchor_wrapped_assets.append({**lk, "type": "asset"})
             else:
                 cross_article_internal.append(lk)
+        external_rows = cast("List[Any]", bundle["links"]["external"])
+        if archive is not None:
+            external_rows, promoted = self._promote_self_absolute_links(
+                archive, entry_path, external_rows
+            )
+            cross_article_internal = cross_article_internal + promoted
         return _OutboundLinkBuckets(
             internal=cross_article_internal,
-            external=cast("List[Any]", bundle["links"]["external"]),
+            external=external_rows,
             media=media_rows + anchor_wrapped_assets,
             anchor_count=anchor_count,
             folded_targets=folded_targets,
@@ -777,7 +896,7 @@ class _StructureMixin:
                 bundle = self._build_bundle(
                     archive, entry_path, validated_path=validated_path
                 )
-                buckets = self._bucket_outbound_links(bundle)
+                buckets = self._bucket_outbound_links(bundle, archive)
                 all_links_for_kind = buckets.for_kind(kind)
                 total_for_kind = len(all_links_for_kind)
                 page = self._resolve_page_paths(

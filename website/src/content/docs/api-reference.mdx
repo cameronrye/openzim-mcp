@@ -528,6 +528,8 @@ zim_links(
 
 Relative hrefs are resolved against the source entry's directory; redirects are followed to resolved paths; the content namespace is identified correctly on domain-scheme archives; self-referential refs are rejected.
 
+On a scraped archive (warc2zim/ZIMIT), whose entry paths are host-prefixed, the site's own links are commonly stored as **absolute URLs** — `https://www.iep.utm.edu/aris-log/` inside `iep.utm.edu/aristotle/`. Those count as `internal`, with a resolved `path`, whenever the archive can actually serve them: the host is matched against the archive's own with and without a leading `www.`, and the candidate path is verified (and redirect-followed) before the row moves. A same-host URL the archive never captured stays `external` — a `path` that fetches nothing would be worse than an honest external row. On mwoffliner archives, where the first path segment is a namespace letter rather than a host, nothing is promoted.
+
 **Returns:** a paginated `{results, next_cursor, total, done, page_info, …}` envelope for every direction. `direction="outbound"` adds `kind` and `category_totals` alongside; `"inbound"` and `"related"` carry neither, and key the article as `entry_path` rather than `path`/`title`.
 
 Outbound entries carry `url`/`text`/`title` (plus `domain` for external, `alt` for media). **`url` is the raw href as written in the article** — it does not necessarily round-trip into `zim_get`. Internal rows additionally carry `path`, the resolved entry path, and that is the one to pass to `zim_get`. Inbound entries are `{path, title, inbound_degree, anchor_text}`; related entries are `{path, title, …}` rows.
