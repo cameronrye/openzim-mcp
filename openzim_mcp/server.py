@@ -571,7 +571,10 @@ class OpenZimMcpServer:
                         "Switch to --transport http (streamable HTTP): it is "
                         "the transport the current MCP revision specifies, "
                         "and the only network transport here that can "
-                        "enforce an auth token."
+                        "enforce an auth token. It also classifies malformed "
+                        "JSON-RPC frames, which SSE does not: over SSE an "
+                        "unusable request id is accepted with 202 and then "
+                        "dropped, and the client waits forever."
                     )
                     http_app.check_safe_startup(self.config)
                     # The v2 SDK has no settings object: the SSE path takes

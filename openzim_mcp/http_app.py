@@ -1019,6 +1019,17 @@ def serve_streamable_http(
     # Added FIRST, so it is the INNERMOST layer: nothing else has looked at
     # the frame by the time it runs, and everything above has already had its
     # say. See JsonRpcFrameGateMiddleware.
+    #
+    # This covers streamable HTTP only. The deprecated ``sse`` transport is
+    # served by ``MCPServer.run(transport="sse")``, which builds and runs its
+    # own ASGI app inside the SDK and never reaches here — so an unusable
+    # request id over SSE still gets 202-and-drop, which is what v3.3.1's
+    # fid 107 reported on that transport. Wiring the gate there means
+    # reimplementing ``run_sse_async``'s uvicorn and transport-security
+    # setup for a transport already deprecated for removal in 4.0.0; the gap
+    # is recorded here and asserted by
+    # ``TestTheFrameGateCoversStreamableHttpOnly`` rather than left to be
+    # discovered again. stdio is covered separately, by ``_StdinFrames``.
     app.add_middleware(JsonRpcFrameGateMiddleware)
     # Next: the GET stream's resume header, dropped before the SDK can fault
     # on it. See UnsupportedResumeHeaderMiddleware.

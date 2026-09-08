@@ -1001,3 +1001,68 @@ class TestNothingClaimsStreamResumptionWorks:
         assert any(
             h.lower() == "last-event-id" for h in CORS_ALLOW_HEADERS
         ), CORS_ALLOW_HEADERS
+
+
+class TestTheFrameGateCoversStreamableHttpOnly:
+    """fid 107's audit residue — a third transport was left untouched.
+
+    The malformed-frame classification was wired into stdio and streamable
+    HTTP. The deprecated ``sse`` transport is served by
+    ``MCPServer.run(transport="sse")``, which builds and runs its own ASGI
+    app inside the SDK, so no middleware added by ``serve_streamable_http``
+    reaches it: over SSE an unusable request id is still accepted with 202
+    and dropped, which is the shape fid 107's own repro recorded there.
+
+    Wiring it means reimplementing ``run_sse_async``'s uvicorn and
+    transport-security setup for a transport already deprecated for removal
+    in 4.0.0. The gap is asserted here instead of assumed away — if the
+    gate ever does cover SSE, this test is what says the record is stale.
+    """
+
+    def test_streamable_http_installs_the_gate(self, tmp_path: Path) -> None:
+        from openzim_mcp.http_app import JsonRpcFrameGateMiddleware
+
+        client, _server = _build_http_client(tmp_path)
+        installed = {
+            getattr(m, "cls", None) for m in client.app.user_middleware  # type: ignore[attr-defined]
+        }
+
+        assert JsonRpcFrameGateMiddleware in installed, installed
+
+    def test_the_sse_path_does_not_route_through_the_http_app_builder(self) -> None:
+        """The mechanism behind the gap, pinned at its source.
+
+        ``run``'s sse branch calls ``self.mcp.run(transport="sse")``; every
+        middleware this server adds is added in ``serve_streamable_http``.
+        A reader tracing "is my frame checked?" should find this stated.
+        """
+        import inspect
+
+        from openzim_mcp import http_app
+        from openzim_mcp import server as server_mod
+
+        source = inspect.getsource(server_mod.OpenZimMcpServer.run)
+        sse_branch = source.split('if transport == "sse":', 1)
+        assert len(sse_branch) == 2, "the sse branch moved; re-check the gap"
+        assert "serve_streamable_http" not in sse_branch[1], sse_branch[1][:400]
+
+        gate_wiring = inspect.getsource(http_app.serve_streamable_http)
+        assert "JsonRpcFrameGateMiddleware" in gate_wiring
+
+    def test_the_deprecation_notice_names_the_gap(self) -> None:
+        """An operator choosing SSE should learn this when they choose it,
+        not from a transcript of a client that hung."""
+        import inspect
+
+        from openzim_mcp import server as server_mod
+
+        source = inspect.getsource(server_mod.OpenZimMcpServer.run)
+
+        # Not a bare "202": the same three digits sit inside "2026-07-28"
+        # eight lines below, which is enough to make a loose assertion pass
+        # while the sentence it is checking has been reworded away.
+        assert "accepted with 202" in source, (
+            "the SSE deprecation notice no longer says what SSE does with an "
+            "unusable request id"
+        )
+        assert "dropped" in source, source[-600:]
