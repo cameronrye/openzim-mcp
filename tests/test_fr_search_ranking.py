@@ -33,6 +33,7 @@ what the tool actually emits.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from unittest.mock import MagicMock
@@ -163,6 +164,24 @@ def _stream(n: int, prefix: str = "medlineplus.gov/ency/article/") -> List[str]:
 # ---------------------------------------------------------------------------
 # fid 28 / 63 / 125 — the fulltext page needs a response budget
 # ---------------------------------------------------------------------------
+
+
+def _links_to_the_archive_library(message: str) -> bool:
+    """Whether ``message`` points the reader at the Kiwix archive library.
+
+    Compares the parsed host of each URL in the message rather than testing
+    for a host substring: a substring test also passes for
+    ``https://evil.example/?u=browse.library.kiwix.org``, which is why
+    CodeQL's ``py/incomplete-url-substring-sanitization`` reads that shape as
+    a defect wherever it appears. The stricter form is what this assertion
+    always meant.
+    """
+    from urllib.parse import urlparse
+
+    return any(
+        urlparse(candidate).netloc == "browse.library.kiwix.org"
+        for candidate in re.findall(r"https?://\S+", message)
+    )
 
 
 class TestFulltextResponseBudget:
@@ -605,7 +624,7 @@ class TestZeroArchivesIsNotZeroHits:
         assert out["operation"] == "no_archives_loaded"
         # Positive: the message says what is wrong and where to get one.
         assert "no `.zim` files" in out["message"], out["message"]
-        assert "https://browse.library.kiwix.org/" in out["message"], out["message"]
+        assert _links_to_the_archive_library(out["message"]), out["message"]
         # Negative: it must not read as a successful empty search.
         assert "results" not in out
 
@@ -621,7 +640,7 @@ class TestZeroArchivesIsNotZeroHits:
         assert out.get("error") is True, out
         assert out["operation"] == "no_archives_loaded"
         assert "promotion" not in out["message"].lower(), out["message"]
-        assert "https://browse.library.kiwix.org/" in out["message"]
+        assert _links_to_the_archive_library(out["message"]), out["message"]
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("mode", ["fulltext", "title", "suggest"])
@@ -640,7 +659,7 @@ class TestZeroArchivesIsNotZeroHits:
         assert "load exactly one archive" not in out["message"], out["message"]
         assert "cross_file=True" not in out["message"], out["message"]
         # Positive: the acquisition route is.
-        assert "https://browse.library.kiwix.org/" in out["message"]
+        assert _links_to_the_archive_library(out["message"]), out["message"]
 
     @pytest.mark.asyncio
     async def test_multi_archive_advice_is_unchanged(self, tmp_path) -> None:
