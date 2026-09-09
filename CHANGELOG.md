@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.3.2](https://github.com/cameronrye/openzim-mcp/compare/v3.3.1...v3.3.2) (2026-09-09)
+
+
+### Fixed
+
+* close the real-world field report's findings and its audit residues ([#429](https://github.com/cameronrye/openzim-mcp/issues/429)) ([b722fa9](https://github.com/cameronrye/openzim-mcp/commit/b722fa9d2b89d23bc689c0f23b7e1840335fbce6))
+* **deps:** take httpx2 2.12.0 for three advisories ([#430](https://github.com/cameronrye/openzim-mcp/issues/430)) ([1ca3eb3](https://github.com/cameronrye/openzim-mcp/commit/1ca3eb3649d9a8c5ee14a93abd0daeb8242aeed0))
+
 ## [3.3.1](https://github.com/cameronrye/openzim-mcp/compare/v3.3.0...v3.3.1) (2026-09-04)
 
 
