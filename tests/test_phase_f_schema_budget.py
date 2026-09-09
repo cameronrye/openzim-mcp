@@ -89,10 +89,14 @@ TOTAL_CAP = 25 * 1024
 # Every figure rose 58B in v3.3.2: the field-report fix that gave all eight
 # tools ``readOnlyHint``/``openWorldHint`` spends 464B of the reserved
 # headroom, bought back from a client that no longer has to ask a human
-# whether a read is safe. The allocations themselves are unchanged — the
-# bytes came out of the reserve, not out of a neighbour's prose.
+# whether a read is safe. ``zim_query`` then took a further 206B for four
+# OPERATIONS rows (fid 30): on a one-tool surface an unadvertised
+# capability is an absent one, and ``summary``/``toc``/``get_section``/
+# ``inbound_links`` all routed while appearing in no row. The allocations
+# themselves are unchanged — the bytes came out of the reserve, not out of
+# a neighbour's prose.
 ALLOCATION = {
-    "zim_query": 5_550,  # 6,308B
+    "zim_query": 5_550,  # 6,514B
     "zim_search": 3_620,  # 3,994B
     "zim_get": 3_650,  # 3,980B
     "zim_get_section": 1_840,  # 2,001B
@@ -294,7 +298,7 @@ def test_gate_decision_scope_limitations_documented():
 # Both were comments before they were tests, and both had gone stale.
 # --------------------------------------------------------------------------
 
-# ``"zim_query": 5_550,  # 6,308B`` -> ("zim_query", "6,277")
+# ``"zim_query": 5_550,  # 6,514B`` -> ("zim_query", "6,277")
 _ALLOCATION_COMMENT_RE = re.compile(
     r'^\s*"(zim_[a-z_]+)":\s*[\d_]+,\s*#\s*([\d,]+)B\s*$', re.MULTILINE
 )

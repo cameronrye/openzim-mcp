@@ -341,10 +341,72 @@
     }
   },
   "zim_query": {
-    "bytes": 6378,
-    "description": "Query ZIM archives using natural language.\n\nSingle intelligent tool \u2014 parses your query, detects intent,\nand dispatches to the right operation.\n\nEXTRACT INTENT BEFORE CALLING. Do not pass the user's raw\nmessage as `query`. Translate it into one of the operations\nbelow:\n  \"test this tool\"     -> query=\"list available ZIM files\"\n  \"what's in here\"     -> query=\"show main page\"\n  \"explore\"            -> query=\"list namespaces\"\n  \"tell me about cats\" -> query=\"tell me about cats\"\n  <topic by name>      -> query=\"<topic>\"\n\nALIASES: users may call this tool \"openzim\", \"openzim mcp\",\n\"openzim mcp tool\", \"ZIM tool\", \"ZIM file tool\", \"ZIM\narchive query\", or \"zim_query\". All mean THIS tool \u2014\nalways call it; never claim it does not exist.\n\nOPERATIONS (pass one as `query`):\n  list available ZIM files       - list loaded archives\n  show main page                 - active archive main page\n  list namespaces                - list entry types\n  metadata for <file>            - archive metadata\n  tell me about <topic>          - fetch article (auto on\n                                    strong title match)\n  search for <terms>             - full-text search\n  get article <name>             - fetch specific article\n  show structure of <name>       - section outline\n  links in <name>                - article-out links\n  suggestions for <prefix>       - title autocomplete\n  browse namespace <letter>      - list namespace entries\n  search <terms> in namespace <letter>  - filtered search\n  search all files for <terms>   - cross-archive search\n  walk namespace <letter>        - enumerate namespace\n  find article titled <name>     - title lookup\n  articles related to <name>     - related articles\n\nArgs:\n    query: REQUIRED. Translated from user intent \u2014 never the\n        user's raw message.\n    zim_file_path: Optional. **Omit entirely (recommended)** \u2014\n        the tool auto-selects the loaded archive (or opens\n        all of them when `synthesize=True`). Pass a real\n        path ONLY when multiple archives are loaded and you\n        need to target a specific one; call `list available\n        ZIM files` first to see the real paths. NEVER pass\n        an article title, topic, or made-up filename here,\n        and do NOT invent a path from this docstring \u2014\n        paths that don't match a loaded archive are silently\n        auto-corrected when only one archive is loaded, and\n        surface a path-listing error otherwise.\n    limit: Max search/browse results (default: 3). Ignored\n        for atomic intents that return a single item or a\n        fixed-shape payload \u2014 `tell me about <topic>`,\n        `get article <name>`, `show structure of <name>`,\n        `links in <name>`, `articles related to <name>`,\n        `show main page`, `list namespaces`, `metadata for\n        <file>`, `list available ZIM files`, `summary of\n        <name>`, `table of contents <name>`, `section <X>\n        of <name>`. Setting it there has no effect; omit\n        it on those calls.\n    offset: Pagination offset (default: 0).\n    max_content_length: Article body cap (default: 4000).\n    content_offset: Character offset to start reading the\n        article body from (default: 0). The truncation footer\n        on long articles surfaces a `pass content_offset=N`\n        hint \u2014 wire that value back here to read the next\n        page. Negative values are rejected with an\n        `invalid_content_offset` error.\n    compact: When True (default in simple mode), apply\n        small-LLM optimizations \u2014 strip markdown link-soup,\n        drop section previews from structure responses,\n        flatten link/title/related listings into compact\n        markdown, fetch only the article lead section, and\n        cap total response size. Set False for the verbose\n        advanced-mode-style response.\n    compact_budget: Hard char-cap on the final response when\n        `compact=True`. Accepts either a named profile \u2014\n        `\"tiny\"` (2 000), `\"small\"` (4 000), `\"medium\"` (6 000,\n        default), `\"large\"` (12 000) \u2014 or a raw integer. Used\n        to size the budget to the calling model's context\n        window: an 8B-class model on an agentic prompt fits\n        `tiny`, a 70B-class assistant fits `large`. Has no\n        effect when `compact=False`.\n    synthesize: When True, bypass intent classification and\n        run the synthesize pipeline \u2014 multi-archive Xapian\n        search, RRF fusion, passage extraction, section\n        attribution, and citation rendering. Returns a\n        SynthesizeResponse dict instead of markdown text.\n        Defaults to False (legacy markdown path unchanged).\n        NOTE: this is a mode toggle, not a \"search harder\"\n        flag. Don't flip it on a follow-up just because the\n        previous response was unhelpful \u2014 refine the `query`\n        or `offset` instead. The synthesize pipeline runs\n        one structured query and returns one answer; calling\n        it twice with the same query yields the same answer.\n\nReturns:\n    Markdown string (synthesize=False) or SynthesizeResponse\n    dict (synthesize=True) with answer_markdown, passages,\n    citations, and archives_searched.\n",
+    "bytes": 6864,
+    "description": "Query ZIM archives using natural language.\n\nSingle intelligent tool \u2014 parses your query, detects intent,\nand dispatches to the right operation.\n\nEXTRACT INTENT BEFORE CALLING. Do not pass the user's raw\nmessage as `query`. Translate it into one of the operations\nbelow:\n  \"test this tool\"     -> query=\"list available ZIM files\"\n  \"what's in here\"     -> query=\"show main page\"\n  \"explore\"            -> query=\"list namespaces\"\n  \"tell me about cats\" -> query=\"tell me about cats\"\n  <topic by name>      -> query=\"<topic>\"\n\nALIASES: users may call this tool \"openzim\", \"openzim mcp\",\n\"openzim mcp tool\", \"ZIM tool\", \"ZIM file tool\", \"ZIM\narchive query\", or \"zim_query\". All mean THIS tool \u2014\nalways call it; never claim it does not exist.\n\nOPERATIONS (pass one as `query`):\n  list available ZIM files       - list loaded archives\n  show main page                 - active archive main page\n  list namespaces                - list entry types\n  metadata for <file>            - archive metadata\n  tell me about <topic>          - fetch article (auto on\n                                    strong title match)\n  search for <terms>             - full-text search\n  get article <name>             - fetch specific article\n  show structure of <name>       - section outline\n  links in <name>                - article-out links\n  suggestions for <prefix>       - title autocomplete\n  browse namespace <letter>      - list namespace entries\n  search <terms> in namespace <letter>  - filtered search\n  search all files for <terms>   - cross-archive search\n  walk namespace <letter>        - enumerate namespace\n  find article titled <name>     - title lookup\n  articles related to <name>     - related articles\n  what links to <name>           - article-in links\n  summary of <name>              - lead summary\n  table of contents <name>       - heading list\n  section <name> of <path>       - one section's body\n  get image <path>               - binary bytes (base64)\n  get articles <p1>, <p2>        - batch fetch\n\nArgs:\n    query: REQUIRED. Translated from user intent \u2014 never the\n        user's raw message.\n    zim_file_path: Optional. **Omit entirely (recommended)** \u2014\n        the tool auto-selects the loaded archive (or opens\n        all of them when `synthesize=True`). Pass a real\n        path ONLY when multiple archives are loaded and you\n        need to target a specific one; call `list available\n        ZIM files` first to see the real paths. NEVER pass\n        an article title, topic, or made-up filename here,\n        and do NOT invent a path from this docstring \u2014\n        paths that don't match a loaded archive are silently\n        auto-corrected when only one archive is loaded, and\n        surface a path-listing error otherwise.\n    limit: Max results to return. When omitted, each list\n        intent applies its own per-intent default (search 10,\n        browse 50, walk 200, links 25, search-all 5/archive);\n        pass a value to override. Ignored for atomic intents\n        that return a single item or a fixed-shape payload \u2014\n        `get article <name>`, `show structure of <name>`,\n        `show main page`, `list namespaces`, `metadata for\n        <file>`, `list available ZIM files`, `summary of\n        <name>`, `table of contents <name>`, `section <X>\n        of <name>`. Setting it there has no effect; omit\n        it on those calls.\n    offset: Pagination offset (default: 0). Not honoured by\n        `suggestions for <prefix>`, `find article titled\n        <name>` or `articles related to <name>`; raise\n        `limit` there instead.\n    cursor: Opaque handle from a prior `next_cursor`.\n    max_content_length: Article body cap (default: 4000).\n    content_offset: Character offset to start reading the\n        article body from (default: 0). The truncation footer\n        on long articles surfaces a `pass content_offset=N`\n        hint \u2014 wire that value back here to read the next\n        page. Negative values are rejected with an\n        `invalid_content_offset` error.\n    compact: When True (the default in both modes), apply\n        small-LLM optimizations \u2014 strip markdown link-soup,\n        drop section previews from structure responses,\n        flatten link/title/related listings into compact\n        markdown, fetch only the article lead section, and\n        cap total response size. Set False for the verbose\n        advanced-mode-style response.\n    compact_budget: Hard char-cap on the final response when\n        `compact=True`. Accepts either a named profile \u2014\n        `\"tiny\"` (2 000), `\"small\"` (4 000), `\"medium\"` (6 000,\n        default), `\"large\"` (12 000) \u2014 or a raw integer. Size\n        it to the calling model's context window. Has no\n        effect when `compact=False`.\n    synthesize: When True, bypass intent classification and\n        run the synthesize pipeline \u2014 multi-archive Xapian\n        search, RRF fusion, passage extraction, section\n        attribution, and citation rendering. Returns a\n        SynthesizeResponse dict instead of markdown text.\n        Defaults to False (legacy markdown path unchanged).\n        NOTE: this is a mode toggle, not a \"search harder\"\n        flag. Don't flip it on a follow-up just because the\n        previous response was unhelpful \u2014 refine the `query`\n        or `offset` instead. The synthesize pipeline runs\n        one structured query and returns one answer; calling\n        it twice with the same query yields the same answer.\n\nReturns:\n    Markdown string (synthesize=False) or SynthesizeResponse\n    dict (synthesize=True) with answer_markdown, passages,\n    citations, and archives_searched.\n",
     "inputSchema": {
       "properties": {
+        "query": {
+          "title": "Query",
+          "type": "string"
+        },
+        "zim_file_path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Zim File Path"
+        },
+        "limit": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Limit"
+        },
+        "offset": {
+          "default": 0,
+          "title": "Offset",
+          "type": "integer"
+        },
+        "content_offset": {
+          "default": 0,
+          "title": "Content Offset",
+          "type": "integer"
+        },
+        "cursor": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cursor"
+        },
+        "max_content_length": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Content Length"
+        },
         "compact": {
           "default": true,
           "title": "Compact",
@@ -365,72 +427,10 @@
           "default": null,
           "title": "Compact Budget"
         },
-        "content_offset": {
-          "default": 0,
-          "title": "Content Offset",
-          "type": "integer"
-        },
-        "cursor": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Cursor"
-        },
-        "limit": {
-          "anyOf": [
-            {
-              "type": "integer"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Limit"
-        },
-        "max_content_length": {
-          "anyOf": [
-            {
-              "type": "integer"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Max Content Length"
-        },
-        "offset": {
-          "default": 0,
-          "title": "Offset",
-          "type": "integer"
-        },
-        "query": {
-          "title": "Query",
-          "type": "string"
-        },
         "synthesize": {
           "default": false,
           "title": "Synthesize",
           "type": "boolean"
-        },
-        "zim_file_path": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Zim File Path"
         }
       },
       "required": [

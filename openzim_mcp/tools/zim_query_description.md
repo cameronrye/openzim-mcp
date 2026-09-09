@@ -35,6 +35,10 @@ OPERATIONS (pass one as `query`):
   walk namespace <letter>        - enumerate namespace
   find article titled <name>     - title lookup
   articles related to <name>     - related articles
+  what links to <name>           - article-in links
+  summary of <name>              - lead summary
+  table of contents <name>       - heading list
+  section <name> of <path>       - one section's body
   get image <path>               - binary bytes (base64)
   get articles <p1>, <p2>        - batch fetch
 

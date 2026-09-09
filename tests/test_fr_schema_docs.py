@@ -57,6 +57,7 @@ from openzim_mcp.exceptions import OpenZimMcpEntryNotFoundError
 from openzim_mcp.intent_parser import IntentParser
 from openzim_mcp.security import PathValidator
 from openzim_mcp.server import OpenZimMcpServer
+from openzim_mcp.simple_tools import SimpleToolsHandler
 from openzim_mcp.zim_operations import ZimOperations
 
 # --------------------------------------------------------------------------
@@ -392,6 +393,48 @@ class TestZimQueryMenuIsTheWholeSurface:
                 f"no OPERATIONS row dispatches to {intent!r}; menu rows were "
                 f"{sorted(reachable)}"
             )
+
+    def test_every_routable_intent_has_a_menu_row(self) -> None:
+        """The direction the sibling test above does not check.
+
+        ``test_every_menu_row_reaches_its_own_handler`` walks rows -> intents,
+        so a capability with a handler and no row is invisible to it — which
+        is how ``summary``, ``toc``, ``get_section`` and ``inbound_links``
+        stayed unadvertised while fid 30 was recorded as closed. On a
+        one-tool surface an unadvertised capability is an absent one: this
+        block IS the client's API.
+
+        Stated against the dispatcher's own table rather than a hand-copied
+        list, so a new handler cannot be added without either advertising it
+        or saying here why it is not advertised.
+        """
+        rows = _operations_rows(_wire_description("zim_query", mode="simple"))
+        parser = IntentParser()
+        advertised = {parser.parse_intent(_example_for(row))[0] for row in rows}
+
+        missing = sorted(
+            set(SimpleToolsHandler._INTENT_HANDLERS) - advertised - _UNADVERTISED
+        )
+        assert not missing, (
+            "these intents route but appear in no OPERATIONS row, so a "
+            f"simple-mode client cannot discover them: {missing}"
+        )
+
+    def test_the_unadvertised_set_does_not_hide_a_live_capability(self) -> None:
+        """Paired with the test above so the exemption list cannot be used to
+        silence it: anything named there must actually not be routable."""
+        stale = sorted(_UNADVERTISED & set(SimpleToolsHandler._INTENT_HANDLERS))
+        assert not stale, (
+            f"{stale} are exempted from the menu but the dispatcher routes "
+            "them; either advertise them or drop them from the exemption"
+        )
+
+
+# Intents the OPERATIONS menu deliberately does not carry. Empty today:
+# every intent the dispatcher routes is advertised. Kept as the seam for a
+# future internal-only intent, so declining to advertise one is a decision
+# recorded here rather than an omission nothing notices.
+_UNADVERTISED: frozenset[str] = frozenset()
 
 
 class TestCompactBudgetNamesTheToolThatHonoursIt:
