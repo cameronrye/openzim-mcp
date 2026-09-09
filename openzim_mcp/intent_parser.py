@@ -1059,7 +1059,15 @@ def _extract_get_section(query: str, params: Dict[str, Any]) -> None:
 # ``wikipedia_en_all``). Deliberately NOT "any single word": ``Rome`` is a
 # perfectly good article title, and treating it as path-shaped would split
 # ``section History of A/The History of Rome`` in the middle of its path.
-_PATH_SHAPED_RE = re.compile(r"(?:/|\.html?$)|^[^\s]*[._][^\s]*$", re.IGNORECASE)
+_PATH_SHAPED_RE = re.compile(
+    # Each alternative is grouped explicitly: two of the three are anchored
+    # and one is not, and a bare top-level ``|`` between them reads as though
+    # the anchors might bind to the whole pattern.
+    r"(?:/)"  # a path separator anywhere in the tail
+    r"|(?:\.html?$)"  # ...or it names an HTML file
+    r"|(?:^\S*[._]\S*$)",  # ...or it is one token carrying a dot/underscore
+    re.IGNORECASE,
+)
 
 # ``[the] section`` prefix, and the of/in/from connector, for the Form A
 # split. An optional leading verb is consumed so ``get section X of Y`` is

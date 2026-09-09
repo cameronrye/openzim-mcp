@@ -74,6 +74,16 @@ def _serving_stdio_process(
     return proc, stderr_path
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason=(
+        "POSIX stop signals. Windows has no SIGHUP, cannot deliver SIGINT to "
+        "another process through Popen.send_signal, and does not use the "
+        "128+signum exit convention this asserts — the behaviour under test "
+        "(a stdio server unwinding through its flush path on a stop signal) "
+        "has no Windows equivalent to check."
+    ),
+)
 class TestStopSignalsUnwindTheStdioServer:
     """fid 131 — Ctrl-C on the documented manual run left an unkillable process.
 
@@ -96,6 +106,11 @@ class TestStopSignalsUnwindTheStdioServer:
         proc, stderr_path = _serving_stdio_process(tmp_path)
         try:
             proc.send_signal(signum)
+            # Bound before the try: ``pytest.fail`` is ``NoReturn``, but a
+            # reader (and a static analyser) should not have to know that to
+            # see that the assertion below always has a value. -1 is not a
+            # possible ``128+signum``, so a fall-through still fails loudly.
+            returncode = -1
             try:
                 returncode = proc.wait(timeout=20)
             except subprocess.TimeoutExpired:  # pragma: no cover - the defect
@@ -412,9 +427,7 @@ class TestResumeHeaderOpensAFreshStream:
     the server faulted.
     """
 
-    @pytest.mark.parametrize(
-        "header_value", ["1", "0", "abc", "1_2", ""], ids=lambda v: repr(v)
-    )
+    @pytest.mark.parametrize("header_value", ["1", "0", "abc", "1_2", ""], ids=repr)
     def test_get_stream_opens(
         self, mcp_session: "tuple[TestClient, str]", header_value: str
     ) -> None:

@@ -215,8 +215,8 @@ def _resolve_entry_html(
             canonical_title = getattr(canonical, "title", None)
             if isinstance(canonical_title, str) and canonical_title:
                 title = canonical_title
-        except Exception:  # pragma: no cover — defensive
-            pass
+        except Exception as exc:  # pragma: no cover — defensive
+            logger.debug("canonical title for %s failed: %s", resolved_path, exc)
     return title, mime, html, resolved_path
 
 

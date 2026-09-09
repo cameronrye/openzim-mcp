@@ -717,8 +717,8 @@ class _StructureMixin:
                 entry, spelling = _canonical_entry(archive, candidate)
             except Exception as e:  # pragma: no cover — defensive
                 logger.debug(f"self-absolute probe for {candidate} failed: {e}")
-                entry = None
-                spelling = candidate
+                stays.append(link)
+                continue
             if entry is None:
                 stays.append(link)
                 continue

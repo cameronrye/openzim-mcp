@@ -31,6 +31,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any, Dict
+from urllib.parse import urlparse
 
 import pytest
 from libzim.writer import Creator, Hint, Item, StringProvider
@@ -189,7 +190,11 @@ def test_a_same_host_link_the_archive_lacks_stays_external(ops, scraped_zim):
 def test_an_offsite_link_is_untouched(ops, scraped_zim):
     external = _links(ops, scraped_zim, "external")
 
-    sep = [r for r in external["results"] if "plato.stanford.edu" in r.get("url", "")]
+    sep = [
+        r
+        for r in external["results"]
+        if urlparse(r.get("url", "")).netloc == "plato.stanford.edu"
+    ]
     assert sep, [r.get("url") for r in external["results"]]
     assert "path" not in sep[0], sep[0]
     assert sep[0].get("domain") == "plato.stanford.edu", sep[0]

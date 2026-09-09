@@ -31,6 +31,7 @@ from __future__ import annotations
 import base64
 import json
 import re
+from pathlib import Path
 from types import MethodType
 from typing import Any, Dict, List
 from unittest.mock import MagicMock
@@ -394,10 +395,14 @@ def _bundle_for(cp: ContentProcessor, html: str) -> Any:
 
 
 @pytest.fixture
-def cp() -> ContentProcessor:
+def cp(tmp_path: Path) -> ContentProcessor:
     from openzim_mcp.config import OpenZimMcpConfig
 
-    config = OpenZimMcpConfig(allowed_directories=["/tmp"])
+    # ``tmp_path``, not a hardcoded "/tmp": the config validates that the
+    # directory exists, and on Windows "/tmp" resolves to ``D:\tmp``, which
+    # does not — six tests here errored in collection for a path none of
+    # them reads. The fixture only needs *a* valid directory.
+    config = OpenZimMcpConfig(allowed_directories=[str(tmp_path)])
     return ContentProcessor(config.content)
 
 

@@ -605,7 +605,7 @@ class TestZeroArchivesIsNotZeroHits:
         assert out["operation"] == "no_archives_loaded"
         # Positive: the message says what is wrong and where to get one.
         assert "no `.zim` files" in out["message"], out["message"]
-        assert "library.kiwix.org" in out["message"], out["message"]
+        assert "https://browse.library.kiwix.org/" in out["message"], out["message"]
         # Negative: it must not read as a successful empty search.
         assert "results" not in out
 
@@ -621,7 +621,7 @@ class TestZeroArchivesIsNotZeroHits:
         assert out.get("error") is True, out
         assert out["operation"] == "no_archives_loaded"
         assert "promotion" not in out["message"].lower(), out["message"]
-        assert "library.kiwix.org" in out["message"]
+        assert "https://browse.library.kiwix.org/" in out["message"]
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("mode", ["fulltext", "title", "suggest"])
@@ -640,7 +640,7 @@ class TestZeroArchivesIsNotZeroHits:
         assert "load exactly one archive" not in out["message"], out["message"]
         assert "cross_file=True" not in out["message"], out["message"]
         # Positive: the acquisition route is.
-        assert "library.kiwix.org" in out["message"]
+        assert "https://browse.library.kiwix.org/" in out["message"]
 
     @pytest.mark.asyncio
     async def test_multi_archive_advice_is_unchanged(self, tmp_path) -> None:
