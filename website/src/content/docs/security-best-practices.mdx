@@ -117,7 +117,7 @@ export OPENZIM_MCP_CORS_ORIGINS='["https://app.example.com"]'
 
 Wildcard `"*"` is **rejected at startup** — including whitespace-padded variants like `" * "`. There is no opt-out; the wildcard footgun is closed.
 
-The allow-list covers both protocol eras the endpoint serves: `Mcp-Session-Id` (also in `expose_headers`) and `Last-Event-ID` for browser clients still on the `initialize` handshake, and `Mcp-Method` / `Mcp-Name` for 2026-07-28 clients, which are stateless and send no session id at all.
+The allow-list covers both protocol eras the endpoint serves: `Mcp-Session-Id` (also in `expose_headers`) and `Last-Event-ID` for browser clients still on the `initialize` handshake, and `Mcp-Method` / `Mcp-Name` for 2026-07-28 clients, which are stateless and send no session id at all. `Last-Event-ID` is accepted so a browser client sending it is not blocked by CORS, but this server keeps no event store and never emits SSE `id:` fields, so nothing is resumable: the header is stripped and the request opens a fresh stream.
 
 ### Health endpoints
 

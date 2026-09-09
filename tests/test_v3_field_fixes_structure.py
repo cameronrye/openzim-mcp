@@ -209,7 +209,7 @@ def _tool_server() -> MagicMock:
     srv = MagicMock()
     store: dict = {}
 
-    def _tool(*, description: str = ""):
+    def _tool(*, description: str = "", **_kw: object):
         def decorate(fn):
             store[fn.__name__] = (fn, description)
             return fn
@@ -613,9 +613,17 @@ class TestD34OutboundResolvedPath:
         # Unverifiable target: best-effort path-normalized, still present.
         assert rows["../zenos-paradoxes"]["path"] == "iep.utm.edu/zenos-paradoxes"
 
-    def test_external_and_media_rows_have_no_path(
+    def test_external_rows_have_no_path_but_media_rows_do(
         self, ops: ZimOperations, zim_path: str
     ) -> None:
+        """Updated by f93: an in-archive media row now carries ``path`` too.
+
+        D34 originally asserted that media rows carry no ``path``. That is
+        the behaviour f93 corrects — the media bucket exists to be handed to
+        ``zim_get(binary=True)``, and only anchor-wrapped assets used to get
+        an addressable path, so the field appeared or vanished page to page.
+        External rows are unchanged: they name no entry.
+        """
         archive = _links_archive(
             PLATO_HTML, source="iep.utm.edu/plato/", targets=_redirect_pair()
         )
@@ -631,7 +639,9 @@ class TestD34OutboundResolvedPath:
         assert external["results"]
         assert all("path" not in r for r in external["results"])
         assert media["results"]
-        assert all("path" not in r for r in media["results"])
+        assert [r["path"] for r in media["results"]] == [
+            "iep.utm.edu/wp-content/media/plato.jpg"
+        ]
 
 
 # ---------------------------------------------------------------------------

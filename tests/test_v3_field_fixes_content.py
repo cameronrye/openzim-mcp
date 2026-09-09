@@ -339,7 +339,7 @@ async def test_zim_get_forwards_max_content_length_to_main_page(
     srv = MagicMock()
     store: dict = {}
 
-    def _tool(*, description: str = ""):
+    def _tool(*, description: str = "", **_kw: object):
         def decorate(fn):
             store[fn.__name__] = fn
             return fn

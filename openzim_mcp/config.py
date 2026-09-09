@@ -125,6 +125,14 @@ class SearchConfig(BaseModel):
     )
 
 
+# The most cited passages the synthesize pipeline will return, and so the
+# ceiling ``zim_query(synthesize=True, limit=N)`` is checked against — the
+# two must be one number, or the tool would accept a limit the pipeline then
+# clamps. Named here rather than inlined into the Field so ``tools/
+# zim_query.py`` can quote it in its refusal (v3.3.1 field report, fid 130).
+SYNTHESIZE_MAX_PASSAGES = 50
+
+
 class SynthesizeConfig(BaseModel):
     """Phase C: tunables for `zim_query(synthesize=True)`.
 
@@ -133,7 +141,12 @@ class SynthesizeConfig(BaseModel):
     rather than refusing to include it).
     """
 
-    top_n: int = Field(default=5, ge=1, le=50, description="Final passages returned.")
+    top_n: int = Field(
+        default=5,
+        ge=1,
+        le=SYNTHESIZE_MAX_PASSAGES,
+        description="Final passages returned.",
+    )
     per_archive_k: int = Field(
         default=10, ge=1, le=100, description="Top-K from each archive before fusion."
     )

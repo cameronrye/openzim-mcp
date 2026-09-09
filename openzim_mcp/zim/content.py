@@ -12,6 +12,7 @@ shim's symbols continue to work without changes.
 import base64
 import json
 import logging
+import re
 from pathlib import Path
 from typing import (
     TYPE_CHECKING,
@@ -316,6 +317,26 @@ def _select_summary_section_md(
 # remediation advice.
 
 
+def _truncate_markdown_words(text: str, max_words: int) -> str:
+    """Cut ``text`` after its ``max_words``-th word, KEEPING its whitespace.
+
+    ``" ".join(text.split()[:max_words])`` counts the same words but flattens
+    every newline, and ``view="summary"`` truncates on any article long
+    enough to be worth summarising — so the common case shipped one blob with
+    ``##``/``###``/``*`` markers stranded mid-line, which no markdown renderer
+    can lay out. Slice by character offset instead: the word budget is
+    identical, the line structure survives.
+    """
+    if max_words <= 0:
+        return ""
+    seen = 0
+    for match in re.finditer(r"\S+", text):
+        seen += 1
+        if seen == max_words:
+            return text[: match.end()].rstrip()
+    return text.rstrip()
+
+
 def _looks_like_path_traversal(entry_path: str) -> bool:
     r"""Return True iff ``entry_path`` carries a path-traversal shape.
 
@@ -383,6 +404,83 @@ def reject_path_traversal(entry_path: str) -> None:
             f"``..`` segments or absolute prefixes are blocked. ZIM "
             f"entry paths are namespace-prefixed (e.g. ``C/Article_Name``)."
         )
+
+
+# The shortest stored title worth completing from a body heading. "A"
+# prefixes almost any sentence, so a one- or two-character title would let
+# the page's typography overwrite the archive's naming on a coincidence.
+_MIN_COMPLETABLE_TITLE = 3
+
+_LEADING_H1_RE = re.compile(r"^\s*#\s+(.+?)\s*$", re.MULTILINE)
+
+
+def snippet_render_key(validated_path: Optional[str], entry_path: str) -> Optional[str]:
+    """Cache key for one entry's rendered markdown, or ``None``.
+
+    Factored out so the search row can read back the very render its own
+    snippet just produced (see ``completed_title``) without re-deriving the
+    key — two spellings of one key is how a cache silently stops hitting.
+    """
+    if not validated_path or not entry_path:
+        return None
+    try:
+        from openzim_mcp.bundle import archive_stat_token
+
+        return (
+            f"snippet_render:v1:{validated_path}:"
+            f"{archive_stat_token(Path(validated_path))}:"
+            f"{entry_path}"
+        )
+    except Exception:
+        return None
+
+
+def leading_h1(rendered_markdown: str) -> str:
+    """The document's opening ``# `` heading, or ``""``.
+
+    Read from the RENDERED markdown, which every search row already
+    produces to build its snippet and which is cached per entry — so this
+    costs a string scan, not a second body read. The render is
+    query-independent (highlighting happens later, per query in
+    ``create_snippet``), so the text here carries no emphasis markers.
+
+    Only a heading that OPENS the document counts: a ``##`` further down is
+    a section, and a page whose first heading is not an ``h1`` has no title
+    heading to offer.
+    """
+    if not rendered_markdown:
+        return ""
+    # ``match`` (not ``search``) is what makes this "leading": it anchors at
+    # position 0, so a ``# `` further down the document cannot answer, and
+    # ``#\s+`` cannot match ``##`` because the second hash is not
+    # whitespace. An explicit startswith guard here would be unreachable.
+    match = _LEADING_H1_RE.match(rendered_markdown.lstrip())
+    return match.group(1).strip() if match else ""
+
+
+def completed_title(stored_title: str, body_h1: str) -> str:
+    """``stored_title``, completed from ``body_h1`` when it was truncated.
+
+    v3.3.1 field report (fid 70). warc2zim cuts a scraped ``<title>`` at a
+    curly apostrophe, so MedlinePlus stores "Alzheimer" for a page whose
+    own ``<h1>`` reads "Alzheimer's Disease" — and four unrelated pages
+    then carry one indistinguishable title in a result list. The same
+    truncation scores an exact 1.0 title match, so "Sartre" (really
+    "Sartre's Political Philosophy") outranked the real overview article.
+
+    Strictly a PREFIX repair, never a preference. A stored title that
+    merely differs from the heading is the archive's own editorial choice,
+    and overriding it would replace that choice with the page's
+    typography; a stored title LONGER than the heading is already the
+    fuller of the two.
+    """
+    stored = (stored_title or "").strip()
+    h1 = (body_h1 or "").strip()
+    if len(stored) < _MIN_COMPLETABLE_TITLE or len(h1) <= len(stored):
+        return stored_title
+    if not h1.lower().startswith(stored.lower()):
+        return stored_title
+    return h1
 
 
 class _ContentMixin:
@@ -460,21 +558,15 @@ class _ContentMixin:
             # so cache the rendered markdown per (path, entry, stat token) when
             # the caller supplies ``validated_path``; create_snippet then runs
             # per-query over the cached text.
-            render_cache_key: Optional[str] = None
-            entry_path_attr = getattr(entry, "path", "") or ""
-            if validated_path and entry_path_attr:
-                try:
-                    from openzim_mcp.bundle import archive_stat_token
-
-                    render_cache_key = (
-                        f"snippet_render:v1:{validated_path}:"
-                        f"{archive_stat_token(Path(validated_path))}:"
-                        f"{entry_path_attr}"
-                    )
-                except Exception:
-                    render_cache_key = None
+            render_cache_key = snippet_render_key(
+                validated_path, getattr(entry, "path", "") or ""
+            )
             cached_content = (
-                self.cache.get(render_cache_key) if render_cache_key else None
+                # One lookup per search RESULT, so this is the traffic that
+                # used to swamp the reported hit rate (fid 127).
+                self.cache.get(render_cache_key, ancillary=True)
+                if render_cache_key
+                else None
             )
             if isinstance(cached_content, str):
                 entry_title = getattr(entry, "title", None) or ""
@@ -1955,12 +2047,35 @@ class _ContentMixin:
                 # ``max_content_length`` onto this byte cap and never exposes
                 # ``include_data`` / ``max_size_bytes``, so the old hint sent
                 # callers to parameters the tool silently ignores.
-                result["message"] = (
+                #
+                # ...but only when turning it would work. ``zim_get`` refuses
+                # a ``max_content_length`` above
+                # ``CONTENT.MAX_BINARY_CONTENT_LENGTH``, so for a bigger entry
+                # this used to name a number the very next call rejects, whose
+                # rejection sends the caller back to a cap that produces this
+                # message again — a closed loop of the server's own advice.
+                # Past the ceiling there is no in-protocol fetch to advertise,
+                # so say that instead of inventing one.
+                from ..defaults import CONTENT as _CONTENT
+
+                head = (
                     f"Content size ({self._format_size(size)}) exceeds the "
                     f"{self._format_size(max_size_bytes)} byte cap. The metadata "
-                    f"above is complete; raise max_content_length to at least "
-                    f"{size} to fetch the bytes."
+                    f"above is complete; "
                 )
+                if size > _CONTENT.MAX_BINARY_CONTENT_LENGTH:
+                    result["message"] = head + (
+                        "this entry is past the "
+                        f"{_CONTENT.MAX_BINARY_CONTENT_LENGTH:,}-byte ceiling on "
+                        "a binary fetch, which ships as one base64 line with no "
+                        "continuation, so no `max_content_length` will return "
+                        "it — read the file outside the MCP surface."
+                    )
+                else:
+                    result["message"] = head + (
+                        f"raise max_content_length to at least {size} to fetch "
+                        "the bytes."
+                    )
         else:
             result["encoding"] = None
             result["data"] = None
@@ -2137,7 +2252,7 @@ class _ContentMixin:
                 words = summary_md.split()
                 is_truncated = len(words) > max_words
                 if is_truncated:
-                    summary_md = " ".join(words[:max_words])
+                    summary_md = _truncate_markdown_words(summary_md, max_words)
 
                 return {
                     "path": bundle["entry_path"],

@@ -24,7 +24,13 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Optional, Union
 
 from ..responses import tool_error
-from ._common import enforce_rate_limit, load_description, tool_error_response
+from ._common import (
+    READ_ONLY_ANNOTATIONS,
+    blank_archive_path,
+    enforce_rate_limit,
+    load_description,
+    tool_error_response,
+)
 
 if TYPE_CHECKING:
     from ..server import OpenZimMcpServer
@@ -38,7 +44,7 @@ def register(server: "OpenZimMcpServer") -> None:
 
     ops = AsyncZimOperations(server.zim_operations)
 
-    @server.mcp.tool(description=_DESCRIPTION)
+    @server.mcp.tool(description=_DESCRIPTION, annotations=READ_ONLY_ANNOTATIONS)
     async def zim_get_section(
         zim_file_path: str,
         entry_path: str,
@@ -52,6 +58,9 @@ def register(server: "OpenZimMcpServer") -> None:
             rl = enforce_rate_limit(server, "zim_get_section")
             if rl is not None:
                 return rl
+            blank = blank_archive_path(zim_file_path)
+            if blank is not None:
+                return blank
             if not section_id:
                 return tool_error(
                     operation="invalid_section",

@@ -140,7 +140,7 @@ async def test_zim_get_compact_default_preserves_legacy_behavior(
     server = MagicMock()
     tools: dict[str, object] = {}
 
-    def _tool(*, description: str = "") -> object:
+    def _tool(*, description: str = "", **_kw: object) -> object:
         def decorate(fn: object) -> object:
             tools[fn.__name__] = fn  # type: ignore[attr-defined]
             return fn

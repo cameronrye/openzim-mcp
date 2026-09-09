@@ -148,8 +148,10 @@ class FileSummary(TypedDict):
     size: str
     size_bytes: int
     modified: str
-    # Whether the file carries the ZIM signature (cheap probe, not a full
-    # integrity check). ``warning`` accompanies ``readable: False`` so a
+    # Whether the file opens as a ZIM archive. Not just the signature check
+    # any more: a file that carries the magic bytes but is shorter than its
+    # own header declares is a truncated download, and reads False (still a
+    # cheap probe, not a full integrity check). ``warning`` accompanies ``readable: False`` so a
     # garbage file named ``.zim`` is visibly flagged rather than presented
     # as a loaded archive.
     readable: NotRequired[bool]
@@ -205,6 +207,12 @@ class SearchResponse(TypedDict):
     _meta: MetaEnvelope
     # Tool-specific extras
     query: str
+    # The archive this page was read from, echoed so a hit can be handed
+    # straight to the five tools that REQUIRE ``zim_file_path``. Present on
+    # single-archive fulltext responses, where the server may have chosen the
+    # archive itself; absent from the cross-archive fan-out, whose rows carry
+    # their own per-file identity. See ``tools/zim_search._name_the_archive``.
+    zim_file_path: NotRequired[str]
 
 
 class _SearchAllPerFile(TypedDict, total=False):
@@ -671,6 +679,12 @@ class SynthesizeResponse(TypedDict, total=False):
     passages: list[SynthesizePassage]
     citations: list[Citation]
     archives_searched: list[str]
+    # v3.3.1 field report (fid 4): archives that could NOT be opened, as
+    # ``{archive, error}`` rows. Present only when at least one failed —
+    # this surface claims coverage across every allowed archive, so a
+    # silently shortened list is a claim the caller cannot audit, and a key
+    # that is always there is one a reader stops checking.
+    archives_failed: list[dict[str, str]]
     fallback_used: Literal["xapian_score", "rrf_fusion", "reranker"]
     total_chars: int
     total_words: int
@@ -846,6 +860,15 @@ class ArchiveValidationResponse(TypedDict):
     has_title_index: bool
     uuid: str
     is_multipart: bool
+    # v3.3.1 field report (fid 91): whether an inbound-link query can be
+    # answered for this archive. Previously the only way to find out was to
+    # issue one and read the failure. ``link_graph`` rides alongside when
+    # there is a sidecar, carrying its own meta table (built_at,
+    # builder_version, schema_version, node_count, edge_count) plus
+    # ``is_stale`` — presence is not usability, and a sidecar built for
+    # another archive revision refuses every inbound call.
+    has_link_graph: bool
+    link_graph: NotRequired[dict[str, Any]]
     _meta: MetaEnvelope
 
 

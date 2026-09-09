@@ -52,7 +52,7 @@ from __future__ import annotations
 
 import difflib
 import json
-from typing import Any, Callable
+from typing import Any, Callable, Optional
 
 import pydantic_core
 from mcp.server.mcpserver import Context, MCPServer
@@ -177,6 +177,40 @@ def _invalid_params(message: str, **data: Any) -> MCPError:
     return MCPError(code=INVALID_PARAMS, message=message, data=data)
 
 
+def _unknown_tool_error(name: str, available: list[str]) -> dict:
+    """The ``unknown_tool`` envelope for a tool name that is not registered.
+
+    The SDK answers an unregistered name with ``ToolError("Unknown tool: X")``,
+    which reaches the client as four words of plain text: no ``error`` flag in
+    the body, no ``operation``, no recovery advice — the one shape the
+    ``instructions`` block promises every rejection carries. The argument path
+    beside it already returns the full envelope, difflib suggestion included,
+    so the break happens exactly where a small model is most likely to be
+    wrong.
+
+    ``available`` comes from the tool manager, which holds only the tools this
+    *mode* registered, so the advice can never name a tool the client cannot
+    call. Simple mode is the sharp case: the model has ``zim_query`` and
+    nothing else, and the names it will invent are the seven advanced tools
+    printed in the README.
+    """
+    match = difflib.get_close_matches(name.casefold(), available, n=1, cutoff=0.6)
+    hint = f" Did you mean {match[0]!r}?" if match else ""
+    extras: dict[str, Any] = {"available_tools": available}
+    if match:
+        extras["closest_match"] = match[0]
+    return dict(
+        tool_error(
+            operation="unknown_tool",
+            message=(
+                f"No tool named {name!r}.{hint} "
+                f"Available tools: {', '.join(available) or 'none'}."
+            ),
+            extras=extras,
+        )
+    )
+
+
 def _argument_field(loc: tuple[Any, ...], declared: set[str]) -> str:
     """The argument name a pydantic error location points at.
 
@@ -200,7 +234,10 @@ def _argument_field(loc: tuple[Any, ...], declared: set[str]) -> str:
 
 
 def _argument_validation_error(
-    name: str, exc: ValidationError, declared: set[str]
+    name: str,
+    exc: ValidationError,
+    declared: set[str],
+    sole_archive: Optional[str] = None,
 ) -> dict:
     """The ``invalid_argument`` envelope for a schema-level rejection.
 
@@ -216,6 +253,17 @@ def _argument_validation_error(
     pydantic's own ``msg`` is kept verbatim: for the enum case it already
     spells out the legal values ("Input should be 'fulltext', 'title' or
     'suggest'"), which is exactly what the caller needs to retry.
+
+    ``sole_archive`` closes the v3.3.1 field report's fid 27 / fid 11 from
+    the rejection side. ``zim_file_path`` is optional on ``zim_search`` and
+    required on the five tools a search hit is normally handed to, so on the
+    one-archive deployment the README quickstart describes the caller omits
+    it, the search auto-selects, and the follow-up call is refused for a
+    field the caller was never told the value of. Naming the archive is only
+    honest when there is exactly one — with two loaded, picking one would be
+    guessing on the caller's behalf, so the caller gets the unadorned
+    rejection and the pointer at ``zim_health()`` that the archive-path
+    vocabulary in ``error_messages.py`` already carries.
     """
     fields: list[str] = []
     details: list[str] = []
@@ -232,12 +280,16 @@ def _argument_validation_error(
             seen_details.add(detail)
             details.append(detail)
 
+    message = f"`{name}` received invalid argument(s): " + "; ".join(details) + "."
+    if sole_archive and "zim_file_path" in fields:
+        message += (
+            f" Exactly one archive is loaded — retry with "
+            f"`zim_file_path={sole_archive!r}`."
+        )
     return dict(
         tool_error(
             operation="invalid_argument",
-            message=(
-                f"`{name}` received invalid argument(s): " + "; ".join(details) + "."
-            ),
+            message=message,
             extras={"invalid_arguments": fields},
         )
     )
@@ -351,12 +403,36 @@ class EnvelopeAwareMCPServer(MCPServer):
         archive_read_ttl_ms: TTL stamped on reads of archive-backed ``zim://``
             URIs. ``0`` leaves the result alone, so those reads fall back to
             the server-wide ``resources/read`` hint.
+        sole_archive: Zero-argument probe returning the single loaded
+            archive's path, or ``None`` when zero or several are loaded. Read
+            only while building a rejection, never on the success path, so it
+            costs a directory listing on calls that already failed.
     """
 
-    def __init__(self, *args: Any, archive_read_ttl_ms: int = 0, **kwargs: Any) -> None:
-        """Capture the archive TTL, then defer to the SDK constructor."""
+    def __init__(
+        self,
+        *args: Any,
+        archive_read_ttl_ms: int = 0,
+        sole_archive: Optional[Callable[[], Optional[str]]] = None,
+        **kwargs: Any,
+    ) -> None:
+        """Capture the archive TTL and probe, then defer to the SDK constructor."""
         super().__init__(*args, **kwargs)
         self._archive_read_ttl_ms = archive_read_ttl_ms
+        self._sole_archive = sole_archive
+
+    def _sole_archive_path(self) -> Optional[str]:
+        """The lone loaded archive, or ``None`` — never raising.
+
+        A probe that throws while the server is already answering an error
+        must not turn a clear rejection into a stack trace.
+        """
+        if self._sole_archive is None:
+            return None
+        try:
+            return self._sole_archive()
+        except Exception:  # pragma: no cover — defensive; a probe must not throw
+            return None
 
     def add_tool(
         self,
@@ -556,13 +632,23 @@ class EnvelopeAwareMCPServer(MCPServer):
             context = Context(mcp_server=self, subscriptions=self._subscriptions)
         # Reject argument names the tool does not declare before dispatching:
         # pydantic drops them silently, so this is the only place the stray key
-        # is still visible. ``get_tool`` returning ``None`` falls through, so an
-        # unknown *tool* name keeps raising the SDK's ``ToolError`` as before.
+        # is still visible.
         tool = self._tool_manager.get_tool(name)
-        if tool is not None:
-            rejected = _unknown_argument_error(tool, name, arguments)
-            if rejected is not None:
-                return error_result(rejected)
+        if tool is None:
+            # An unknown *tool* name used to fall through to the SDK's
+            # ``ToolError``, which reaches the client as the bare text
+            # "Unknown tool: X" — no envelope, no did-you-mean, and in simple
+            # mode no hint that ``zim_query`` is the one tool there is. It is
+            # answered here instead, in the vocabulary every other rejection
+            # already uses. See :func:`_unknown_tool_error`.
+            return error_result(
+                _unknown_tool_error(
+                    name, sorted(t.name for t in self._tool_manager.list_tools())
+                )
+            )
+        rejected = _unknown_argument_error(tool, name, arguments)
+        if rejected is not None:
+            return error_result(rejected)
         # convert_result=False so the raw return value is still inspectable;
         # the success path is then converted by the same
         # ``fn_metadata.convert_result`` the base class would have used, which
@@ -576,20 +662,21 @@ class EnvelopeAwareMCPServer(MCPServer):
             # wrong type, missing required) fails inside pydantic, which the
             # SDK stringifies into a bare text block. Convert it to the same
             # envelope every other rejected argument gets. An unknown *tool*
-            # name also arrives as ``ToolError`` but carries no
-            # ``ValidationError``, so it keeps raising as before.
+            # name never reaches here any more — it is answered above — so a
+            # ``ToolError`` with no ``ValidationError`` really is ours, and
+            # keeps raising.
             validation_error = _validation_error_in_chain(exc)
             if validation_error is None:
                 raise
             declared = set((tool.parameters.get("properties") or {}) if tool else {})
             return error_result(
-                _argument_validation_error(name, validation_error, declared)
+                _argument_validation_error(
+                    name, validation_error, declared, self._sole_archive_path()
+                )
             )
         if is_tool_error_envelope(result):
             return error_result(result)
 
-        if tool is None:  # pragma: no cover - call_tool raises on unknown names
-            return result  # type: ignore[no-any-return]
         converted: CallToolResult | InputRequiredResult = (
             tool.fn_metadata.convert_result(result)
         )

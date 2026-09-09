@@ -75,7 +75,7 @@ class _RecordingCache:
     def __init__(self) -> None:
         self.gets: List[str] = []
 
-    def get(self, key: str) -> Optional[Any]:
+    def get(self, key: str, **kwargs: Any) -> Optional[Any]:
         self.gets.append(key)
         return None
 

@@ -37,7 +37,7 @@ JSON list of every ZIM file in the allowed directories.
 ]
 ```
 
-`readable` is always present: the listing globs `*.zim` by name, then probes each file's ZIM signature, so a file that is named right but is not an archive stays in the list marked `"readable": false` rather than disappearing. Unreadable rows additionally carry a `warning` string saying whether the file was denied or simply lacks the signature.
+`readable` is always present: the listing globs `*.zim` by name, then probes each file — the ZIM signature, plus the total size the file's own header declares — so a file that is named right but cannot be opened stays in the list marked `"readable": false` rather than disappearing. Unreadable rows additionally carry a `warning` string saying which case it is: the file was denied, it lacks the signature, or it is truncated (an interrupted download) and should be fetched again.
 
 Same shape as the `loaded_archives` field returned by the `zim_health` tool.
 

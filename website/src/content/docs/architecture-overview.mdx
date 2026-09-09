@@ -181,7 +181,7 @@ Owns streamable-HTTP and legacy-SSE concerns so `server.py` stays focused on MCP
 
 - **Starlette app** with `/healthz` (liveness — always 200) and `/readyz` (returns 503 if no allowed directory is readable).
 - **`BearerTokenAuthMiddleware`** — timing-safe `hmac.compare_digest`; never logs the attempted token; `OPTIONS` is *not* exempt; `/healthz`/`/readyz` are.
-- **CORS** — explicit allow-list via `apply_cors_middleware`; wildcard `*` rejected at config-load time. The header allow-list is the union of both protocol eras the endpoint serves: `Mcp-Session-Id` and `Last-Event-ID` are kept for browser-based handshake-era clients (2026-07-28 removed sessions and stream resumption), while `Mcp-Method` and `Mcp-Name` are what a 2026-07-28 client must send on every POST.
+- **CORS** — explicit allow-list via `apply_cors_middleware`; wildcard `*` rejected at config-load time. The header allow-list is the union of both protocol eras the endpoint serves: `Mcp-Session-Id` and `Last-Event-ID` are kept for browser-based handshake-era clients (2026-07-28 removed sessions and stream resumption) — though `Last-Event-ID` resumes nothing here either: with no event store configured it is stripped and the request opens a fresh stream, while `Mcp-Method` and `Mcp-Name` are what a 2026-07-28 client must send on every POST.
 - **`check_safe_startup`** — refuses to bind a non-loopback host without an auth token (HTTP) or any non-loopback host (SSE has no auth middleware).
 - **Lifespan wrapping** — the subscription watcher is started/stopped via a wrapper around the SDK's own lifespan context (`streamable_http_app()` supplies its own custom lifespan, which means `add_event_handler('startup', …)` is silently a no-op).
 
@@ -208,7 +208,7 @@ Polling-based mtime watcher, plus the mapping from its change kinds onto MCP not
 
 Single LRU+TTL cache shared across all tools and the smart-retrieval path-mapping store. Backed by an in-memory `dict` plus a heap for O(log n) LRU eviction (a monotonic access counter, not a timestamp, so coarse platform clock resolution cannot break the ordering); optional disk persistence (off by default) at `~/.cache/openzim-mcp-<config-fingerprint>.json`, or an explicit `OPENZIM_MCP_CACHE__PERSISTENCE_PATH`.
 
-Cache stats: 13 fields — `enabled`, `size`, `max_size`, `ancillary_entries`, `total_entries`, `size_bytes`, `max_bytes`, `ttl_seconds`, `hits`, `misses`, `hit_rate`, `background_cleanup`, `persistence_enabled` — plus `persistence_path` and `persistence_file_exists` when persistence is on. Surfaced inside `zim_health` under `.health.cache_performance`; there are no separate management tools. Restarting flushes the cache only when `CACHE__PERSISTENCE_ENABLED` is off; with persistence on it is saved at exit and reloaded at start.
+Cache stats: 15 fields — `enabled`, `size`, `max_size`, `ancillary_entries`, `total_entries`, `size_bytes`, `max_bytes`, `ttl_seconds`, `hits`, `misses`, `hit_rate`, `ancillary_hits`, `ancillary_misses`, `background_cleanup`, `persistence_enabled` — plus `persistence_path` and `persistence_file_exists` when persistence is on. Surfaced inside `zim_health` under `.health.cache_performance`; there are no separate management tools. Restarting flushes the cache only when `CACHE__PERSISTENCE_ENABLED` is off; with persistence on it is saved at exit and reloaded at start.
 
 ### Rate limiter (`rate_limiter.py`)
 

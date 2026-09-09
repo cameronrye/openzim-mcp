@@ -17,12 +17,14 @@ import unicodedata
 import urllib.parse
 from dataclasses import dataclass
 from pathlib import Path
+from time import monotonic as _monotonic
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, cast
 
 from libzim.reader import Archive  # type: ignore[import-untyped]
 
 import openzim_mcp.zim_operations as _zim_ops_mod
 from openzim_mcp.constants import CANONICAL_TITLE_MATCH_SNIPPET
+from openzim_mcp.defaults import SEARCH as _SEARCH_DEFAULTS
 from openzim_mcp.exceptions import (
     OpenZimMcpArchiveError,
     OpenZimMcpValidationError,
@@ -313,6 +315,36 @@ _QUERY_OPERATOR_WORDS = frozenset({"and", "or", "not", "xor", "near", "adj"})
 _QUERY_FIELD_PREFIXES = frozenset({"title", "path"})
 
 
+def _paging_span(*, offset: int, shown: int, next_offset: int, total_text: str) -> str:
+    """The "Showing …" clause, in ONE coordinate system.
+
+    v3.3.1 field report (fid 50). ``offset`` is a position in the ranked
+    stream; the range counts RENDERED rows. They differ exactly when the
+    canonical dedup collapsed query-string twins inside the page — on the
+    shipped MedlinePlus archive, ``asthma`` renders 10 rows out of 12
+    consumed and then recommends ``offset=12``. A caller who reads
+    "Showing 1-10" and pages by ``offset=10`` — the only arithmetic that
+    sentence supports — gets two rows it has already seen.
+
+    fid 67 made the recommendation correct. This makes the sentence around
+    it explain the number, by naming the scan span and the collapse
+    alongside the rendered range. When nothing collapsed the two systems
+    coincide and the wording is byte-identical to what it always was: a
+    clause reconciling a discrepancy that does not exist is its own kind of
+    noise.
+    """
+    shown_range = f"{offset + 1}-{offset + shown}"
+    collapsed = (next_offset - offset) - shown
+    if collapsed <= 0:
+        return f"Showing {shown_range} of {total_text}"
+    plural = "" if collapsed == 1 else "s"
+    return (
+        f"Showing {shown_range} of {total_text} "
+        f"(scanned through {next_offset}; {collapsed} duplicate path{plural} "
+        f"collapsed)"
+    )
+
+
 def _snippet_query(query: str) -> Optional[str]:
     """``query`` without Boolean-operator words, for snippet selection.
 
@@ -504,9 +536,13 @@ def _format_filtered_response(
             resume_offset if resume_offset is not None else scan.filtered_count
         )
         parts.append(
-            f"Showing {offset + 1}-{offset + len(results)} "
-            f"of {total_filtered_text} — "
-            f"pass `offset={next_offset}` for the next page\n"
+            _paging_span(
+                offset=offset,
+                shown=len(results),
+                next_offset=next_offset,
+                total_text=total_filtered_text,
+            )
+            + f" — pass `offset={next_offset}` for the next page\n"
         )
         # A14: when the result set is much larger than a small model can
         # productively page through, nudge toward refining the query
@@ -829,6 +865,22 @@ class _SearchMixin:
                     except Exception as e:
                         logger.debug(f"alt_spelling suggestion build failed: {e}")
 
+                    # v3.3.1 field report (fid 60): ``SuggestionSearcher`` is
+                    # a title-PREFIX matcher, so it structurally cannot
+                    # correct a typo — ``diabetis`` and ``asprin`` came back
+                    # with no ``suggestions`` key at all, while
+                    # ``mode='title'`` recovered the identical query through
+                    # its case-ladder + Levenshtein-1 sweep. Reuse that sweep
+                    # rather than leaving the miss unrecoverable. Gated to
+                    # the branch that already pays an archive re-open, and
+                    # only when the prefix pass found nothing.
+                    if not suggestions:
+                        suggestions.extend(
+                            self._alt_spellings_from_title_index(
+                                validated_path, query, limit=limit_n
+                            )
+                        )
+
                 # alt_archive (priority 3) — fill remaining slots.
                 if len(suggestions) < limit_n:
                     try:
@@ -850,11 +902,19 @@ class _SearchMixin:
                     except Exception as e:
                         logger.debug(f"alt_archive suggestion build failed: {e}")
 
+            # ``truncated`` on a budget-capped page: the caller asked for
+            # ``limit`` rows and is getting fewer, with more available. The
+            # sweep found the opposite reported — ``truncated: false`` on a
+            # 247,856-token body — which actively tells a client nothing was
+            # cut. There is no ``content_chars`` continuation here: search
+            # resumes by ``offset``, not by byte offset, so ``more_at_offset``
+            # stays absent and the resume point rides ``page_info``.
             with_meta = attach_meta(
                 payload,
                 reason=reason,
                 suggestions=suggestions if suggestions else None,
                 preset_applied=applied_type,
+                truncated=bool(payload["page_info"].get("budget_truncated")),
             )
             # Cache the meta-attached payload so cold vs warm reads are
             # bit-identical. Skip the cache for zero-hit responses
@@ -875,6 +935,44 @@ class _SearchMixin:
         except Exception as e:
             logger.error(f"Search failed for {validated_path}: {e}")
             raise OpenZimMcpArchiveError(f"Search operation failed: {e}") from e
+
+    def _alt_spellings_from_title_index(
+        self, validated_path: Path, query: str, *, limit: int
+    ) -> List[Dict[str, str]]:
+        """Typo corrections for a zero-hit fulltext query, via title mode.
+
+        ``find_entry_by_title_data`` already owns the case-ladder plus the
+        Levenshtein-1 sweep verified against the title index — the machinery
+        that turns ``diabetis`` into ``medlineplus.gov/diabetes.html``. This
+        borrows its answer instead of duplicating it (and its per-archive
+        result is cached, so a caller who then runs the title lookup pays
+        nothing twice).
+
+        The emitted value is the article's OWN name, not its site-suffixed
+        title: the footer renders each suggestion as ``suggestions for
+        <value>``, and ``suggestions for Diabetes | Type 1 Diabetes | Type 2
+        Diabetes | MedlinePlus`` is not a query anyone can re-issue.
+        """
+        try:
+            page = self.find_entry_by_title_data(
+                str(validated_path), query, limit=max(1, min(limit, 50))
+            )
+        except Exception as e:
+            logger.debug(f"title-index alt_spelling recovery failed: {e}")
+            return []
+        out: List[Dict[str, str]] = []
+        seen: set[str] = set()
+        q_lower = query.strip().lower()
+        for row in page.get("results") or []:
+            label = _leading_title_segment(str(row.get("title") or ""))
+            key = label.lower()
+            if not label or key == q_lower or key in seen:
+                continue
+            seen.add(key)
+            out.append({"type": "alt_spelling", "value": label})
+            if len(out) >= limit:
+                break
+        return out
 
     def _perform_search(
         self,
@@ -909,7 +1007,7 @@ class _SearchMixin:
                 query, limit=limit, offset=offset, total_results=total_results
             )
 
-        results, consumed, exhausted = self._collect_distinct_hits(
+        results, consumed, exhausted, budget_truncated = self._collect_distinct_hits(
             search,
             archive,
             query,
@@ -929,8 +1027,39 @@ class _SearchMixin:
             "limit": limit,
             "returned_count": returned_count,
         }
+        # v3.3.1 field report (fid 73): ``total`` is ``getEstimatedMatches()``
+        # and is known to over-report — "high blood pressure" claimed 2000,
+        # "type 2 diabetes" 900, and a superset query returned a SMALLER
+        # count than its subset. The renderer has always hedged it as ``~N``;
+        # the structured payload shipped the round number bare, while the
+        # filtered path flags ``total_is_lower_bound`` and suggest sets its
+        # own reason. Say it in the envelope too, so a structured consumer
+        # sees what a prose reader has been shown all along. Only when there
+        # is something to estimate: a zero total is exact.
+        if total_results > 0:
+            page_info["total_is_estimate"] = True
         if consumed != returned_count:
             page_info["source_consumed"] = consumed
+        # v3.3.1 field report (fid 67): the resume point used to be a RULE
+        # ("advance by ``source_consumed`` if present, else by ``limit``")
+        # documented in prose only, and ``source_consumed`` rides only the
+        # pages where the canonical dedup actually collapsed something. A
+        # caller doing the obvious ``offset += limit`` re-served three of
+        # fifty rows on the shipped MedlinePlus corpus. ``next_offset`` is
+        # the same number as a VALUE: the offset that continues this page,
+        # present exactly when there is a next page to continue to.
+        # ``source_consumed`` stays as it was — it reports how far into the
+        # ranked stream the page walked, which is a different question.
+        if not done:
+            page_info["next_offset"] = last_index
+        # A page that ran out of budget stopped short of ``limit`` with rows
+        # still to serve. Say so in the machine-readable envelope — the
+        # ranked stream resumes at ``offset + source_consumed`` exactly as it
+        # does after a dedup collapse, so no separate continuation handle is
+        # needed. Suppressed when the budget bound on the very last row:
+        # nothing was withheld, so nothing was truncated.
+        if budget_truncated and not done:
+            page_info["budget_truncated"] = True
         next_cursor: Optional[str] = None
         if not done:
             next_cursor = self._search_page_cursor(
@@ -984,9 +1113,9 @@ class _SearchMixin:
         snippet_length: Optional[int],
         max_paragraphs: Optional[int],
         validated_path: Optional[Path],
-    ) -> Tuple[List[Dict[str, Any]], int, bool]:
+    ) -> Tuple[List[Dict[str, Any]], int, bool, bool]:
         """Pull ranked rows from ``search`` until the page holds ``limit``
-        distinct pages or the stream ends.
+        distinct pages, the stream ends, or the response budget binds.
 
         warc2zim stores query-string variants of a page as separate entries
         (``quiz.htm`` and ``quiz.htm?quiz=1``), and Xapian ranks them side
@@ -1010,11 +1139,23 @@ class _SearchMixin:
         would still leak; only the filtered path's scan-from-zero is fully
         general, and that costs O(offset) per page.
 
-        Returns ``(rows, consumed, exhausted)``. ``total_results`` is
-        Xapian's ESTIMATE and can exceed the real hit count; when
-        ``getResults`` hands back fewer entries than requested the real
-        stream is exhausted, and the caller must treat the page as done —
-        trusting the estimate here re-minted the same cursor forever
+        RESPONSE BUDGET (v3.3.1 field report, fids 28/63/125): ``limit`` is
+        a row count, and nothing bounded ``limit x snippet_length``. At the
+        documented maximum of 1000 the loop below rendered a megabyte of
+        compact HTML over 43-53 s — past a typical MCP client timeout, with
+        no cancellation, for a payload larger than most context windows.
+        Two stop conditions bound it: ``SEARCH.MAX_RESULT_CHARS`` on the
+        assembled rows and ``SEARCH.RESULT_BUDGET_SECONDS`` on the render
+        loop's wall clock. Both are checked AFTER a row is appended so a
+        page is never empty while hits remain (an empty non-done page is
+        the livelock the ``exhausted`` flag below exists to prevent), and
+        both leave ``consumed`` pointing at the exact resume position.
+
+        Returns ``(rows, consumed, exhausted, budget_truncated)``.
+        ``total_results`` is Xapian's ESTIMATE and can exceed the real hit
+        count; when ``getResults`` hands back fewer entries than requested
+        the real stream is exhausted, and the caller must treat the page as
+        done — trusting the estimate here re-minted the same cursor forever
         (empty page, done=False, offset unchanged: a livelock for
         contract-following clients).
         """
@@ -1022,6 +1163,9 @@ class _SearchMixin:
         seen_canonical: set[str] = set()
         consumed = 0
         exhausted = False
+        budget_truncated = False
+        assembled_chars = 0
+        deadline = _monotonic() + _SEARCH_DEFAULTS.RESULT_BUDGET_SECONDS
         # Seed the lookbehind window. Clamped at 0 — ``getResults`` takes an
         # absolute start index, and a negative one reads from the tail of the
         # stream rather than the head. This fetch is deliberately kept out of
@@ -1036,31 +1180,54 @@ class _SearchMixin:
                     lookbehind_start, offset - lookbehind_start
                 )
             )
-        while len(results) < limit and not exhausted:
+        while len(results) < limit and not exhausted and not budget_truncated:
             want = min(limit - len(results), total_results - offset - consumed)
             if want <= 0:
                 break
             batch = list(search.getResults(offset + consumed, want))
             if len(batch) < want:
                 exhausted = True
+            # v3.3.1 field report: ``exhausted`` is decided at FETCH time for
+            # the whole batch, but the budget below can break out part-way
+            # through RENDERING it. Both flags then read true, ``done``
+            # follows ``exhausted``, and the ``budget_truncated and not done``
+            # gate suppresses the truncation notice for a page that really did
+            # withhold rows — reported as complete, with no ``next_offset`` and
+            # no cursor. Track how much of the batch was actually walked so a
+            # mid-batch break cannot masquerade as the end of the stream.
+            batch_consumed = 0
             for entry_id in batch:
                 consumed += 1
+                batch_consumed += 1
                 canonical = canonical_result_path(entry_id)
                 if canonical in seen_canonical:
                     continue
                 seen_canonical.add(canonical)
-                results.append(
-                    self._search_result_row(
-                        archive,
-                        entry_id,
-                        rank=offset + consumed,
-                        query=query,
-                        snippet_length=snippet_length,
-                        max_paragraphs=max_paragraphs,
-                        validated_path=validated_path,
-                    )
+                row = self._search_result_row(
+                    archive,
+                    entry_id,
+                    rank=offset + consumed,
+                    query=query,
+                    snippet_length=snippet_length,
+                    max_paragraphs=max_paragraphs,
+                    validated_path=validated_path,
                 )
-        return results, consumed, exhausted
+                results.append(row)
+                assembled_chars += (
+                    len(row["path"]) + len(row["title"]) + len(row["snippet"])
+                )
+                if (
+                    assembled_chars >= _SEARCH_DEFAULTS.MAX_RESULT_CHARS
+                    or _monotonic() >= deadline
+                ):
+                    budget_truncated = True
+                    break
+            if batch_consumed < len(batch):
+                # Rows from this batch were never rendered, so the stream is
+                # not finished from the caller's point of view even though the
+                # fetch came up short.
+                exhausted = False
+        return results, consumed, exhausted, budget_truncated
 
     @staticmethod
     def _search_page_cursor(
@@ -1117,7 +1284,20 @@ class _SearchMixin:
                 max_paragraphs=max_paragraphs,
                 validated_path=str(validated_path) if validated_path else None,
             )
-            return {"path": entry_id, "title": title, "snippet": snippet}
+            # v3.3.1 field report (fid 70): warc2zim truncates a scraped
+            # <title> at a curly apostrophe, so MedlinePlus stores
+            # "Alzheimer" for a page whose own <h1> says "Alzheimer's
+            # Disease" — and four unrelated pages then share one
+            # indistinguishable title on a result page. The snippet above
+            # has just rendered (and cached) this entry's markdown, whose
+            # first line IS that heading, so completing the title costs a
+            # cache read rather than the second body read that kept this
+            # open. A miss simply leaves the stored title alone.
+            return {
+                "path": entry_id,
+                "title": self._completed_row_title(title, entry_id, validated_path),
+                "snippet": snippet,
+            }
         except Exception as e:
             logger.warning(f"Error processing search result {entry_id}: {e}")
             return {
@@ -1125,6 +1305,35 @@ class _SearchMixin:
                 "title": f"Entry {rank}",
                 "snippet": f"(Error getting entry details: {e})",
             }
+
+    def _completed_row_title(
+        self, title: str, entry_id: str, validated_path: Optional[Path]
+    ) -> str:
+        """``title``, completed from the entry's rendered leading heading.
+
+        Reads the ``snippet_render:v1:`` entry the snippet build just wrote,
+        so this is an ancillary cache hit and never a render. Best-effort
+        throughout: any miss, any failure, and the archive's own title
+        stands — a result row must not be lost to a cosmetic upgrade.
+        """
+        from openzim_mcp.zim.content import (
+            completed_title,
+            leading_h1,
+            snippet_render_key,
+        )
+
+        key = snippet_render_key(
+            str(validated_path) if validated_path else "", entry_id
+        )
+        if not key:
+            return title
+        try:
+            rendered = self.cache.get(key, ancillary=True)
+        except Exception:  # pragma: no cover — cache is best-effort
+            return title
+        if not isinstance(rendered, str):
+            return title
+        return completed_title(title, leading_h1(rendered))
 
     def _format_search_text(
         self,
@@ -1190,13 +1399,28 @@ class _SearchMixin:
                 # apply to a filter mismatch (the typo path doesn't help
                 # when the filter excluded the hits).
                 return f'No filtered matches for "{echo_query}"{filter_suffix}'
+            # v3.3.1 field report (fid 62): the list used to lead with
+            # ``suggestions for X``. On the shipped corpus that step provably
+            # returns nothing for the failure it was offered for — libzim's
+            # SuggestionSearcher is a title-PREFIX matcher, so ``suggestions
+            # for diabetis`` yields ``total: 0`` — and it renders as a raw
+            # JSON blob rather than prose. The title-index route recovers the
+            # same query (``diabetis`` -> ``medlineplus.gov/diabetes.html``,
+            # score 0.85), so it goes first.
+            #
+            # The ``tell me about`` bullet is kept VERBATIM: when the caller
+            # already tried that intent,
+            # ``simple_tools._swap_tell_me_about_recovery_hint`` rewrites this
+            # exact string into ``find article titled X`` so the advice is
+            # never circular. Reordering keeps the leading slot pointed at
+            # the title index in both renderings.
             return (
                 f'No search results found for "{echo_query}".\n\n'
                 f"**Try one of these:**\n"
-                f"- `suggestions for {echo_query[:30]}` — autocomplete to "
-                f"catch typos or partial names\n"
                 f"- `tell me about {echo_query[:30]}` — structured topic "
                 f"lookup with auto article fetch\n"
+                f"- `suggestions for {echo_query[:30]}` — autocomplete to "
+                f"catch typos or partial names\n"
                 f"- A shorter or differently-cased query"
             )
 
@@ -1275,6 +1499,19 @@ class _SearchMixin:
                 "narrower, topically-ranked result set._\n\n"
             )
 
+        # v3.3.1 field report (fids 28/63/125): the page stopped short of the
+        # requested ``limit`` because the response-size budget bound first.
+        # Say it in the body as well as in ``_meta`` — a model that reasons
+        # "bigger limit, fewer round trips" needs to see that the strategy
+        # did not work, and the resume offset printed below is the way out.
+        if page_info.get("budget_truncated"):
+            result_text += (
+                f"_Note: this page was cut at {len(results)} of the "
+                f"{limit} results requested by the response-size budget. "
+                f"Continue from the offset below, or re-run with a smaller "
+                f"`limit` and page through._\n\n"
+            )
+
         # Compact one-liner footer — see the matching comment in the simple
         # search renderer above for rationale.
         result_text += "---\n"
@@ -1296,8 +1533,19 @@ class _SearchMixin:
                 # it whether or not a cursor was minted — the rendered footer
                 # is what a model without cursor support pages by, and
                 # ``offset + limit`` would replay the collapsed rows.
+                # ``next_offset`` (fid 67) is the resume point as a value and
+                # is emitted on every unfinished page of this path, including
+                # one the response-size budget cut short — where
+                # ``source_consumed`` can equal ``returned_count`` and the
+                # ``offset + limit`` fallback below would skip everything
+                # between the cut and the requested ``limit``. Preferred, and
+                # equal to the ``source_consumed`` arithmetic wherever both
+                # are present.
+                advertised = page_info.get("next_offset")
                 consumed = page_info.get("source_consumed")
-                if isinstance(consumed, int) and not isinstance(consumed, bool):
+                if isinstance(advertised, int) and not isinstance(advertised, bool):
+                    next_offset = advertised
+                elif isinstance(consumed, int) and not isinstance(consumed, bool):
                     next_offset = offset + consumed
                 elif next_cursor is None:
                     # Limited path that doesn't know the next-page boundary
@@ -1306,9 +1554,13 @@ class _SearchMixin:
                 else:
                     next_offset = offset + limit
             result_text += (
-                f"Showing {offset + 1}-{offset + len(results)} "
-                f"of {total_text} — "
-                f"pass `offset={next_offset}` for the next page\n"
+                _paging_span(
+                    offset=offset,
+                    shown=len(results),
+                    next_offset=next_offset,
+                    total_text=total_text,
+                )
+                + f" — pass `offset={next_offset}` for the next page\n"
             )
             # A14: see ``_format_filtered_response`` for the rationale —
             # nudge toward query refinement when the total is much
@@ -3477,10 +3729,24 @@ class _SearchMixin:
         # article (one from each suggestion that resolved to the
         # canonical). Pre-F3, the rows had distinct paths so no
         # dedup was needed.
+        #
+        # v3.3.1 field report (fid 59): the key is the CANONICAL path, not
+        # the raw one. warc2zim files a query-string URL variant as its own
+        # entry with an identical title, and the title index ranks the twins
+        # side by side — ``type 2 diabetes`` on MedlinePlus spent ranks 4/5
+        # and 7/8 of a ten-row page on two articles, then footed the page
+        # with "re-run with a larger limit", which only pulls in more
+        # variants. Full-text search has collapsed these on
+        # ``canonical_result_path`` since D27 (``_collect_distinct_hits``);
+        # title mode was the last surface still showing both. The sort above
+        # means the survivor is whichever twin the index ranked higher.
         seen: set[tuple[str, str]] = set()
         deduped: List[Dict[str, Any]] = []
         for row in aggregate_results:
-            key = (str(row.get("zim_file", "")), str(row.get("path", "")))
+            key = (
+                str(row.get("zim_file", "")),
+                canonical_result_path(str(row.get("path", ""))),
+            )
             if key in seen:
                 continue
             seen.add(key)

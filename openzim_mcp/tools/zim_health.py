@@ -9,7 +9,12 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Optional
 
-from ._common import enforce_rate_limit, load_description, tool_error_response
+from ._common import (
+    READ_ONLY_ANNOTATIONS,
+    enforce_rate_limit,
+    load_description,
+    tool_error_response,
+)
 
 if TYPE_CHECKING:
     from ..server import OpenZimMcpServer
@@ -23,7 +28,7 @@ def register(server: "OpenZimMcpServer") -> None:
 
     ops = AsyncZimOperations(server.zim_operations)
 
-    @server.mcp.tool(description=_DESCRIPTION)
+    @server.mcp.tool(description=_DESCRIPTION, annotations=READ_ONLY_ANNOTATIONS)
     async def zim_health(zim_file_path: Optional[str] = None) -> Any:
         try:
             rl = enforce_rate_limit(server, "zim_health")

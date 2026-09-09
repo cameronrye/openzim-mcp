@@ -29,7 +29,7 @@ from .onboarding import acquisition_hint_line
 from .responses import ToolErrorPayload, tool_error
 from .security import redact_paths_in_message, sanitize_path_for_error
 from .tool_schemas import HealthStatus, ServerConfigurationResponse
-from .zim.archive import has_zim_signature, zim_signature_error
+from .zim.archive import has_zim_signature, is_truncated_zim, zim_signature_error
 
 if TYPE_CHECKING:
     from .server import OpenZimMcpServer
@@ -52,15 +52,30 @@ def _downgrade_to_warning(health_info: Dict[str, Any]) -> None:
         health_info["status"] = "warning"
 
 
-def _count_readable_zim_files(
+def _resolved(path: Path) -> Path:
+    """``path`` resolved, or the path itself when the filesystem refuses."""
+    try:
+        return path.resolve()
+    except OSError:  # pragma: no cover - a vanished/looping path
+        return path
+
+
+def _readable_zim_files(
     dir_path: Path,
     health_info: Dict[str, Any],
     health_checks: Dict[str, Any],
     warnings: List[str],
     recommendations: List[str],
-) -> int:
-    """Count the ``.zim`` files under an accessible directory that carry the
-    ZIM signature, reporting the ones that do not.
+) -> "set[Path]":
+    """The ``.zim`` files under an accessible directory that carry the ZIM
+    signature, keyed by resolved path, reporting the ones that do not.
+
+    Resolved paths rather than a bare count, because the caller unions them
+    across every allowed directory: two entries that name the same tree (the
+    same path twice, or a parent alongside its child — both ordinary editing
+    mistakes in a hand-maintained client config) used to make
+    ``zim_files_found`` report one archive as two, contradicting
+    ``loaded_archives`` three lines below it in the very same payload.
 
     Probes the directory with ``iterdir`` first so a permission problem
     surfaces as the exception the caller classifies, not as a silent zero.
@@ -71,13 +86,23 @@ def _count_readable_zim_files(
     good one.
     """
     list(dir_path.iterdir())
-    zim_files = [p for p in dir_path.glob("**/*.zim") if p.is_file()]
+    zim_files = sorted({_resolved(p) for p in dir_path.glob("**/*.zim") if p.is_file()})
     unreadable = [p for p in zim_files if not has_zim_signature(p)]
-    denied = [p for p in unreadable if zim_signature_error(p) is not None]
+    denied = {p for p in unreadable if zim_signature_error(p) is not None}
     for bad in unreadable:
         redacted = sanitize_path_for_error(str(bad))
         if bad in denied:
             warnings.append(f"Cannot read .zim file: {redacted}")
+        elif is_truncated_zim(bad):
+            # v3.3.1 field report (fid 0's residual). A truncated download
+            # DOES carry the signature — that is why the per-archive
+            # ``loaded_archives[].warning`` calls it truncated and says to
+            # re-download it. This line kept calling it a missing signature,
+            # contradicting that verdict three lines up in the same payload
+            # and pointing the operator at replacing a file whose bytes are
+            # fine as far as they go. The two remedies differ, so the two
+            # verdicts have to.
+            warnings.append(f"Truncated .zim file (re-download it): {redacted}")
         else:
             warnings.append(f"Unreadable .zim file (missing ZIM signature): {redacted}")
     if denied:
@@ -92,7 +117,7 @@ def _count_readable_zim_files(
         )
     if unreadable:
         _downgrade_to_warning(health_info)
-    return len(zim_files) - len(unreadable)
+    return set(zim_files) - set(unreadable)
 
 
 def _check_directory_health(
@@ -101,12 +126,14 @@ def _check_directory_health(
     health_checks: Dict[str, Any],
     warnings: List[str],
     recommendations: List[str],
-) -> Tuple[int, int]:
-    """Probe one allowed directory and return (accessible, zim_count).
+) -> Tuple[int, "set[Path]"]:
+    """Probe one allowed directory and return (accessible, readable archives).
 
-    ``zim_count`` counts only files that carry the ZIM signature. A file
-    merely *named* ``.zim`` that libzim could never open is reported as a
-    warning (and downgrades the status) instead of being counted as a
+    The archives come back as resolved paths rather than a count so the
+    caller can union them; overlapping allowed directories then cannot
+    inflate the total. Only files carrying the ZIM signature are included: a
+    file merely *named* ``.zim`` that libzim could never open is reported as
+    a warning (and downgrades the status) instead of being counted as a
     loaded archive — otherwise a directory of garbage reads as "healthy".
 
     Mutates ``health_info``/``health_checks``/``warnings``/``recommendations``
@@ -119,7 +146,7 @@ def _check_directory_health(
     try:
         dir_path = Path(directory)
         if dir_path.exists() and dir_path.is_dir():
-            readable = _count_readable_zim_files(
+            readable = _readable_zim_files(
                 dir_path, health_info, health_checks, warnings, recommendations
             )
             return 1, readable
@@ -136,7 +163,23 @@ def _check_directory_health(
             f"Error accessing {redacted}: {redact_paths_in_message(str(e))}"
         )
         _downgrade_to_warning(health_info)
-    return 0, 0
+    return 0, set()
+
+
+def _dedupe(items: List[str]) -> List[str]:
+    """``items`` with later repeats dropped, order preserved.
+
+    Two allowed directories naming the same tree produced every warning and
+    every recommendation twice, for the same reason they produced every
+    archive twice.
+    """
+    seen: "set[str]" = set()
+    unique = []
+    for item in items:
+        if item not in seen:
+            seen.add(item)
+            unique.append(item)
+    return unique
 
 
 # Minimum cache accesses before we report on hit-rate trends. Below this we
@@ -148,27 +191,66 @@ _CACHE_RECOMMENDATION_MIN_SAMPLES = 50
 def _append_cache_recommendations(
     cache_stats: Dict[str, Any], recommendations: List[str]
 ) -> None:
-    """Translate cache hit-rate stats into human-readable recommendations.
+    """Translate cache stats into human-readable recommendations.
 
     Skip the "low" warning until the cache has seen a meaningful sample.
     A fresh session legitimately has a low hit rate while it warms up;
     warning on the first query was misleading and got beta-tester
     complaints.
+
+    A cache sitting at ``max_size`` is checked first, and it suppresses the
+    hit-rate advice rather than adding to it. "Issue repeated queries against
+    the same ZIM files" is the wrong knob for a full cache: a client that
+    obeys it re-issues a query whose entry has already been evicted and misses
+    again. Capacity is the knob, and it was the one thing this report never
+    mentioned.
     """
-    if cache_stats.get("enabled", False):
-        hit_rate = cache_stats.get("hit_rate", 0)
-        total_accesses = cache_stats.get("hits", 0) + cache_stats.get("misses", 0)
-        if total_accesses < _CACHE_RECOMMENDATION_MIN_SAMPLES:
-            return  # Not enough signal yet — silence is more useful than noise.
-        if hit_rate < CACHE_LOW_HIT_RATE_THRESHOLD:
-            recommendations.append(
-                "Cache hit rate is low — consider issuing repeated "
-                "queries against the same ZIM files"
-            )
-        elif hit_rate > CACHE_HIGH_HIT_RATE_THRESHOLD:
-            recommendations.append("Cache is performing well")
-    else:
+    if not cache_stats.get("enabled", False):
         recommendations.append("Consider enabling cache for better performance")
+        return
+
+    max_size = cache_stats.get("max_size", 0) or 0
+    if max_size and cache_stats.get("size", 0) >= max_size:
+        recommendations.append(
+            f"Cache is full ({max_size} entries) and evicting — raise "
+            "OPENZIM_MCP_CACHE__MAX_SIZE if the working set is larger"
+        )
+        return
+
+    hit_rate = cache_stats.get("hit_rate", 0)
+    total_accesses = cache_stats.get("hits", 0) + cache_stats.get("misses", 0)
+    if total_accesses < _CACHE_RECOMMENDATION_MIN_SAMPLES:
+        return  # Not enough signal yet — silence is more useful than noise.
+    if hit_rate < CACHE_LOW_HIT_RATE_THRESHOLD:
+        recommendations.append(
+            "Cache hit rate is low — consider issuing repeated "
+            "queries against the same ZIM files"
+        )
+    elif hit_rate > CACHE_HIGH_HIT_RATE_THRESHOLD:
+        recommendations.append("Cache is performing well")
+
+
+def _append_persistence_warning(
+    cache_stats: Dict[str, Any], warnings: List[str], recommendations: List[str]
+) -> bool:
+    """Report a broken cache persistence path; True when one was reported.
+
+    An unwritable cache directory used to reach the operator only as a
+    ``WARNING`` on stderr at process exit — after the last moment anyone could
+    react — while ``zim_health`` returned ``status: healthy``,
+    ``warnings: []`` and ``Server is running optimally`` for the same run.
+    Nothing is wrong with the *content* the server can serve, so this is a
+    warning rather than an error, but it must not be silent.
+    """
+    error = cache_stats.get("persistence_error")
+    if not error:
+        return False
+    warnings.append(f"Cache persistence is not working: {error}")
+    recommendations.append(
+        "Point OPENZIM_MCP_CACHE__PERSISTENCE_PATH (or XDG_CACHE_HOME) at a "
+        "writable directory, or disable cache persistence"
+    )
+    return True
 
 
 def _finalize_health_status(
@@ -302,18 +384,26 @@ def _build_health_report(
             health_info["simple_tools_telemetry"] = simple_handler.get_telemetry()
 
         accessible_dirs = 0
-        total_zim_files = 0
+        # Distinct resolved paths, so a directory listed twice (or a parent
+        # listed alongside its child) cannot report one archive as two.
+        readable_zim_files: "set[Path]" = set()
         for directory in server.config.allowed_directories:
-            ok, zim_count = _check_directory_health(
+            ok, readable = _check_directory_health(
                 directory, health_info, health_checks, warnings, recommendations
             )
             accessible_dirs += ok
-            total_zim_files += zim_count
+            readable_zim_files |= readable
 
+        warnings[:] = _dedupe(warnings)
+        recommendations[:] = _dedupe(recommendations)
+
+        total_zim_files = len(readable_zim_files)
         health_checks["directories_accessible"] = accessible_dirs
         health_checks["zim_files_found"] = total_zim_files
 
         _append_cache_recommendations(cache_stats, recommendations)
+        if _append_persistence_warning(cache_stats, warnings, recommendations):
+            _downgrade_to_warning(health_info)
         _finalize_health_status(
             health_info, accessible_dirs, total_zim_files, warnings, recommendations
         )

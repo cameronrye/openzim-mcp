@@ -111,6 +111,7 @@ ADVICE_REASONS = (
     "sample_only",
     "archive_unavailable",
     "search_all_budget_exceeded",
+    "namespace_not_iterable",
 )
 
 # Backticked bare identifiers that are deliberately NOT tool calls: tool
@@ -208,6 +209,12 @@ ADVANCED_ONLY_ADVICE: Dict[Tuple[str, str, str], str] = {
     ),
     ("openzim_mcp/zim/structure.py", "_StructureMixin._get_section_data", "zim_get"): (
         "section-miss payloads; simple mode renders its own body instead"
+    ),
+    ("openzim_mcp/tools/_common.py", "blank_archive_path", "zim_health"): (
+        "reached only from the five wrappers that REQUIRE zim_file_path "
+        "(zim_get, zim_get_section, zim_links, zim_browse, zim_metadata), "
+        "none of which is registered in simple mode — zim_query resolves its "
+        "own archive and never passes a blank one down"
     ),
 }
 
@@ -346,6 +353,57 @@ def _structure_strings(tool_mode: str) -> Iterator[Tuple[str, str, str]]:
         "_entry_not_found_error",
         str(_entry_not_found_error("C/Nope", tool_mode=tool_mode)),
     )
+    yield (
+        "openzim_mcp/zim/structure.py",
+        "_StructureMixin.get_inbound_links_data",
+        _inbound_unavailable_message(tool_mode),
+    )
+
+
+def _inbound_unavailable_message(tool_mode: str) -> str:
+    """The ``inbound_sidecar_unavailable`` message, as each mode renders it.
+
+    Driven through the real method rather than copied: v3.3.1's fid 92 gave
+    this string a client-issuable fallback beside its operator command, and
+    the fallback names two advanced tools in advanced mode. Rendering it here
+    is what lets the guard check the simple-mode wording instead of the
+    package walk simply spotting ``zim_links`` in a source literal and
+    having to be told to ignore it.
+    """
+    import pathlib as _pathlib
+    import tempfile
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock, patch
+
+    from openzim_mcp.linkgraph.reader import LinkGraphUnavailable
+    from openzim_mcp.zim import structure as structure_mod
+
+    archive = _pathlib.Path(tempfile.mkdtemp()) / "wiki.zim"
+    archive.write_bytes(b"stub")
+
+    ops = structure_mod._StructureMixin.__new__(structure_mod._StructureMixin)
+    ops._validate_zim_path = MagicMock(return_value=str(archive))  # type: ignore
+    ops.config = SimpleNamespace(tool_mode=tool_mode)  # type: ignore[attr-defined]
+
+    fake_archive = MagicMock()
+    fake_archive.uuid = "uuid-1"
+    ctx = MagicMock()
+    ctx.__enter__ = MagicMock(return_value=fake_archive)
+    ctx.__exit__ = MagicMock(return_value=False)
+
+    with (
+        patch.object(structure_mod, "_zim_ops_mod") as zim_ops_mod,
+        patch(
+            "openzim_mcp.linkgraph.reader.LinkGraphReader.open_for",
+            return_value=None,
+        ),
+    ):
+        zim_ops_mod.zim_archive = MagicMock(return_value=ctx)
+        try:
+            ops.get_inbound_links_data(str(archive), "C/Anything", limit=5, offset=0)
+        except LinkGraphUnavailable as exc:
+            return str(exc)
+    raise AssertionError("the sidecar-unavailable path did not raise")
 
 
 def _error_template_strings(tool_mode: str) -> Iterator[Tuple[str, str, str]]:

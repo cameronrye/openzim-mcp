@@ -6,7 +6,8 @@
   "page_info": {
     "limit": 2,
     "offset": 0,
-    "returned_count": 1
+    "returned_count": 1,
+    "total_is_estimate": true
   },
   "query": "Einstein",
   "results": [

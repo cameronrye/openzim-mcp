@@ -143,6 +143,10 @@ def _advanced_surface_bytes() -> int:
         }
         if tool.output_schema is not None:
             payload["outputSchema"] = tool.output_schema
+        if tool.annotations is not None:
+            payload["annotations"] = tool.annotations.model_dump(
+                by_alias=True, exclude_none=True
+            )
         total += len(json.dumps(payload, separators=(",", ":")).encode())
     return total
 
@@ -154,7 +158,12 @@ _BYTES_RE = re.compile(r"(?<![\d,])(\d{2},\d{3})(?:[- ]byte\b|\s+bytes\b)")
 # "~23.3KB" / "~23.3 KB" — the rounded figure, only when it is describing the
 # advanced surface. Matched near the MCP-Tax/footprint prose to avoid catching
 # unrelated sizes (the reranker's install footprint, ZIM file sizes).
-_KB_RE = re.compile(r"~(\d{2}\.\d)\s?KB")
+#
+# The tilde is OPTIONAL, and that is the point: it used to be required, and
+# ``faq.mdx`` writes the same figure as "roughly 23.4KB". That one line sat a
+# release behind the surface while this gate read green — the approximation
+# marker is prose, not part of the number.
+_KB_RE = re.compile(r"~?(\d{2}\.\d)\s?KB")
 
 # Figures that are legitimately not the current measurement: the pre-
 # consolidation v1 footprint quoted as a before/after, and the budget cap
@@ -1681,6 +1690,7 @@ _PHRASEBOOK_LABEL_TO_INTENT = {
     "One section": "get_section",
     "Outbound links": "links",
     "Related articles": "related",
+    "Inbound links": "inbound_links",
     "Browse a namespace": "browse",
     "Walk a namespace": "walk_namespace",
     "Batch fetch": "get_zim_entries",

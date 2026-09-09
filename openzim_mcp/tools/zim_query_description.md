@@ -35,6 +35,12 @@ OPERATIONS (pass one as `query`):
   walk namespace <letter>        - enumerate namespace
   find article titled <name>     - title lookup
   articles related to <name>     - related articles
+  what links to <name>           - article-in links
+  summary of <name>              - lead summary
+  table of contents <name>       - heading list
+  section <name> of <path>       - one section's body
+  get image <path>               - binary bytes (base64)
+  get articles <p1>, <p2>        - batch fetch
 
 Args:
     query: REQUIRED. Translated from user intent — never the
@@ -83,10 +89,8 @@ Args:
     compact_budget: Hard char-cap on the final response when
         `compact=True`. Accepts either a named profile —
         `"tiny"` (2 000), `"small"` (4 000), `"medium"` (6 000,
-        default), `"large"` (12 000) — or a raw integer. Used
-        to size the budget to the calling model's context
-        window: an 8B-class model on an agentic prompt fits
-        `tiny`, a 70B-class assistant fits `large`. Has no
+        default), `"large"` (12 000) — or a raw integer. Size
+        it to the calling model's context window. Has no
         effect when `compact=False`.
     synthesize: When True, bypass intent classification and
         run the synthesize pipeline — multi-archive Xapian

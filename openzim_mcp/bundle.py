@@ -63,7 +63,13 @@ logger = logging.getLogger(__name__)
 # fetches by — so a v2f bundle does not just look different, it hands the
 # caller ids that resolve to the wrong occurrence. Same rule as the bumps
 # above.
-_BUNDLE_KEY_PREFIX = "bundle:v2g"
+# v2g -> v2h: the heading locator now takes the EARLIEST match across its
+# strict/relaxed patterns, and a structural container heading (one followed
+# immediately by a same-level heading) is kept instead of dropped. Both change
+# which sections a bundle CONTAINS and which ``section_id`` resolves to which
+# slice, so a cached v2g bundle would keep serving one section's prose under
+# another's title. Same rule as the bumps above.
+_BUNDLE_KEY_PREFIX = "bundle:v2h"
 
 # The stat token below tells a cached value that the ARCHIVE changed. Nothing
 # told it that this SERVER changed what it renders from an unchanged archive,
@@ -78,7 +84,7 @@ _BUNDLE_KEY_PREFIX = "bundle:v2g"
 #
 # Bump this in any release that changes what the server renders from an
 # unchanged archive; tests/test_v3_cache_render_epoch.py fails until you do.
-_RENDER_EPOCH = "r1"
+_RENDER_EPOCH = "r2"
 
 
 def archive_stat_token(validated_path: Any) -> str:
@@ -190,6 +196,27 @@ def _resolve_entry_html(
     # this must not branch on it).
     served = getattr(item, "path", None)
     resolved_path = served if isinstance(served, str) and served else entry_path
+    if resolved_path != entry_path:
+        # v3.3.1 field report (fid 90). ``get_item()`` follows the redirect,
+        # so ``resolved_path`` names the article actually served — but
+        # ``title`` was read off the STUB, which is a different article. The
+        # header then read ``title: "10-year flood"`` beside ``path:
+        # "A/100-year_flood"``, and on zimit archives, where a stub's title
+        # is its own path string, it read as a raw path. ``zim_get`` and
+        # ``direction="inbound"`` both resolve this already;
+        # ``_resolve_outbound_titles`` does it for the ROWS and says why
+        # ("succeeded with junk"). Only the header was left behind.
+        #
+        # Best-effort: a failure here means keeping the stub's title, which
+        # is what shipped before, so a lookup that throws must not fail the
+        # whole fetch.
+        try:
+            canonical = archive.get_entry_by_path(resolved_path)
+            canonical_title = getattr(canonical, "title", None)
+            if isinstance(canonical_title, str) and canonical_title:
+                title = canonical_title
+        except Exception as exc:  # pragma: no cover — defensive
+            logger.debug("canonical title for %s failed: %s", resolved_path, exc)
     return title, mime, html, resolved_path
 
 
@@ -336,41 +363,61 @@ def _locate_heading_text(
     Split out so a heading can be retried under a second spelling (see
     ``line_text`` in :func:`_compute_section_offsets`) without duplicating
     the cascade or reordering it.
+
+    v3.3.1 field report (fid 115): the cascade returns the EARLIEST match
+    across its strict and relaxed patterns, not simply the strict one when
+    it succeeds anywhere. ``_compute_section_offsets`` walks a monotonic
+    cursor, so a matcher that skips forward past the real occurrence does
+    not just mislabel one heading — it poisons everything after it. The
+    concrete case is ``iep.utm.edu/responsi/``, where html2text renders
+    ``d. Responsibility as a Virtue`` with two spaces after the hashes in
+    section 2 and with one space 20k chars later in section 4. Only the
+    relaxed pattern accepts the two-space form, so the strict pattern won
+    at the LATER position: section 2's subsection served section 4's prose
+    under section 2's title, and the six headings in between were reported
+    as unlocatable and dropped. The relaxed pattern matches everything the
+    strict one does (each character may be preceded by an optional
+    backslash, and the inline-markup runs may be empty), so its match is
+    at or before the strict one — taking the earliest cannot promote a
+    match that the strict pass would have rejected on content.
     """
-    # Strict pattern first; relaxed fallback covers html2text decorating
-    # the heading text with inline markup (italics, bold, code spans)
-    # that the soup-level get_text() stripped — without the fallback
-    # those sections are silently absent from the bundle and
-    # ``get_section`` returns "not found".
     strict = re.compile(
         rf"^{'#' * level} {re.escape(text)}\s*$",
         re.MULTILINE,
     )
-    match = strict.search(rendered_markdown, cursor)
-    if match is None:
-        # H17: the relaxed pattern previously read
-        # ``[^\n]*{re.escape(text)}[^\n]*$`` — a substring match that
-        # accidentally picked up a heading like ``## Notes and See also``
-        # when the bundle was probing for ``See also``. Constrain the
-        # prefix/suffix to inline-markup characters html2text actually
-        # emits (``*``, ``_``, ``` ` ```, backslashes, whitespace) so
-        # the relaxed branch only catches decorated-heading cases, not
-        # any heading containing the text anywhere.
-        # Inline markup (``**bold**`` etc.) is tolerated as a prefix/suffix
-        # wrapper; ``_loose_escaped_text`` additionally tolerates html2text's
-        # backslash-escaped interior punctuation (e.g. ``1\.`` for ``1.``).
-        _MD_INLINE = r"[ \t\*_`\\]*"
-        relaxed = re.compile(
-            rf"^{'#' * level} {_MD_INLINE}{_loose_escaped_text(text)}"
-            rf"{_MD_INLINE}\s*$",
-            re.MULTILINE,
+    # H17: the relaxed pattern previously read
+    # ``[^\n]*{re.escape(text)}[^\n]*$`` — a substring match that
+    # accidentally picked up a heading like ``## Notes and See also``
+    # when the bundle was probing for ``See also``. Constrain the
+    # prefix/suffix to inline-markup characters html2text actually
+    # emits (``*``, ``_``, ``` ` ```, backslashes, whitespace) so
+    # the relaxed branch only catches decorated-heading cases, not
+    # any heading containing the text anywhere.
+    # Inline markup (``**bold**`` etc.) is tolerated as a prefix/suffix
+    # wrapper; ``_loose_escaped_text`` additionally tolerates html2text's
+    # backslash-escaped interior punctuation (e.g. ``1\.`` for ``1.``).
+    _MD_INLINE = r"[ \t\*_`\\]*"
+    relaxed = re.compile(
+        rf"^{'#' * level} {_MD_INLINE}{_loose_escaped_text(text)}" rf"{_MD_INLINE}\s*$",
+        re.MULTILINE,
+    )
+    candidates = [
+        m
+        for m in (
+            strict.search(rendered_markdown, cursor),
+            relaxed.search(rendered_markdown, cursor),
         )
-        match = relaxed.search(rendered_markdown, cursor)
-    if match is None:
-        # Inline links in the heading (``## [Linked](X) part``) carry
-        # brackets and a URL the relaxed character class can't cover.
-        match = _match_decorated_heading_line(rendered_markdown, level, text, cursor)
-    return match
+        if m is not None
+    ]
+    if candidates:
+        return min(candidates, key=lambda m: m.start())
+    # Inline links in the heading (``## [Linked](X) part``) carry
+    # brackets and a URL the relaxed character class can't cover. Kept as a
+    # last resort rather than folded into the earliest-match choice above:
+    # it compares link-stripped visible text (and, failing that, text with
+    # the spaces removed), which is looser than either pattern, so letting
+    # it win on position alone could promote a match the patterns rejected.
+    return _match_decorated_heading_line(rendered_markdown, level, text, cursor)
 
 
 def _compute_section_offsets(
@@ -471,13 +518,28 @@ def _compute_section_offsets(
                 char_end = matches[j][2]  # heading_start of next sibling
                 break
 
-        # Spec invariant: ``0 <= char_start < char_end <= len(rendered_markdown)``.
+        # Spec invariant: ``0 <= char_start <= char_end <= len(rendered_markdown)``.
         # A heading that sits at the very end of the document with no
         # trailing body content lands with ``char_start == char_end`` —
-        # legal markdown, but a zero-length section is useless to ``get_section``
-        # (returns empty body, ``word_count=0``). Drop those rather than
-        # ship a degenerate SectionMeta.
-        if char_end <= char_start:
+        # legal markdown, but a zero-length section there really is useless
+        # to ``get_section`` (empty body, ``word_count=0``) and carries no
+        # outline information either, because nothing follows it. Drop those.
+        #
+        # v3.3.1 field report (fid 117): a heading immediately followed by a
+        # same-or-higher-level heading measures zero-length too, and dropping
+        # it was a different thing entirely. That shape is a structural
+        # CONTAINER — ``## 2. Phenomenology and Existentialism`` followed at
+        # once by ``## a. Introduction``, which is how the IEP builds every
+        # multi-part article. Dropping it took the whole top-level outline
+        # out of ``view="toc"`` and left six sibling entries all titled
+        # "a. Introduction" with nothing to say which movement each
+        # introduces, while ``view="full"`` went on emitting the headings
+        # ``view="toc"`` refused to list (so ``get_section`` answered
+        # ``section_not_found`` for a heading the caller could plainly see).
+        # Keep those: an empty body is a smaller loss than a missing outline,
+        # and it makes the two views agree on which sections exist.
+        is_container = char_end == char_start and i + 1 < len(matches)
+        if char_end < char_start or (char_end == char_start and not is_container):
             continue
 
         if section_id in emitted_ids:

@@ -807,6 +807,30 @@ def _extract_tell_me_about(query: str, params: Dict[str, Any]) -> None:
         ).strip()
         if topic == before:
             break
+    # D-T1: strip a trailing purpose / aspect qualifier. ``what is X
+    # good for?`` is one of the most common shapes of consumer-health
+    # question, and the tail rode into the topic: ``aspirin good for``
+    # put "Drugs beginning with G" at rank 1 on MedlinePlus and lost the
+    # "Aspirin: MedlinePlus Drug Information" article entirely, while
+    # the identical ``what is aspirin?`` resolved it first. The tail
+    # asks something ABOUT the topic; it is never part of the topic's
+    # name. Same class as the politeness tails swept above, and equally
+    # end-anchored. Guarded so a query that is ONLY the qualifier
+    # (``what is it good for``) keeps a non-empty topic for the
+    # downstream topic-required / filler checks to judge.
+    _purpose_stripped = safe_regex_sub(
+        r"\s+(?:"
+        r"(?:good|great|useful|helpful|used|prescribed|indicated|recommended)"
+        r"\s+for"
+        r"|(?:used|prescribed|indicated|recommended)\s+to\s+treat"
+        r"|made\s+(?:of|from|out\s+of)"
+        r")\s*$",
+        "",
+        topic,
+        flags=re.IGNORECASE,
+    ).strip()
+    if _purpose_stripped:
+        topic = _purpose_stripped
     # A16 post-a16 D2: strip orphan trailing chain connectors. ``tell
     # me about Apollo 11 also`` with no right-hand topic used to leave
     # ``Apollo 11 also`` as the search topic, where the fuzzy ranker
@@ -942,12 +966,57 @@ def _extract_get_section(query: str, params: Dict[str, Any]) -> None:
     if narrow_match:
         params["narrow"] = True
         query = query[narrow_match.end() :]
+    # Form A-quoted / B-quoted: an explicitly quoted section name is taken
+    # WHOLE, up to its closing quote, before the unquoted forms get a
+    # chance to split it. The docstring above promises exactly this
+    # ("Quoted names take precedence so a section called ``In the news``
+    # doesn't get parsed as ``In`` + `` the news`` of nothing"), but the
+    # unquoted forms only ever had an *optional* closing quote, so
+    # ``section "Table of Contents" of X`` still split at the first
+    # `` of `` and leaked the closing quote into the path
+    # (``entry_path='contents" of X'``). Requiring the closing quote —
+    # and matching the name greedily so the LAST quote before the
+    # connector closes it — restores the guarantee.
+    for quoted_pattern in (
+        rf"\b(?:the\s+)?section\s+{_QUOTE_OPEN}(.+){_QUOTE_OPEN}"
+        rf"\s+(?:of|in|from)\s+{_QUOTE_OPEN}?(.+?){_QUOTE_OPEN}?\s*\??\s*$",
+        rf"\bthe\s+{_QUOTE_OPEN}(.+){_QUOTE_OPEN}\s+section"
+        rf"\s+(?:of|in|from)\s+{_QUOTE_OPEN}?(.+?){_QUOTE_OPEN}?\s*\??\s*$",
+    ):
+        m = safe_regex_search(quoted_pattern, query, re.IGNORECASE)
+        if m:
+            params["section_name"] = m.group(1).strip()
+            params["entry_path"] = m.group(2).strip().rstrip("?.,;:!")
+            return
     # Form A: ``[the] section <name> of|in|from <path>``
-    # M8: ``{_QUOTE_NOT_APOS}`` lets a possessive section name keep its
-    # apostrophe (``section Earth's atmosphere of Earth``) instead of the
-    # capture aborting at the ``'``.
+    #
+    # v3.3.1 field report: the lazy name capture split at the FIRST
+    # connector, so every heading with "of" in it was unreachable —
+    # including "Table of Contents", which the tool's own ``view='toc'``
+    # prints unquoted and thereby invites a caller to type back. Quoting it
+    # worked; typing it did not.
+    #
+    # Neither end of the string is reliably right. Last-wins breaks
+    # ``section History of A/The History of Rome``, where the second " of "
+    # belongs to the PATH; first-wins breaks the reported case. So the split
+    # is chosen by which tail actually looks like an entry path, and falls
+    # back to the historical first-connector reading when none does — a
+    # genuinely ambiguous ``section Symptoms of Diabetes`` keeps the answer
+    # it has always given.
+    split = _split_section_name_and_path(query)
+    if split is not None:
+        params["section_name"], params["entry_path"] = split
+        return
+    # M8: the name capture must tolerate an apostrophe (``section Earth's
+    # atmosphere of Earth``). It also has to tolerate the curly DOUBLE
+    # quotes an archive puts inside a heading it authored — ``section 2.
+    # Analytics or "Logic" of iep.utm.edu/aristotle/`` extracted nothing
+    # at all while ``_QUOTE_NOT_APOS`` excluded them, so a heading the
+    # tool itself printed was unreachable. The quoted forms above already
+    # peeled a *deliberately* quoted name, so an unrestricted class here
+    # can no longer swallow one.
     m = safe_regex_search(
-        rf"\b(?:the\s+)?section\s+{_QUOTE_OPEN}?({_QUOTE_NOT_APOS}+?){_QUOTE_OPEN}?"
+        r"\b(?:the\s+)?section\s+(.+?)"
         rf"\s+(?:of|in|from)\s+{_QUOTE_OPEN}?(.+?){_QUOTE_OPEN}?\s*\??\s*$",
         query,
         re.IGNORECASE,
@@ -958,7 +1027,7 @@ def _extract_get_section(query: str, params: Dict[str, Any]) -> None:
         return
     # Form B: ``the <name> section of|in|from <path>``
     m = safe_regex_search(
-        rf"\bthe\s+{_QUOTE_OPEN}?({_QUOTE_NOT_APOS}+?){_QUOTE_OPEN}?\s+section"
+        r"\bthe\s+(.+?)\s+section"
         rf"\s+(?:of|in|from)\s+{_QUOTE_OPEN}?(.+?){_QUOTE_OPEN}?\s*\??\s*$",
         query,
         re.IGNORECASE,
@@ -982,6 +1051,70 @@ def _extract_get_section(query: str, params: Dict[str, Any]) -> None:
     if m:
         params["entry_path"] = m.group(1).strip().rstrip("?.,;:!")
         params["section_name"] = m.group(2).strip()
+
+
+# A tail that reads as an entry path rather than as more prose: it carries a
+# path separator, names an HTML file, or is a single token holding a dot or
+# underscore (``A/Page``, ``medlineplus.gov/asthma.html``,
+# ``wikipedia_en_all``). Deliberately NOT "any single word": ``Rome`` is a
+# perfectly good article title, and treating it as path-shaped would split
+# ``section History of A/The History of Rome`` in the middle of its path.
+_PATH_SHAPED_RE = re.compile(
+    # Each alternative is grouped explicitly: two of the three are anchored
+    # and one is not, and a bare top-level ``|`` between them reads as though
+    # the anchors might bind to the whole pattern.
+    r"(?:/)"  # a path separator anywhere in the tail
+    r"|(?:\.html?$)"  # ...or it names an HTML file
+    r"|(?:^\S*[._]\S*$)",  # ...or it is one token carrying a dot/underscore
+    re.IGNORECASE,
+)
+
+# ``[the] section`` prefix, and the of/in/from connector, for the Form A
+# split. An optional leading verb is consumed so ``get section X of Y`` is
+# read the same way as ``section X of Y`` — the pattern this replaces used a
+# bare ``\b`` and so matched mid-string for free.
+_SECTION_PREFIX_RE = re.compile(
+    r"^\s*(?:(?:get|show|read|display|fetch|open)\s+)?(?:the\s+)?section\s+",
+    re.IGNORECASE,
+)
+_SECTION_CONNECTOR_RE = re.compile(r"\s+(?:of|in|from)\s+", re.IGNORECASE)
+
+
+def _split_section_name_and_path(query: str) -> Optional[Tuple[str, str]]:
+    """``section <name> of <path>`` -> ``(name, path)``, or ``None``.
+
+    Picks among the connectors rather than assuming the first or the last:
+    the LAST one whose tail is path-shaped wins, because the path is the
+    tail and a section name may legitimately contain "of". When no tail is
+    path-shaped the first connector wins, which is what this parser has
+    always done and the only defensible reading of ``section Symptoms of
+    Diabetes``.
+
+    Returns ``None`` when the query is not Form A at all, leaving the
+    remaining forms to try.
+    """
+    prefix = _SECTION_PREFIX_RE.match(query)
+    if not prefix:
+        return None
+    remainder = query[prefix.end() :].strip().rstrip("?")
+    connectors = list(_SECTION_CONNECTOR_RE.finditer(remainder))
+    if not connectors:
+        return None
+
+    def _clean(text: str) -> str:
+        return text.strip().strip("\"'\u201c\u201d\u2018\u2019").strip()
+
+    chosen = connectors[0]
+    for match in reversed(connectors):
+        tail = remainder[match.end() :].strip()
+        if tail and _PATH_SHAPED_RE.search(tail):
+            chosen = match
+            break
+    name = remainder[: chosen.start()].strip()
+    path = remainder[chosen.end() :].strip().rstrip("?.,;:!")
+    if not name or not path:
+        return None
+    return _clean(name), _clean(path)
 
 
 # Post-v2.0.0 D-B: filename hint extractor for the ``metadata`` intent.
@@ -1030,6 +1163,9 @@ _PARAM_EXTRACTORS = {
     "walk_namespace": _extract_walk_namespace,
     "find_by_title": _extract_find_by_title,
     "related": _extract_related,
+    # Same shape as ``related``: the topic/entry path trails the direction
+    # phrase, so the existing extractor handles it unchanged.
+    "inbound_links": _extract_related,
     "get_zim_entries": _extract_get_zim_entries,
     "get_section": _extract_get_section,
     "metadata": _extract_metadata,
@@ -1212,9 +1348,25 @@ class IntentParser:
             8,
         ),
         (r"\bwhat'?s\s+the\s+path\s+for\b", "find_by_title", 0.9, 8),
+        # Inbound links — "what links HERE", the reverse-direction question.
+        # v3.3.1 field report: every one of these phrasings used to fall
+        # through to the outbound ``related`` / ``links`` intents and be
+        # rendered under a header asserting the opposite direction, so simple
+        # mode answered "what links to X" with what X links FROM. Priority 10
+        # so these beat ``related`` (8) and ``links`` (7); ``what links from``
+        # deliberately stays outbound below.
+        (
+            r"\b(backlinks?\s+(for|to)|inbound\s+links?\s+(to|for)"
+            r"|what\s+links\s+(to|here)"
+            r"|wh(ich|at)\s+articles?\s+link\s+to"
+            r"|articles?\s+linking\s+to)\b",
+            "inbound_links",
+            0.92,
+            10,
+        ),
         # related - moderately specific
         (
-            r"\b(related\s+to|articles?\s+linking\s+to|what\s+links\s+(to|from))\b",
+            r"\b(related\s+to|what\s+links\s+from)\b",
             "related",
             0.9,
             8,

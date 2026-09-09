@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import sqlite3
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -98,6 +99,10 @@ def test_stale_sidecar_message_tells_the_operator_about_force(tmp_path) -> None:
 
     ops = structure_mod._StructureMixin.__new__(structure_mod._StructureMixin)
     ops._validate_zim_path = MagicMock(return_value=str(archive))  # type: ignore[method-assign]
+    # This message became mode-aware with fid 92: the operator's build
+    # command now carries a client-issuable fallback alongside it, phrased
+    # for the tools the caller actually has.
+    ops.config = SimpleNamespace(tool_mode="advanced")  # type: ignore[attr-defined]
 
     fake_archive = MagicMock()
     fake_archive.uuid = "uuid-1"

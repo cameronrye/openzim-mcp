@@ -119,10 +119,15 @@ def test_cors_preflight_allows_mcp_protocol_version_header():
 
 
 def test_cors_preflight_allows_last_event_id_header():
-    """Last-Event-ID lets browser MCP clients resume interrupted streams.
+    """Last-Event-ID must survive CORS preflight from a browser client.
 
-    Without this header in allow_headers, browser preflight rejects stream
-    resume requests before they reach the streamable-HTTP transport.
+    It does NOT resume anything here: this server configures no event store
+    and never emits SSE ``id:`` fields, and
+    ``UnsupportedResumeHeaderMiddleware`` strips the header so the request
+    opens a fresh stream. The header is allowed so a browser client sending
+    it is not blocked before reaching the transport — not because
+    resumption works. (v3.3.1 fid 108: this docstring used to claim it did,
+    which is why the test could never see the defect it was cited for.)
     """
     app = _build_app(["http://localhost:5173"])
     client = TestClient(app)

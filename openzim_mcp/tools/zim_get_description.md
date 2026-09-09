@@ -36,7 +36,7 @@ PARAMETERS:
                        (single entry only).
   main_page            Default False. Set True for the archive's
                        main page (zero-path fetch).
-  max_content_length   Body cap in chars for view="full"; with
+  max_content_length   Char cap for view="full" (default 100,000); with
                        `binary=True` caps fetched bytes (default 10MB,
                        oversize returns metadata + `truncated: true`).
   content_offset       Char offset into the body for view="full"

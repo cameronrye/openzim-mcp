@@ -18,7 +18,8 @@ PARAMETERS:
                        placeholders and link markup is stripped (the
                        zim_get compact=True shape). False: raw body
                        with full tables and links.
-  compact_budget       Named profile or integer char cap. Inert.
+  compact_budget       Inert — never forwarded. Use `max_chars` to cap
+                       this tool; only `zim_query` honors this one.
 
 RESPONSE:
   GetSectionResponse — section body markdown, metadata, and any

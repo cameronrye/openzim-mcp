@@ -16,19 +16,20 @@ MODES (pass one as `mode`):
     Levenshtein-1). Use when the caller knows the article name and
     wants to confirm it exists or find near matches ("find article
     titled Detroit"). Single-archive applies Z3/Z4/OPP-1 promotion;
-    cross-archive (`cross_file=True`) returns raw matches without
-    promotion (promotion is per-archive).
+    cross-archive (`cross_file=True`) returns raw matches
+    (promotion is per-archive).
 - "suggest" — Prefix autocomplete via libzim SuggestionSearcher.
     Returns title candidates only — no snippets, no body. Use for
     typeahead-style completion ("prefix `Det`"). Does NOT support
-    `cross_file=True` (libzim's SuggestionSearcher is per-archive).
+    `cross_file=True` (per-archive).
 
 ALIASES: callers may say "search", "find", "lookup", or "autocomplete".
 All route through THIS tool — pick the matching `mode`.
 
 PARAMETERS:
-  query        REQUIRED. Plain terms; AND/OR/NOT, quotes and
-               wildcards are not parsed (matched as literal words).
+  query        REQUIRED. Plain terms, all AND-ed (drop one to widen);
+               AND/OR/NOT, quotes and wildcards are not parsed
+               (matched as literal words).
   mode         One of {"fulltext", "title", "suggest"}. Default
                "fulltext".
   zim_file_path Optional. Omit to auto-select the single loaded

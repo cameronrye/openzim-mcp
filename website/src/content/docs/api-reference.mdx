@@ -188,7 +188,8 @@ it looks — the traps are called out below the table.
 | Summary | "summary of Quantum_mechanics", "summarize Protein" | Opening-paragraph summary | — |
 | One section | "the Biochemistry section of Protein", "section Synthesis of Protein" | That section's body | — |
 | Outbound links | "links in Ant", "references from Protein" | Links extracted from the body | 25 per bucket (100 if `compact=False`) |
-| Related articles | "articles related to Climate_Change", "what links to Ant" | Link-graph neighbours | 10 |
+| Related articles | "articles related to Climate_Change", "what links from Ant" | Link-graph neighbours | 10 |
+| Inbound links | "what links to Ant", "backlinks for Protein", "which articles link to Evolution" | The articles that link **to** this one, from the link-graph sidecar | 10 |
 | Browse a namespace | "browse namespace C with limit 10" | A sampled page of entries | 50 |
 | Walk a namespace | "walk namespace M", "enumerate namespace C" | Deterministic cursor-paginated iteration | 200 |
 | Batch fetch | "get articles C/Ant, C/Bee" | Several entries in one call. The values must be **path-shaped** — bare titles reach the intent but extract nothing and return "Missing Entry Paths" | — |
@@ -258,6 +259,8 @@ evidence bundle to hand your own LLM, not as an answer to display.
 
 The pipeline: per-archive search → RRF fusion across archives → passage extraction → optional cross-encoder rerank (only with the `[reranker]` extra) → section attribution and heading-affinity boost → budget enforcement → answer rendering → citation building.
 
+**Arguments this mode reads, and the ones it refuses.** `limit` selects the number of cited passages (`SynthesizeConfig.top_n`), so it is capped at **50** here rather than at the 1,000 the search path allows — a larger value is refused with `invalid_limit` rather than clamped. `offset`, `content_offset` and `cursor` are refused with `invalid_combination`: the pipeline fuses a single ranked set across every archive and has no next page. Pass `synthesize=False` to page a search instead.
+
 **Response** (`SynthesizeResponse`):
 
 | Key | Meaning |
@@ -267,6 +270,7 @@ The pipeline: per-archive search → RRF fusion across archives → passage extr
 | `passages` | `{cite_id, text_markdown, rank, score}` per passage. Dropped in compact mode, which moves `rank`/`score` onto the citations instead |
 | `citations` | `{cite_id, archive, entry_path, title, section_id, section_title, rank, score}` — `entry_path` is what you pass to `zim_get` |
 | `archives_searched` | Which archives actually contributed |
+| `archives_failed` | `{archive, error}` per archive that could not be opened. **Present only when at least one failed** — this is the only cross-archive answering path, so its coverage claim is auditable rather than implied. A failure degrades the briefing rather than refusing it: the answer is still built from the archives that did open |
 | `fallback_used` | The fusion stage that ordered the hits: `rrf_fusion` (multiple archives) or `xapian_score` (single archive, or fusion unavailable). **Not an error**, and not a reranker signal — the cross-encoder runs after fusion and never changes this field, so the schema's third literal `reranker` is never emitted |
 | `total_chars` / `total_words` | Size of the assembled answer |
 | `considered_articles` / `considered_sections` | Pivot handles for a follow-up turn without re-running the search: the other top hits minus the top passage's own article, and that article's other sections. Only the top passage's article and section are excluded, so lower-ranked cited articles still appear here. Empty when there was no candidate space |
@@ -332,6 +336,15 @@ there.
 
 ## Advanced tools (8)
 
+Every tool on this surface — in both modes — is published with the MCP
+annotations `readOnlyHint: true` and `openWorldHint: false`. Nothing here
+writes to an archive and nothing reaches the network, so a client that gates
+auto-approval on `readOnlyHint` can run the whole surface without prompting,
+and one that caches on `openWorldHint` can treat a repeated call as
+replayable. `destructiveHint` and `idempotentHint` are deliberately not
+published: the MCP spec defines both as meaningful only when `readOnlyHint`
+is false.
+
 ### `zim_search`
 
 Full-text / title / suggest search dispatch. Collapses five v1 search tools (`search_zim_file`, `search_all`, `search_with_filters`, `find_entry_by_title`, `get_search_suggestions`) into one.
@@ -361,6 +374,8 @@ zim_search(
 | `cursor` | Accepted for surface uniformity but **rejected** when non-empty (`invalid_combination` envelope) — paginate single-archive fulltext with `offset` instead |
 
 **Returns:** mode-shaped response — `SearchResponse` / `SearchAllResponse` / `SearchWithFiltersResponse` / `FindEntryResponse` / `SearchSuggestionsResponse` — or `ToolErrorPayload` on validation failure. Every `next_cursor` in these responses is nulled; page with `offset`.
+
+Single-archive `fulltext` responses carry a top-level **`zim_file_path`** naming the archive that answered — including when the server auto-selected it because only one is loaded. Hand it straight to `zim_get`, `zim_get_section`, `zim_links`, `zim_browse` or `zim_metadata`, all of which require the field. (`mode="title"` states the same fact per hit, as `zim_file`; the cross-archive fan-out states it per file.) If you get a `zim_file_path: Field required` rejection anyway, it names the archive for you whenever exactly one is loaded.
 
 ---
 
@@ -516,6 +531,8 @@ zim_links(
 
 Relative hrefs are resolved against the source entry's directory; redirects are followed to resolved paths; the content namespace is identified correctly on domain-scheme archives; self-referential refs are rejected.
 
+On a scraped archive (warc2zim/ZIMIT), whose entry paths are host-prefixed, the site's own links are commonly stored as **absolute URLs** — `https://www.iep.utm.edu/aris-log/` inside `iep.utm.edu/aristotle/`. Those count as `internal`, with a resolved `path`, whenever the archive can actually serve them: the host is matched against the archive's own with and without a leading `www.`, and the candidate path is verified (and redirect-followed) before the row moves. A same-host URL the archive never captured stays `external` — a `path` that fetches nothing would be worse than an honest external row. On mwoffliner archives, where the first path segment is a namespace letter rather than a host, nothing is promoted.
+
 **Returns:** a paginated `{results, next_cursor, total, done, page_info, …}` envelope for every direction. `direction="outbound"` adds `kind` and `category_totals` alongside; `"inbound"` and `"related"` carry neither, and key the article as `entry_path` rather than `path`/`title`.
 
 Outbound entries carry `url`/`text`/`title` (plus `domain` for external, `alt` for media). **`url` is the raw href as written in the article** — it does not necessarily round-trip into `zim_get`. Internal rows additionally carry `path`, the resolved entry path, and that is the one to pass to `zim_get`. Inbound entries are `{path, title, inbound_degree, anchor_text}`; related entries are `{path, title, …}` rows.
@@ -584,11 +601,22 @@ The three blocks are built independently. If the health or configuration builder
   "uuid": "<archive uuid>",
   "is_multipart": false,
   "path": "...archive.zim",
-  "name": "archive.zim"
+  "name": "archive.zim",
+  "has_link_graph": true,
+  "link_graph": {
+    "built_at": "2026-09-04T16:05:54Z",
+    "builder_version": "<openzim-mcp version that built it>",
+    "schema_version": "3",
+    "node_count": 15990,
+    "edge_count": 422722,
+    "is_stale": false
+  }
 }
 ```
 
 `is_valid` is the result of libzim's `Archive.check()` structural-integrity probe — a quick way to tell a valid archive from a corrupt or truncated one. A non-indexed archive reports `has_fulltext_index: false`; full-text `zim_search` against it then degrades gracefully to a `no_xapian_index` reason instead of erroring.
+
+`has_link_graph` answers, without a trial call, whether `zim_links(direction="inbound")` can be served for this archive — previously the only way to find out was to issue one and read the failure. When a sidecar is present, `link_graph` carries its own meta table alongside it. Read **`is_stale`**, not just presence: a sidecar built for a different archive revision or an older schema is on disk but refuses every inbound query, and rebuilding it is `openzim-mcp build link-graph <archive> --force`. `has_link_graph: false` means no sidecar file at all.
 
 ---
 

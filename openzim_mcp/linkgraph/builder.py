@@ -151,7 +151,30 @@ def _is_content_source(path: str, *, has_new_scheme: bool) -> bool:
     return namespace.upper() in {"A", "C"}
 
 
-def iter_article_links(archive: Any) -> Iterator[Tuple[str, List[Tuple[str, str]]]]:
+# Progress cadence for the walk. The stride is derived from the archive so a
+# build reports about fifty times whatever its size — one line every second or
+# two on a 30k-entry archive — while a Wikipedia-scale walk stays at one line
+# per 10,000 entries instead of emitting hundreds of thousands.
+_PROGRESS_MIN_STRIDE = 500
+_PROGRESS_MAX_STRIDE = 10_000
+_PROGRESS_TARGET_REPORTS = 50
+
+
+def _progress_stride(total: int) -> int:
+    """Entries between progress reports for an archive of ``total`` entries."""
+    if total <= 0:
+        return _PROGRESS_MAX_STRIDE
+    return max(
+        _PROGRESS_MIN_STRIDE,
+        min(_PROGRESS_MAX_STRIDE, total // _PROGRESS_TARGET_REPORTS),
+    )
+
+
+def iter_article_links(
+    archive: Any,
+    *,
+    progress: Optional[Callable[[int, int], None]] = None,
+) -> Iterator[Tuple[str, List[Tuple[str, str]]]]:
     """Yield ``(source_path, [(target, anchor_text), ...])`` per content entry.
 
     Walk the open archive once via ``_get_entry_by_id`` over ``entry_count``,
@@ -165,6 +188,14 @@ def iter_article_links(archive: Any) -> Iterator[Tuple[str, List[Tuple[str, str]
     (``"C/Evolution"`` old-scheme, ``"Evolution"`` new-scheme) so it stays
     consistent with what the runtime query layer looks up. Per-entry read
     failures are skipped so one bad entry never aborts the whole build.
+
+    ``progress`` (if given) is called ``progress(entries_walked, entry_count)``
+    every ``_progress_stride`` entries, and once more on completion. It counts
+    ENTRIES WALKED, skips included — the same population as the denominator.
+    Counting yielded pairs instead made the numerator a strict subset of the
+    denominator (articles are roughly half the entries of a ZIMIT archive), so
+    the percentage stalled around half and never reached 100 %, which reads as
+    a hung build on the one long-running command in the product.
     """
     # Imported here (not at module scope) so the pure ``build_from_link_stream``
     # core keeps no dependency on the ZIM/structure layer.
@@ -178,7 +209,16 @@ def iter_article_links(archive: Any) -> Iterator[Tuple[str, List[Tuple[str, str]
 
     has_new_scheme = bool(getattr(archive, "has_new_namespace_scheme", False))
     total = int(getattr(archive, "entry_count", 0) or 0)
+    stride = _progress_stride(total)
+    reported = 0
     for entry_id in range(total):
+        # Reported before the filters below, so an entry that is skipped
+        # (redirect, image, unreadable) still counts toward the walk the
+        # denominator describes.
+        walked = entry_id + 1
+        if progress is not None and walked % stride == 0:
+            reported = walked
+            progress(walked, total)
         try:
             entry = archive._get_entry_by_id(entry_id)
         except Exception:  # nosec B112 - skip unreadable entry, keep walking
@@ -224,6 +264,11 @@ def iter_article_links(archive: Any) -> Iterator[Tuple[str, List[Tuple[str, str]
             continue
         yield (path, edges)
 
+    # Close the walk on its denominator: a progress line that stops short of
+    # the total it reports against is indistinguishable from a stalled build.
+    if progress is not None and total and reported != total:
+        progress(total, total)
+
 
 def build_link_graph(
     archive_path: str,
@@ -240,7 +285,8 @@ def build_link_graph(
     an in-memory id map and materialises the full node list for insertion, so
     peak RSS scales with the article count (GB-scale on a full Wikipedia build),
     not with the edge count. ``progress`` (if given) is invoked as
-    ``progress(processed, total)`` every 10,000 source entries.
+    ``progress(entries_walked, entry_count)`` — both halves count the same
+    population, so the report ends at 100 % (see ``iter_article_links``).
     """
     from openzim_mcp.linkgraph.reader import sidecar_path_for
     from openzim_mcp.zim_operations import zim_archive
@@ -250,16 +296,18 @@ def build_link_graph(
         archive_uuid = str(archive.uuid)
         total = int(getattr(archive, "entry_count", 0) or 0)
 
-        def _stream() -> Iterator[Tuple[str, List[Tuple[str, str]]]]:
-            for i, pair in enumerate(iter_article_links(archive)):
-                # ``i and`` guards against the spurious 0 % 10_000 == 0 call at
-                # the very first entry; report every 10,000 thereafter.
-                if progress and i and i % 10_000 == 0:
-                    progress(i, total)
-                yield pair
+        # The walk owns the reporting: it is the only place that knows how
+        # many ENTRIES have been visited, and reporting yielded pairs against
+        # ``entry_count`` counted one population against another. Hand it a
+        # reporter only when the caller asked for one, so an unwatched build
+        # keeps the plain walk.
+        if progress is not None:
+            walk = iter_article_links(archive, progress=progress)
+        else:
+            walk = iter_article_links(archive)
 
         stats = build_from_link_stream(
-            out, archive_uuid=archive_uuid, link_stream=_stream(), force=force
+            out, archive_uuid=archive_uuid, link_stream=walk, force=force
         )
         if total and not stats.node_count:
             # A non-empty archive that yields no content sources means the

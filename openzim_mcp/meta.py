@@ -47,12 +47,59 @@ def _get_encoder() -> Any:
         return None
 
 
+# Above this many characters, ``tokens_est`` is extrapolated from bounded
+# samples instead of encoding the whole string.
+#
+# v3.3.1 field report (fid 124): ``attach_meta`` json.dumps's the whole
+# payload and hands it to tiktoken unconditionally, base64 ``data`` field
+# included. On the DEFAULT binary path (a 9.9 MB entry, no unusual arguments)
+# that is 1.4 s and +240 MB of RSS; raise ``max_content_length`` and it
+# becomes 7.5 s and +1.25 GB, producing a 51-million-element token list — to
+# compute an advisory number that gates nothing and whose only content is
+# "this response is unusable". cl100k costs roughly 0.1 s and ~20x the
+# string's size in peak RSS per megabyte, so 200 KB is ~20 ms and is where
+# exactness stops being worth paying for.
+_EXACT_TOKENISE_LIMIT = 200_000
+# Three windows (head / middle / tail) rather than one prefix, so a payload
+# that mixes prose and a base64 blob is not estimated entirely from whichever
+# of the two happens to start it.
+_TOKENISE_SAMPLE_WINDOW = 32_000
+
+
+def _sampled_tokens_est(encoder: Any, rendered: str) -> int:
+    """Extrapolate a token count from bounded samples of ``rendered``.
+
+    Sampling rather than a flat chars/N divisor because the divisor is not
+    a constant across content types: cl100k averages ~4 chars per token on
+    English prose but ~1.4 on base64, so a chars/4 estimate under-reports a
+    media payload by ~3x — in the direction that causes context overflow.
+    Encoding a sample measures the ratio for the content actually present at
+    a cost that does not grow with the payload.
+    """
+    total = len(rendered)
+    window = _TOKENISE_SAMPLE_WINDOW
+    middle = (total - window) // 2
+    samples = [
+        rendered[:window],
+        rendered[middle : middle + window],
+        rendered[-window:],
+    ]
+    sampled_chars = sum(len(s) for s in samples)
+    sampled_tokens = sum(len(encoder.encode(s, disallowed_special=())) for s in samples)
+    if sampled_chars == 0:  # pragma: no cover — total > limit implies chars
+        return 0
+    return int(sampled_tokens * (total / sampled_chars))
+
+
 def _raw_tokens_est(rendered: str) -> Optional[int]:
     """Tokenize ``rendered``. Returns ``None`` when the tokenizer is
     unavailable or the encode fails, so callers can distinguish
     "couldn't estimate" from "zero tokens" — spec §5 requires omitting
     ``tokens_est`` on tiktoken init failure rather than emitting a
     misleading 0.
+
+    Payloads above :data:`_EXACT_TOKENISE_LIMIT` are estimated from bounded
+    samples; see the constant.
     """
     if not rendered:
         return 0
@@ -65,6 +112,8 @@ def _raw_tokens_est(rendered: str) -> Optional[int]:
         # tiktoken's default would raise on them, and they occur naturally
         # in article bodies and user queries about tokenizers — a
         # best-effort budget estimate must never fail the tool call.
+        if len(rendered) > _EXACT_TOKENISE_LIMIT:
+            return _sampled_tokens_est(encoder, rendered)
         return len(encoder.encode(rendered, disallowed_special=()))
     except Exception as e:
         logger.warning("token estimation failed; omitting tokens_est: %s", e)
@@ -211,6 +260,7 @@ def format_footer(
         "sample_only",
         "archive_unavailable",
         "search_all_budget_exceeded",
+        "namespace_not_iterable",
     }:
         suggestions = meta.get("suggestions") or []
         visible = suggestions[:3]
@@ -242,6 +292,26 @@ def format_footer(
                         "content of <path>` fetches one you can already name."
                     )
                 )
+            if reason == "namespace_not_iterable":
+                # v3.3.1 field report (fid 80 audit residue). The data layer
+                # separates "this namespace holds nothing" from "this
+                # namespace is real but not on this archive's iterable
+                # surface" — and then this footer, gating on a closed set
+                # this code was never added to, rendered both as the same
+                # token-budget line. A verdict nothing renders is a verdict
+                # nobody acts on. Distinct prose from ``bad_namespace``: the
+                # namespace is not the caller's mistake here.
+                return (
+                    "> That namespace exists but this archive does not "
+                    "enumerate it. "
+                    + (
+                        "Try `zim_browse(mode='walk')`, which scans entry ids "
+                        "directly."
+                        if advanced
+                        else "Ask for `walk namespace <namespace>`, which "
+                        "scans entry ids directly."
+                    )
+                )
             if reason == "sample_only":
                 return "> Sampled view only — more entries remain. " + (
                     "Use `zim_browse(mode='walk')` for exhaustive iteration."
@@ -261,6 +331,20 @@ def format_footer(
                     "> Search-all aggregate timeout fired before every archive "
                     "was probed. Narrow the query or raise "
                     "`OPENZIM_MCP_SEARCH__SEARCH_ALL_TOTAL_TIMEOUT_SECONDS`."
+                )
+            if reason == "low_relevance":
+                # v3.3.1 field report: this branch used to fall through to the
+                # ``0_hits`` prose below, so a response that DID return hits
+                # was footed with "No results." — false in the other
+                # direction. ``low_relevance`` means Xapian matched something
+                # but no hit token-matches the query, so the rows above are
+                # real and probably not what was asked for.
+                return "> These matches look weak — no result matches your " + (
+                    "search terms directly. Try `zim_search(mode='title')` "
+                    "for an exact-title lookup, or rephrase."
+                    if advanced
+                    else "search terms directly. Ask for `find article titled "
+                    "<title>` for an exact-title lookup, or rephrase."
                 )
             return "> No results. Try a shorter or differently-spelled query."
         bits: List[str] = []
@@ -310,6 +394,42 @@ def format_footer(
         if "more_at_offset" in meta:
             parts.append(f"pass `content_offset={meta['more_at_offset']}` for more")
     return "> " + " · ".join(parts)
+
+
+def remeasure(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Recompute an existing ``_meta``'s size fields after a late edit.
+
+    ``chars`` and ``tokens_est`` are the only entries ``build_meta`` derives
+    from the payload; everything else there is a verdict the caller supplied.
+    So a tool that adds a field to a payload the data layer already measured
+    can restate the size without having to reconstruct — and risk dropping —
+    ``reason``, ``suggestions``, ``detected_type`` and the rest.
+
+    This repo has fixed the stale-envelope bug twice by hand already
+    (``_refresh_promotion_meta`` on the title path, ``_restamp_spliced_meta``
+    on the splice path), each rebuilding the whole envelope from a
+    hand-copied list of carried keys. A third open-coded copy is how one of
+    those lists goes stale.
+
+    A payload with no ``_meta`` is left alone: absence means the tool never
+    published a size, not that it published a wrong one.
+    """
+    meta = payload.get("_meta")
+    if not isinstance(meta, dict):
+        return payload
+    rendered = _json.dumps(
+        {k: v for k, v in payload.items() if k != "_meta"},
+        ensure_ascii=False,
+    )
+    meta["chars"] = len(rendered)
+    raw_tokens = _raw_tokens_est(rendered)
+    if raw_tokens is None:
+        meta.pop("tokens_est", None)
+    elif raw_tokens == 0 and not rendered:
+        meta["tokens_est"] = 0
+    else:
+        meta["tokens_est"] = int(raw_tokens * 1.05) + 1
+    return payload
 
 
 def attach_meta(

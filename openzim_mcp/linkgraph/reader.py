@@ -99,3 +99,34 @@ class LinkGraphReader:
     def close(self) -> None:
         """Close the underlying connection."""
         self._conn.close()
+
+
+def read_sidecar_meta(archive_path: str) -> Optional[Dict[str, str]]:
+    """The sidecar's ``meta`` table for ``archive_path``, or ``None``.
+
+    Deliberately does NOT apply ``open_for``'s fingerprint gate. That gate
+    exists so a stale sidecar cannot answer a query with another archive's
+    edges; this function exists to *describe* what is on disk, and "there is
+    a sidecar and it is stale" is precisely the answer a planner needs and
+    could not previously get. v3.3.1 field report (fid 91): the only way to
+    learn whether an archive had a link graph was to issue an inbound call
+    and see it fail.
+
+    Returns ``None`` when there is no sidecar file, or when the file is
+    present but not a readable SQLite database carrying a meta table — both
+    of which mean "no link graph you can use" from the caller's side.
+    """
+    path = sidecar_path_for(archive_path)
+    if not Path(path).is_file():
+        return None
+    uri = f"file:{pathname2url(str(Path(path).resolve()))}?mode=ro"
+    try:
+        conn = sqlite3.connect(uri, uri=True)
+    except sqlite3.Error:
+        return None
+    try:
+        return {str(k): str(v) for k, v in conn.execute("SELECT key, value FROM meta")}
+    except sqlite3.DatabaseError:
+        return None
+    finally:
+        conn.close()

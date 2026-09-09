@@ -225,8 +225,15 @@ def test_footer_advice_branches_render_actionable_prose(reason: str, tool_mode: 
 
 
 def test_footer_advice_falls_back_when_reason_has_no_branch():
-    """``0_hits`` / ``low_relevance`` / ``bad_query`` share the generic line."""
-    for reason in ("0_hits", "low_relevance", "bad_query"):
+    """``0_hits`` / ``bad_query`` share the generic no-results line.
+
+    ``low_relevance`` used to share it too, which was wrong in the opposite
+    direction: that reason means Xapian DID return hits, none of which
+    token-match the query, so footing it "No results." contradicted the rows
+    printed directly above. It now has its own branch — see
+    ``test_footer_low_relevance_does_not_claim_zero_results``.
+    """
+    for reason in ("0_hits", "bad_query"):
         for tool_mode in ("simple", "advanced"):
             assert (
                 format_footer(
@@ -234,6 +241,21 @@ def test_footer_advice_falls_back_when_reason_has_no_branch():
                 )
                 == "> No results. Try a shorter or differently-spelled query."
             )
+
+
+def test_footer_low_relevance_does_not_claim_zero_results():
+    """A result-bearing weak-match response must not be footed "No results."."""
+    for tool_mode, expected_route in (
+        ("simple", "find article titled"),
+        ("advanced", "zim_search(mode='title')"),
+    ):
+        footer = format_footer(
+            {"reason": "low_relevance"}, footer_enabled=True, tool_mode=tool_mode
+        )
+        # Negative paired with a positive: "renders nothing" fails both.
+        assert "No results" not in footer, footer
+        assert "weak" in footer, footer
+        assert expected_route in footer, footer
 
 
 def test_footer_sample_only_routes_to_walk_mode_in_advanced():

@@ -471,9 +471,19 @@ class TestSimpleToolsHandler:
         """Empty/whitespace-only queries must surface a validation message.
 
         Without this, the router silently falls through to a no-op search.
+
+        D-Q1: the message now rides in the structured ``query_required``
+        error envelope instead of a plain string on the success path —
+        ``query=null`` / ``123`` already returned an ``isError`` envelope
+        for the same argument, so ``""`` handing back prose meant one
+        parameter gave opposite machine signals for two bad values.
         """
         result = handler.handle_zim_query(empty_query)
-        assert "Query Required" in result
+        assert isinstance(result, dict)
+        assert result["error"] is True
+        assert result["operation"] == "query_required"
+        assert result["invalid_arguments"] == ["query"]
+        assert "Query Required" in result["message"]
         # And no underlying op should have been invoked.
         mock_zim_operations.list_zim_files.assert_not_called()
         mock_zim_operations.search_zim_file.assert_not_called()
@@ -835,7 +845,9 @@ class TestSimpleToolsOptionsPassthrough:
             "articles related to",
             "articles related to ",
             "related to",
-            "what links to",
+            # "what links to" moved to the inbound-links intent in v3.3.1 —
+            # see test_inbound_missing_entry_path_returns_actionable_error.
+            # "what links FROM" stays outbound and belongs here.
             "what links from",
         ],
     )
@@ -859,6 +871,32 @@ class TestSimpleToolsOptionsPassthrough:
         assert "articles related to" in result.lower()
         # Backend must NOT be called with an empty entry_path.
         zim_ops.get_related_articles.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "query",
+        ["what links to", "backlinks for", "which articles link to"],
+    )
+    def test_inbound_missing_entry_path_returns_actionable_error(self, query):
+        """Inbound phrasings get their own missing-article error.
+
+        Before v3.3.1 these fell through to the OUTBOUND related handler and
+        were answered under a header claiming the opposite direction; the
+        empty-path case shared that handler's wording too.
+        """
+        from unittest.mock import MagicMock
+
+        from openzim_mcp.simple_tools import SimpleToolsHandler
+
+        zim_ops = MagicMock()
+        zim_ops.list_zim_files_data.return_value = [{"path": "/x.zim"}]
+        handler = SimpleToolsHandler(zim_ops)
+
+        result = handler.handle_zim_query(query)
+        assert "Missing Article" in result
+        assert "inbound links" in result.lower()
+        zim_ops.get_inbound_links_data.assert_not_called()
+        # And it must not offer the outbound wording as the example.
+        assert "articles related to" not in result.lower()
 
     @pytest.mark.parametrize(
         "query",
@@ -2471,6 +2509,7 @@ class TestZimPathHallucinationHandling:
             "berlin",
             "/var/lib/zim/wikipedia_en_all_maxi.zim",
             compact=False,
+            top_n=None,
         )
 
     def test_synthesize_bare_filename_no_match_triggers_auto_select(
@@ -2498,6 +2537,7 @@ class TestZimPathHallucinationHandling:
             "May Erlewine",
             "/var/lib/zim/wikipedia_en_all_maxi.zim",
             compact=False,
+            top_n=None,
         )
 
     def test_synthesize_slashed_unmatched_path_single_archive_auto_selects(
@@ -2540,6 +2580,7 @@ class TestZimPathHallucinationHandling:
             "berlin",
             "/var/lib/zim/wikipedia_en_all_maxi.zim",
             compact=False,
+            top_n=None,
         )
 
     def test_synthesize_slashed_unmatched_path_multi_archive_preserved(
@@ -2581,7 +2622,7 @@ class TestZimPathHallucinationHandling:
         # candidate preserved. H14 still holds when there's something
         # to disambiguate against.
         mock_synth.assert_called_once_with(
-            "berlin", "/some/other/ghost.zim", compact=False
+            "berlin", "/some/other/ghost.zim", compact=False, top_n=None
         )
 
     def test_synthesize_no_path_skips_resolver(self, handler, mock_zim_operations):
@@ -2603,7 +2644,7 @@ class TestZimPathHallucinationHandling:
                 zim_file_path=None,
                 options={"synthesize": True},
             )
-        mock_synth.assert_called_once_with("berlin", None, compact=False)
+        mock_synth.assert_called_once_with("berlin", None, compact=False, top_n=None)
 
 
 class TestLowConfidenceNoteAppendedConsistently:

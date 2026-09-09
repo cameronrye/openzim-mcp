@@ -85,7 +85,7 @@ async def test_zim_query_rejects_oversized_query():
     captured = {}
 
     class _FakeMcp:
-        def tool(self, description=None):
+        def tool(self, description=None, **_kw):
             def deco(fn):
                 captured["fn"] = fn
                 return fn

@@ -86,15 +86,24 @@ TOTAL_CAP = 25 * 1024
 # Trailing comments are the wire bytes measured after the schema trim. The
 # allocation is deliberately not that number any more, so it is recorded here —
 # otherwise the table stops telling a reader what the surface actually costs.
+# Every figure rose 58B in v3.3.2: the field-report fix that gave all eight
+# tools ``readOnlyHint``/``openWorldHint`` spends 464B of the reserved
+# headroom, bought back from a client that no longer has to ask a human
+# whether a read is safe. ``zim_query`` then took a further 206B for four
+# OPERATIONS rows (fid 30): on a one-tool surface an unadvertised
+# capability is an absent one, and ``summary``/``toc``/``get_section``/
+# ``inbound_links`` all routed while appearing in no row. The allocations
+# themselves are unchanged — the bytes came out of the reserve, not out of
+# a neighbour's prose.
 ALLOCATION = {
-    "zim_query": 5_550,  # 6,266B
-    "zim_search": 3_620,  # 3,937B
-    "zim_get": 3_650,  # 3,913B
-    "zim_get_section": 1_840,  # 1,863B
-    "zim_browse": 2_080,  # 2,170B
-    "zim_metadata": 1_310,  # 1,386B
-    "zim_links": 2_700,  # 2,990B
-    "zim_health": 1_300,  # 1,367B
+    "zim_query": 5_550,  # 6,514B
+    "zim_search": 3_620,  # 3,994B
+    "zim_get": 3_650,  # 3,980B
+    "zim_get_section": 1_840,  # 2,001B
+    "zim_browse": 2_080,  # 2,228B
+    "zim_metadata": 1_310,  # 1,444B
+    "zim_links": 2_700,  # 3,048B
+    "zim_health": 1_300,  # 1,425B
 }
 
 
@@ -107,6 +116,10 @@ def _measure_tools(mode: str) -> dict[str, int]:
     inside the pain band this cap exists to keep it out of — while this
     function measured 24.8KB and the budget stayed green. Anything the client
     receives has to be counted, or the cap is measuring a number nobody pays.
+    ``annotations`` joined the payload the same way and for the same reason:
+    the v3.3.1 field-report fix that gave all eight tools ``readOnlyHint`` /
+    ``openWorldHint`` put 58 bytes per tool on the wire, and a gate that
+    skipped them would have let the surface grow while reading unchanged.
 
     The same rule cuts the other way, which is why the separators are pinned.
     ``json.dumps`` defaults to ``", "`` and ``": "``, and the wire uses neither
@@ -128,6 +141,10 @@ def _measure_tools(mode: str) -> dict[str, int]:
         }
         if tool.output_schema is not None:
             payload["outputSchema"] = tool.output_schema
+        if tool.annotations is not None:
+            payload["annotations"] = tool.annotations.model_dump(
+                by_alias=True, exclude_none=True
+            )
         measured[name] = len(json.dumps(payload, separators=(",", ":")).encode())
     return measured
 
@@ -161,6 +178,10 @@ def test_measurement_counts_wire_bytes_not_serializer_padding():
         }
         if tool.output_schema is not None:
             payload["outputSchema"] = tool.output_schema
+        if tool.annotations is not None:
+            payload["annotations"] = tool.annotations.model_dump(
+                by_alias=True, exclude_none=True
+            )
         padded = len(json.dumps(payload).encode())
         assert measured[name] < padded, (
             f"{name} is being measured with the padded serializer "
@@ -277,7 +298,7 @@ def test_gate_decision_scope_limitations_documented():
 # Both were comments before they were tests, and both had gone stale.
 # --------------------------------------------------------------------------
 
-# ``"zim_query": 5_550,  # 6,243B`` -> ("zim_query", "6,277")
+# ``"zim_query": 5_550,  # 6,514B`` -> ("zim_query", "6,277")
 _ALLOCATION_COMMENT_RE = re.compile(
     r'^\s*"(zim_[a-z_]+)":\s*[\d_]+,\s*#\s*([\d,]+)B\s*$', re.MULTILINE
 )

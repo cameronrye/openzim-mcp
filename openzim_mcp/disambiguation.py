@@ -192,6 +192,31 @@ class _DisambiguationMixin:
             return canonicals[0]
         return None
 
+    # One collapsed line of a candidate's snippet. Long enough to tell
+    # "Headache: causes, when to see a doctor" from a page of outbound
+    # links, short enough that five candidates stay skimmable.
+    _CANDIDATE_LEAD_CHARS = 140
+
+    @classmethod
+    def _candidate_lead(cls, candidate: Dict[str, Any]) -> str:
+        """A single-line excerpt for one disambiguation candidate.
+
+        Returns ``""`` when the candidate carries no usable snippet (the
+        title-index canonical row prepended by the probe has none), so the
+        renderer falls back to the bare title/path line it always emitted.
+        """
+        raw = candidate.get("snippet")
+        if not isinstance(raw, str):
+            return ""
+        text = re.sub(r"\s+", " ", raw.replace("**", "")).strip()
+        if not text:
+            return ""
+        if len(text) <= cls._CANDIDATE_LEAD_CHARS:
+            return f"_{text}_"
+        cut = text.rfind(" ", 0, cls._CANDIDATE_LEAD_CHARS)
+        clipped = text[: cut if cut > 0 else cls._CANDIDATE_LEAD_CHARS].rstrip(" ,;:.")
+        return f"_{clipped}…_"
+
     @classmethod
     def _render_disambiguation(
         cls,
@@ -245,6 +270,15 @@ class _DisambiguationMixin:
                 lines.append(f"{i}. **{title}** — `{path}` (score: {float(score):.2f})")
             else:
                 lines.append(f"{i}. **{title}** — `{path}`")
+            # D-D1: a chooser with no content is a pure tax — the caller
+            # spends a whole round trip to learn two titles it could
+            # already see in the search results, and nothing distinguishes
+            # a link-only portal page from a real article. The search hit
+            # already carries a snippet; one collapsed line of it makes the
+            # forced round trip carry information.
+            lead = cls._candidate_lead(c)
+            if lead:
+                lines.append(f"   {lead}")
         lines.append("")
         lines.append(
             "_Follow up with `tell me about <full title>` for the article "

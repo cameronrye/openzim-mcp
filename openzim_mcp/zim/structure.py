@@ -24,7 +24,7 @@ from typing import (
     Union,
     cast,
 )
-from urllib.parse import unquote
+from urllib.parse import unquote, urlparse
 
 from libzim.reader import Archive  # type: ignore[import-untyped]
 
@@ -43,6 +43,7 @@ from openzim_mcp.responses import ToolErrorPayload, tool_error
 from openzim_mcp.zim._ops_base import _json
 from openzim_mcp.zim.content import (
     _strip_markdown_links_shared,
+    normalize_entry_path,
     reject_path_traversal,
     rewrite_well_known_path,
 )
@@ -222,6 +223,139 @@ class _OutboundLinkBuckets(NamedTuple):
         return self.external
 
 
+def _self_host(entry_path: str) -> Optional[str]:
+    """The archive's own host, when its entry paths carry one.
+
+    warc2zim/zimit store a scraped site under its hostname
+    (``iep.utm.edu/aristotle/``); mwoffliner stores ``A/Aristotle``. The
+    first segment is read as a host only when it looks like one — a dot, no
+    whitespace, and no ``%`` (an escaped asset name) — so an mwoffliner
+    archive, whose first segment is a single namespace letter, never yields
+    one and nothing downstream can fire on it.
+
+    Deliberately derived from the entry path rather than from ``M/Source``:
+    the entry path is what a link has to be rewritten INTO, and on archives
+    where the two disagree (a redirect-following scrape, a site served under
+    several names) the metadata would send the rewrite somewhere the archive
+    does not store.
+    """
+    head = entry_path.split("/", 1)[0]
+    if "." not in head or "%" in head:
+        return None
+    if any(ch.isspace() for ch in head) or head.startswith("."):
+        return None
+    return head.lower()
+
+
+def _self_absolute_target(url: str, self_host: str) -> Optional[str]:
+    """``https://www.iep.utm.edu/aris-log/`` -> ``iep.utm.edu/aris-log/``.
+
+    Returns ``None`` unless ``url`` is an http(s) or protocol-relative URL
+    whose host IS the archive's own — matched with and without a leading
+    ``www.``, because warc2zim stores the host the scrape resolved while the
+    page's own links commonly carry the ``www`` alias.
+
+    The result is a CANDIDATE. It is a path shaped like one the archive
+    could hold, not one it does; the caller verifies before promoting
+    anything, because an unverified promotion would replace an under-report
+    with a row claiming a ``path`` that fetches nothing.
+    """
+    if url.startswith("//"):
+        url = "https:" + url
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return None
+    if parsed.scheme.lower() not in ("http", "https") or not parsed.netloc:
+        return None
+    host = parsed.netloc.lower().split("@")[-1].split(":")[0]
+    if host != self_host and host.removeprefix("www.") != self_host:
+        return None
+    path = parsed.path.lstrip("/")
+    # A bare ``https://host/`` names the site root, which is the archive's
+    # main page rather than an article; leave it external rather than
+    # inventing a path for it.
+    if not path:
+        return None
+    return f"{self_host}/{path}"
+
+
+def _entry_content_type(entry: Any) -> str:
+    """Best-effort mimetype of ``entry``; ``""`` when it cannot be read.
+
+    Must be called while the archive is still open. Mock archives across the
+    suite hand back MagicMock items whose ``mimetype`` is not a ``str``, and
+    a redirect stub has no item at all — neither is worth an exception.
+    """
+    if entry is None:
+        return ""
+    try:
+        mime = entry.get_item().mimetype
+    except Exception:
+        return ""
+    return mime if isinstance(mime, str) else ""
+
+
+def _non_article_graph_message(content_type: str) -> "Optional[str]":
+    """Why an inbound/related result is empty for a non-HTML entry.
+
+    ``extract_article_links_data`` already sets ``LinksResponse.message`` for
+    these, but inbound and related returned a bare ``total: 0`` — which reads
+    as "nothing links to this file" rather than "the graph does not index
+    files". ``_is_non_article_target`` drops asset targets by design, so the
+    zero is structural and permanent.
+    """
+    if not content_type or content_type.startswith(_HTML_MIME_PREFIX):
+        return None
+    return (
+        "The link graph indexes article-to-article <a href> links only; "
+        f"this entry is {content_type}, which is not indexed — so this is "
+        "not a count of the pages that embed or reference this file."
+    )
+
+
+def _normalize_section_title(text: str) -> str:
+    """Fold a heading title / ``section_id`` for lenient comparison."""
+    return " ".join(text.split()).casefold()
+
+
+def _match_section_by_title(sections: List[Any], section_id: str) -> "Optional[int]":
+    """Index of the section whose HEADING TITLE answers to ``section_id``.
+
+    warc2zim gives scholarly-site headings machine anchors (``SH5b``,
+    ``SSH2gii``), so the heading title is the only handle a model can
+    generate — and the natural-language surface already resolves sections
+    that way (``simple_tools._handle_get_section``). The structured tool
+    consulted ``id`` alone, so a title-shaped ``section_id`` returned a list
+    of opaque slugs and forced an 8 KB ``view='toc'`` round trip.
+
+    Resolution mirrors the NL surface: exact (whitespace-collapsed,
+    case-folded) title, then a substring of a title — useful when the model
+    truncates a heading it read from the TOC ("The Categorical Imperative"
+    for "b. The Categorical Imperative"). The substring pass needs three
+    characters so a short token can't sweep up an unrelated heading.
+
+    Deliberately does NOT fall back on a case-folded ``id``: a mistyped id is
+    D24's territory, and ``closest_match`` answers it with a suggestion the
+    caller can confirm rather than a silent guess.
+
+    Returns ``None`` when nothing matches, leaving the caller's
+    ``section_not_found`` envelope untouched.
+    """
+    wanted = _normalize_section_title(section_id)
+    if not wanted:
+        return None
+    for i, s in enumerate(sections):
+        if _normalize_section_title(str(s.get("title") or "")) == wanted:
+            return i
+    if len(wanted) < 3:
+        return None
+    for i, s in enumerate(sections):
+        if wanted in _normalize_section_title(str(s.get("title") or "")):
+            return i
+    return None
+
+
 def _entry_not_found_error(
     entry_path: str, *, tool_mode: str = "simple"
 ) -> OpenZimMcpEntryNotFoundError:
@@ -380,6 +514,7 @@ class _StructureMixin:
             OpenZimMcpFileNotFoundError: If ZIM file not found
             OpenZimMcpArchiveError: If structure extraction fails
         """
+        entry_path = normalize_entry_path(entry_path)
         reject_path_traversal(entry_path)
 
         # Validate and resolve file path
@@ -542,7 +677,63 @@ class _StructureMixin:
         """Entry path a media/anchor row's href resolves to, or ``None``."""
         return self._resolve_link_to_entry_path(str(link.get("url", "")), entry_path)
 
-    def _bucket_outbound_links(self, bundle: Any) -> _OutboundLinkBuckets:
+    def _promote_self_absolute_links(
+        self, archive: Any, entry_path: str, external: List[Any]
+    ) -> Tuple[List[Any], List[Any]]:
+        """Split ``external`` into (still external, now internal).
+
+        v3.3.1 field report (fid 17). ``_classify_anchor`` decides
+        internal-vs-external on the SCHEME alone, so on a warc2zim archive —
+        which keeps the scraped site's own links absolute — six of one IEP
+        page's ten "external" rows were ``https://www.iep.utm.edu/…``, every
+        one of them resolvable inside that very archive. They shipped with no
+        ``path``, so a model had to guess the URL-to-path transform, and the
+        transform it was told to guess was wrong (the same report's fid 18).
+        Reported internal links were a third of the real count.
+
+        Only a row the archive can actually serve moves. Promoting an
+        unresolvable same-host link would trade an under-report for a row
+        asserting a ``path`` that fetches nothing, which is worse: a caller
+        can see that a link is external, but cannot see that a ``path`` is
+        fiction. ``_canonical_entry`` returning ``None`` for the entry is
+        exactly that test, and it follows redirects on the way, so
+        ``/ibnrushd/`` promotes with the path it actually serves.
+        """
+        self_host = _self_host(entry_path)
+        if not self_host:
+            return external, []
+        stays: List[Any] = []
+        promoted: List[Any] = []
+        for link in external:
+            candidate = (
+                _self_absolute_target(str(link.get("url", "")), self_host)
+                if isinstance(link, dict)
+                else None
+            )
+            if candidate is None:
+                stays.append(link)
+                continue
+            try:
+                entry, spelling = _canonical_entry(archive, candidate)
+            except Exception as e:  # pragma: no cover — defensive
+                logger.debug(f"self-absolute probe for {candidate} failed: {e}")
+                stays.append(link)
+                continue
+            if entry is None:
+                stays.append(link)
+                continue
+            row = {k: v for k, v in link.items() if k != "domain"}
+            row["type"] = "internal"
+            # Resolved here rather than left to ``_resolve_page_paths``:
+            # ``_resolve_link_to_entry_path`` refuses anything carrying
+            # ``://`` by design, and this row's ``url`` still does.
+            row["path"] = spelling
+            promoted.append(row)
+        return stays, promoted
+
+    def _bucket_outbound_links(
+        self, bundle: Any, archive: Any = None
+    ) -> _OutboundLinkBuckets:
         """Split the bundle's raw link lists into the reported categories.
 
         BUG #6: the bundle 'internal' bucket carries BOTH real
@@ -604,9 +795,15 @@ class _StructureMixin:
                 anchor_wrapped_assets.append({**lk, "type": "asset"})
             else:
                 cross_article_internal.append(lk)
+        external_rows = cast("List[Any]", bundle["links"]["external"])
+        if archive is not None:
+            external_rows, promoted = self._promote_self_absolute_links(
+                archive, entry_path, external_rows
+            )
+            cross_article_internal = cross_article_internal + promoted
         return _OutboundLinkBuckets(
             internal=cross_article_internal,
-            external=cast("List[Any]", bundle["links"]["external"]),
+            external=external_rows,
             media=media_rows + anchor_wrapped_assets,
             anchor_count=anchor_count,
             folded_targets=folded_targets,
@@ -629,27 +826,19 @@ class _StructureMixin:
         post-redirect) and redirect-followed where the archive can verify
         it. Fresh dicts: ``page`` aliases the cached bundle's rows.
 
-        Anchor-wrapped assets were ``<a href>``s, so they get the same
-        resolved ``path`` internal rows do — usable with
-        ``zim_get(binary=True)``. Media rows that absorbed such an anchor
-        get it too, so folding loses nothing. External rows pass through
-        untouched.
+        EVERY media row gets one, not just the anchor-wrapped assets and the
+        rows that absorbed one: the media bucket exists to be fed back to
+        ``zim_get(binary=True)``, and a plain ``<img src="../media/x.jpg">``
+        row used to ship only the document-relative href — so ``path`` was
+        present or absent unpredictably page to page within one archive,
+        which a client cannot code against. ``_with_resolved_path`` returns
+        the row untouched when the href names no entry (an off-archive
+        ``https://`` image, a data URI), so external rows are unaffected.
+        ``folded_targets`` is no longer consulted here; it stays a parameter
+        because the bucket builder computes it for the caller anyway.
         """
-        if kind == "internal":
+        if kind in ("internal", "media"):
             return [self._with_resolved_path(archive, lk, entry_path) for lk in page]
-        if kind == "media":
-            return [
-                (
-                    self._with_resolved_path(archive, lk, entry_path)
-                    if isinstance(lk, dict)
-                    and (
-                        lk.get("type") == "asset"
-                        or self._media_target(lk, entry_path) in folded_targets
-                    )
-                    else lk
-                )
-                for lk in page
-            ]
         return page
 
     def extract_article_links_data(
@@ -694,6 +883,7 @@ class _StructureMixin:
         """
         self._validate_links_args(limit, offset, kind)
 
+        entry_path = normalize_entry_path(entry_path)
         reject_path_traversal(entry_path)
 
         # Validate and resolve file path
@@ -706,7 +896,7 @@ class _StructureMixin:
                 bundle = self._build_bundle(
                     archive, entry_path, validated_path=validated_path
                 )
-                buckets = self._bucket_outbound_links(bundle)
+                buckets = self._bucket_outbound_links(bundle, archive)
                 all_links_for_kind = buckets.for_kind(kind)
                 total_for_kind = len(all_links_for_kind)
                 page = self._resolve_page_paths(
@@ -739,22 +929,35 @@ class _StructureMixin:
                 "path": bundle["entry_path"],
                 "content_type": bundle["content_type"],
                 "kind": kind,
-                "results": page,
-                "next_cursor": next_cursor,
-                "total": total_for_kind,
-                "done": done,
-                "page_info": {
-                    "offset": offset,
-                    "limit": limit,
-                    "returned_count": returned_count,
-                },
-                "category_totals": {
-                    "internal": len(buckets.internal),
-                    "external": len(buckets.external),
-                    "media": len(buckets.media),
-                    "anchor": buckets.anchor_count,
-                },
             }
+            if bundle["entry_path"] != entry_path:
+                # v3.3.1 field report (fid 90), second half: outbound rewrote
+                # ``path`` to the redirect target and said nothing, so a
+                # caller correlating a response with its request had no
+                # handle on it. ``zim_get`` and ``direction="inbound"`` both
+                # echo the spelling that was asked for. Present only when a
+                # rewrite happened — an echo on every response is noise, and
+                # its absence is the signal that nothing moved.
+                payload["requested_path"] = entry_path
+            payload.update(
+                {
+                    "results": page,
+                    "next_cursor": next_cursor,
+                    "total": total_for_kind,
+                    "done": done,
+                    "page_info": {
+                        "offset": offset,
+                        "limit": limit,
+                        "returned_count": returned_count,
+                    },
+                    "category_totals": {
+                        "internal": len(buckets.internal),
+                        "external": len(buckets.external),
+                        "media": len(buckets.media),
+                        "anchor": buckets.anchor_count,
+                    },
+                }
+            )
             # ``LinksResponse.message`` is documented as set for non-HTML
             # entries, and the sibling TOC payload sets it; without it an
             # image entry's empty result was indistinguishable from an
@@ -832,6 +1035,7 @@ class _StructureMixin:
             OpenZimMcpFileNotFoundError: If ZIM file not found
             OpenZimMcpArchiveError: If TOC extraction fails
         """
+        entry_path = normalize_entry_path(entry_path)
         reject_path_traversal(entry_path)
 
         # Validate and resolve file path
@@ -966,6 +1170,7 @@ class _StructureMixin:
                 ),
             )
         try:
+            entry_path = normalize_entry_path(entry_path)
             reject_path_traversal(entry_path)
             validated_path = self._validate_zim_path(zim_file_path)
             with _zim_ops_mod.zim_archive(validated_path) as archive:
@@ -1006,6 +1211,8 @@ class _StructureMixin:
             (i for i, s in enumerate(bundle["sections"]) if s["id"] == section_id),
             None,
         )
+        if section_idx is None:
+            section_idx = _match_section_by_title(bundle["sections"], section_id)
         if section_idx is None and not bundle["sections"]:
             # The entry cannot have sections at all, so the wrong-id advice
             # below ("list the IDs with view='toc'") would only send the
@@ -1037,6 +1244,7 @@ class _StructureMixin:
                     "available_section_ids": [],
                     "available_section_ids_truncated": False,
                     "available_section_ids_total": 0,
+                    "available_sections": [],
                 },
             )
         if section_idx is None:
@@ -1077,6 +1285,14 @@ class _StructureMixin:
                 "available_section_ids": truncated_ids,
                 "available_section_ids_truncated": len(all_ids) > _MAX_IDS,
                 "available_section_ids_total": len(all_ids),
+                # A list of bare slugs like ``SH2gii`` is not a recovery
+                # affordance — nothing in it says which section is which, so
+                # the caller had to spend a second call on ``view='toc'``
+                # just to read the titles. Ship the pairs; same 50-item cap.
+                "available_sections": [
+                    {"id": s["id"], "title": s["title"]}
+                    for s in bundle["sections"][:_MAX_IDS]
+                ],
             }
             if closest:
                 extras["closest_match"] = closest
@@ -1085,7 +1301,9 @@ class _StructureMixin:
                 message=(
                     f"No section with id={section_id!r} in entry {entry_path!r}. "
                     + (f"Did you mean {closest!r}? " if closest else "")
-                    + "Use `zim_get(view='toc')` to list section IDs."
+                    + "`section_id` also accepts a section's heading title; "
+                    "`available_sections` below pairs each id with its title, "
+                    "and `zim_get(view='toc')` lists them all."
                 ),
                 extras=extras,
             )
@@ -1291,8 +1509,10 @@ class _StructureMixin:
 
         v2 Phase B contract: the response carries ``results`` /
         ``next_cursor`` / ``total`` / ``done`` / ``page_info`` plus the
-        tool-specific ``entry_path``. This tool is non-paginated, so
-        ``next_cursor`` is always ``None`` and ``done`` is always ``True``.
+        tool-specific ``entry_path``. This tool takes no ``offset``, so
+        ``next_cursor`` is always ``None``; ``total`` is the size of the full
+        ranked neighbour set and ``done`` is ``False`` when ``limit`` cut it
+        short — raising ``limit`` is the only way to see the rest.
         The contract is applied for uniformity and anticipates Phase E's
         inbound-link feature where ``direction`` becomes a parameter and
         ``results`` covers either side.
@@ -1310,6 +1530,7 @@ class _StructureMixin:
                 f"limit must be between 1 and 100 (provided: {limit})"
             )
 
+        entry_path = normalize_entry_path(entry_path)
         reject_path_traversal(entry_path)
 
         # Resolve the path once so both link extraction and the title
@@ -1322,9 +1543,13 @@ class _StructureMixin:
         validated_str = str(validated_path)
 
         outbound: List[Dict[str, Any]] = []
+        # Size of the FULL ranked neighbour set, before the ``limit`` slice —
+        # see the ``total``/``done`` note in the docstring.
+        total_related = 0
         outbound_error: Optional[str] = None
         links_scan_truncated = False
         links_total_internal: Optional[int] = None
+        related_content_type = ""
 
         try:
             # Use the dict-returning extract_article_links_data so we don't
@@ -1350,6 +1575,7 @@ class _StructureMixin:
                 else None
             )
             links_scan_truncated = not bool(links_data.get("done", True))
+            related_content_type = str(links_data.get("content_type") or "")
             # extract_article_links_data resolves redirects internally and
             # stores the post-redirect entry path in ``links_data["path"]``.
             # Resolve relative links against THAT path, not the caller-supplied
@@ -1419,9 +1645,9 @@ class _StructureMixin:
                     merged[canonical] = row
             # ``sorted`` is stable, so equal counts keep their first-
             # appearance order from ``most_common``.
-            outbound = sorted(merged.values(), key=lambda r: -r["mention_count"])[
-                :limit
-            ]
+            ranked_all = sorted(merged.values(), key=lambda r: -r["mention_count"])
+            total_related = len(ranked_all)
+            outbound = ranked_all[:limit]
         except OpenZimMcpArchiveError as e:
             # Partial-success contract: an archive- or extraction-level
             # failure surfaces as an empty result with an error string,
@@ -1436,8 +1662,16 @@ class _StructureMixin:
             "entry_path": entry_path,
             "results": outbound,
             "next_cursor": None,
-            "total": len(outbound),
-            "done": True,
+            # ``total`` is the size of the whole ranked neighbour set, the way
+            # every other paginated surface reports it. It used to be
+            # ``len(outbound)`` — the page size — so a caller who asked for 10
+            # of 221 neighbours was told, with ``done: True``, that it had
+            # them all, and the other 211 were both invisible and (this tool
+            # takes no offset) unreachable. ``done`` now says whether the page
+            # covered the set; the recovery is a larger ``limit``, since
+            # ``next_cursor`` stays ``None``.
+            "total": total_related,
+            "done": len(outbound) >= total_related,
             "page_info": {
                 "offset": 0,
                 "limit": limit,
@@ -1446,6 +1680,9 @@ class _StructureMixin:
         }
         if outbound_error is not None:
             payload["outbound_error"] = outbound_error
+        message = _non_article_graph_message(related_content_type)
+        if message:
+            payload["message"] = message
         # Frequency rank was computed over only the first 500 internal links.
         # Hub/index articles can have many more; the surfaced ranking is then
         # biased toward the document-head links. Flag this so callers don't
@@ -1498,6 +1735,7 @@ class _StructureMixin:
             raise OpenZimMcpValidationError(
                 f"offset must be non-negative (provided: {offset})"
             )
+        entry_path = normalize_entry_path(entry_path)
         reject_path_traversal(entry_path)
         validated_path = self._validate_zim_path(zim_file_path)
         validated_str = str(validated_path)
@@ -1528,19 +1766,52 @@ class _StructureMixin:
             live_uuid = str(archive.uuid)
             entry, _spelling = _resolve_entry_spelling(archive, entry_path)
             in_archive = entry is not None
+            # Read the mimetype while the archive is still open; it only
+            # decides whether the payload explains an empty result.
+            content_type = _entry_content_type(entry)
             # Class-qualified: the helper is static, and the unit tests drive
             # this method through a stub ``self`` exposing only the seams it
             # already needed.
             lookup_path = _StructureMixin._canonical_target_path(archive, entry_path)
         reader = LinkGraphReader.open_for(validated_str, live_archive_uuid=live_uuid)
         if reader is None:
+            if not in_archive:
+                # Without this, a typo and a valid path produced the SAME
+                # "build a link-graph sidecar" text on every archive that has
+                # no sidecar — hiding the one thing the caller could act on.
+                # With a sidecar the not-found check below already fires; the
+                # ordering was the only reason it didn't here. (A path the
+                # archive lacks but the index knows — a red link — still
+                # reaches the sidecar message, because the index is what
+                # would have answered it.)
+                raise _entry_not_found_error(
+                    entry_path, tool_mode=self.config.tool_mode
+                )
+            # v3.3.1 field report (fid 92): this was the one runtime message
+            # that offered a client nothing. Building a sidecar is an
+            # operator action — the caller reading this cannot run a shell
+            # command — so the operator sentence stays (an operator may be
+            # reading the transcript) and a clause the CLIENT can act on now
+            # follows it. Mode-aware for the same reason
+            # ``_entry_not_found_error`` above is: naming a tool the client
+            # cannot call is worse than naming none, and in simple mode
+            # ``zim_query`` is the only tool there is.
+            advanced = self.config.tool_mode == "advanced"
+            fallback = (
+                "Meanwhile `zim_links(direction='related')` gives "
+                "outbound-overlap neighbours and `zim_search` finds pages "
+                "that mention it."
+                if advanced
+                else "Meanwhile ask for `related articles for <path>`, or "
+                "search for the article's title to find pages that mention it."
+            )
             raise LinkGraphUnavailable(
                 "Inbound links require a link-graph sidecar for this archive. "
                 f"Run `openzim-mcp build link-graph {validated_str}`. "
                 "If a sidecar file is already present it is stale — built for "
                 "a different archive revision or an older schema, which 3.0.0 "
                 "makes true of every sidecar built before it — and the build "
-                "refuses to overwrite without `--force`."
+                "refuses to overwrite without `--force`. " + fallback
             )
         try:
             page = reader.query_inbound(lookup_path, limit=limit, offset=offset)
@@ -1595,6 +1866,9 @@ class _StructureMixin:
         }
         if lookup_path != entry_path:
             payload["resolved_path"] = lookup_path
+        message = _non_article_graph_message(content_type)
+        if message:
+            payload["message"] = message
         return cast("RelatedArticlesResponse", attach_meta(payload, reason=None))
 
     @staticmethod

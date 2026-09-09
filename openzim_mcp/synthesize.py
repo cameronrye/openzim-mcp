@@ -520,6 +520,226 @@ def _maybe_boost_passage(
     return new_p, False
 
 
+# ---------------------------------------------------------------------------
+# Pipeline stage 5a: answering-section redirect (D-A1)
+# ---------------------------------------------------------------------------
+
+# Question scaffolding that carries no retrieval signal. Deliberately small:
+# it exists so "how much vitamin D do I need" reduces to {vitamin, d, need}
+# and "what are the side effects of metformin" to {side, effects, metformin}
+# — it is not a general stop-word list and is used nowhere else.
+_ANSWER_SECTION_STOPWORDS = frozenset(
+    {
+        "a",
+        "about",
+        "an",
+        "and",
+        "any",
+        "are",
+        "as",
+        "at",
+        "be",
+        "by",
+        "can",
+        "did",
+        "do",
+        "does",
+        "for",
+        "from",
+        "get",
+        "has",
+        "have",
+        "how",
+        "i",
+        "if",
+        "in",
+        "is",
+        "it",
+        "its",
+        "long",
+        "many",
+        "me",
+        "much",
+        "my",
+        "of",
+        "on",
+        "or",
+        "our",
+        "should",
+        "so",
+        "some",
+        "tell",
+        "that",
+        "the",
+        "their",
+        "there",
+        "these",
+        "they",
+        "this",
+        "to",
+        "us",
+        "was",
+        "we",
+        "were",
+        "what",
+        "when",
+        "where",
+        "which",
+        "who",
+        "whose",
+        "why",
+        "will",
+        "with",
+        "you",
+        "your",
+    }
+)
+
+# Ceiling on the text a redirect may substitute in. The whole point is a
+# short, complete answer passage (the live vitamin-D dose table is 453
+# chars); without a cap a long section would eat the entire
+# ``output_char_budget`` and crowd out every other citation.
+_ANSWER_SECTION_MAX_CHARS = 1600
+
+
+def _content_tokens(text: str) -> set[str]:
+    """Affinity tokens minus question scaffolding."""
+    return _affinity_tokens(text) - _ANSWER_SECTION_STOPWORDS
+
+
+def _pick_answering_section(
+    bundle: Any, *, query: str, cited_section_id: str, threshold: float
+) -> Optional[dict]:
+    """The section whose HEADING restates the query, if there is one.
+
+    A heading qualifies when, after the article's own title has covered
+    whatever part of the query it can (``Metformin`` for "side effects of
+    metformin"), every remaining content token of the query appears in the
+    heading — i.e. the heading restates the question rather than merely
+    sitting near it. The existing affinity ratio
+    (``|query n heading| / |heading|``) applies on top as the same
+    conservative floor ``_boost_by_section_affinity`` uses, so a long
+    heading that happens to contain the words cannot win.
+
+    Returns ``None`` (no redirect) when the query is already fully covered
+    by the article title — there is nothing left for a heading to answer,
+    and the lead is the right passage.
+    """
+    query_tokens = _affinity_tokens(query)
+    if not query_tokens:
+        return None
+    needed = _content_tokens(query) - _affinity_tokens(bundle.get("title", ""))
+    if not needed:
+        return None
+    best: Optional[dict] = None
+    best_ratio = 0.0
+    for section in bundle.get("sections", []):
+        section_id = str(section.get("id", ""))
+        if not section_id or section_id == cited_section_id:
+            continue
+        heading_tokens = _affinity_tokens(section.get("title", ""))
+        if not heading_tokens:
+            continue
+        if not needed <= (heading_tokens - _ANSWER_SECTION_STOPWORDS):
+            continue
+        ratio = len(heading_tokens & query_tokens) / len(heading_tokens)
+        if ratio < threshold:
+            continue
+        if ratio > best_ratio:
+            best, best_ratio = section, ratio
+    return best
+
+
+def _section_text(bundle: Any, section: dict) -> str:
+    """The section's own body, sliced out of the bundle's markdown."""
+    md = bundle.get("rendered_markdown", "")
+    if not isinstance(md, str) or not md:
+        return ""
+    start = section.get("char_start")
+    end = section.get("char_end")
+    if not isinstance(start, int) or not isinstance(end, int):
+        return ""
+    body = md[start:end].strip()
+    if len(body) <= _ANSWER_SECTION_MAX_CHARS:
+        return body
+    cut = body.rfind(" ", 0, _ANSWER_SECTION_MAX_CHARS)
+    return body[: cut if cut > 0 else _ANSWER_SECTION_MAX_CHARS].rstrip()
+
+
+def _redirect_to_answering_section(
+    passages: list[SynthesizePassage],
+    *,
+    query: str,
+    bundle_lookup: Callable[[str, str], Any],
+    hit_keys: list[tuple[str, str]],
+    config: "SynthesizeConfig",
+) -> list[SynthesizePassage]:
+    """Re-point the featured passage at the section that answers the query.
+
+    D-A1: the featured passage is whatever text BM25 highlighted, which on
+    a question-shaped query is routinely the article lead — so
+    ``how much vitamin D do I need`` cited vitaminddeficiency.html's lead
+    plus four other pages, while ``How much vitamin D do I need?`` (a
+    heading in that same, already top-ranked article, whose body is the
+    complete dose table) was never cited at all. It could not be: the A14
+    affinity boost only re-orders passages that ALREADY carry a
+    ``#section_id``, so a section that never became a passage candidate is
+    invisible to it, and ``_build_considered_sections`` merely lists it as
+    a next-turn pivot. Extracting that section's own body turns the pivot
+    the caller was offered into the answer they asked for.
+
+    Deliberately narrow — it touches only the top-ranked passage, only when
+    the article title leaves part of the query uncovered, and only for a
+    heading that restates that remainder. Everything else is a no-op, so
+    the ranking stages keep their existing behaviour.
+    """
+    if not passages or not hit_keys:
+        return passages
+    featured = passages[0]
+    archive_name, entry_path = hit_keys[0]
+    cite_id = featured["cite_id"]
+    cited_section_id = cite_id.partition("#")[2]
+    try:
+        bundle = bundle_lookup(archive_name, entry_path)
+    except Exception as e:
+        logger.debug(
+            "answer-section redirect bundle lookup failed for %s/%s: %s",
+            archive_name,
+            entry_path,
+            e,
+        )
+        return passages
+    if bundle is None:
+        return passages
+    section = _pick_answering_section(
+        bundle,
+        query=query,
+        cited_section_id=cited_section_id,
+        threshold=config.section_affinity_threshold,
+    )
+    if section is None:
+        return passages
+    body = _section_text(bundle, section)
+    if not body:
+        return passages
+    # No redirect when the featured passage ALREADY carries that section's
+    # text: the answer is present, only the citation label differs, and
+    # trimming to the section alone would drop lead sentences the caller
+    # can already see. Compared bold-stripped and whitespace-normalised
+    # because the snippet renderer and the bundle renderer are different
+    # paths (the same asymmetry ``_locate_passage`` exists to absorb).
+    if _normalize_ws(_strip_bold(body)) in _normalize_ws(
+        _strip_bold(featured["text_markdown"])
+    ):
+        return passages
+    base = cite_id.partition("#")[0]
+    redirected = cast("SynthesizePassage", dict(featured))
+    redirected["text_markdown"] = body
+    redirected["cite_id"] = f"{base}#{section['id']}"
+    logger.debug("answer-section redirect: %s -> %s", cite_id, redirected["cite_id"])
+    return [redirected] + passages[1:]
+
+
 def _boost_by_section_affinity(
     passages: list[SynthesizePassage],
     *,
@@ -2049,6 +2269,17 @@ def synthesize_query(
     )
     attributed = _attribute_sections(
         all_passages, bundle_lookup=bundle_lookup, hit_keys=hit_keys
+    )
+    # D-A1: before ranking, give the featured article a chance to answer
+    # with the section whose heading restates the question instead of with
+    # whatever text BM25 highlighted. See
+    # ``_redirect_to_answering_section``.
+    attributed = _redirect_to_answering_section(
+        attributed,
+        query=query,
+        bundle_lookup=bundle_lookup,
+        hit_keys=hit_keys,
+        config=config,
     )
     # A14 (Change B): section-heading affinity boost. Promotes passages
     # whose section heading shares tokens with the query past lexically-

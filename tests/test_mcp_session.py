@@ -100,8 +100,15 @@ def _text(result: Any) -> str:
         ({"query": "x", "zim_file_path": "/etc/passwd"}, "zim_search"),
         # Archive that does not exist.
         ({"query": "x", "zim_file_path": "/nonexistent/archive.zim"}, "zim_search"),
-        # Handler-side argument validation (no archive resolvable).
-        ({"query": "x"}, "missing_archive"),
+        # Handler-side argument validation (no archive resolvable). The
+        # session fixture's ``tmp_path`` holds no ``.zim`` file, so the cause
+        # here is specifically "nothing is loaded" — tagged
+        # ``no_archives_loaded`` since the v3.3.1 field report (fid 3), which
+        # found the generic ``missing_archive`` advice unfollowable in this
+        # world: it told the caller to pass a path that does not exist, load
+        # an archive that is not there, or fan out over nothing.
+        # ``missing_archive`` still tags the multi-archive-none-pinned case.
+        ({"query": "x"}, "no_archives_loaded"),
         # Out-of-range limit — rejected by the handler, not by the input schema.
         (
             {"query": "x", "mode": "title", "limit": 10_000},

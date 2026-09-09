@@ -10,7 +10,13 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from ._common import enforce_rate_limit, load_description, tool_error_response
+from ._common import (
+    READ_ONLY_ANNOTATIONS,
+    blank_archive_path,
+    enforce_rate_limit,
+    load_description,
+    tool_error_response,
+)
 
 if TYPE_CHECKING:
     from ..server import OpenZimMcpServer
@@ -24,7 +30,7 @@ def register(server: "OpenZimMcpServer") -> None:
 
     ops = AsyncZimOperations(server.zim_operations)
 
-    @server.mcp.tool(description=_DESCRIPTION)
+    @server.mcp.tool(description=_DESCRIPTION, annotations=READ_ONLY_ANNOTATIONS)
     async def zim_metadata(zim_file_path: str) -> Any:
         try:
             # Internal operation name, not the wire name — see
@@ -32,6 +38,9 @@ def register(server: "OpenZimMcpServer") -> None:
             rl = enforce_rate_limit(server, "get_metadata")
             if rl is not None:
                 return rl
+            blank = blank_archive_path(zim_file_path)
+            if blank is not None:
+                return blank
             return await ops.get_archive_metadata_data(zim_file_path)
         except Exception as e:  # noqa: BLE001 — broad catch matches b13 envelope
             return tool_error_response(

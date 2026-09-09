@@ -12,10 +12,13 @@ from pydantic import Field
 
 from ..responses import tool_error
 from ._common import (
+    READ_ONLY_ANNOTATIONS,
+    blank_archive_path,
     cursor_context_mismatch,
     decode_cursor_state,
     effective_limit,
     enforce_rate_limit,
+    limit_out_of_range,
     load_description,
     tool_error_response,
 )
@@ -44,7 +47,7 @@ def register(server: "OpenZimMcpServer") -> None:
 
     ops = AsyncZimOperations(server.zim_operations)
 
-    @server.mcp.tool(description=_DESCRIPTION)
+    @server.mcp.tool(description=_DESCRIPTION, annotations=READ_ONLY_ANNOTATIONS)
     async def zim_browse(
         zim_file_path: str,
         namespace: str,
@@ -69,6 +72,18 @@ def register(server: "OpenZimMcpServer") -> None:
                         f"(provided: {mode!r})."
                     ),
                 )
+            blank = blank_archive_path(zim_file_path)
+            if blank is not None:
+                return blank
+            # Each mode has its own ceiling in the data layer (page 200,
+            # walk 500); quote the one that applies to this call.
+            bad_limit = limit_out_of_range(
+                limit,
+                maximum=200 if mode == "page" else 500,
+                qualifier=f"mode={mode!r}",
+            )
+            if bad_limit is not None:
+                return bad_limit
 
             # A cursor is bound to the issuing tool (browse vs walk) so a
             # replayed handle can't apply one mode's resume position to the

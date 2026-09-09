@@ -25,8 +25,20 @@ def _raise_system_exit(signum: int, _frame: Optional[FrameType]) -> None:
     raise SystemExit(128 + signum)
 
 
+def _termination_signals() -> tuple[int, ...]:
+    """The stop signals this process turns into an ordinary interpreter exit.
+
+    SIGHUP is absent on Windows, so it is looked up rather than named.
+    """
+    signals = [signal.SIGTERM, signal.SIGINT]
+    hangup = getattr(signal, "SIGHUP", None)
+    if hangup is not None:
+        signals.append(hangup)
+    return tuple(int(sig) for sig in signals)
+
+
 def install_termination_handler() -> None:
-    """Make SIGTERM unwind the interpreter instead of killing it outright.
+    """Make a stop signal unwind the interpreter instead of killing it outright.
 
     Python's default SIGTERM disposition terminates the process without
     unwinding, so ``atexit`` never runs — and ``atexit`` is where
@@ -44,11 +56,26 @@ def install_termination_handler() -> None:
     happens after uvicorn has finished its own shutdown rather than instead
     of it.
 
+    SIGINT and SIGHUP get the same handler, and for the stdio transport that
+    is not a nicety. SIGINT's default disposition raises ``KeyboardInterrupt``
+    into the main thread, but the stdio transport parks a *non-daemon* worker
+    thread on a blocking read of ``sys.stdin``; the exception unwinds the
+    event loop and then interpreter finalization joins that thread, which
+    never returns. Ctrl-C on the manual ``python -m openzim_mcp <dir>`` run the
+    README documents therefore did nothing at all — the process sat there
+    looking hung until the operator found the pid and sent SIGKILL, which is
+    the one exit that skips the cache flush entirely. Routing SIGINT through
+    ``SystemExit`` lands it on the ``main`` arm that calls ``_flush_and_exit``,
+    whose ``os._exit`` deliberately does not wait for that reader thread.
+    SIGHUP (a closed terminal) killed the process outright, flush and all, for
+    the same reason SIGTERM used to.
+
     ``signal.signal`` rejects a non-main thread, so an embedding harness that
     imports and calls ``main`` off-thread keeps working without the handler.
     """
-    with contextlib.suppress(ValueError, OSError):
-        signal.signal(signal.SIGTERM, _raise_system_exit)
+    for signum in _termination_signals():
+        with contextlib.suppress(ValueError, OSError):
+            signal.signal(signum, _raise_system_exit)
 
 
 def _flush_and_exit(server: OpenZimMcpServer, code: int) -> None:
@@ -230,8 +257,9 @@ def main() -> None:
         # ``config.transport`` directly (translating our short name 'http'
         # to the SDK's 'streamable-http'); calling without an argument keeps
         # the configured transport and the runtime transport in sync.
-        # Before ``run()`` blocks: a SIGTERM arriving at any point after this
-        # unwinds the interpreter so the cache's atexit flush actually runs.
+        # Before ``run()`` blocks: a SIGTERM, SIGINT or SIGHUP arriving at any
+        # point after this unwinds the interpreter so the cache's atexit flush
+        # actually runs.
         install_termination_handler()
 
         try:

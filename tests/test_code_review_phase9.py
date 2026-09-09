@@ -70,7 +70,7 @@ def search_server() -> MagicMock:
     srv = MagicMock()
     store: dict[str, Any] = {}
 
-    def _tool(*, description: str = ""):
+    def _tool(*, description: str = "", **_kw: object):
         def decorate(fn):
             store[fn.__name__] = (fn, description)
             return fn
@@ -132,7 +132,7 @@ def _build_search_server_for_zim(zim: Path) -> MagicMock:
     srv.zim_operations = real_ops
     store: dict[str, Any] = {}
 
-    def _tool(*, description: str = ""):
+    def _tool(*, description: str = "", **_kw: object):
         def decorate(fn):
             store[fn.__name__] = (fn, description)
             return fn

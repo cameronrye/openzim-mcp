@@ -57,10 +57,14 @@ private-dict access.
   anywhere. The wrapper relays the read stream and answers the
   ``Exception`` items on the write stream itself, so the serving loop never
   sees them.
-- Null-id requests. The adapter ignores unknown members, so a request
-  carrying ``"id": null`` validates as a *notification* and vanishes. The
-  wrapper feeds the SDK its stdin lines itself and answers that one shape
-  with ``-32600`` before the adapter can misread it.
+- Unusable-id requests. The adapter ignores unknown members and types the
+  id as ``str | int``, so a request carrying ``"id": null`` — or ``3.0``,
+  ``1e21``, ``true``, an array, an object — validates as a *notification*
+  and vanishes. The wrapper feeds the SDK its stdin lines itself and answers
+  every such shape with ``-32600`` before the adapter can misread it.
+  ``rejection_for_http_body`` applies the same judgement to a request body,
+  which is how the HTTP transport (whose SDK path 202-accepts these frames
+  and then drops them) gets the same answers in the same words.
 - EOF. The dispatcher cancels every in-flight handler the instant its read
   stream ends, so a client that closes stdin right after its request —
   ``printf '<request>' | server`` — never gets the answer. The wrapper holds
@@ -168,6 +172,22 @@ def install_ping_keepalive_shim() -> bool:
     return added
 
 
+# One rejection vocabulary for both transports. The stdio relay and the HTTP
+# body gate answer the same malformed shape with the same code and the same
+# sentence, so a client author reading either log learns the same thing —
+# rather than "batches are not supported by MCP (removed in 2025-06-18)" on
+# one transport and a 1.2 KB pydantic union dump under the wrong code on the
+# other.
+_BATCH_UNSUPPORTED = (
+    "Invalid Request: JSON-RPC batches are not supported by MCP "
+    "(removed in 2025-06-18); send one message per request"
+)
+_NOT_AN_OBJECT = "Invalid Request: a JSON-RPC message must be an object"
+_NOT_JSONRPC_20 = (
+    "Invalid Request: not a JSON-RPC 2.0 request, notification or response"
+)
+
+
 def _rejection(code: int, message: str, request_id: RequestId | None) -> JSONRPCError:
     return JSONRPCError(
         jsonrpc="2.0", id=request_id, error=ErrorData(code=code, message=message)
@@ -216,57 +236,109 @@ def rejection_for_frame(exc: Exception) -> JSONRPCError | None:
         return _rejection(PARSE_ERROR, "Parse error: the line is not valid JSON", None)
     frame = _rejected_frame(errors)
     if isinstance(frame, list):
-        return _rejection(
-            INVALID_REQUEST,
-            "Invalid Request: JSON-RPC batches are not supported by MCP "
-            "(removed in 2025-06-18); send one message per line",
-            None,
-        )
+        return _rejection(INVALID_REQUEST, _BATCH_UNSUPPORTED, None)
     if not isinstance(frame, dict):
-        return _rejection(
-            INVALID_REQUEST,
-            "Invalid Request: a JSON-RPC message must be an object",
-            None,
-        )
+        return _rejection(INVALID_REQUEST, _NOT_AN_OBJECT, None)
     return _rejection(
         INVALID_REQUEST,
-        "Invalid Request: not a JSON-RPC 2.0 request, notification or response",
+        _NOT_JSONRPC_20,
         _usable_request_id(frame.get("id")),
     )
 
 
-def null_id_rejection(line: str) -> JSONRPCError | None:
-    """The -32600 a request carrying ``"id": null`` deserves, else None.
+def _render_unusable_id(value: Any) -> str:
+    """The offending id, as JSON, short enough to put in an error message."""
+    try:
+        rendered = json.dumps(value)
+    except (TypeError, ValueError):  # pragma: no cover - json.loads output only
+        rendered = repr(value)
+    return rendered if len(rendered) <= 40 else rendered[:37] + "..."
 
-    The SDK's message adapter ignores members it does not know, so such a
-    frame validates as a *notification* of the same method and is dropped
-    without a trace. JSON-RPC 2.0 and the MCP schema both define a request
-    id as a string or a number; null is reserved for error responses to
-    undecodable requests, so a frame with a ``method`` and a null id is an
-    invalid Request, answered with id null like the other -32600s here. This
-    helper leaves every frame without a ``method`` alone: an ``error``
+
+def invalid_request_id_rejection(frame: Any) -> JSONRPCError | None:
+    """The -32600 a request whose id the wire cannot carry deserves, else None.
+
+    The SDK's message adapter ignores members it does not know and types the
+    id as ``str | int`` (strict, so not ``bool``), so a request carrying any
+    other id — ``null``, ``3.0``, ``1e21``, ``true``, ``[1]``, ``{"a": 1}`` —
+    validates as a *notification* of the same method and is dropped without a
+    trace. A hand-rolled client waiting on such an id hangs with nothing in
+    either log to explain it, which is the exact failure this module exists to
+    remove; ``3.0`` is not contrived, because a whole number held in a float
+    is what several languages' JSON encoders emit.
+
+    JSON-RPC 2.0 and the MCP schema both define a request id as a string or an
+    integer, so a frame with a ``method`` and any other id is an invalid
+    Request, answered with id null like the other -32600s here — there is no
+    usable id to echo, which is the whole complaint.
+
+    This helper leaves every frame without a ``method`` alone: an ``error``
     response with a null id is legal and passes through untouched, while a
     ``result`` response with a null id is rejected downstream by the SDK's
     adapter with the generic -32600 (JSON-RPC 2.0 permits a null id only on
     error responses).
     """
-    if '"id"' not in line or "null" not in line:
+    if not (isinstance(frame, dict) and "method" in frame and "id" in frame):
+        return None
+    if _usable_request_id(frame["id"]) is not None:
+        return None
+    return _rejection(
+        INVALID_REQUEST,
+        "Invalid Request: a request id must be a string or an integer, not "
+        f"{_render_unusable_id(frame['id'])}; omit the id to send a "
+        "notification",
+        None,
+    )
+
+
+def invalid_request_id_rejection_for_line(line: str) -> JSONRPCError | None:
+    """:func:`invalid_request_id_rejection` for one raw stdin line."""
+    if '"id"' not in line:
         return None
     try:
         frame = json.loads(line)
     except ValueError:
         # The transport's own parse failure path answers these with -32700.
         return None
-    if not (isinstance(frame, dict) and "method" in frame and "id" in frame):
+    return invalid_request_id_rejection(frame)
+
+
+def rejection_for_http_body(body: bytes) -> JSONRPCError | None:
+    """The curated rejection an HTTP request body deserves, else None.
+
+    ``None`` means "let the SDK answer": the gate this backs must never turn
+    away a body the transport would have served, so only shapes the SDK
+    already refuses (or silently drops) are classified here.
+
+    The SDK's HTTP path answers the envelope-level failures with ``-32602``
+    ("Invalid params" — wrong: the frame never got as far as params) and a
+    ~1.2 KB pydantic union dump complete with ``errors.pydantic.dev`` links,
+    while the unusable ids above it are ``202 Accepted`` and then dropped.
+    Both are worse than what stdio already says, so the shared sentences are
+    used on both transports rather than a second dialect per transport.
+
+    Undecodable JSON is deliberately *not* claimed: the SDK's in-session HTTP
+    path already answers it with a correct ``-32700``, and the sessionless
+    path's ``Missing session ID`` is a documented decision of its own gate.
+    """
+    try:
+        frame = json.loads(body)
+    except (ValueError, RecursionError):
         return None
-    if frame["id"] is not None:
-        return None
-    return _rejection(
-        INVALID_REQUEST,
-        "Invalid Request: a request id must be a string or an integer, not "
-        "null; omit the id to send a notification",
-        None,
-    )
+    if isinstance(frame, list):
+        return _rejection(INVALID_REQUEST, _BATCH_UNSUPPORTED, None)
+    if not isinstance(frame, dict):
+        return _rejection(INVALID_REQUEST, _NOT_AN_OBJECT, None)
+    unusable_id = invalid_request_id_rejection(frame)
+    if unusable_id is not None:
+        return unusable_id
+    if "method" in frame and frame.get("jsonrpc") != "2.0":
+        return _rejection(
+            INVALID_REQUEST,
+            _NOT_JSONRPC_20,
+            _usable_request_id(frame.get("id")),
+        )
+    return None
 
 
 async def _send_rejection(
@@ -303,16 +375,16 @@ async def _answer_rejected_frame(
 
 
 class _StdinFrames:
-    """Lines of ``sys.stdin`` for the SDK's reader, minus null-id requests.
+    """Lines of ``sys.stdin`` for the SDK's reader, minus unusable-id requests.
 
-    Passed to ``stdio_server(stdin=...)`` so the one shape the SDK's adapter
-    misreads is answered before it can be parsed; every other line reaches
-    the adapter verbatim. Decoding mirrors the SDK's own stdin wrapper
-    (UTF-8, undecodable bytes replaced, so a bad byte is a -32700 rather
-    than a dead reader). The rejection is written from the reader itself, in
-    line order, on the write stream ``answer_on`` binds once the transport
-    exists; reading waits for that binding rather than for a scheduling
-    accident.
+    Passed to ``stdio_server(stdin=...)`` so the shapes the SDK's adapter
+    misreads as notifications are answered before it can parse them; every
+    other line reaches the adapter verbatim. Decoding mirrors the SDK's own
+    stdin wrapper (UTF-8, undecodable bytes replaced, so a bad byte is a
+    -32700 rather than a dead reader). The rejection is written from the
+    reader itself, in line order, on the write stream ``answer_on`` binds
+    once the transport exists; reading waits for that binding rather than
+    for a scheduling accident.
     """
 
     def __init__(self) -> None:
@@ -327,7 +399,7 @@ class _StdinFrames:
         await self._bound.wait()
         async for raw in anyio.wrap_file(sys.stdin.buffer):
             line = raw.decode("utf-8", errors="replace")
-            rejection = null_id_rejection(line)
+            rejection = invalid_request_id_rejection_for_line(line)
             if rejection is None:
                 yield line
             elif self._write_stream is not None:
