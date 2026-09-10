@@ -33,12 +33,35 @@ class InboundPage:
     total: int
 
 
+# A node linked from at least half the archive is site furniture, not a topic:
+# it is in the nav bar. Below ``_MIN_ARCHIVE_FOR_FURNITURE`` nodes there is no
+# boilerplate to separate an article from — on a twenty-page archive a
+# genuinely central article can legitimately be linked from half of it — so the
+# demotion is switched off rather than applied to a population too small to
+# have the pattern. Returns 0 when it should not apply, including for an older
+# sidecar of this schema that never stored ``node_count``.
+_FURNITURE_DEGREE_FRACTION = 0.5
+_MIN_ARCHIVE_FOR_FURNITURE = 50
+
+
+def _furniture_threshold(node_count: Optional[str]) -> int:
+    """Inbound degree at or above which a node counts as site furniture."""
+    try:
+        total = int(node_count or 0)
+    except (TypeError, ValueError):
+        return 0
+    if total < _MIN_ARCHIVE_FOR_FURNITURE:
+        return 0
+    return -(-int(total * _FURNITURE_DEGREE_FRACTION) // 1)
+
+
 class LinkGraphReader:
     """Open and query a link-graph sidecar. Construct via ``open_for``."""
 
     def __init__(self, conn: sqlite3.Connection) -> None:
         """Store the open read-only SQLite connection."""
         self._conn = conn
+        self._furniture_threshold: Optional[int] = None
 
     @classmethod
     def open_for(
@@ -65,7 +88,9 @@ class LinkGraphReader:
         if meta.get("archive_uuid") != live_archive_uuid:
             conn.close()
             return None
-        return cls(conn)
+        reader = cls(conn)
+        reader._furniture_threshold = _furniture_threshold(meta.get("node_count"))
+        return reader
 
     def query_inbound(
         self, target_path: str, *, limit: int, offset: int
@@ -80,15 +105,35 @@ class LinkGraphReader:
         total = self._conn.execute(
             "SELECT COUNT(*) FROM edges WHERE target_id = ?", (target_id,)
         ).fetchone()[0]
+        # v3.3.1 field report (fid 86): ranking purely on inbound_degree
+        # answered "what links here?" with the site's navigation. A page in
+        # the nav bar links to everything and is therefore linked FROM
+        # everything, so it won this ordering on every single query — on the
+        # shipped IEP sidecar the alphabet index led 366 of 371 article
+        # targets. Nodes at or above the threshold sink as a group; below it,
+        # inbound degree is still the signal.
+        #
+        # A demote by RANK only: no row is dropped, so ``total``, the
+        # pagination arithmetic and the cursor contract are untouched.
+        # ``threshold`` of 0 disables the clause (small or unlabelled
+        # archives), leaving exactly the previous ordering.
+        threshold = self._furniture_threshold or 0
         cur = self._conn.execute(
             """
             SELECT n.path, n.inbound_degree, e.anchor_text
               FROM edges e JOIN nodes n ON n.id = e.source_id
-             WHERE e.target_id = ?
-             ORDER BY n.inbound_degree DESC, n.path ASC
-             LIMIT ? OFFSET ?
+             WHERE e.target_id = :target_id
+             ORDER BY (:threshold > 0 AND n.inbound_degree >= :threshold) ASC,
+                      n.inbound_degree DESC,
+                      n.path ASC
+             LIMIT :limit OFFSET :offset
             """,
-            (target_id, limit, offset),
+            {
+                "target_id": target_id,
+                "threshold": threshold,
+                "limit": limit,
+                "offset": offset,
+            },
         )
         rows = [
             {"path": p, "inbound_degree": d, "anchor_text": a}
