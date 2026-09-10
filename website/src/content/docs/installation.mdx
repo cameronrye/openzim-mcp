@@ -72,8 +72,10 @@ uv sync --no-dev
 
 ### Optional extras
 
-One extra ships: `[reranker]`, which adds cross-encoder relevance reranking
-over Xapian's results.
+One extra ships: `[reranker]`, which re-scores Xapian's results with a
+cross-encoder. Whether that improves them is unmeasured, and it roughly
+doubles query latency — see [Search reranking](/openzim-mcp/docs/search-reranking/)
+before pulling the model down.
 
 ```bash
 uv tool install "openzim-mcp[reranker]"    # or: pip install "openzim-mcp[reranker]"

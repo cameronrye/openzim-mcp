@@ -5,15 +5,27 @@ group: Concepts
 sidebar_order: 2
 ---
 
-The only optional install OpenZIM MCP ships, and the only one that changes
-retrieval quality. Everything here is opt-in: the base install neither
-includes it nor reaches the network.
+The only optional install OpenZIM MCP ships. Everything here is opt-in: the
+base install neither includes it nor reaches the network.
 
-The `[reranker]` extra adds cross-encoder relevance reranking on top of
-Xapian's BM25 results. When installed, `zim_query` search intents and
-`synthesize` mode silently produce more relevant top-K results on
-content-fragment queries. The advanced `zim_search` tool returns raw
-Xapian ranking and is not reranked. Caller surface is unchanged.
+The `[reranker]` extra re-scores Xapian's BM25 candidates with a
+cross-encoder and reorders the top-K that `zim_query` search intents and
+`synthesize` mode return. The advanced `zim_search` tool returns raw Xapian
+ranking and is not reranked. The caller's arguments and response shape are
+unchanged.
+
+**Whether that reordering is an improvement is unmeasured.** The one blind
+evaluation run against this server — 50 queries, 44 of them rerank-eligible,
+132 blind judgments, on two warc2zim archives (MedlinePlus and the Internet
+Encyclopedia of Philosophy) — found no metric reaching significance: 55
+preference votes for reranked output against 52 for Xapian alone (p = 0.85),
+and a relevant article at rank 1 in 64.4% of reranked results against 62.9%
+without. Median query latency roughly doubled, 0.44 s to 0.885 s. That
+sample rules out a large effect, not a small one, and says nothing about
+Wikipedia- or Stack Exchange-shaped archives, which were not tested.
+
+Install it to evaluate it on your own corpus. The ranking this project
+stands behind is Xapian's.
 
 ## Install
 

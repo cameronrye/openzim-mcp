@@ -2874,3 +2874,45 @@ def test_changelog_stays_out_of_the_mcp_range_sweep() -> None:
         "is the thing the exclusion exists to permit *not* doing — or "
         "_MCP_RANGE_RE stopped matching the shape release notes use."
     )
+
+
+def test_the_reranker_page_does_not_claim_an_unmeasured_improvement() -> None:
+    """The extra's benefit is a null result, and the page must say so.
+
+    The only blind evaluation ever run against this server — 50 queries, 44
+    rerank-eligible, 132 judgments on two warc2zim archives — found no metric
+    reaching significance, while the extra costs a ~1.1 GB model and roughly
+    doubles query latency. The page previously asserted the opposite twice:
+    "the only one that changes retrieval quality" and "silently produce more
+    relevant top-K results".
+
+    Read out of ``_visible_prose`` so a hedge parked in a code fence or an MDX
+    comment counts as absent, which is the failure mode this repo has shipped
+    before.
+    """
+    page = REPO / "website/src/content/docs/search-reranking.mdx"
+    prose = _visible_prose(page.read_text(encoding="utf-8"))
+
+    assert "unmeasured" in prose.lower(), (
+        "search-reranking.mdx no longer discloses that the improvement is " "unmeasured"
+    )
+
+    banned = ("changes retrieval quality", "more relevant top-K")
+    present = [c for c in banned if c.lower() in prose.lower()]
+    assert not present, (
+        f"search-reranking.mdx asserts an improvement the evidence does not "
+        f"support: {present}"
+    )
+
+
+def test_the_install_page_warns_before_the_download() -> None:
+    """A reader decides whether to pull the model down on the install page,
+    not on the concept page, so the hedge has to appear there too."""
+    prose = _visible_prose(
+        (REPO / "website/src/content/docs/installation.mdx").read_text(encoding="utf-8")
+    )
+    lines = [ln for ln in prose.splitlines() if "reranker" in ln.lower()]
+
+    assert lines, "the install page no longer mentions the reranker extra"
+    window = " ".join(prose.split("[reranker]", 1)[-1].split()[:60]).lower()
+    assert "unmeasured" in window, window
