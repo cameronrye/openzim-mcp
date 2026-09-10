@@ -13,6 +13,7 @@ reference at import time.
 """
 
 import logging
+import re
 import unicodedata
 import urllib.parse
 from dataclasses import dataclass
@@ -343,6 +344,61 @@ def _paging_span(*, offset: int, shown: int, next_offset: int, total_text: str) 
         f"(scanned through {next_offset}; {collapsed} duplicate path{plural} "
         f"collapsed)"
     )
+
+
+# Scraper output that a crawl files as an entry but a reader would never ask
+# for: image-caption stubs, translation hubs, subtitle sidecars, and index
+# pagination. v3.3.1 field report (fid 71). Measured at v3.3.2 on the shipped
+# MedlinePlus archive, rate limiter disabled so the sweep does not read its own
+# throttling as clean pages: 24.5% of title-mode top-5 rows and 23.4% of
+# suggest-mode rows are one of these, against 11.9% in fulltext.
+#
+# ``/category/`` is deliberately ABSENT. On the IEP archive those pages are the
+# encyclopedia's own topic index and the correct #1, at score 1.0, for
+# "metaphysics", "philosophy of science", "feminist philosophy" and
+# "continental philosophy" — the demote the finding proposed would have turned
+# four right answers into wrong ones. The patterns below are matched
+# INDEPENDENTLY rather than as a precedence chain, so
+# ``category/m-and-e/metaphysics/page/2/`` is still demoted: index pagination
+# is scraper output wherever it lives.
+_CRAWL_ARTEFACT_RE = re.compile(
+    r"(?:/imagepages/)"  # ency image-caption stubs
+    r"|(?:/languages/)"  # per-language translation hubs
+    r"|(?:\.srt$)"  # subtitle sidecars filed as entries
+    r"|(?:/page/\d+/?$)",  # index pagination
+    re.IGNORECASE,
+)
+
+
+def is_crawl_artefact(path: str) -> bool:
+    """Whether ``path`` is scraper output rather than an article.
+
+    Shape only: no archive access, so this is safe to call inside a ranking
+    loop. See ``_CRAWL_ARTEFACT_RE`` for what is deliberately excluded.
+    """
+    return bool(path) and bool(_CRAWL_ARTEFACT_RE.search(path))
+
+
+def demote_crawl_artefacts(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Sink crawl artefacts below real articles, stably, dropping nothing.
+
+    A DEMOTE, not a filter: every row the caller would have had is still
+    there, and relative order inside each group is the archive's own ranking,
+    which this has no opinion about.
+
+    A page whose rows are ALL artefacts therefore comes back in its original
+    order — not by a special case, but because partitioning a list and
+    concatenating the halves in order reproduces it. An explicit
+    "all artefacts" guard here would be unreachable: it was written, and the
+    mutation that deleted it changed no behaviour at all.
+    """
+    if not rows:
+        return rows
+    artefacts = [r for r in rows if is_crawl_artefact(str(r.get("path", "")))]
+    if not artefacts:
+        return rows
+    keep = [r for r in rows if not is_crawl_artefact(str(r.get("path", "")))]
+    return keep + artefacts
 
 
 def _snippet_query(query: str) -> Optional[str]:
@@ -2677,7 +2733,12 @@ class _SearchMixin:
             # contract here: rename ``suggestions`` → ``results`` at the
             # top level (the Phase A ``_meta.suggestions[]`` recovery
             # candidates are unrelated and live inside ``_meta``).
-            suggestions = raw.get("suggestions", [])
+            # v3.3.1 field report (fid 71): suggest mode measured WORST of
+            # the three surfaces (23.4% of top-5 rows are scraper output on
+            # the shipped MedlinePlus archive), and it is served from here —
+            # a different function from ``_assemble_find_response``, which
+            # is why the finding, naming only two surfaces, missed it.
+            suggestions = demote_crawl_artefacts(raw.get("suggestions", []))
             actual_count = len(suggestions)
 
             # The suggestion pool is capped at ``limit``; we don't enumerate
@@ -3751,7 +3812,14 @@ class _SearchMixin:
                 continue
             seen.add(key)
             deduped.append(row)
-        aggregate_results = deduped
+        # v3.3.1 field report (fid 71): sink scraper output below real
+        # articles. Measured 24.5% of title-mode top-5 rows on the shipped
+        # MedlinePlus archive — ``title 'migraine headache'`` returned an
+        # image-caption stub as its only hit. After the dedup so a demoted
+        # twin cannot displace the row that survived it, and before the
+        # ``limit`` slice so the demote decides what makes the page rather
+        # than reordering what already did.
+        aggregate_results = demote_crawl_artefacts(deduped)
 
         # Build _meta.suggestions[] from archive-verified typo variants.
         # Two cases surface them (spec §14.4):

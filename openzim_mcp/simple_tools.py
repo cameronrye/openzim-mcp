@@ -64,6 +64,7 @@ from .tool_schemas import (
     SearchResponse,
     SynthesizeResponse,
 )
+from .zim.search import demote_crawl_artefacts
 from .zim_operations import ZimOperations
 
 logger = logging.getLogger(__name__)
@@ -3888,7 +3889,11 @@ class SimpleToolsHandler(
                     # the type-checker since the synthetic row carries
                     # only the keys downstream consumers actually read.
                     strong_matches = cast(Any, [canonical_row, *strong_matches])
-        return strong_matches
+        # v3.3.1 field report (fid 71): this list decides what the caller
+        # is auto-fetched or offered, so a scraper artefact here is a wrong
+        # ANSWER rather than a bad row on a page. Demoted last, after the
+        # canonical prepend above, so the canonical row keeps its lead.
+        return demote_crawl_artefacts(strong_matches)
 
     def _auto_pick_or_render_disambiguation(
         self,
