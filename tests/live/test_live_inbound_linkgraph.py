@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
 from typing import Optional
 
@@ -39,7 +40,8 @@ def _build_first_linked_archive(zims) -> Optional[tuple]:
 
 
 def test_build_then_inbound_roundtrip(zim_dir, tmp_path) -> None:
-    """Building a sidecar then querying inbound returns importance-ranked linkers."""
+    """Building a sidecar then querying inbound returns importance-ranked
+    linkers, with site furniture sunk below every other linker."""
     zims = usable_zims(zim_dir)
     if not zims:
         pytest.skip("no ZIM test data available")
@@ -61,6 +63,9 @@ def test_build_then_inbound_roundtrip(zim_dir, tmp_path) -> None:
             "SELECT t.path FROM edges e JOIN nodes t ON t.id=e.target_id "
             "GROUP BY e.target_id ORDER BY COUNT(*) DESC LIMIT 1"
         ).fetchone()[0]
+        node_count = int(
+            conn.execute("SELECT value FROM meta WHERE key='node_count'").fetchone()[0]
+        )
         conn.close()
 
         # Read it back through the public reader, fingerprint-checked.
@@ -70,11 +75,27 @@ def test_build_then_inbound_roundtrip(zim_dir, tmp_path) -> None:
             uuid = str(a.uuid)
         reader = LinkGraphReader.open_for(str(archive), live_archive_uuid=uuid)
         assert reader is not None
-        page = reader.query_inbound(target, limit=5, offset=0)
-        assert len(page.rows) >= 1
-        degrees = [r["inbound_degree"] for r in page.rows]
-        assert degrees == sorted(degrees, reverse=True)  # ranked by importance
+        page = reader.query_inbound(target, limit=100_000, offset=0)
         reader.close()
+        assert len(page.rows) == page.total >= 1
+
+        # Ranked by importance, except that a linker whose degree reaches half
+        # the archive is in the nav bar and sinks to the end. Checked over the
+        # WHOLE list: the first version read five rows, which never reach the
+        # sunk group, so it went on asserting pure degree order. The threshold
+        # is recomputed here rather than imported, to cross-check the reader.
+        threshold = math.ceil(node_count / 2) if node_count >= 50 else 0
+        furniture = [
+            threshold > 0 and r["inbound_degree"] >= threshold for r in page.rows
+        ]
+        assert furniture == sorted(furniture), "a furniture linker outranks an article"
+        for group in (False, True):
+            degrees = [
+                r["inbound_degree"]
+                for r, is_furniture in zip(page.rows, furniture)
+                if is_furniture is group
+            ]
+            assert degrees == sorted(degrees, reverse=True)
     finally:
         if created_here:
             Path(sidecar).unlink(missing_ok=True)

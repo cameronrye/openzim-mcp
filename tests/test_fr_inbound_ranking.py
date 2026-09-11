@@ -3,11 +3,15 @@
 v3.3.1 field report, fid 86 (ranking half). Inbound linkers were ranked
 ``ORDER BY n.inbound_degree DESC`` — a signal site boilerplate maximises.
 A page in the nav bar links to everything and is therefore linked FROM
-everything, so it wins that ordering on every query, and the caller asking
+everything, so it wins that ordering for most targets, and the caller asking
 what links to an article gets the alphabet index instead of the articles.
 
-Measured on the shipped IEP sidecar: 366 of 371 article targets get a real
-article at rank 1 under the fix, where before they got the index page.
+Measured on the shipped IEP sidecar (1,187 nodes, threshold 594): the 33
+nodes at or above the threshold are the home page, the 26 alphabet pages,
+five site pages and the RSS feed; the best-linked article, ``plato/``, sits
+at 106. Of the 919 targets that have at least one non-furniture linker,
+furniture led 654 before the fix and leads none after it. Among the 371
+targets with five or more linkers, it led 366.
 
 The demote is by RANK, not by removal: rows are only reordered, so
 ``total``, the pagination arithmetic and the cursor contract are untouched.
@@ -141,6 +145,36 @@ def test_a_small_archive_is_exempt(tmp_path):
     assert rows[0]["path"] == "a.org/hub/"
 
 
+def test_the_threshold_is_inclusive_at_the_boundary(tmp_path):
+    """``at least half`` only matters AT the boundary, and only the pure
+    arithmetic below was pinned: ``>=`` could become ``>`` in the SQL and the
+    ceiling could become a floor with every ordering test still green.
+
+    101 nodes puts the threshold at 51, so degree 51 is furniture and sinks,
+    while degree 50 — a floor's threshold — is an ordinary linker and must not.
+    """
+    nodes = [
+        (1, "a.org/at-threshold/", 51),
+        (2, "a.org/just-below/", 50),
+        (3, "a.org/article/", 12),
+        (5, "a.org/target/", 1),
+    ]
+    edges = [(1, 5, "Nav"), (2, 5, "Hub"), (3, 5, "Article")]
+    archive = _sidecar(tmp_path, nodes=nodes, edges=edges, node_count=101)
+
+    reader = _open(archive)
+    try:
+        rows = reader.query_inbound("a.org/target/", limit=10, offset=0).rows
+    finally:
+        reader.close()
+
+    assert [r["path"] for r in rows] == [
+        "a.org/just-below/",
+        "a.org/article/",
+        "a.org/at-threshold/",
+    ]
+
+
 def test_pagination_still_spans_every_linker(tmp_path):
     """The demote reorders within the full set, so paging must still reach
     every row exactly once — the cursor contract depends on it."""
@@ -159,8 +193,9 @@ def test_pagination_still_spans_every_linker(tmp_path):
 
 
 def test_a_sidecar_without_node_count_still_answers(tmp_path):
-    """Older sidecars of the same schema may lack the key. Degrading to the
-    previous ordering is right; refusing to answer is not."""
+    """Defensive: every builder writes ``node_count``, so only a hand-made or
+    damaged sidecar lacks it. Degrading to the previous ordering is right;
+    refusing to answer is not."""
     nodes = [(1, "a.org/hub/", 90), (2, "a.org/x/", 2), (5, "a.org/target/", 1)]
     edges = [(1, 5, "Hub"), (2, 5, "X")]
     archive = tmp_path / "b.zim"
@@ -195,7 +230,8 @@ def test_the_shipped_iep_sidecar_leads_with_an_article():
     """The measured case, on the real sidecar rather than a fixture."""
     import os
 
-    iep = "/Users/cameron/Developer/zim/internet-encyclopedia-philosophy_en_all_2025-06.zim"
+    zim_dir = os.environ.get("ZIM_TEST_DATA_DIR", str(Path.home() / "Developer/zim"))
+    iep = str(Path(zim_dir) / "internet-encyclopedia-philosophy_en_all_2025-06.zim")
     if not os.path.exists(sidecar_path_for(iep)):
         pytest.skip("IEP sidecar not present")
 
@@ -233,8 +269,8 @@ def test_the_shipped_iep_sidecar_leads_with_an_article():
     ],
 )
 def test_the_furniture_threshold_is_a_true_ceiling(node_count, expected):
-    """The docstring says "at least half", and the first implementation did
-    not do that: ``-(-int(x) // 1)`` truncates inside ``int()`` before the
+    """The rule is "at least half", and the first implementation did not do
+    that: ``-(-int(x) // 1)`` truncates inside ``int()`` before the
     ceiling idiom runs, so it computed the FLOOR and was off by one on every
     odd node count. Nothing in the file pinned the arithmetic, so it passed.
     """

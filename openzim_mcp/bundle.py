@@ -82,8 +82,12 @@ _BUNDLE_KEY_PREFIX = "bundle:v2h"
 # content-derived cache at once, because embedding the token is already the
 # contract for all of them.
 #
-# Bump this in any release that changes what the server renders from an
-# unchanged archive; tests/test_v3_cache_render_epoch.py fails until you do.
+# Bump this in any release that changes what the server renders OR RANKS into
+# a cache from an unchanged archive. tests/test_v3_cache_render_epoch.py pins
+# the epoch to a fingerprint of the rendering and of the crawl-artefact
+# ranking the suggestions cache holds, so it fails when either changes without
+# a bump, or when a bump is reverted. It cannot see any other ranking a cache
+# holds: check a new cached ordering by hand.
 _RENDER_EPOCH = "r3"
 
 

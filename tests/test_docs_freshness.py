@@ -2897,22 +2897,44 @@ def test_the_reranker_page_does_not_claim_an_unmeasured_improvement() -> None:
         "search-reranking.mdx no longer discloses that the improvement is " "unmeasured"
     )
 
-    # Ban the CLAIM, not two exact spellings of it. The first version listed
-    # the two strings this commit happened to remove, so any reword — or the
-    # original sentence split across a line break — walked straight past it.
-    # Whitespace is collapsed for the same reason.
+    # Gate SENTENCES, not phrases. The phrase list this replaced banned four
+    # spellings of the claim, and six realistic rewordings walked past it —
+    # "the only one that improves retrieval quality", "silently surface the
+    # most relevant articles first" — as did swapping the hedge for "is no
+    # longer unmeasured: it is an upgrade", because the keyword survived. Any
+    # sentence that speaks of improvement must carry the hedge itself, and the
+    # hedge sentence is pinned so it cannot be inverted in place.
     collapsed = " ".join(prose.lower().split())
-    banned = [
-        r"\bchanges? retrieval quality\b",
-        r"\bmore relevant\b",
-        r"\bimproves? (?:the )?(?:results|ranking|relevance)\b",
-        r"\bbetter (?:results|ranking|relevance)\b",
-    ]
-    present = [pat for pat in banned if re.search(pat, collapsed)]
-    assert not present, (
+    unhedged = _unhedged_improvement_claims(collapsed)
+    assert not unhedged, (
         f"search-reranking.mdx asserts an improvement the evidence does not "
-        f"support: {present}"
+        f"support: {unhedged}"
     )
+    assert (
+        "whether that reordering is an improvement is unmeasured." in collapsed
+    ), "search-reranking.mdx no longer carries the hedge sentence verbatim"
+
+
+# Wording that asserts the reranker makes results better, and wording that
+# makes such a sentence honest by saying the effect was not shown.
+_IMPROVEMENT_CLAIM_RE = re.compile(
+    r"\b(?:improv\w*|better\w*|more relevant|most relevant|higher[- ]quality"
+    r"|(?:retrieval|search|result|ranking) quality|boost\w*|enhanc\w*"
+    r"|upgrade\w*|outperform\w*|superior)\b"
+)
+_IMPROVEMENT_HEDGE_RE = re.compile(
+    r"\b(?:unmeasured|no metric reaching significance)\b"
+)
+
+
+def _unhedged_improvement_claims(collapsed_prose: str) -> list[str]:
+    """Sentences of ``collapsed_prose`` claiming an improvement unhedged."""
+    sentences = re.split(r"(?<=[.!?:])\s+", collapsed_prose)
+    return [
+        s
+        for s in sentences
+        if _IMPROVEMENT_CLAIM_RE.search(s) and not _IMPROVEMENT_HEDGE_RE.search(s)
+    ]
 
 
 def test_the_install_page_warns_before_the_download() -> None:
@@ -2926,3 +2948,22 @@ def test_the_install_page_warns_before_the_download() -> None:
     assert lines, "the install page no longer mentions the reranker extra"
     window = " ".join(prose.split("[reranker]", 1)[-1].split()[:60]).lower()
     assert "unmeasured" in window, window
+    assert not _unhedged_improvement_claims(window), window
+
+
+def test_the_api_reference_says_row_order_is_authoritative() -> None:
+    """Title and inbound rows are deliberately out of ``score`` and
+    ``inbound_degree`` order, and a client that re-sorts on the exposed
+    number silently undoes the demote. Nothing pinned either note, so the
+    title one could be rewritten to promise score order with every suite
+    green."""
+    prose = " ".join(
+        _visible_prose(
+            (REPO / "website/src/content/docs/api-reference.mdx").read_text(
+                encoding="utf-8"
+            )
+        ).split()
+    )
+
+    assert "presentation order, not score order" in prose
+    assert "re-sorting rows on `inbound_degree` puts the navigation pages" in prose

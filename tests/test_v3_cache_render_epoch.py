@@ -204,12 +204,15 @@ _RENDER_FIXTURE_HTML = """
 </main></body></html>
 """
 
-# sha256 over the rendering these caches hold. If this assertion fails, the
-# server renders something different from what a cache written by the current
-# epoch contains: bump ``_RENDER_EPOCH`` in openzim_mcp/bundle.py, then
-# replace this digest with the one the failure prints.
+# (epoch, sha256) over the rendering these caches hold. If this assertion
+# fails, the server renders something different from what a cache written by
+# the current epoch contains: bump ``_RENDER_EPOCH`` in openzim_mcp/bundle.py,
+# then re-pin BOTH pairs in this file with the new epoch and the printed
+# digest. The epoch is part of the pin so that reverting a bump fails too —
+# pinning the digest alone let ``r3`` go back to ``r2`` with every suite green.
 _PINNED_RENDER_FINGERPRINT = (
-    "d62d668001dd2a7ca972108f82ff6e49d7f2b2d5bebeb40af0890a607ba89c18"
+    "r3",
+    "d62d668001dd2a7ca972108f82ff6e49d7f2b2d5bebeb40af0890a607ba89c18",
 )
 
 
@@ -245,10 +248,52 @@ def test_render_fingerprint_is_pinned_to_the_current_epoch(
     content_processor: ContentProcessor,
 ) -> None:
     """A rendering change must not land without an epoch bump."""
-    observed = _render_fingerprint(content_processor)
+    observed = (_RENDER_EPOCH, _render_fingerprint(content_processor))
 
     assert observed == _PINNED_RENDER_FINGERPRINT, (
-        f"what the bundle/entry/snippet caches hold changed (fingerprint "
+        f"what the bundle/entry/snippet caches hold, or the epoch, changed "
+        f"(observed {observed}). Bump _RENDER_EPOCH in openzim_mcp/bundle.py "
+        f"so an upgrade invalidates persisted values, then re-pin both pairs."
+    )
+
+
+# The epoch also guards what a RANKING cache holds. ``suggestions_data``
+# stores its page after the fid 71 crawl-artefact demote, under a key whose
+# only build-sensitive part is the epoch, so a snapshot persisted by a build
+# that ranked differently re-serves that build's order until its TTL — which
+# is what reverting this release's ``r2`` -> ``r3`` bump did, with every
+# suite green. Every shape the demote treats specially is in the fixture,
+# including the two it deliberately leaves alone.
+_RANKING_FIXTURE_PATHS = (
+    "a/languages/x.html",
+    "a/real.html",
+    "a/ency/imagepages/1.htm",
+    "a/captions/x.srt",
+    "a/b.html",
+    "a/category/c/",
+    "a/category/c/page/2/",
+)
+_PINNED_RANKING_FINGERPRINT = (
+    "r3",
+    "5d5745359f1eaa811b415ce912d61851e74d0fcc475704852100369c371896f4",
+)
+
+
+def _ranking_fingerprint() -> str:
+    """Digest the order ``demote_crawl_artefacts`` gives the fixture."""
+    from openzim_mcp.zim.search import demote_crawl_artefacts
+
+    rows = [{"path": p} for p in _RANKING_FIXTURE_PATHS]
+    ordered = [r["path"] for r in demote_crawl_artefacts(rows)]
+    return hashlib.sha256(json.dumps(ordered).encode("utf-8")).hexdigest()
+
+
+def test_ranking_fingerprint_is_pinned_to_the_current_epoch() -> None:
+    """A change to the cached suggest ranking must not land without a bump."""
+    observed = (_RENDER_EPOCH, _ranking_fingerprint())
+
+    assert observed == _PINNED_RANKING_FINGERPRINT, (
+        f"what the suggestions cache holds, or the epoch, changed (observed "
         f"{observed}). Bump _RENDER_EPOCH in openzim_mcp/bundle.py so an "
-        f"upgrade invalidates persisted values, then pin the new digest here."
+        f"upgrade invalidates persisted values, then re-pin both pairs."
     )

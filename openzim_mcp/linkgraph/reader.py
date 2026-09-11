@@ -39,8 +39,9 @@ class InboundPage:
 # boilerplate to separate an article from — on a twenty-page archive a
 # genuinely central article can legitimately be linked from half of it — so the
 # demotion is switched off rather than applied to a population too small to
-# have the pattern. Returns 0 when it should not apply, including for an older
-# sidecar of this schema that never stored ``node_count``.
+# have the pattern. Returns 0 when it should not apply: below that floor, or
+# when ``node_count`` is missing or unparseable (defensive — every builder
+# writes it, so only a hand-made or damaged sidecar lacks it).
 _FURNITURE_DEGREE_FRACTION = 0.5
 _MIN_ARCHIVE_FOR_FURNITURE = 50
 
@@ -54,7 +55,7 @@ def _furniture_threshold(node_count: Optional[str]) -> int:
     if total < _MIN_ARCHIVE_FOR_FURNITURE:
         return 0
     # A true ceiling. ``-(-int(x) // 1)`` was written here and is a no-op:
-    # ``int()`` truncates first, so it computed the FLOOR and the docstring's
+    # ``int()`` truncates first, so it computed the FLOOR and the rule's
     # "at least half" was off by one on every odd node count.
     return math.ceil(total * _FURNITURE_DEGREE_FRACTION)
 
@@ -112,13 +113,16 @@ class LinkGraphReader:
         # v3.3.1 field report (fid 86): ranking purely on inbound_degree
         # answered "what links here?" with the site's navigation. A page in
         # the nav bar links to everything and is therefore linked FROM
-        # everything, so it won this ordering on every single query — on the
-        # shipped IEP sidecar the alphabet index led 366 of 371 article
-        # targets. Nodes at or above the threshold sink as a group; below it,
-        # inbound degree is still the signal.
+        # everything, so it won this ordering for most targets — on the
+        # shipped IEP sidecar, furniture led 366 of the 371 targets with five
+        # or more linkers. Nodes at or above the threshold sink as a group;
+        # below it, inbound degree is still the signal.
         #
-        # A demote by RANK only: no row is dropped, so ``total``, the
-        # pagination arithmetic and the cursor contract are untouched.
+        # A demote by RANK only: no row is dropped, so ``total`` and the
+        # pagination arithmetic are untouched and paging within one server
+        # version reaches every row exactly once. A cursor minted by a build
+        # that ranked purely on degree resumes at the same offset in this
+        # order, so a walk spanning the upgrade can repeat or skip a row.
         # ``threshold`` of 0 disables the clause (small or unlabelled
         # archives), leaving exactly the previous ordering.
         threshold = self._furniture_threshold or 0

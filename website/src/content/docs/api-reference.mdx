@@ -375,7 +375,7 @@ zim_search(
 
 **Returns:** mode-shaped response — `SearchResponse` / `SearchAllResponse` / `SearchWithFiltersResponse` / `FindEntryResponse` / `SearchSuggestionsResponse` — or `ToolErrorPayload` on validation failure. Every `next_cursor` in these responses is nulled; page with `offset`.
 
-`mode="title"` returns rows in **presentation order, not score order**: scraper output the archive files as its own entry — per-language translation hubs (`/languages/…`), image-caption stubs (`/ency/imagepages/…`) and subtitle sidecars (`.srt`) — is sunk below real articles even when the archive scores it higher. Nothing is dropped, so `total` and the paging arithmetic are unaffected. Read `results` order as authoritative and treat `score` as a match-quality signal rather than a rank; re-sorting rows by `score` undoes the demote and puts the scraper output back on top.
+`mode="title"` (pinned or `cross_file=True`) and `mode="suggest"` sink scraper output the archive files as its own entry — per-language translation hubs (`/languages/…`), image-caption stubs (`/ency/imagepages/…`) and subtitle sidecars (`.srt`) — below real articles, even when the archive ranks it higher. The demote reorders the page it is handed: nothing is dropped, so `total` and the paging arithmetic are unaffected, and a small `limit` whose page holds no real article still leads with scraper output. Title rows therefore come back in **presentation order, not score order**. Read `results` order as authoritative and treat `score` as a match-quality signal rather than a rank; re-sorting rows by `score` undoes the demote and puts the scraper output back on top.
 
 Single-archive `fulltext` responses carry a top-level **`zim_file_path`** naming the archive that answered — including when the server auto-selected it because only one is loaded. Hand it straight to `zim_get`, `zim_get_section`, `zim_links`, `zim_browse` or `zim_metadata`, all of which require the field. (`mode="title"` states the same fact per hit, as `zim_file`; the cross-archive fan-out states it per file.) If you get a `zim_file_path: Field required` rejection anyway, it names the archive for you whenever exactly one is loaded.
 
@@ -538,6 +538,8 @@ On a scraped archive (warc2zim/ZIMIT), whose entry paths are host-prefixed, the 
 **Returns:** a paginated `{results, next_cursor, total, done, page_info, …}` envelope for every direction. `direction="outbound"` adds `kind` and `category_totals` alongside; `"inbound"` and `"related"` carry neither, and key the article as `entry_path` rather than `path`/`title`.
 
 Outbound entries carry `url`/`text`/`title` (plus `domain` for external, `alt` for media). **`url` is the raw href as written in the article** — it does not necessarily round-trip into `zim_get`. Internal rows additionally carry `path`, the resolved entry path, and that is the one to pass to `zim_get`. Inbound entries are `{path, title, inbound_degree, anchor_text}`; related entries are `{path, title, …}` rows.
+
+Inbound rows are ranked by the linker's `inbound_degree`, except that **site furniture sinks to the end**: a linker whose `inbound_degree` is at least half the sidecar's node count — on a sidecar of 50 or more nodes — is in the site's navigation, links to everything, and would otherwise lead every answer. Nothing is dropped, so `total` and paging are unaffected. Read `results` order as authoritative; re-sorting rows on `inbound_degree` puts the navigation pages back on top.
 
 ---
 
