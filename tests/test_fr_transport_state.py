@@ -248,7 +248,7 @@ def mcp_session(tmp_path: Path) -> Iterator["tuple[TestClient, str]"]:
 
 def _open_get_stream(
     client: TestClient, headers: "dict[str, str]"
-) -> "tuple[int | None, str, list[BaseException]]":
+) -> "tuple[int | None, str, list[Exception]]":
     """Open the SSE GET stream on the real app; report how it answered.
 
     ``TestClient`` runs an ASGI app to completion before handing back a
@@ -260,9 +260,9 @@ def _open_get_stream(
     """
     import anyio
 
-    async def drive() -> "tuple[int | None, str, list[BaseException]]":
+    async def drive() -> "tuple[int | None, str, list[Exception]]":
         started: "dict[str, Any]" = {}
-        failures: "list[BaseException]" = []
+        failures: "list[Exception]" = []
         first_receive = True
 
         async def receive() -> "dict[str, Any]":
@@ -305,11 +305,10 @@ def _open_get_stream(
         with anyio.move_on_after(20):
             try:
                 await client.app(scope, receive, send)  # type: ignore[operator]
-            except BaseException as exc:  # noqa: BLE001 - the 500 arrives here
-                if not isinstance(exc, anyio.get_cancelled_exc_class()):
-                    failures.append(exc)
-                else:
-                    raise
+            except Exception as exc:  # noqa: BLE001 - the 500 arrives here
+                # Cancellation is a BaseException, so the hang-up still
+                # reaches ``move_on_after`` without being recorded here.
+                failures.append(exc)
         content_type = ""
         for name, value in started.get("headers", []):
             if name.lower() == b"content-type":
