@@ -10,9 +10,8 @@ base install neither includes it nor reaches the network.
 
 The `[reranker]` extra re-scores Xapian's BM25 candidates with a
 cross-encoder and reorders the top-K that `zim_query` search intents and
-`synthesize` mode return. The advanced `zim_search` tool returns raw Xapian
-ranking and is not reranked. The caller's arguments and response shape are
-unchanged.
+`synthesize` mode return. The advanced `zim_search` tool is not reranked.
+The caller's arguments and response shape are unchanged.
 
 **Whether that reordering is an improvement is unmeasured.** The one blind
 evaluation run against this server — 50 queries, 44 of them rerank-eligible,

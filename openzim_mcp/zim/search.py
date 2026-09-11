@@ -348,10 +348,10 @@ def _paging_span(*, offset: int, shown: int, next_offset: int, total_text: str) 
 
 # Scraper output that a crawl files as an entry but a reader would never ask
 # for: image-caption stubs, translation hubs and subtitle sidecars. v3.3.1
-# field report (fid 71). Measured at v3.3.2 on the shipped
-# MedlinePlus archive, rate limiter disabled so the sweep does not read its own
-# throttling as clean pages: 24.5% of title-mode top-5 rows and 23.4% of
-# suggest-mode rows are one of these, against 11.9% in fulltext.
+# field report (fid 71). Measured on the shipped MedlinePlus archive, 40 topic
+# queries at limit=5, rate limiter and cache off so the sweep does not read its
+# own throttling as clean pages: 26.1% of title-mode and 26.6% of suggest-mode
+# rows are one of these. Fulltext carries them too (12.0%) and is not demoted.
 #
 # ``/category/`` is deliberately ABSENT. On the IEP archive those pages are the
 # encyclopedia's own topic index and the correct #1, at score 1.0, for
@@ -2745,8 +2745,8 @@ class _SearchMixin:
             # v3.3.1 field report (fid 71): suggest mode is served from here,
             # a different function from ``_assemble_find_response``, which is
             # why the finding — naming only two surfaces — missed it. Measured
-            # 23.4% of top-5 rows scraper output on the shipped MedlinePlus
-            # archive, against title's 24.5%: comparable, not worse. Note the
+            # 26.6% of top-5 rows scraper output on the shipped MedlinePlus
+            # archive, against title's 26.1%: comparable. Note the
             # pool is already capped at ``limit`` by the generator above, so
             # this reorders the page it is given and cannot evict from it.
             suggestions = demote_crawl_artefacts(raw.get("suggestions", []))

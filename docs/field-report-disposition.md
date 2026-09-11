@@ -58,19 +58,22 @@ and after the change:
 | Suggest | 6 → 1 | 29 of 40 → 0 |
 | Chooser | 7 → 1 | 7 of 39 → 0 |
 
-The remaining #1 is `migraine headache`, whose only row is an image stub.
+The remaining #1 on each surface is a page with nothing else on it:
+`migraine headache` in title and suggest, whose only row is an image stub,
+and `swollen glands` in the chooser, whose only strong match is an image
+stub — which `zim_query` still fetches as the answer.
 The artefact share of the rows (26.1% title, 26.6% suggest) does not move,
 and must not: the demote reorders the page it is handed and never evicts
 from it. On IEP, the `/category/` topic pages stay #1 for the four queries
 they answer.
 
-Getting there took three placements. Demoting inside the title lookup
+Getting there took three attempts at two placements. Demoting inside the title lookup
 reordered the page the canonical-title promotion reads as
 score-descending, so the probe blanked and a weaker hit was hoisted to #1
 at a fabricated score of 1.0. Moving the demote to the response edge fixed
 that call and broke the next one: the edge rewrote the *cached* page in
-place, so a second identical `title 'swollen glands'` brought the
-fabricated 1.0 back. The edge now demotes a copy. A "24.5% → 12.8%"
+place, so a second identical `title 'swollen glands'` at `limit=3` — the
+page size the promotion probe reads — brought the fabricated 1.0 back. The edge now demotes a copy. A "24.5% → 12.8%"
 artefact figure recorded along the way was measured on the first
 placement, and does not describe the shipped code.
 
@@ -80,17 +83,18 @@ count — on sidecars of 50 or more nodes — is site furniture and sinks to
 the end. Reader-only: no rebuild and no schema bump. On the IEP sidecar
 (1,187 nodes, threshold 594) the 33 nodes over the line are the home page,
 the 26 alphabet pages, five site pages and the RSS feed; the best-linked
-article, `plato/`, sits at 106. Of the 919 targets with at least one
-non-furniture linker, furniture led 654 before and leads none after; the
-235 targets linked only by furniture still lead with it, since a reorder
-cannot change them.
+article, `plato/`, sits at 106. Of the 919 article targets — targets not
+themselves furniture — with at least one non-furniture linker, furniture led
+654 before and leads none after; the 235 linked only by furniture still lead
+with it, since a reorder cannot change them.
 
 **The reranker docs stop claiming an improvement.** The only blind
 evaluation — 50 queries, 44 rerank-eligible, 132 judgments on two warc2zim
 archives — found no metric reaching significance (55 preference votes
 against 52, p = 0.85; a relevant article at #1 in 64.4% against 62.9%),
 while median latency roughly doubled and the model costs about 1.1 GB. The
-reranking page and the install page now say that, with the numbers.
+reranking page now says that, with the numbers; the install page carries the
+hedge and the latency cost, and links to them.
 
 ## Deliberately not fixed
 
@@ -108,7 +112,7 @@ omissions — reopen one only with evidence that changes its premise.
 | Re-adding `title`/`content_type` to batch items | Declined. Removed deliberately in PR #374; the bodies are self-identifying and the caller supplied the paths. |
 | Worker processes / single-flight coalescing for the HTTP transport | Declined. Horizontal scaling is the documented answer and the replica is the worker unit. Coalescing means per-key in-flight futures across a lock also touched from `atexit` and a cleanup thread — real deadlock risk, for a thundering-herd shape rare on a personal offline server, with no load-test harness in CI to defend it. |
 | Stripping the site-name suffix from browse titles | Declined. `strip_site_suffix` splits only on `" \| "`, so it would clean the IEP rows and ~553 MedlinePlus rows but none of the ~10,678 `": MedlinePlus …"` ones — and the same suffix rides `zim_search` and `zim_links` rows, so stripping it in browse alone desynchronises the surfaces. |
-| The builder-scoping half of fid 86 | Declined. Feeding the sidecar builder `select_main_content` would make outbound and inbound describe the same graph, but it inherits the furniture strips, which on MedlinePlus delete "Related Health Topics": 165 of 174 strip-only removals in a 250-page sample were genuine topic pages. That trades a contradiction no caller can observe for the loss of MedlinePlus's best inbound signal, and invalidates every sidecar in the field. |
+| The builder-scoping half of fid 86 | Declined. Feeding the sidecar builder `select_main_content` would make outbound and inbound describe the same graph, but it inherits the furniture strips, which on MedlinePlus delete "Related Health Topics": 165 of 174 strip-only removals in a 250-page sample were genuine topic pages. That trades an inconsistency between the two directions — `c/`'s inbound list includes `hume-causation/`, whose outbound list omits `c/` — for the loss of MedlinePlus's best inbound signal, and would invalidate every sidecar in the field. |
 | Dropping the reranker extra, or publishing an improvement figure | Declined. "No measured effect at n=44 on two warc2zim archives" is not "no effect" — the sample rules out a large effect, not a small one, and says nothing about Wikipedia-shaped corpora — and a published figure would be invented. The docs give the measured numbers and let a reader price the trade. |
 | Demoting index pagination (`/page/N/`) as a crawl artefact | Declined on measurement. It matched nothing on MedlinePlus and two IEP entries, both false positives: `category/…/metaphysics/page/2/` continues the topic index `/category/` is kept for, 19 more articles with no overlap. |
 | Over-fetching so a small title or suggest `limit` evicts artefacts | Declined. The demote reorders the page the data layer returns, so at `limit` 1 or 2 a page holding no real article still leads with an artefact, and a larger `limit` can change which row leads. Over-fetching means recomputing `total`, `done` and the paging arithmetic, in the same spot where the first placement broke promotion. Documented in the API reference. |
@@ -121,15 +125,18 @@ omissions — reopen one only with evidence that changes its premise.
 Recorded rather than closed, in rough order of value:
 
 - **Ranking headroom beyond artefacts.** Both reranker configurations put a
-  relevant article at #1 only about 64% of the time. The follow-up sank
-  scraper output; what remains is real articles in the wrong order — a
-  supplement monograph outranking "High blood pressure medications".
+  relevant article at #1 of `zim_query` search results only 63–64% of the
+  time. The follow-up sank scraper output on title, suggest and the chooser
+  only: fulltext and `zim_query` search still carry it (12% of top-5 rows
+  on the 40 MedlinePlus queries, 4 of them at #1), alongside real articles
+  in the wrong order — a supplement monograph outranking "High blood
+  pressure medications".
 - `zim_browse(mode='page')` renders a `preview` that is empty on 99.8% of
   IEP rows, making the default mode far slower than `mode='walk'` for
   identical rows.
 - Cross-archive fan-out has no cross-archive ranking. Cross-archive title
-  mode now sinks artefacts, but rows from different archives are still not
-  ranked against each other.
+  mode now sinks artefacts, but rows from different archives are still
+  interleaved by per-archive rank scores that mean nothing across archives.
 - Rate-limit pricing charges a wide search less than a batch fetch that does
   less work.
 - `zim_query "find article titled X"` is a title surface the artefact demote

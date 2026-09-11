@@ -112,10 +112,10 @@ class LinkGraphReader:
         ).fetchone()[0]
         # v3.3.1 field report (fid 86): ranking purely on inbound_degree
         # answered "what links here?" with the site's navigation. A page in
-        # the nav bar links to everything and is therefore linked FROM
-        # everything, so it won this ordering for most targets — on the
-        # shipped IEP sidecar, furniture led 366 of the 371 targets with five
-        # or more linkers. Nodes at or above the threshold sink as a group;
+        # the nav bar is linked FROM every page that carries the bar, so it
+        # won this ordering for most targets — on the shipped IEP sidecar,
+        # furniture led 366 of the 371 non-furniture targets with five or
+        # more linkers. Nodes at or above the threshold sink as a group;
         # below it, inbound degree is still the signal.
         #
         # A demote by RANK only: no row is dropped, so ``total`` and the

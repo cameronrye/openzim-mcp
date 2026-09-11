@@ -3891,9 +3891,10 @@ class SimpleToolsHandler(
                     strong_matches = cast(Any, [canonical_row, *strong_matches])
         # v3.3.1 field report (fid 71): this list is what the caller is
         # offered, so a scraper artefact leading it is a wrong ANSWER rather
-        # than a bad row on a page. The auto-pick rules downstream match on
-        # titles, not position, so this reorders a rendered chooser and never
-        # decides whether one is rendered. Demoted last, after the canonical
+        # than a bad row on a page. Whether a chooser is rendered does not
+        # depend on order, but when several rows title-match the topic the
+        # auto-pick takes the first, so a real article now wins over an
+        # artefact twin. Demoted last, after the canonical
         # prepend: a real canonical keeps its lead because the partition is
         # stable, and a canonical that is itself an artefact — an image stub
         # offered as "(canonical title match)" — sinks with the rest.
