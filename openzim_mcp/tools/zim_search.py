@@ -469,7 +469,13 @@ def _name_the_archive(payload: Any, resolved_path: str) -> Any:
     if isinstance(payload, dict) and not payload.get("error"):
         from ..meta import remeasure
 
-        payload["zim_file_path"] = resolved_path
+        # COPY-ON-WRITE, ``_meta`` included. The caller's copy is shallow, so
+        # ``_meta`` here was still the dict inside the cached search page, and
+        # re-measuring it in place rewrote the cache's size fields to describe
+        # a body the cache does not hold.
+        payload = {**payload, "zim_file_path": resolved_path}
+        if isinstance(payload.get("_meta"), dict):
+            payload["_meta"] = dict(payload["_meta"])
         # The data layer measured the payload before this field existed, so
         # ``_meta.chars`` would under-report the body by exactly the path it
         # now carries. Same defect as the splice's stale envelope, and the
@@ -766,7 +772,7 @@ async def _handle_title_mode(
     merged = _merge_promotion_into_title_results(raw, promoted, effective_limit)
     # v3.3.1 field report (fid 71), at the RESPONSE EDGE and nowhere earlier.
     # Scraper output — translation hubs, image-caption stubs, subtitle
-    # sidecars — outranks real articles on 39 of ~55 measured title pages
+    # sidecars — outranks a real article on 30 of 40 measured title pages
     # (``title 'hepatitis b'`` puts ``languages/hepatitisb.html`` above a real
     # ency article). Demoting it inside ``find_entry_by_title_data`` instead
     # would reorder the list the promotion probes above read as
@@ -902,8 +908,8 @@ def _merge_promotion_into_title_results(
         m for m in matches if (m.get("entry_path") or m.get("path")) != promoted_path
     ]
     promoted_row = dict(promoted)
-    # Score 1.0 marks a canonical title-index hit, the only kind promotion
-    # accepts. It is a label, not what keeps the row first: title rows go out
+    # Score 1.0 labels the row promotion chose as the topic's canonical match.
+    # It is a label, not what keeps the row first: title rows go out
     # in presentation order (crawl artefacts are sunk at the response edge),
     # and the API reference tells callers not to re-sort them on ``score``.
     promoted_row.setdefault("score", 1.0)
