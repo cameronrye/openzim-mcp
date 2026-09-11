@@ -38,8 +38,13 @@ mutation pass proved by deleting the guard and changing no behaviour.
 
 from __future__ import annotations
 
+import asyncio
+from types import SimpleNamespace
+
 import pytest
 
+from openzim_mcp.config import CacheConfig, OpenZimMcpConfig, RateLimitConfig
+from openzim_mcp.server import OpenZimMcpServer
 from openzim_mcp.zim.search import demote_crawl_artefacts, is_crawl_artefact
 
 # ---------------------------------------------------------------------------
@@ -53,8 +58,6 @@ from openzim_mcp.zim.search import demote_crawl_artefacts, is_crawl_artefact
         "medlineplus.gov/ency/imagepages/18146.htm",
         "medlineplus.gov/languages/hepatitisb.html",
         "medlineplus.gov/media/captions/tutorial.srt",
-        "iep.utm.edu/category/m-and-e/metaphysics/page/2/",
-        "iep.utm.edu/page/3/",
     ],
 )
 def test_scraper_output_is_an_artefact(path: str) -> None:
@@ -85,12 +88,19 @@ def test_real_content_is_not_an_artefact(path: str) -> None:
     assert is_crawl_artefact(path) is False
 
 
-def test_a_category_page_is_kept_but_its_pagination_is_not():
-    """The shapes are independent, not a precedence chain. Stated because
-    "skip anything under /category/" is the obvious wrong simplification —
-    it would keep index pagination that is pure scraper output."""
+def test_index_pagination_is_not_an_artefact():
+    """``/page/N/`` was in the set and was removed on measurement.
+
+    It matched nothing on MedlinePlus and exactly two entries on IEP, both
+    false positives: ``category/…/metaphysics/page/2/`` is the continuation
+    of the topic index ``/category/`` is kept for — page 1 lists 50 articles,
+    page 2 lists 19 more with zero overlap, both at score 1.0. "Index
+    pagination is scraper output wherever it lives" sounded right and, on
+    every shipped archive, only ever discarded real content.
+    """
     assert is_crawl_artefact("iep.utm.edu/category/s-l-m/science/") is False
-    assert is_crawl_artefact("iep.utm.edu/category/s-l-m/science/page/2/") is True
+    assert is_crawl_artefact("iep.utm.edu/category/s-l-m/science/page/2/") is False
+    assert is_crawl_artefact("iep.utm.edu/page/3/") is False
 
 
 # ---------------------------------------------------------------------------
@@ -179,8 +189,209 @@ def test_an_empty_page_is_handled():
 
 
 def test_rows_without_a_path_are_not_promoted_or_dropped():
-    """Defensive: a malformed row must not crash the sort or vanish."""
-    rows = [{"title": "no path"}, {"path": "a.org/real.html"}]
+    """Defensive: a malformed row must not crash the sort or vanish.
+
+    Asserts both halves its name claims — that the pathless row is still
+    there (not dropped) and that it did not jump the real row (not
+    promoted). The first version checked only ``len(out) == 2``, which is
+    satisfied by any ordering at all.
+    """
+    rows = [
+        {"path": "a.org/languages/x.html"},
+        {"title": "no path"},
+        {"path": "a.org/real.html"},
+    ]
 
     out = demote_crawl_artefacts(rows)
-    assert len(out) == 2
+
+    assert {r.get("path") or r.get("title") for r in out} == {
+        "a.org/languages/x.html",
+        "no path",
+        "a.org/real.html",
+    }
+    # A pathless row is not an artefact, so it keeps its place relative to
+    # the other non-artefact row and both lead the demoted one.
+    assert [r.get("path", "") for r in out][-1] == "a.org/languages/x.html"
+
+
+# ---------------------------------------------------------------------------
+# The wirings — each drives a real surface whose ranking actually inverts
+# ---------------------------------------------------------------------------
+#
+# The first version of this file tested only the two pure helpers. All three
+# call sites could be reverted and every test here, the full unit suite and
+# the live suite still passed — the exact "tested the renderer, called the
+# wiring covered" shape this project has shipped before. Each test below
+# feeds a surface an ordering where an artefact outranks an article, which is
+# the only condition under which the demote is observable.
+
+
+def _server(tmp_path):
+    (tmp_path / "a.zim").write_bytes(b"ZIM\x04" + b"\0" * 100)
+    return OpenZimMcpServer(
+        OpenZimMcpConfig(
+            allowed_directories=[str(tmp_path)],
+            tool_mode="advanced",
+            cache=CacheConfig(enabled=False),
+            rate_limit=RateLimitConfig(enabled=False),
+        )
+    )
+
+
+def test_the_title_response_edge_is_wired(tmp_path, monkeypatch):
+    """``_handle_title_mode`` — driven end to end, not via its own helper.
+
+    The first attempt at this test called ``_demote_artefacts_in_response``
+    directly, so deleting the call from ``_handle_title_mode`` left it
+    passing. Calling the helper you just wired proves the helper works and
+    says nothing about the wiring; this drives the dispatch.
+    """
+    from openzim_mcp.tools import zim_search as tool
+
+    server = _server(tmp_path)
+    archive = str(tmp_path / "a.zim")
+
+    class _Ops:
+        async def find_entry_by_title_data(self, path, q, *, cross_file, limit):
+            return {
+                "results": [
+                    {"path": "med.gov/languages/asthma.html", "score": 1.0},
+                    {"path": "med.gov/asthma.html", "score": 0.9},
+                ],
+                "total": 2,
+                "done": True,
+                "_meta": {"chars": 1},
+            }
+
+    monkeypatch.setattr(tool, "_resolve_path", lambda *_a, **_k: archive)
+    monkeypatch.setattr(
+        "openzim_mcp.topic_preprocessing.promote_topic_via_title_index",
+        lambda **_kw: None,
+    )
+
+    out = asyncio.run(
+        tool._handle_title_mode(
+            ops=_Ops(),
+            server=server,
+            query="asthma",
+            zim_file_path=archive,
+            cross_file=False,
+            limit=5,
+            offset=0,
+            cursor=None,
+        )
+    )
+
+    assert [r["path"] for r in out["results"]] == [
+        "med.gov/asthma.html",
+        "med.gov/languages/asthma.html",
+    ]
+    assert out["total"] == 2 and out["done"] is True
+
+
+def test_the_title_data_layer_is_deliberately_NOT_wired(tmp_path, monkeypatch):
+    """The other half of the contract, and the regression this replaced.
+
+    ``find_entry_by_title_data`` must keep emitting score-descending rows, or
+    ``title_promotion.find_title_match`` — which reads ``results[0]`` under a
+    score gate — silently stops resolving.
+    """
+    from openzim_mcp.zim import search as search_mod
+
+    rows = [
+        {"path": "med.gov/languages/asthma.html", "score": 1.0, "zim_file": "a"},
+        {"path": "med.gov/asthma.html", "score": 0.9, "zim_file": "a"},
+    ]
+    assembled = search_mod._SearchMixin._assemble_find_response(
+        _StubOps(),
+        list(rows),
+        title="asthma",
+        limit=5,
+        files=["a"],
+        fast_path_hit=False,
+        fuzzy_path_hit=False,
+        verified_variants=[],
+    )
+
+    scores = [r["score"] for r in assembled["results"]]
+    assert scores == sorted(scores, reverse=True), assembled["results"]
+    assert assembled["results"][0]["path"] == "med.gov/languages/asthma.html"
+
+
+class _StubOps:
+    """Minimal ``self`` for ``_assemble_find_response`` — it is a pure
+    transformation and touches only ``config.search``."""
+
+    config = SimpleNamespace(search=SimpleNamespace(structured_suggestions_limit=3))
+
+
+def test_the_suggest_wiring_is_live(tmp_path, monkeypatch):
+    """``get_search_suggestions_data`` — a different function from the title
+    assembly, which is why the finding that named two surfaces missed it."""
+    from openzim_mcp.zim import search as search_mod
+
+    server = _server(tmp_path)
+    ops = server.zim_operations
+
+    monkeypatch.setattr(
+        search_mod._SearchMixin,
+        "_generate_search_suggestions",
+        lambda self, archive, q, limit: {
+            "partial_query": q,
+            "suggestions": [
+                {"path": "med.gov/ency/imagepages/1.htm", "text": "X"},
+                {"path": "med.gov/real.html", "text": "X"},
+            ],
+            "has_more": False,
+        },
+    )
+    monkeypatch.setattr(search_mod, "_zim_ops_mod", _FakeArchiveModule(), raising=False)
+
+    out = ops.get_search_suggestions_data(str(tmp_path / "a.zim"), "x", limit=5)
+
+    assert [r["path"] for r in out["results"]] == [
+        "med.gov/real.html",
+        "med.gov/ency/imagepages/1.htm",
+    ]
+
+
+class _FakeArchiveModule:
+    """``zim_archive`` context manager yielding a do-nothing archive."""
+
+    class _Ctx:
+        def __enter__(self):
+            return object()
+
+        def __exit__(self, *a):
+            return False
+
+    def zim_archive(self, _path):
+        return self._Ctx()
+
+
+def test_the_chooser_wiring_is_live(tmp_path, monkeypatch):
+    """``_collect_tell_me_about_strong_matches`` — the real method.
+
+    Same correction as the title test: importing ``demote_crawl_artefacts``
+    from ``simple_tools`` and calling it proves nothing about whether the
+    method calls it.
+    """
+    from openzim_mcp import simple_tools as st
+
+    server = _server(tmp_path)
+    handler = st.SimpleToolsHandler(server.zim_operations)
+
+    monkeypatch.setattr(st, "is_strong_title_match", lambda *_a, **_k: True)
+
+    rows = [
+        {"path": "med.gov/languages/asthma.html", "title": "Asthma"},
+        {"path": "med.gov/asthma.html", "title": "Asthma"},
+    ]
+
+    out = handler._collect_tell_me_about_strong_matches(
+        "asthma", str(tmp_path / "a.zim"), rows, "Asthma"
+    )
+
+    paths = [r["path"] for r in out]
+    assert paths and paths[-1] == "med.gov/languages/asthma.html", paths
+    assert "med.gov/asthma.html" in paths

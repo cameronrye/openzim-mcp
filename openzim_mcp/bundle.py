@@ -84,7 +84,7 @@ _BUNDLE_KEY_PREFIX = "bundle:v2h"
 #
 # Bump this in any release that changes what the server renders from an
 # unchanged archive; tests/test_v3_cache_render_epoch.py fails until you do.
-_RENDER_EPOCH = "r2"
+_RENDER_EPOCH = "r3"
 
 
 def archive_stat_token(validated_path: Any) -> str:

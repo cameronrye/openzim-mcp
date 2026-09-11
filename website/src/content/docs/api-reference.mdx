@@ -375,6 +375,8 @@ zim_search(
 
 **Returns:** mode-shaped response — `SearchResponse` / `SearchAllResponse` / `SearchWithFiltersResponse` / `FindEntryResponse` / `SearchSuggestionsResponse` — or `ToolErrorPayload` on validation failure. Every `next_cursor` in these responses is nulled; page with `offset`.
 
+`mode="title"` returns rows in **presentation order, not score order**: scraper output the archive files as its own entry — per-language translation hubs (`/languages/…`), image-caption stubs (`/ency/imagepages/…`) and subtitle sidecars (`.srt`) — is sunk below real articles even when the archive scores it higher. Nothing is dropped, so `total` and the paging arithmetic are unaffected. Read `results` order as authoritative and treat `score` as a match-quality signal rather than a rank; re-sorting rows by `score` undoes the demote and puts the scraper output back on top.
+
 Single-archive `fulltext` responses carry a top-level **`zim_file_path`** naming the archive that answered — including when the server auto-selected it because only one is loaded. Hand it straight to `zim_get`, `zim_get_section`, `zim_links`, `zim_browse` or `zim_metadata`, all of which require the field. (`mode="title"` states the same fact per hit, as `zim_file`; the cross-archive fan-out states it per file.) If you get a `zim_file_path: Field required` rejection anyway, it names the archive for you whenever exactly one is loaded.
 
 ---

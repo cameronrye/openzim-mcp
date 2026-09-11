@@ -216,3 +216,28 @@ def test_the_shipped_iep_sidecar_leads_with_an_article():
     assert rows, "no inbound linkers for a well-linked article"
     # The alphabet index (iep.utm.edu/a/ and friends) must not lead.
     assert len(rows[0]["path"].rstrip("/").rsplit("/", 1)[-1]) > 2, rows[0]
+
+
+@pytest.mark.parametrize(
+    "node_count,expected",
+    [
+        (0, 0),
+        (49, 0),  # below the exemption floor
+        (50, 25),
+        (100, 50),
+        (101, 51),  # ODD: "at least half" must round UP, not truncate
+        (999, 500),
+        (None, 0),
+        ("not-a-number", 0),
+        ("-5", 0),
+    ],
+)
+def test_the_furniture_threshold_is_a_true_ceiling(node_count, expected):
+    """The docstring says "at least half", and the first implementation did
+    not do that: ``-(-int(x) // 1)`` truncates inside ``int()`` before the
+    ceiling idiom runs, so it computed the FLOOR and was off by one on every
+    odd node count. Nothing in the file pinned the arithmetic, so it passed.
+    """
+    from openzim_mcp.linkgraph.reader import _furniture_threshold
+
+    assert _furniture_threshold(node_count) == expected

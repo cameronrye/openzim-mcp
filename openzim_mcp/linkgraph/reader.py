@@ -7,6 +7,7 @@ strict staleness decision). ``query_inbound`` is a ranked, paginated lookup.
 
 from __future__ import annotations
 
+import math
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
@@ -52,7 +53,10 @@ def _furniture_threshold(node_count: Optional[str]) -> int:
         return 0
     if total < _MIN_ARCHIVE_FOR_FURNITURE:
         return 0
-    return -(-int(total * _FURNITURE_DEGREE_FRACTION) // 1)
+    # A true ceiling. ``-(-int(x) // 1)`` was written here and is a no-op:
+    # ``int()`` truncates first, so it computed the FLOOR and the docstring's
+    # "at least half" was off by one on every odd node count.
+    return math.ceil(total * _FURNITURE_DEGREE_FRACTION)
 
 
 class LinkGraphReader:

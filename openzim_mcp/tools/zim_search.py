@@ -42,6 +42,7 @@ from typing import TYPE_CHECKING, Any, Literal, Optional
 
 from ..constants import MAX_QUERY_LENGTH, MAX_SEARCH_RESULT_LIMIT
 from ..responses import tool_error
+from ..zim.search import demote_crawl_artefacts
 from ._common import (
     READ_ONLY_ANNOTATIONS,
     enforce_rate_limit,
@@ -760,7 +761,32 @@ async def _handle_title_mode(
         zim_file_path=resolved_path,
         topic=preprocessed,
     )
-    return _merge_promotion_into_title_results(raw, promoted, effective_limit)
+    merged = _merge_promotion_into_title_results(raw, promoted, effective_limit)
+    # v3.3.1 field report (fid 71), at the RESPONSE EDGE and nowhere earlier.
+    # Scraper output — translation hubs, image-caption stubs, subtitle
+    # sidecars — outranks real articles on 39 of ~55 measured title pages
+    # (``title 'hepatitis b'`` puts ``languages/hepatitisb.html`` above a real
+    # ency article). Demoting it inside ``find_entry_by_title_data`` instead
+    # would reorder the list the promotion probes above read as
+    # score-descending, which blanks the canonical probe and hoists a weaker
+    # fallback to rank 1 at a fabricated 1.0. Promotion has run by here, so
+    # reordering is safe.
+    return _demote_artefacts_in_response(merged)
+
+
+def _demote_artefacts_in_response(payload: Any) -> Any:
+    """Sink crawl artefacts in a title-mode response, leaving ``_meta`` sized.
+
+    Reorders ``results`` only: no row is added or dropped, so ``total``,
+    ``done`` and the page arithmetic are untouched and ``_meta`` stays
+    accurate without a re-measure.
+    """
+    if not isinstance(payload, dict) or payload.get("error"):
+        return payload
+    rows = payload.get("results")
+    if isinstance(rows, list):
+        payload["results"] = demote_crawl_artefacts(rows)
+    return payload
 
 
 # ``_meta`` keys that describe the SOURCE rather than the rendered page, so

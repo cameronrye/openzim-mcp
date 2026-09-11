@@ -2897,8 +2897,18 @@ def test_the_reranker_page_does_not_claim_an_unmeasured_improvement() -> None:
         "search-reranking.mdx no longer discloses that the improvement is " "unmeasured"
     )
 
-    banned = ("changes retrieval quality", "more relevant top-K")
-    present = [c for c in banned if c.lower() in prose.lower()]
+    # Ban the CLAIM, not two exact spellings of it. The first version listed
+    # the two strings this commit happened to remove, so any reword — or the
+    # original sentence split across a line break — walked straight past it.
+    # Whitespace is collapsed for the same reason.
+    collapsed = " ".join(prose.lower().split())
+    banned = [
+        r"\bchanges? retrieval quality\b",
+        r"\bmore relevant\b",
+        r"\bimproves? (?:the )?(?:results|ranking|relevance)\b",
+        r"\bbetter (?:results|ranking|relevance)\b",
+    ]
+    present = [pat for pat in banned if re.search(pat, collapsed)]
     assert not present, (
         f"search-reranking.mdx asserts an improvement the evidence does not "
         f"support: {present}"
