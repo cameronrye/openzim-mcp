@@ -725,7 +725,9 @@ async def _handle_title_mode(
             "Z3/Z4/OPP-1 promotion is per-archive. Pin a specific "
             "`zim_file_path` to enable promotion."
         )
-        return raw
+        # The fan-out is a title surface too: without this, the same lookup
+        # sank ``imagepages/`` stubs when pinned and led with them here.
+        return _demote_artefacts_in_response(raw)
 
     resolved_path = _resolve_path(server, zim_file_path)
     if resolved_path is None:
@@ -770,7 +772,7 @@ async def _handle_title_mode(
     # would reorder the list the promotion probes above read as
     # score-descending, which blanks the canonical probe and hoists a weaker
     # fallback to rank 1 at a fabricated 1.0. Promotion has run by here, so
-    # reordering is safe.
+    # reordering this response is safe — but only as a copy, see below.
     return _demote_artefacts_in_response(merged)
 
 
@@ -780,13 +782,23 @@ def _demote_artefacts_in_response(payload: Any) -> Any:
     Reorders ``results`` only: no row is added or dropped, so ``total``,
     ``done`` and the page arithmetic are untouched and ``_meta`` stays
     accurate without a re-measure.
+
+    COPY-ON-WRITE, like ``_merge_promotion_into_title_results``. When
+    promotion passes ``raw`` through unchanged, ``payload`` IS the cached
+    ``find_title:v2`` page, and the next call's promotion probes read that
+    page as score-descending. Reordering it in place brought back the very
+    defect the edge placement avoids, one call late: a second identical
+    ``title 'swollen glands'`` led with ``hormones.html`` at a fabricated 1.0.
     """
     if not isinstance(payload, dict) or payload.get("error"):
         return payload
     rows = payload.get("results")
-    if isinstance(rows, list):
-        payload["results"] = demote_crawl_artefacts(rows)
-    return payload
+    if not isinstance(rows, list):
+        return payload
+    demoted = demote_crawl_artefacts(rows)
+    if demoted is rows:
+        return payload
+    return {**payload, "results": demoted}
 
 
 # ``_meta`` keys that describe the SOURCE rather than the rendered page, so
@@ -890,13 +902,13 @@ def _merge_promotion_into_title_results(
         m for m in matches if (m.get("entry_path") or m.get("path")) != promoted_path
     ]
     promoted_row = dict(promoted)
-    # Score 1.0 keeps the emitted rank consistent with the ranking signal:
-    # promotion only accepts canonical title-index hits, and a hoisted row
-    # scored below the rows it displaced would be re-sorted back down by any
-    # caller ordering on ``score``.
+    # Score 1.0 marks a canonical title-index hit, the only kind promotion
+    # accepts. It is a label, not what keeps the row first: title rows go out
+    # in presentation order (crawl artefacts are sunk at the response edge),
+    # and the API reference tells callers not to re-sort them on ``score``.
     promoted_row.setdefault("score", 1.0)
     results = [promoted_row, *hoisted][:limit]
-    # COPY-ON-WRITE: ``raw`` is the cached ``find_title:v1`` object (H15 caches
+    # COPY-ON-WRITE: ``raw`` is the cached ``find_title:v2`` object (H15 caches
     # single-archive title lookups, returned by reference) and is shared with
     # the internal promotion probes that read the same key. Mutating it in place
     # would poison that cache (the H12 defect class), so build a new dict.

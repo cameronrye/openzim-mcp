@@ -4,30 +4,32 @@ v3.3.1 field report, fid 71 — the report's own "bigger opportunity
 underneath": both reranker configurations put a relevant article at #1 only
 about 64% of the time and carry off-topic entries in every top-5.
 
-Measured on the shipped archives at v3.3.2, with the rate limiter disabled
-so the sweep is not reading its own throttling as clean pages:
-
-    MedlinePlus, 20 topic queries, top-5
-      fulltext  101 rows  12 artefacts  11.9%
-      title      94 rows  23 artefacts  24.5%
-      suggest    94 rows  22 artefacts  23.4%
-
 The artefacts are scraper output, not articles: ``/imagepages/`` caption
-stubs, ``/languages/`` translation hubs, ``.srt`` caption files, and
-``/page/N/`` index pagination. ``title 'migraine headache'`` returns an
-image-caption stub as its single hit.
+stubs, ``/languages/`` translation hubs and ``.srt`` caption files.
+``title 'migraine headache'`` returns an image-caption stub as its single
+hit. Measured on the shipped MedlinePlus archive, 40 topic queries at
+``limit=5``, rate limiter and cache off, v3.3.2 against this change:
+
+                   rows  artefacts  artefact at #1  artefact above an article
+    title           184    26.1%       4  ->  1           30  ->  0 pages
+    suggest         184    26.6%       6  ->  1           29  ->  0 pages
+    chooser          82    12.2%       7  ->  1            7  ->  0 lists
+
+The artefact share does not move, and must not: the demote reorders the page
+it is given and never evicts from it. The one remaining #1 is a page whose
+every row is an artefact.
 
 **``/category/`` is deliberately NOT an artefact.** On the IEP archive
 those pages are the encyclopedia's own topic index and the correct #1, at
 score 1.0, for "metaphysics", "philosophy of science", "feminist
 philosophy" and "continental philosophy" — demoting them would turn four
-right answers into wrong ones. The shapes are matched independently, so
-``category/m-and-e/metaphysics/page/2/`` is still demoted: it is index
-pagination that happens to live under a category.
+right answers into wrong ones. Neither is ``/page/N/``: it was in the set and
+was removed on measurement (see ``test_index_pagination_is_not_an_artefact``).
 
-Three surfaces need it, not the two the finding names — suggest mode is
-served by ``get_search_suggestions_data``, a different function from
-``_assemble_find_response``, and measured worst of the three.
+Three surfaces need it, not the two the finding names: single- and
+cross-archive title mode at the response edge, suggest mode (served by
+``get_search_suggestions_data``, a different function from
+``_assemble_find_response``), and the ``zim_query`` chooser.
 
 The demote is STABLE and drops nothing: relative order within each group is
 the archive's own ranking, and every row the caller would have had is still
@@ -39,13 +41,18 @@ mutation pass proved by deleting the guard and changing no behaviour.
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from libzim.writer import Creator
 
+from openzim_mcp.async_operations import AsyncZimOperations
 from openzim_mcp.config import CacheConfig, OpenZimMcpConfig, RateLimitConfig
 from openzim_mcp.server import OpenZimMcpServer
+from openzim_mcp.title_promotion import find_title_match
 from openzim_mcp.zim.search import demote_crawl_artefacts, is_crawl_artefact
+from tests.conftest_v2_fixtures import _HtmlItem
 
 # ---------------------------------------------------------------------------
 # What counts as an artefact
@@ -58,6 +65,10 @@ from openzim_mcp.zim.search import demote_crawl_artefacts, is_crawl_artefact
         "medlineplus.gov/ency/imagepages/18146.htm",
         "medlineplus.gov/languages/hepatitisb.html",
         "medlineplus.gov/media/captions/tutorial.srt",
+        # Matched regardless of case; nothing pinned the flag before.
+        "medlineplus.gov/ency/ImagePages/1.htm",
+        "a.org/LANGUAGES/x.html",
+        "a.org/captions/x.SRT",
     ],
 )
 def test_scraper_output_is_an_artefact(path: str) -> None:
@@ -81,6 +92,8 @@ def test_scraper_output_is_an_artefact(path: str) -> None:
         "medlineplus.gov/languages-of-health.html",
         "A/Page_three",
         "medlineplus.gov/srt-therapy.html",
+        # ``.srt`` counts only at the END of the path.
+        "a.org/guide.srt.html",
         "",
     ],
 )
@@ -289,6 +302,49 @@ def test_the_title_response_edge_is_wired(tmp_path, monkeypatch):
     assert out["total"] == 2 and out["done"] is True
 
 
+def test_the_cross_archive_title_branch_is_wired(tmp_path):
+    """``cross_file=True`` returns from its own branch, ahead of the pinned
+    path's demote, so the same lookup used to sink ``imagepages/`` stubs when
+    pinned and lead with them here — while the API reference promised title
+    mode sinks them."""
+    from openzim_mcp.tools import zim_search as tool
+
+    server = _server(tmp_path)
+
+    class _Ops:
+        async def find_entry_by_title_data(self, path, q, *, cross_file, limit):
+            assert cross_file is True
+            return {
+                "results": [
+                    {"path": "med.gov/languages/asthma.html", "score": 1.0},
+                    {"path": "med.gov/asthma.html", "score": 0.9},
+                ],
+                "total": 2,
+                "done": True,
+                "files_searched": 1,
+                "_meta": {"chars": 1},
+            }
+
+    out = asyncio.run(
+        tool._handle_title_mode(
+            ops=_Ops(),
+            server=server,
+            query="asthma",
+            zim_file_path=None,
+            cross_file=True,
+            limit=5,
+            offset=0,
+            cursor=None,
+        )
+    )
+
+    assert [r["path"] for r in out["results"]] == [
+        "med.gov/asthma.html",
+        "med.gov/languages/asthma.html",
+    ]
+    assert out["_meta"]["promotion_applied"] is False
+
+
 def test_the_title_data_layer_is_deliberately_NOT_wired(tmp_path, monkeypatch):
     """The other half of the contract, and the regression this replaced.
 
@@ -325,6 +381,116 @@ class _StubOps:
     config = SimpleNamespace(search=SimpleNamespace(structured_suggestions_limit=3))
 
 
+# ---------------------------------------------------------------------------
+# Against a real archive, with the cache ON
+# ---------------------------------------------------------------------------
+#
+# Every wiring test above runs with the cache off and calls once, so none of
+# them could see the title demote reorder a CACHED page in place — which it
+# did. ``_merge_promotion_into_title_results`` passes the cached
+# ``find_title:v2`` page straight through when promotion changes nothing, and
+# the edge then rewrote it; the next call's promotion probe read the demoted
+# order, and on MedlinePlus a second ``title 'swollen glands'`` led with
+# ``hormones.html`` at a fabricated 1.0.
+
+_HOST = "medlineplus.gov"
+# The artefact is the exact-title hit, so the title index ranks it first and
+# the promotion probe resolves to it.
+_ASTHMA_PAGES = [
+    (f"{_HOST}/languages/asthma.html", "Asthma"),
+    (f"{_HOST}/asthmainchildren.html", "Asthma in Children"),
+]
+
+
+def _medlineplus_like_zim(tmp_path: Path) -> Path:
+    out = tmp_path / "medlineplus_like.zim"
+    with Creator(out).config_indexing(True, "eng") as creator:
+        for path, title in _ASTHMA_PAGES:
+            creator.add_item(
+                _HtmlItem(
+                    path, title, f"<html><body><h1>{title}</h1><p>x</p></body></html>"
+                )
+            )
+        creator.set_mainpath(_ASTHMA_PAGES[1][0])
+    return out
+
+
+def _cached_server(tmp_path: Path) -> OpenZimMcpServer:
+    return OpenZimMcpServer(
+        OpenZimMcpConfig(
+            allowed_directories=[str(tmp_path)],
+            tool_mode="advanced",
+            cache=CacheConfig(
+                enabled=True,
+                persistence_enabled=False,
+                persistence_path=str(tmp_path / "cache"),
+            ),
+            rate_limit=RateLimitConfig(enabled=False),
+        )
+    )
+
+
+def _title_page(ops, zim: Path, *, limit: int) -> list:
+    page = ops.find_entry_by_title_data(str(zim), "asthma", limit=limit)
+    return [(r["path"], r["score"]) for r in page["results"]]
+
+
+def test_the_title_data_layer_stays_score_descending(tmp_path):
+    """The public function the promotion probes actually call.
+
+    ``test_the_title_data_layer_is_deliberately_NOT_wired`` drives the
+    private ``_assemble_find_response``, so a demote added one function up —
+    inside ``find_entry_by_title_data`` itself — passed every test while
+    bringing the fabricated-promotion defect back on the first call.
+    """
+    zim = _medlineplus_like_zim(tmp_path)
+    ops = _cached_server(tmp_path).zim_operations
+
+    rows = _title_page(ops, zim, limit=5)
+    scores = [score for _path, score in rows]
+
+    assert len(scores) == 2, rows
+    assert scores == sorted(scores, reverse=True), rows
+    match = find_title_match(ops, str(zim), "asthma")
+    assert match is not None and match["path"] == _ASTHMA_PAGES[0][0]
+
+
+def test_the_title_edge_leaves_the_cached_page_alone(tmp_path):
+    """A title call must not reorder the page the NEXT call's probe reads.
+
+    ``limit=3`` is the size the promotion probe asks for, so this call and
+    the probe share one cache key — the configuration in which the defect
+    changed answers. The response is demoted; the cached page is not.
+    """
+    from openzim_mcp.tools import zim_search as tool
+
+    zim = _medlineplus_like_zim(tmp_path)
+    server = _cached_server(tmp_path)
+    ops = server.zim_operations
+    before = _title_page(ops, zim, limit=3)
+
+    out = asyncio.run(
+        tool._handle_title_mode(
+            ops=AsyncZimOperations(ops),
+            server=server,
+            query="asthma",
+            zim_file_path=str(zim),
+            cross_file=False,
+            limit=3,
+            offset=0,
+            cursor=None,
+        )
+    )
+
+    assert [r["path"] for r in out["results"]] == [
+        _ASTHMA_PAGES[1][0],
+        _ASTHMA_PAGES[0][0],
+    ]
+    assert _title_page(ops, zim, limit=3) == before
+    match = find_title_match(ops, str(zim), "asthma")
+    assert match is not None and match["path"] == _ASTHMA_PAGES[0][0]
+
+
 def test_the_suggest_wiring_is_live(tmp_path, monkeypatch):
     """``get_search_suggestions_data`` — a different function from the title
     assembly, which is why the finding that named two surfaces missed it."""
@@ -353,6 +519,34 @@ def test_the_suggest_wiring_is_live(tmp_path, monkeypatch):
         "med.gov/real.html",
         "med.gov/ency/imagepages/1.htm",
     ]
+
+
+def test_the_suggest_demote_survives_a_cache_hit(tmp_path, monkeypatch):
+    """The test above runs cache-off and calls once, so a demote applied only
+    on the cold path — after the cache write — passed it, and every repeat
+    of a query then served the raw order."""
+    from openzim_mcp.zim import search as search_mod
+
+    (tmp_path / "a.zim").write_bytes(b"ZIM\x04" + b"\0" * 100)
+    ops = _cached_server(tmp_path).zim_operations
+    monkeypatch.setattr(
+        search_mod._SearchMixin,
+        "_generate_search_suggestions",
+        lambda self, archive, q, limit: {
+            "partial_query": q,
+            "suggestions": [
+                {"path": "med.gov/ency/imagepages/1.htm", "text": "X"},
+                {"path": "med.gov/real.html", "text": "X"},
+            ],
+            "has_more": False,
+        },
+    )
+    monkeypatch.setattr(search_mod, "_zim_ops_mod", _FakeArchiveModule(), raising=False)
+
+    want = ["med.gov/real.html", "med.gov/ency/imagepages/1.htm"]
+    for _call in range(2):
+        out = ops.get_search_suggestions_data(str(tmp_path / "a.zim"), "x", limit=5)
+        assert [r["path"] for r in out["results"]] == want
 
 
 class _FakeArchiveModule:
@@ -395,3 +589,37 @@ def test_the_chooser_wiring_is_live(tmp_path, monkeypatch):
     paths = [r["path"] for r in out]
     assert paths and paths[-1] == "med.gov/languages/asthma.html", paths
     assert "med.gov/asthma.html" in paths
+
+
+def test_an_artefact_canonical_does_not_lead_the_chooser(tmp_path, monkeypatch):
+    """The title-index canonical is prepended, then the list is demoted — so
+    a canonical that is itself scraper output sinks with the rest.
+
+    Deliberate: that canonical is the field report's own example of a wrong
+    answer, an image-caption stub offered first as "(canonical title
+    match)". Demoting before the prepend instead passed every test.
+    """
+    from openzim_mcp import simple_tools as st
+
+    handler = st.SimpleToolsHandler(_server(tmp_path).zim_operations)
+    monkeypatch.setattr(st, "is_strong_title_match", lambda *_a, **_k: True)
+    monkeypatch.setattr(
+        handler,
+        "_promote_topic_via_title_index",
+        lambda *_a, **_k: {
+            "path": "med.gov/ency/imagepages/1.htm",
+            "title": "Migraine headache",
+        },
+    )
+    rows = [
+        {"path": "med.gov/migraine.html", "title": "Migraine"},
+        {"path": "med.gov/headache.html", "title": "Headache"},
+    ]
+
+    out = handler._collect_tell_me_about_strong_matches(
+        "migraine headache", str(tmp_path / "a.zim"), rows, "Migraine"
+    )
+
+    paths = [r["path"] for r in out]
+    assert paths[0] == "med.gov/migraine.html", paths
+    assert paths[-1] == "med.gov/ency/imagepages/1.htm", paths
