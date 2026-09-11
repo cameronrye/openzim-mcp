@@ -1706,7 +1706,9 @@ class _StructureMixin:
     ) -> "RelatedArticlesResponse":
         """Return the inbound linkers for ``entry_path`` from the sidecar.
 
-        Ranked by each linker's own inbound-degree. Raises
+        Ranked by each linker's own inbound-degree, except that site
+        furniture — a linker whose degree is at least half the sidecar's
+        ``node_count``, on sidecars of 50+ nodes — sinks to the end. Raises
         ``LinkGraphUnavailable`` when the sidecar is absent or stale (the
         tool layer renders that as a structured error). Phase-B five-key
         contract; paginated.

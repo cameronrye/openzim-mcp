@@ -13,6 +13,7 @@ reference at import time.
 """
 
 import logging
+import re
 import unicodedata
 import urllib.parse
 from dataclasses import dataclass
@@ -343,6 +344,70 @@ def _paging_span(*, offset: int, shown: int, next_offset: int, total_text: str) 
         f"(scanned through {next_offset}; {collapsed} duplicate path{plural} "
         f"collapsed)"
     )
+
+
+# Scraper output that a crawl files as an entry but a reader would never ask
+# for: image-caption stubs, translation hubs and subtitle sidecars. v3.3.1
+# field report (fid 71). Measured on the shipped MedlinePlus archive, 40 topic
+# queries at limit=5, rate limiter and cache off so the sweep does not read its
+# own throttling as clean pages: 26.1% of title-mode and 26.6% of suggest-mode
+# rows are one of these. Fulltext carries them too (12.0%) and is not demoted.
+#
+# ``/category/`` is deliberately ABSENT. On the IEP archive those pages are the
+# encyclopedia's own topic index and the correct #1, at score 1.0, for
+# "metaphysics", "philosophy of science", "feminist philosophy" and
+# "continental philosophy" — the demote the finding proposed would have turned
+# four right answers into wrong ones.
+_CRAWL_ARTEFACT_RE = re.compile(
+    r"(?:/imagepages/)"  # ency image-caption stubs
+    r"|(?:/languages/)"  # per-language translation hubs
+    r"|(?:\.srt$)",  # subtitle sidecars filed as entries
+    re.IGNORECASE,
+)
+# ``/page/N/`` was in this set and has been REMOVED. It matched nothing on
+# MedlinePlus and exactly two entries on the IEP archive, and both were false
+# positives: ``category/m-and-e/metaphysics/page/2/`` is the continuation of
+# the very topic index ``/category/`` is kept for — page 1 lists 50 articles,
+# page 2 lists 19 more with zero overlap, and both score 1.0. "Index
+# pagination is scraper output wherever it lives" was a reasonable-sounding
+# rule that, measured, only ever threw away real content.
+
+
+def is_crawl_artefact(path: str) -> bool:
+    """Whether ``path`` is scraper output rather than an article.
+
+    Shape only: no archive access, so this is safe to call inside a ranking
+    loop. See ``_CRAWL_ARTEFACT_RE`` for what is deliberately excluded.
+    """
+    return bool(path) and bool(_CRAWL_ARTEFACT_RE.search(path))
+
+
+def demote_crawl_artefacts(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Sink crawl artefacts below real articles, stably, dropping nothing.
+
+    A DEMOTE, not a filter: every row the caller would have had is still
+    there, and relative order inside each group is the archive's own ranking,
+    which this has no opinion about.
+
+    Call it at a RESPONSE EDGE only. Applying it to a list that something
+    downstream reads as score-descending breaks that consumer: the title
+    surface's promotion probes read ``results[0]`` under a score gate, and
+    demoting before them blanks the probe and lets a weaker fallback pass be
+    hoisted to rank 1 at a fabricated score of 1.0.
+
+    A page whose rows are ALL artefacts therefore comes back in its original
+    order — not by a special case, but because partitioning a list and
+    concatenating the halves in order reproduces it. An explicit
+    "all artefacts" guard here would be unreachable: it was written, and the
+    mutation that deleted it changed no behaviour at all.
+    """
+    if not rows:
+        return rows
+    artefacts = [r for r in rows if is_crawl_artefact(str(r.get("path", "")))]
+    if not artefacts:
+        return rows
+    keep = [r for r in rows if not is_crawl_artefact(str(r.get("path", "")))]
+    return keep + artefacts
 
 
 def _snippet_query(query: str) -> Optional[str]:
@@ -2677,7 +2742,14 @@ class _SearchMixin:
             # contract here: rename ``suggestions`` → ``results`` at the
             # top level (the Phase A ``_meta.suggestions[]`` recovery
             # candidates are unrelated and live inside ``_meta``).
-            suggestions = raw.get("suggestions", [])
+            # v3.3.1 field report (fid 71): suggest mode is served from here,
+            # a different function from ``_assemble_find_response``, which is
+            # why the finding — naming only two surfaces — missed it. Measured
+            # 26.6% of top-5 rows scraper output on the shipped MedlinePlus
+            # archive, against title's 26.1%: comparable. Note the
+            # pool is already capped at ``limit`` by the generator above, so
+            # this reorders the page it is given and cannot evict from it.
+            suggestions = demote_crawl_artefacts(raw.get("suggestions", []))
             actual_count = len(suggestions)
 
             # The suggestion pool is capped at ``limit``; we don't enumerate
@@ -3751,6 +3823,16 @@ class _SearchMixin:
                 continue
             seen.add(key)
             deduped.append(row)
+        # v3.3.1 field report (fid 71) is NOT applied here, deliberately.
+        # This list is score-descending, and ``title_promotion.find_title_match``
+        # reads ``results[0]`` and gates on ``score >= min_score`` — so
+        # demoting here silently blanks the canonical promotion probe, a later
+        # fallback pass wins instead, and its hit is hoisted to rank 1 stamped
+        # ``score: 1.0``. Measured: ``title 'Swollen glands'`` led with
+        # ``medlineplus.gov/hormones.html`` at 1.0, an article this query does
+        # not otherwise return at all, on a medical archive. The demote runs at
+        # the response edge instead (``tools/zim_search._handle_title_mode``),
+        # after promotion has read the ordering it depends on.
         aggregate_results = deduped
 
         # Build _meta.suggestions[] from archive-verified typo variants.

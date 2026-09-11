@@ -42,6 +42,7 @@ from typing import TYPE_CHECKING, Any, Literal, Optional
 
 from ..constants import MAX_QUERY_LENGTH, MAX_SEARCH_RESULT_LIMIT
 from ..responses import tool_error
+from ..zim.search import demote_crawl_artefacts
 from ._common import (
     READ_ONLY_ANNOTATIONS,
     enforce_rate_limit,
@@ -468,7 +469,13 @@ def _name_the_archive(payload: Any, resolved_path: str) -> Any:
     if isinstance(payload, dict) and not payload.get("error"):
         from ..meta import remeasure
 
-        payload["zim_file_path"] = resolved_path
+        # COPY-ON-WRITE, ``_meta`` included. The caller's copy is shallow, so
+        # ``_meta`` here was still the dict inside the cached search page, and
+        # re-measuring it in place rewrote the cache's size fields to describe
+        # a body the cache does not hold.
+        payload = {**payload, "zim_file_path": resolved_path}
+        if isinstance(payload.get("_meta"), dict):
+            payload["_meta"] = dict(payload["_meta"])
         # The data layer measured the payload before this field existed, so
         # ``_meta.chars`` would under-report the body by exactly the path it
         # now carries. Same defect as the splice's stale envelope, and the
@@ -724,7 +731,9 @@ async def _handle_title_mode(
             "Z3/Z4/OPP-1 promotion is per-archive. Pin a specific "
             "`zim_file_path` to enable promotion."
         )
-        return raw
+        # The fan-out is a title surface too: without this, the same lookup
+        # sank ``imagepages/`` stubs when pinned and led with them here.
+        return _demote_artefacts_in_response(raw)
 
     resolved_path = _resolve_path(server, zim_file_path)
     if resolved_path is None:
@@ -760,7 +769,42 @@ async def _handle_title_mode(
         zim_file_path=resolved_path,
         topic=preprocessed,
     )
-    return _merge_promotion_into_title_results(raw, promoted, effective_limit)
+    merged = _merge_promotion_into_title_results(raw, promoted, effective_limit)
+    # v3.3.1 field report (fid 71), at the RESPONSE EDGE and nowhere earlier.
+    # Scraper output — translation hubs, image-caption stubs, subtitle
+    # sidecars — outranks a real article on 30 of 40 measured title pages
+    # (``title 'hepatitis b'`` puts ``languages/hepatitisb.html`` above a real
+    # ency article). Demoting it inside ``find_entry_by_title_data`` instead
+    # would reorder the list the promotion probes above read as
+    # score-descending, which blanks the canonical probe and hoists a weaker
+    # fallback to rank 1 at a fabricated 1.0. Promotion has run by here, so
+    # reordering this response is safe — but only as a copy, see below.
+    return _demote_artefacts_in_response(merged)
+
+
+def _demote_artefacts_in_response(payload: Any) -> Any:
+    """Sink crawl artefacts in a title-mode response, leaving ``_meta`` sized.
+
+    Reorders ``results`` only: no row is added or dropped, so ``total``,
+    ``done`` and the page arithmetic are untouched and ``_meta`` stays
+    accurate without a re-measure.
+
+    COPY-ON-WRITE, like ``_merge_promotion_into_title_results``. When
+    promotion passes ``raw`` through unchanged, ``payload`` IS the cached
+    ``find_title:v2`` page, and the next call's promotion probes read that
+    page as score-descending. Reordering it in place brought back the very
+    defect the edge placement avoids, one call late: a second identical
+    ``title 'swollen glands'`` led with ``hormones.html`` at a fabricated 1.0.
+    """
+    if not isinstance(payload, dict) or payload.get("error"):
+        return payload
+    rows = payload.get("results")
+    if not isinstance(rows, list):
+        return payload
+    demoted = demote_crawl_artefacts(rows)
+    if demoted is rows:
+        return payload
+    return {**payload, "results": demoted}
 
 
 # ``_meta`` keys that describe the SOURCE rather than the rendered page, so
@@ -864,13 +908,13 @@ def _merge_promotion_into_title_results(
         m for m in matches if (m.get("entry_path") or m.get("path")) != promoted_path
     ]
     promoted_row = dict(promoted)
-    # Score 1.0 keeps the emitted rank consistent with the ranking signal:
-    # promotion only accepts canonical title-index hits, and a hoisted row
-    # scored below the rows it displaced would be re-sorted back down by any
-    # caller ordering on ``score``.
+    # Score 1.0 labels the row promotion chose as the topic's canonical match.
+    # It is a label, not what keeps the row first: title rows go out
+    # in presentation order (crawl artefacts are sunk at the response edge),
+    # and the API reference tells callers not to re-sort them on ``score``.
     promoted_row.setdefault("score", 1.0)
     results = [promoted_row, *hoisted][:limit]
-    # COPY-ON-WRITE: ``raw`` is the cached ``find_title:v1`` object (H15 caches
+    # COPY-ON-WRITE: ``raw`` is the cached ``find_title:v2`` object (H15 caches
     # single-archive title lookups, returned by reference) and is shared with
     # the internal promotion probes that read the same key. Mutating it in place
     # would poison that cache (the H12 defect class), so build a new dict.

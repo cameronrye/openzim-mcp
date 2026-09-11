@@ -82,9 +82,13 @@ _BUNDLE_KEY_PREFIX = "bundle:v2h"
 # content-derived cache at once, because embedding the token is already the
 # contract for all of them.
 #
-# Bump this in any release that changes what the server renders from an
-# unchanged archive; tests/test_v3_cache_render_epoch.py fails until you do.
-_RENDER_EPOCH = "r2"
+# Bump this in any release that changes what the server renders OR RANKS into
+# a cache from an unchanged archive. tests/test_v3_cache_render_epoch.py pins
+# the epoch to fingerprints of the rendering, of the crawl-artefact demote's
+# code, and of how that demote orders a fixture, so it fails when any of them
+# changes without a bump, or when a bump is reverted. It cannot see a cached
+# ranking that comes from anywhere else: check that by hand.
+_RENDER_EPOCH = "r3"
 
 
 def archive_stat_token(validated_path: Any) -> str:

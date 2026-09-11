@@ -29,6 +29,7 @@ envelope path) against a real libzim archive on disk.
 
 from __future__ import annotations
 
+import copy
 import shutil
 from pathlib import Path
 from typing import Any, Optional
@@ -41,7 +42,9 @@ from openzim_mcp.server import OpenZimMcpServer
 _MINI = "wikipedia_en_climate_change_mini_2024-06.zim"
 
 
-def _one_archive_server(tmp_path: Path, corpus: Optional[Path]) -> OpenZimMcpServer:
+def _one_archive_server(
+    tmp_path: Path, corpus: Optional[Path], *, cache: bool = False
+) -> OpenZimMcpServer:
     if corpus is None:
         pytest.skip("ZIM_TEST_DATA_DIR not set")
     source = corpus / "withns" / _MINI
@@ -54,7 +57,15 @@ def _one_archive_server(tmp_path: Path, corpus: Optional[Path]) -> OpenZimMcpSer
         OpenZimMcpConfig(
             allowed_directories=[str(solo)],
             tool_mode="advanced",
-            cache=CacheConfig(enabled=False),
+            cache=(
+                CacheConfig(
+                    enabled=True,
+                    persistence_enabled=False,
+                    persistence_path=str(tmp_path / "cache"),
+                )
+                if cache
+                else CacheConfig(enabled=False)
+            ),
         )
     )
 
@@ -71,6 +82,27 @@ def _handler(server: OpenZimMcpServer, name: str) -> Any:
 # ---------------------------------------------------------------------------
 # The fulltext response names the archive it searched
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_naming_the_archive_leaves_the_cached_page_alone(
+    tmp_path, zim_test_data_dir
+):
+    """The stamp re-measures ``_meta`` on the page it returns, and
+    ``_strip_next_cursor`` copies only the top level — so that ``_meta`` was
+    the dict inside the cached search page. Every fulltext call rewrote the
+    cache's size fields to describe a body the cache does not hold, and a
+    cross-archive call for the same query then reported a different size
+    than a fresh server did. The same defect class as the title demote that
+    reordered its cached page, one call site over."""
+    server = _one_archive_server(tmp_path, zim_test_data_dir, cache=True)
+    archive = str(tmp_path / "solo" / _MINI)
+    ops = server.zim_operations
+    cached = copy.deepcopy(ops.search_zim_file_data(archive, "carbon", 5, 0))
+
+    await _handler(server, "zim_search")(query="carbon", limit=5)
+
+    assert ops.search_zim_file_data(archive, "carbon", 5, 0) == cached
 
 
 @pytest.mark.asyncio

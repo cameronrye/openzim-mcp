@@ -22,6 +22,7 @@ without bumping the epoch.
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 from contextlib import suppress
@@ -204,12 +205,15 @@ _RENDER_FIXTURE_HTML = """
 </main></body></html>
 """
 
-# sha256 over the rendering these caches hold. If this assertion fails, the
-# server renders something different from what a cache written by the current
-# epoch contains: bump ``_RENDER_EPOCH`` in openzim_mcp/bundle.py, then
-# replace this digest with the one the failure prints.
+# (epoch, sha256) over the rendering these caches hold. If this assertion
+# fails, the server renders something different from what a cache written by
+# the current epoch contains: bump ``_RENDER_EPOCH`` in openzim_mcp/bundle.py,
+# then re-pin BOTH pairs in this file with the new epoch and the printed
+# digest. The epoch is part of the pin so that reverting a bump fails too —
+# pinning the digest alone let ``r3`` go back to ``r2`` with every suite green.
 _PINNED_RENDER_FINGERPRINT = (
-    "d62d668001dd2a7ca972108f82ff6e49d7f2b2d5bebeb40af0890a607ba89c18"
+    "r3",
+    "d62d668001dd2a7ca972108f82ff6e49d7f2b2d5bebeb40af0890a607ba89c18",
 )
 
 
@@ -245,10 +249,107 @@ def test_render_fingerprint_is_pinned_to_the_current_epoch(
     content_processor: ContentProcessor,
 ) -> None:
     """A rendering change must not land without an epoch bump."""
-    observed = _render_fingerprint(content_processor)
+    observed = (_RENDER_EPOCH, _render_fingerprint(content_processor))
 
     assert observed == _PINNED_RENDER_FINGERPRINT, (
-        f"what the bundle/entry/snippet caches hold changed (fingerprint "
+        f"what the bundle/entry/snippet caches hold, or the epoch, changed "
+        f"(observed {observed}). Bump _RENDER_EPOCH in openzim_mcp/bundle.py "
+        f"so an upgrade invalidates persisted values, then re-pin both pairs."
+    )
+
+
+# The epoch also guards what a RANKING cache holds. ``suggestions_data``
+# stores its page after the fid 71 crawl-artefact demote, under a key whose
+# only build-sensitive part is the epoch, so a snapshot persisted by a build
+# that ranked differently re-serves that build's order until its TTL — which
+# is what reverting this release's ``r2`` -> ``r3`` bump did, with every
+# suite green. Every shape the demote treats specially is in the fixture,
+# including the two it deliberately leaves alone.
+_RANKING_FIXTURE_PATHS = (
+    "a/languages/x.html",
+    "a/real.html",
+    "a/ency/imagepages/1.htm",
+    "a/captions/x.srt",
+    "a/b.html",
+    "a/category/c/",
+    "a/category/c/page/2/",
+)
+_PINNED_RANKING_FINGERPRINT = (
+    "r3",
+    "5d5745359f1eaa811b415ce912d61851e74d0fcc475704852100369c371896f4",
+)
+
+
+def _ranking_fingerprint() -> str:
+    """Digest the order ``demote_crawl_artefacts`` gives the fixture."""
+    from openzim_mcp.zim.search import demote_crawl_artefacts
+
+    rows = [{"path": p} for p in _RANKING_FIXTURE_PATHS]
+    ordered = [r["path"] for r in demote_crawl_artefacts(rows)]
+    return hashlib.sha256(json.dumps(ordered).encode("utf-8")).hexdigest()
+
+
+def test_ranking_fingerprint_is_pinned_to_the_current_epoch() -> None:
+    """A change to the cached suggest ranking must not land without a bump."""
+    observed = (_RENDER_EPOCH, _ranking_fingerprint())
+
+    assert observed == _PINNED_RANKING_FINGERPRINT, (
+        f"what the suggestions cache holds, or the epoch, changed (observed "
         f"{observed}). Bump _RENDER_EPOCH in openzim_mcp/bundle.py so an "
-        f"upgrade invalidates persisted values, then pin the new digest here."
+        f"upgrade invalidates persisted values, then re-pin both pairs."
+    )
+
+
+# The fixture above only sees a change that moves one of its seven paths: a
+# new artefact shape, a dropped regex flag or a new rule inside the demote all
+# passed it, and a persisted snapshot then served the old order. So the CODE
+# the suggestions cache's order comes from is pinned as well — read through
+# ``ast``, so comments and docstrings can change freely. If this fails and the
+# cached ordering provably does not change, re-pin it with the same epoch;
+# otherwise bump the epoch.
+_RANKING_CODE_NAMES = (
+    "_CRAWL_ARTEFACT_RE",
+    "is_crawl_artefact",
+    "demote_crawl_artefacts",
+)
+_PINNED_RANKING_CODE = (
+    "r3",
+    "d8cdb6b474b72f0f6fe73971a01d483540d48b9da34d4014ee13f5b2e8e0544b",
+)
+
+
+def _ranking_code_fingerprint() -> str:
+    """Digest the demote's source with docstrings stripped and comments gone."""
+    source = (
+        Path(__file__).resolve().parents[1] / "openzim_mcp" / "zim" / "search.py"
+    ).read_text(encoding="utf-8")
+    parts: dict[str, str] = {}
+    for node in ast.parse(source).body:
+        if isinstance(node, ast.FunctionDef) and node.name in _RANKING_CODE_NAMES:
+            first = node.body[0] if node.body else None
+            if (
+                isinstance(first, ast.Expr)
+                and isinstance(first.value, ast.Constant)
+                and isinstance(first.value.value, str)
+            ):
+                node.body = node.body[1:]
+            parts[node.name] = ast.unparse(node)
+        elif isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id in _RANKING_CODE_NAMES:
+                    parts[target.id] = ast.unparse(node)
+    assert set(parts) == set(_RANKING_CODE_NAMES), sorted(parts)
+    blob = "\x00".join(parts[name] for name in _RANKING_CODE_NAMES)
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()
+
+
+def test_ranking_code_is_pinned_to_the_current_epoch() -> None:
+    """A change to the demote's code must not land without a decision."""
+    observed = (_RENDER_EPOCH, _ranking_code_fingerprint())
+
+    assert observed == _PINNED_RANKING_CODE, (
+        f"the crawl-artefact demote's code, or the epoch, changed (observed "
+        f"{observed}). If what the suggestions cache holds changes, bump "
+        f"_RENDER_EPOCH in openzim_mcp/bundle.py and re-pin every pair here; "
+        f"if it provably does not, re-pin this one with the same epoch."
     )
