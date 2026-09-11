@@ -26,6 +26,13 @@ auto-skip otherwise, so you don't need to remember to filter.
 
 - A directory containing at least one `.zim` file.
   Default: `~/Developer/zim`. Override with `ZIM_TEST_DATA_DIR`.
+  **That directory is read-only to this suite.** A test that rewrites an
+  archive, or builds a sidecar beside one, takes the `disposable_corpus`
+  fixture instead and gets a writable copy (an APFS clone where available).
+  A session-wide guard fails the run if anything in the configured
+  directory moves: the suite used to rewrite an archive in place and
+  force-rebuild its sidecar, which left the bytes identical but moved the
+  mtime that every cache key derived from that archive depends on.
 - Free loopback ports: each test asks the kernel for a fresh port via
   `127.0.0.1:0`, so they don't collide with each other or with anything
   else on the machine.
