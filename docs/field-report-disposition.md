@@ -40,6 +40,58 @@ heading followed (invisible on the shipped corpus, where furniture always
 sits last), and a snippet-emphasis fix whose own repro cases were unchanged
 by it.
 
+### The follow-up
+
+A second branch took three of the six items the first left open.
+
+**Crawl artefacts sink below articles (fid 71).** Paths matching
+`/imagepages/` (image-caption stubs), `/languages/` (translation hubs) or
+ending `.srt` (subtitle sidecars) now sink below real articles on four
+surfaces: single-archive and cross-archive title mode, suggest mode, and the
+`zim_query` chooser. Measured on the shipped MedlinePlus archive with 40
+topic queries at `limit=5`, with the rate limiter and the cache off, before
+and after the change:
+
+| Surface | Artefact at #1 | Pages with an artefact above an article |
+| --- | --- | --- |
+| Title | 4 → 1 | 30 of 40 → 0 |
+| Suggest | 6 → 1 | 29 of 40 → 0 |
+| Chooser | 7 → 1 | 7 of 39 → 0 |
+
+The remaining #1 is `migraine headache`, whose only row is an image stub.
+The artefact share of the rows (26.1% title, 26.6% suggest) does not move,
+and must not: the demote reorders the page it is handed and never evicts
+from it. On IEP, the `/category/` topic pages stay #1 for the four queries
+they answer.
+
+Getting there took three placements. Demoting inside the title lookup
+reordered the page the canonical-title promotion reads as
+score-descending, so the probe blanked and a weaker hit was hoisted to #1
+at a fabricated score of 1.0. Moving the demote to the response edge fixed
+that call and broke the next one: the edge rewrote the *cached* page in
+place, so a second identical `title 'swollen glands'` brought the
+fabricated 1.0 back. The edge now demotes a copy. A "24.5% → 12.8%"
+artefact figure recorded along the way was measured on the first
+placement, and does not describe the shipped code.
+
+**"What links here?" stops answering with the navigation (fid 86, ranking
+half).** A linker whose inbound degree is at least half the sidecar's node
+count — on sidecars of 50 or more nodes — is site furniture and sinks to
+the end. Reader-only: no rebuild and no schema bump. On the IEP sidecar
+(1,187 nodes, threshold 594) the 33 nodes over the line are the home page,
+the 26 alphabet pages, five site pages and the RSS feed; the best-linked
+article, `plato/`, sits at 106. Of the 919 targets with at least one
+non-furniture linker, furniture led 654 before and leads none after; the
+235 targets linked only by furniture still lead with it, since a reorder
+cannot change them.
+
+**The reranker docs stop claiming an improvement.** The only blind
+evaluation — 50 queries, 44 rerank-eligible, 132 judgments on two warc2zim
+archives — found no metric reaching significance (55 preference votes
+against 52, p = 0.85; a relevant article at #1 in 64.4% against 62.9%),
+while median latency roughly doubled and the model costs about 1.1 GB. The
+reranking page and the install page now say that, with the numbers.
+
 ## Deliberately not fixed
 
 Each of these was reproduced and understood. They are decisions, not
@@ -56,39 +108,35 @@ omissions — reopen one only with evidence that changes its premise.
 | Re-adding `title`/`content_type` to batch items | Declined. Removed deliberately in PR #374; the bodies are self-identifying and the caller supplied the paths. |
 | Worker processes / single-flight coalescing for the HTTP transport | Declined. Horizontal scaling is the documented answer and the replica is the worker unit. Coalescing means per-key in-flight futures across a lock also touched from `atexit` and a cleanup thread — real deadlock risk, for a thundering-herd shape rare on a personal offline server, with no load-test harness in CI to defend it. |
 | Stripping the site-name suffix from browse titles | Declined. `strip_site_suffix` splits only on `" \| "`, so it would clean the IEP rows and ~553 MedlinePlus rows but none of the ~10,678 `": MedlinePlus …"` ones — and the same suffix rides `zim_search` and `zim_links` rows, so stripping it in browse alone desynchronises the surfaces. |
+| The builder-scoping half of fid 86 | Declined. Feeding the sidecar builder `select_main_content` would make outbound and inbound describe the same graph, but it inherits the furniture strips, which on MedlinePlus delete "Related Health Topics": 165 of 174 strip-only removals in a 250-page sample were genuine topic pages. That trades a contradiction no caller can observe for the loss of MedlinePlus's best inbound signal, and invalidates every sidecar in the field. |
+| Dropping the reranker extra, or publishing an improvement figure | Declined. "No measured effect at n=44 on two warc2zim archives" is not "no effect" — the sample rules out a large effect, not a small one, and says nothing about Wikipedia-shaped corpora — and a published figure would be invented. The docs give the measured numbers and let a reader price the trade. |
+| Demoting index pagination (`/page/N/`) as a crawl artefact | Declined on measurement. It matched nothing on MedlinePlus and two IEP entries, both false positives: `category/…/metaphysics/page/2/` continues the topic index `/category/` is kept for, 19 more articles with no overlap. |
+| Over-fetching so a small title or suggest `limit` evicts artefacts | Declined. The demote reorders the page the data layer returns, so at `limit` 1 or 2 a page holding no real article still leads with an artefact, and a larger `limit` can change which row leads. Over-fetching means recomputing `total`, `done` and the paging arithmetic, in the same spot where the first placement broke promotion. Documented in the API reference. |
+| Exempting MedlinePlus's per-language portals from `/languages/` | Accepted cost. The shape also matches about 53 "Health Information in *Language*" portals, which now sink below other rows on their page — `title 'Italian'` leads with a recipe. They are still returned. Telling a portal from a translation hub needs a language list or MedlinePlus-specific title matching. |
+| Versioning the inbound cursor across the ranking change | Recorded. A cursor minted before the upgrade resumes at the same offset in the new order, so a paging walk that spans the upgrade can repeat or skip a row. Within one server version paging is exact. Rejecting every pre-upgrade cursor is a contract change for a one-time effect. |
 | Malformed-frame classification on the `sse` transport | Not wired, recorded. `MCPServer.run(transport="sse")` builds its own ASGI app inside the SDK, so no middleware this server adds reaches it. Covering it means reimplementing `run_sse_async`'s uvicorn and transport-security setup for a transport already deprecated for removal in 4.0.0. The gap is named where the gate is wired, in the transport table, and in the deprecation warning an operator sees when they choose SSE — and asserted by tests, so it cannot be re-discovered as a surprise. |
 
 ## Still open
 
 Recorded rather than closed, in rough order of value:
 
-- **Ranking headroom.** Both reranker configurations put a relevant article
-  at #1 only about 64% of the time and carry ~2 off-topic entries in every
-  top-5 — a supplement monograph outranking "High blood pressure
-  medications", a raw `.srt` caption file in a top-5. Demoting crawl
-  artefacts (`/category/`, `/page/N/`, `/imagepages/`) has to land on the
-  title-suggest pool *and* the `zim_query` disambiguation chooser together,
-  or the two surfaces disagree about what an artefact is; and it moves
-  `results[0]`, which the canonical-splice promotion reads under a hard
-  score gate. Needs corpus validation paired across both halves.
-- **The optional reranker is unmeasured.** 50 queries, 44 eligible, 132
-  blind judgments: not one metric approaches significance, while the extra
-  costs ~1.1 GB of model and doubles query latency. Publish a measured
-  number, say in the docs that the improvement is unmeasured, or drop the
-  extra. (44 queries on two archives rules out a large effect, not a small
-  one, and says nothing about Wikipedia-shaped corpora.)
+- **Ranking headroom beyond artefacts.** Both reranker configurations put a
+  relevant article at #1 only about 64% of the time. The follow-up sank
+  scraper output; what remains is real articles in the wrong order — a
+  supplement monograph outranking "High blood pressure medications".
 - `zim_browse(mode='page')` renders a `preview` that is empty on 99.8% of
   IEP rows, making the default mode far slower than `mode='walk'` for
   identical rows.
-- The sidecar builder parses raw entry bytes while the bundle scopes to the
-  main-content landmark, so outbound and inbound describe slightly different
-  graphs; inbound ranks on raw `inbound_degree`, a signal boilerplate
-  maximises.
-- Cross-archive fan-out has no cross-archive ranking.
+- Cross-archive fan-out has no cross-archive ranking. Cross-archive title
+  mode now sinks artefacts, but rows from different archives are still not
+  ranked against each other.
 - Rate-limit pricing charges a wide search less than a batch fetch that does
   less work.
+- `zim_query "find article titled X"` is a title surface the artefact demote
+  does not reach, so the same title-index lookup comes back in a different
+  order there than from `zim_search` title mode.
 
-## Two things the process itself surfaced
+## Three things the process itself surfaced
 
 **Tests keep shipping vacuous.** Every fix here was mutation-proven, and the
 mutation pass repeatedly caught what the tests did not: a guard made
@@ -104,3 +152,11 @@ because the corpus is regular: MedlinePlus always puts furniture last, so a
 strip that ate everything after it never had anything to eat. Both live
 archives are `generic` zimit/warc2zim archives, so nothing here speaks to
 Wikipedia- or Stack Exchange-shaped content.
+
+**The cache is part of the surface.** The follow-up's artefact demote
+rewrote a cached page in place, and every test of it passed, because every
+test ran with the cache off and called once. It was found by re-measuring on
+the real archive with the default in-memory cache on and asking the same
+question twice. A fix that touches what a cached value holds needs a
+two-call test with the cache enabled, and needs the render epoch bumped for
+any cache that stores its output.
