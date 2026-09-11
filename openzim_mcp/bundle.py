@@ -84,10 +84,10 @@ _BUNDLE_KEY_PREFIX = "bundle:v2h"
 #
 # Bump this in any release that changes what the server renders OR RANKS into
 # a cache from an unchanged archive. tests/test_v3_cache_render_epoch.py pins
-# the epoch to a fingerprint of the rendering and of the crawl-artefact
-# ranking the suggestions cache holds, so it fails when either changes without
-# a bump, or when a bump is reverted. It cannot see any other ranking a cache
-# holds: check a new cached ordering by hand.
+# the epoch to fingerprints of the rendering, of the crawl-artefact demote's
+# code, and of how that demote orders a fixture, so it fails when any of them
+# changes without a bump, or when a bump is reverted. It cannot see a cached
+# ranking that comes from anywhere else: check that by hand.
 _RENDER_EPOCH = "r3"
 
 

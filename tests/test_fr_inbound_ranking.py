@@ -2,19 +2,21 @@
 
 v3.3.1 field report, fid 86 (ranking half). Inbound linkers were ranked
 ``ORDER BY n.inbound_degree DESC`` — a signal site boilerplate maximises.
-A page in the nav bar links to everything and is therefore linked FROM
-everything, so it wins that ordering for most targets, and the caller asking
-what links to an article gets the alphabet index instead of the articles.
+A page in the nav bar is linked FROM every page that carries the bar, so it
+wins that ordering for most targets, and the caller asking what links to an
+article gets the alphabet index instead of the articles.
 
 Measured on the shipped IEP sidecar (1,187 nodes, threshold 594): the 33
 nodes at or above the threshold are the home page, the 26 alphabet pages,
 five site pages and the RSS feed; the best-linked article, ``plato/``, sits
-at 106. Of the 919 targets that have at least one non-furniture linker,
-furniture led 654 before the fix and leads none after it. Among the 371
-targets with five or more linkers, it led 366.
+at 106. Of the 919 article targets (those not themselves furniture) that
+have at least one non-furniture linker, furniture led 654 before the fix and
+leads none after it. Among the 371 article targets with five or more
+linkers, it led 366.
 
 The demote is by RANK, not by removal: rows are only reordered, so
-``total``, the pagination arithmetic and the cursor contract are untouched.
+``total`` and the pagination arithmetic are untouched, and paging within one
+server version reaches every row exactly once.
 A node whose inbound degree reaches half the archive's node count is
 treated as site-wide furniture. Small archives are exempt — on a
 twenty-page archive a genuinely central article can legitimately be linked
@@ -30,21 +32,40 @@ inbound signal.
 
 from __future__ import annotations
 
+import asyncio
 import sqlite3
 from pathlib import Path
+from typing import Optional
 
 import pytest
+from libzim.writer import Creator
 
+from openzim_mcp.config import CacheConfig, OpenZimMcpConfig, RateLimitConfig
 from openzim_mcp.linkgraph.reader import LinkGraphReader, sidecar_path_for
 from openzim_mcp.linkgraph.schema import SCHEMA_VERSION
+from openzim_mcp.server import OpenZimMcpServer
+from tests.conftest_v2_fixtures import _HtmlItem
 
 _UUID = "11111111-2222-3333-4444-555555555555"
 
 
-def _sidecar(tmp_path: Path, *, nodes, edges, node_count=None) -> Path:
-    """Build a minimal sidecar. ``nodes`` is [(id, path, inbound_degree)]."""
-    archive = tmp_path / "a.zim"
-    archive.write_bytes(b"ZIM\x04" + b"\0" * 100)
+def _sidecar(
+    tmp_path: Path,
+    *,
+    nodes,
+    edges,
+    node_count=None,
+    archive: Optional[Path] = None,
+    uuid: str = _UUID,
+) -> Path:
+    """Build a minimal sidecar. ``nodes`` is [(id, path, inbound_degree)].
+
+    Beside a placeholder archive unless ``archive`` names a real one, in which
+    case ``uuid`` must be that archive's so the reader accepts the sidecar.
+    """
+    if archive is None:
+        archive = tmp_path / "a.zim"
+        archive.write_bytes(b"ZIM\x04" + b"\0" * 100)
     db = Path(sidecar_path_for(str(archive)))
     conn = sqlite3.connect(db)
     conn.executescript("""
@@ -56,7 +77,7 @@ def _sidecar(tmp_path: Path, *, nodes, edges, node_count=None) -> Path:
         "INSERT INTO meta VALUES (?, ?)",
         [
             ("schema_version", str(SCHEMA_VERSION)),
-            ("archive_uuid", _UUID),
+            ("archive_uuid", uuid),
             ("node_count", str(node_count if node_count is not None else len(nodes))),
         ],
     )
@@ -190,6 +211,60 @@ def test_pagination_still_spans_every_linker(tmp_path):
         ["a.org/aristotle/", "a.org/plato/", "a.org/index-of-everything/"]
     )
     assert first.total == second.total == 3
+
+
+def test_the_inbound_surface_sinks_furniture(tmp_path):
+    """Every test above drives ``LinkGraphReader`` directly, so a re-sort on
+    ``inbound_degree`` added in the data layer or in the ``zim_links``
+    handler — the layers a caller actually reaches — put the navigation back
+    on top with every suite green. This one goes through the registered tool,
+    on a real archive with the same graph as ``_nav_bar_archive``."""
+    from openzim_mcp.zim_operations import zim_archive
+
+    archive = tmp_path / "site.zim"
+    with Creator(archive).config_indexing(True, "eng") as creator:
+        creator.add_item(
+            _HtmlItem(
+                "a.org/target/", "Target", "<html><body><h1>Target</h1></body></html>"
+            )
+        )
+        creator.set_mainpath("a.org/target/")
+    with zim_archive(archive) as opened:
+        uuid = str(opened.uuid)
+    _sidecar(
+        tmp_path,
+        nodes=[
+            (1, "a.org/index-of-everything/", 90),
+            (2, "a.org/aristotle/", 12),
+            (3, "a.org/plato/", 8),
+            (5, "a.org/target/", 3),
+        ],
+        edges=[(1, 5, "Index"), (2, 5, "Aristotle"), (3, 5, "Plato")],
+        node_count=100,
+        archive=archive,
+        uuid=uuid,
+    )
+    server = OpenZimMcpServer(
+        OpenZimMcpConfig(
+            allowed_directories=[str(tmp_path)],
+            tool_mode="advanced",
+            cache=CacheConfig(enabled=False),
+            rate_limit=RateLimitConfig(enabled=False),
+        )
+    )
+    zim_links = server.mcp._tool_manager._tools["zim_links"].fn
+
+    out = asyncio.run(
+        zim_links(
+            zim_file_path=str(archive), entry_path="a.org/target/", direction="inbound"
+        )
+    )
+
+    assert [r["path"] for r in out["results"]] == [
+        "a.org/aristotle/",
+        "a.org/plato/",
+        "a.org/index-of-everything/",
+    ]
 
 
 def test_a_sidecar_without_node_count_still_answers(tmp_path):

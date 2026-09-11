@@ -2916,11 +2916,16 @@ def test_the_reranker_page_does_not_claim_an_unmeasured_improvement() -> None:
 
 
 # Wording that asserts the reranker makes results better, and wording that
-# makes such a sentence honest by saying the effect was not shown.
+# makes such a sentence honest by saying the effect was not shown. A word list
+# cannot be exhaustive: it holds every phrasing a mutation pass has walked past
+# it so far ("more accurate", "the best match", "increases relevance",
+# "sharper rankings" were the second round). A false positive is the cheap
+# failure — hedge the sentence or reword it.
 _IMPROVEMENT_CLAIM_RE = re.compile(
     r"\b(?:improv\w*|better\w*|more relevant|most relevant|higher[- ]quality"
     r"|(?:retrieval|search|result|ranking) quality|boost\w*|enhanc\w*"
-    r"|upgrade\w*|outperform\w*|superior)\b"
+    r"|upgrade\w*|outperform\w*|superior|accura\w*|best"
+    r"|increas\w* (?:the )?relevance|sharper)\b"
 )
 _IMPROVEMENT_HEDGE_RE = re.compile(
     r"\b(?:unmeasured|no metric reaching significance)\b"
@@ -2928,8 +2933,12 @@ _IMPROVEMENT_HEDGE_RE = re.compile(
 
 
 def _unhedged_improvement_claims(collapsed_prose: str) -> list[str]:
-    """Sentences of ``collapsed_prose`` claiming an improvement unhedged."""
-    sentences = re.split(r"(?<=[.!?:])\s+", collapsed_prose)
+    """Sentences of ``collapsed_prose`` claiming an improvement unhedged.
+
+    ``;`` ends a clause too: "it improves results; only the size of that gain
+    is unmeasured" hedged the size and asserted the gain, and passed.
+    """
+    sentences = re.split(r"(?<=[.!?:;])\s+", collapsed_prose)
     return [
         s
         for s in sentences
@@ -2948,7 +2957,15 @@ def test_the_install_page_warns_before_the_download() -> None:
     assert lines, "the install page no longer mentions the reranker extra"
     window = " ".join(prose.split("[reranker]", 1)[-1].split()[:60]).lower()
     assert "unmeasured" in window, window
-    assert not _unhedged_improvement_claims(window), window
+    # Every paragraph that mentions the reranker, not a fixed window: an
+    # unhedged claim placed just past the first sixty words passed that.
+    paragraphs = [p for p in re.split(r"\n\s*\n", prose) if "rerank" in p.lower()]
+    unhedged = [
+        s
+        for p in paragraphs
+        for s in _unhedged_improvement_claims(" ".join(p.lower().split()))
+    ]
+    assert not unhedged, unhedged
 
 
 def test_the_api_reference_says_row_order_is_authoritative() -> None:
@@ -2956,7 +2973,9 @@ def test_the_api_reference_says_row_order_is_authoritative() -> None:
     ``inbound_degree`` order, and a client that re-sorts on the exposed
     number silently undoes the demote. Nothing pinned either note, so the
     title one could be rewritten to promise score order with every suite
-    green."""
+    green — and pinning only its bold label then let the note revert to its
+    title-only text, or tell clients to sort by ``score``, just as quietly.
+    So each note's contract sentences are pinned, not its label."""
     prose = " ".join(
         _visible_prose(
             (REPO / "website/src/content/docs/api-reference.mdx").read_text(
@@ -2965,5 +2984,15 @@ def test_the_api_reference_says_row_order_is_authoritative() -> None:
         ).split()
     )
 
-    assert "presentation order, not score order" in prose
-    assert "re-sorting rows on `inbound_degree` puts the navigation pages" in prose
+    for phrase in (
+        "presentation order, not score order",
+        '`mode="title"` (pinned or `cross_file=True`) and `mode="suggest"` sink '
+        "scraper output",
+        "a small `limit` whose page holds no real article still leads with "
+        "scraper output",
+        "Read `results` order as authoritative and treat `score` as a "
+        "match-quality signal",
+        "re-sorting rows by `score` undoes the demote",
+        "re-sorting rows on `inbound_degree` puts the navigation pages back on top",
+    ):
+        assert phrase in prose, phrase

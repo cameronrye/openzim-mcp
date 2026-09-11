@@ -22,6 +22,7 @@ without bumping the epoch.
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 from contextlib import suppress
@@ -296,4 +297,59 @@ def test_ranking_fingerprint_is_pinned_to_the_current_epoch() -> None:
         f"what the suggestions cache holds, or the epoch, changed (observed "
         f"{observed}). Bump _RENDER_EPOCH in openzim_mcp/bundle.py so an "
         f"upgrade invalidates persisted values, then re-pin both pairs."
+    )
+
+
+# The fixture above only sees a change that moves one of its seven paths: a
+# new artefact shape, a dropped regex flag or a new rule inside the demote all
+# passed it, and a persisted snapshot then served the old order. So the CODE
+# the suggestions cache's order comes from is pinned as well — read through
+# ``ast``, so comments and docstrings can change freely. If this fails and the
+# cached ordering provably does not change, re-pin it with the same epoch;
+# otherwise bump the epoch.
+_RANKING_CODE_NAMES = (
+    "_CRAWL_ARTEFACT_RE",
+    "is_crawl_artefact",
+    "demote_crawl_artefacts",
+)
+_PINNED_RANKING_CODE = (
+    "r3",
+    "d8cdb6b474b72f0f6fe73971a01d483540d48b9da34d4014ee13f5b2e8e0544b",
+)
+
+
+def _ranking_code_fingerprint() -> str:
+    """Digest the demote's source with docstrings stripped and comments gone."""
+    source = (
+        Path(__file__).resolve().parents[1] / "openzim_mcp" / "zim" / "search.py"
+    ).read_text(encoding="utf-8")
+    parts: dict[str, str] = {}
+    for node in ast.parse(source).body:
+        if isinstance(node, ast.FunctionDef) and node.name in _RANKING_CODE_NAMES:
+            first = node.body[0] if node.body else None
+            if (
+                isinstance(first, ast.Expr)
+                and isinstance(first.value, ast.Constant)
+                and isinstance(first.value.value, str)
+            ):
+                node.body = node.body[1:]
+            parts[node.name] = ast.unparse(node)
+        elif isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id in _RANKING_CODE_NAMES:
+                    parts[target.id] = ast.unparse(node)
+    assert set(parts) == set(_RANKING_CODE_NAMES), sorted(parts)
+    blob = "\x00".join(parts[name] for name in _RANKING_CODE_NAMES)
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()
+
+
+def test_ranking_code_is_pinned_to_the_current_epoch() -> None:
+    """A change to the demote's code must not land without a decision."""
+    observed = (_RENDER_EPOCH, _ranking_code_fingerprint())
+
+    assert observed == _PINNED_RANKING_CODE, (
+        f"the crawl-artefact demote's code, or the epoch, changed (observed "
+        f"{observed}). If what the suggestions cache holds changes, bump "
+        f"_RENDER_EPOCH in openzim_mcp/bundle.py and re-pin every pair here; "
+        f"if it provably does not, re-pin this one with the same epoch."
     )
