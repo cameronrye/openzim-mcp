@@ -351,7 +351,8 @@ def _paging_span(*, offset: int, shown: int, next_offset: int, total_text: str) 
 # field report (fid 71). Measured on the shipped MedlinePlus archive, 40 topic
 # queries at limit=5, rate limiter and cache off so the sweep does not read its
 # own throttling as clean pages: 26.1% of title-mode and 26.6% of suggest-mode
-# rows are one of these. Fulltext carries them too (12.0%) and is not demoted.
+# rows are one of these, and 12.0% of fulltext rows, which a later change
+# sinks too — see ``_perform_search``.
 #
 # ``/category/`` is deliberately ABSENT. On the IEP archive those pages are the
 # encyclopedia's own topic index and the correct #1, at score 1.0, for
@@ -389,11 +390,15 @@ def demote_crawl_artefacts(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     there, and relative order inside each group is the archive's own ranking,
     which this has no opinion about.
 
-    Call it at a RESPONSE EDGE only. Applying it to a list that something
-    downstream reads as score-descending breaks that consumer: the title
-    surface's promotion probes read ``results[0]`` under a score gate, and
-    demoting before them blanks the probe and lets a weaker fallback pass be
-    hoisted to rank 1 at a fabricated score of 1.0.
+    Never apply it upstream of a consumer that reads the list as
+    score-descending. The title surface's promotion probes read
+    ``results[0]`` under a score gate, and demoting before them blanks the
+    probe and lets a weaker fallback pass be hoisted to rank 1 at a
+    fabricated score of 1.0 — so title mode demotes at its response edge.
+    Fulltext rows carry no score and no consumer reads their order as one,
+    so fulltext demotes where the page is assembled, before it is cached;
+    anything that reorders such a page afterwards (a splice, a rerank) has
+    to apply it again.
 
     A page whose rows are ALL artefacts therefore comes back in its original
     order — not by a special case, but because partitioning a list and
@@ -1083,6 +1088,16 @@ class _SearchMixin:
             max_paragraphs=max_paragraphs,
             validated_path=validated_path,
         )
+        # v3.3.1 field report (fid 71), fulltext half: here, where the page is
+        # assembled and before ``search_zim_file_data`` caches it, rather than
+        # at a response edge as title mode must. Title rows carry a score that
+        # the canonical promotion probe reads in order; these carry none, and
+        # every consumer of this page — both tools, ``tell me about``, the
+        # cross-archive fan-out and the markdown renderer — wants an article
+        # ahead of a translation hub. ``zim_query 'search for hepatitis b'``
+        # led with ``languages/hepatitisb.html``. A reorder within the page:
+        # ``consumed`` and every offset derived from it are untouched.
+        results = demote_crawl_artefacts(results)
 
         returned_count = len(results)
         last_index = offset + consumed
@@ -1881,6 +1896,12 @@ class _SearchMixin:
                 # drop the limit-th hit from every page.
                 results = [synthetic_canonical, *results]
                 synthetic_added = True
+        # Fid 71: the page arrived with artefacts last, and both steps above
+        # can undo that — the catalog demote moves list articles below them,
+        # and the title index can itself answer with an image stub, which the
+        # reorder just moved to the top. Last, so a real canonical keeps its
+        # lead and an artefact canonical sinks with the rest.
+        results = demote_crawl_artefacts(results)
 
         # Synthesise a ``_FilteredScanState`` from the structured
         # payload so the render path stays unchanged. Honor the
@@ -2669,7 +2690,11 @@ class _SearchMixin:
                         "content_type": content_mime or "unknown",
                     }
                 )
-        return results
+        # Fid 71, same placement as ``_perform_search``: this projection is the
+        # one point both filtered surfaces share — the structured page and the
+        # markdown renderer, each with its own cache key. Error rows were
+        # labelled with their ranked position above, before the reorder.
+        return demote_crawl_artefacts(results)
 
     def get_search_suggestions_data(
         self, zim_file_path: str, partial_query: str, limit: int = 10

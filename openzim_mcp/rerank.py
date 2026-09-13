@@ -17,6 +17,7 @@ import contextvars
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from .constants import CANONICAL_TITLE_MATCH_SNIPPET
+from .zim.search import demote_crawl_artefacts
 
 # Names this module deliberately exports to ``simple_tools`` (the reranker
 # telemetry contract + the mixin). Declaring it documents the cross-module
@@ -198,7 +199,14 @@ class _RerankMixin:
         if not (reranked and "rerank_score" in reranked[0]):
             self._record_rerank_event(_RERANKER_SKIPPED_PASSTHROUGH)
             return payload
-        payload = {**payload, results_key: [*pinned, *reranked]}
+        # v3.3.1 field report (fid 71): a cross-encoder scores the snippet it
+        # is handed, and a translation hub's "Hepatitis B - Multiple Languages"
+        # is as on-topic as snippets get. The page arrived with artefacts
+        # sunk; sorting on ``rerank_score`` alone would put them back on top.
+        payload = {
+            **payload,
+            results_key: demote_crawl_artefacts([*pinned, *reranked]),
+        }
         self._record_rerank_event(_RERANKER_ENGAGED)
         return payload
 
@@ -232,7 +240,9 @@ class _RerankMixin:
         for entry_idx, entry in enumerate(per_file):
             if entry.get("error") or not isinstance(entry.get("result"), dict):
                 continue
-            new_hits = grouped.get(entry_idx, [])
+            # Fid 71, per archive: each bucket renders as its own list, and
+            # the global rerank sorted it on ``rerank_score`` alone.
+            new_hits = demote_crawl_artefacts(grouped.get(entry_idx, []))
             entry["result"] = {**entry["result"], "results": new_hits}
             entry["has_hits"] = bool(new_hits)
 

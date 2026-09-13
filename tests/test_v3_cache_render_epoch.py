@@ -212,7 +212,7 @@ _RENDER_FIXTURE_HTML = """
 # digest. The epoch is part of the pin so that reverting a bump fails too —
 # pinning the digest alone let ``r3`` go back to ``r2`` with every suite green.
 _PINNED_RENDER_FINGERPRINT = (
-    "r3",
+    "r4",
     "d62d668001dd2a7ca972108f82ff6e49d7f2b2d5bebeb40af0890a607ba89c18",
 )
 
@@ -275,7 +275,7 @@ _RANKING_FIXTURE_PATHS = (
     "a/category/c/page/2/",
 )
 _PINNED_RANKING_FINGERPRINT = (
-    "r3",
+    "r4",
     "5d5745359f1eaa811b415ce912d61851e74d0fcc475704852100369c371896f4",
 )
 
@@ -313,7 +313,7 @@ _RANKING_CODE_NAMES = (
     "demote_crawl_artefacts",
 )
 _PINNED_RANKING_CODE = (
-    "r3",
+    "r4",
     "d8cdb6b474b72f0f6fe73971a01d483540d48b9da34d4014ee13f5b2e8e0544b",
 )
 
@@ -352,4 +352,98 @@ def test_ranking_code_is_pinned_to_the_current_epoch() -> None:
         f"{observed}). If what the suggestions cache holds changes, bump "
         f"_RENDER_EPOCH in openzim_mcp/bundle.py and re-pin every pair here; "
         f"if it provably does not, re-pin this one with the same epoch."
+    )
+
+
+# Both pins above watch the demote's own code, so neither saw the fid 71
+# fulltext change, which calls that unchanged code from new places: the
+# fulltext page, the structured filtered page and the markdown filtered page
+# are all cached under keys whose only build-sensitive part is the epoch, and
+# all three now hold a different order for the same archive. So the ORDER
+# those caches hold is pinned too, as literals, on a small archive Xapian
+# ranks with both artefacts first. A wiring removed, a wiring added, or a bump
+# reverted each fails here.
+_FULLTEXT_FIXTURE_PAGES = (
+    ("med.gov/languages/asthma.html", "Asthma - Multiple Languages", "asthma " * 30),
+    (
+        "med.gov/asthma.html",
+        "Asthma",
+        "asthma is a chronic disease of the airways " + "lungs breathing inhaler " * 10,
+    ),
+    ("med.gov/ency/imagepages/1.htm", "Asthma image", "asthma " * 20),
+    ("med.gov/copd.html", "COPD", "copd lungs asthma differs " + "breathing " * 10),
+)
+_DEMOTED_FULLTEXT_ORDER = [
+    "med.gov/asthma.html",
+    "med.gov/copd.html",
+    "med.gov/languages/asthma.html",
+    "med.gov/ency/imagepages/1.htm",
+]
+_PINNED_FULLTEXT_ORDER = (
+    "r4",
+    {
+        "search": _DEMOTED_FULLTEXT_ORDER,
+        "filtered": _DEMOTED_FULLTEXT_ORDER,
+        "filtered_markdown": _DEMOTED_FULLTEXT_ORDER,
+    },
+)
+
+
+def test_the_order_fulltext_caches_hold_is_pinned_to_the_current_epoch(
+    tmp_path: Path,
+) -> None:
+    import re
+
+    from libzim.writer import Creator
+
+    from openzim_mcp.cache import OpenZimMcpCache
+    from openzim_mcp.config import CacheConfig
+    from openzim_mcp.content_processor import ContentProcessor
+    from openzim_mcp.security import PathValidator
+    from tests.conftest_v2_fixtures import _HtmlItem
+
+    zim = tmp_path / "fixture.zim"
+    with Creator(zim).config_indexing(True, "eng") as creator:
+        for path, title, words in _FULLTEXT_FIXTURE_PAGES:
+            html = (
+                f"<html><body><main><h1>{title}</h1><p>{words}</p></main></body></html>"
+            )
+            creator.add_item(_HtmlItem(path, title, html))
+        creator.set_mainpath(_FULLTEXT_FIXTURE_PAGES[1][0])
+    config = OpenZimMcpConfig(
+        allowed_directories=[str(tmp_path)], cache=CacheConfig(enabled=False)
+    )
+    ops = ZimOperations(
+        config,
+        PathValidator(config.allowed_directories),
+        OpenZimMcpCache(config.cache),
+        ContentProcessor(),
+    )
+
+    def paths(rows: Any) -> List[str]:
+        return [r["path"] for r in rows]
+
+    observed = (
+        _RENDER_EPOCH,
+        {
+            "search": paths(
+                ops.search_zim_file_data(str(zim), "asthma", limit=5)["results"]
+            ),
+            "filtered": paths(
+                ops.search_with_filters_data(str(zim), "asthma", "C", None, 5, 0)[
+                    "results"
+                ]
+            ),
+            "filtered_markdown": re.findall(
+                r"^Path: (.+)$",
+                ops.search_with_filters(str(zim), "asthma", "C", None, 5, 0),
+                re.M,
+            ),
+        },
+    )
+
+    assert observed == _PINNED_FULLTEXT_ORDER, (
+        f"what the fulltext search caches hold, or the epoch, changed (observed "
+        f"{observed}). Bump _RENDER_EPOCH in openzim_mcp/bundle.py so an "
+        f"upgrade invalidates persisted pages, then re-pin every pair here."
     )

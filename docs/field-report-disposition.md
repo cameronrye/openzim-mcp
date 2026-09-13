@@ -96,6 +96,58 @@ while median latency roughly doubled and the model costs about 1.1 GB. The
 reranking page now says that, with the numbers; the install page carries the
 hedge and the latency cost, and links to them.
 
+### The fulltext follow-up
+
+A third branch took the first "Still open" item: crawl artefacts on the
+surfaces the 64% figure was measured on.
+
+**Crawl artefacts sink on fulltext too (fid 71, second half).** The same
+three shapes now sink below real articles on every fulltext-shaped route:
+`zim_search(mode="fulltext")` single-archive, filtered and cross-archive;
+`zim_query` search, filtered search and "search all files", compact and
+legacy; and `synthesize=True`. Measured on the shipped MedlinePlus archive
+with the same 40 topic queries at `limit=5`, rate limiter, cache and
+reranker off, `main` against the branch, every route driven through an MCP
+client session:
+
+| Surface | Artefact at #1 | Pages with an artefact above an article |
+| --- | --- | --- |
+| Fulltext page 1, each of seven routes | 4 → 0 | 14 of 40 → 0 |
+| Fulltext page 2 (`offset=5`), each of two routes | 2 → 0 | 8 of 40 → 0 |
+| `synthesize=True`, first five citations | 1 → 0 | 12 of 40 → 0 |
+
+Every changed page is exactly the stable demote of `main`'s page on the
+same route: the same rows, so the artefact share (12.0% of page-1 rows,
+7.5% of page 2) does not move, and `total`, `done`, `next_offset` and
+`source_consumed` match on every structured page. Synthesize cites the same
+205 passages across the 40 answers; the 25 that are scraper output now come
+after the articles in each answer, which is why the first-five share falls
+from 12.5% to 11.5%. The four #1s were `/languages/` hubs for
+`hepatitis b`, `covid-19`, `chickenpox` and `shingles`; each now leads with
+the topic article. `tell me about`, which reads the same fulltext page,
+returns byte-identical text on all 40 queries, and nothing moves on the
+four IEP queries. The live suite gives 26 passed and 11 skipped on both trees. With
+the in-memory cache on and every call made twice, 967 of 968 comparisons
+match the cache-off run on both trees; the one that does not is a
+cache-dependent title completion from the first pass, recorded under
+"Still open".
+
+The placement is the opposite of title mode's, for a reason worth keeping.
+Title mode demotes at the response edge because its canonical promotion
+probe reads the title page as score-descending. Fulltext rows carry no
+score and no consumer reads their order as one, so the demote runs where
+the page is assembled — `_perform_search`, and `_build_filtered_results`
+for both filtered renderers — before the cache write, so a cached page can
+never disagree with a cold one. It then runs again after each step that
+reorders a page later: the two canonical-title splices (whose list-article
+demote moves articles below the artefacts, and whose title-index hit can
+itself be an image stub), the cross-encoder rerank on both `zim_query`
+routes, and synthesize, once on the selected hits and once on the final
+passages, after the rerank and section-affinity boost that re-sort them on
+score. The fulltext search caches now hold a different order for the same
+archive, so the render epoch moved r3 → r4, and a new pin on the order
+those caches hold fails when the wiring changes without a bump.
+
 ## Deliberately not fixed
 
 Each of these was reproduced and understood. They are decisions, not
@@ -115,8 +167,8 @@ omissions — reopen one only with evidence that changes its premise.
 | The builder-scoping half of fid 86 | Declined. Feeding the sidecar builder `select_main_content` would make outbound and inbound describe the same graph, but it inherits the furniture strips, which on MedlinePlus delete "Related Health Topics": 165 of 174 strip-only removals in a 250-page sample were genuine topic pages. That trades an inconsistency between the two directions — `c/`'s inbound list includes `hume-causation/`, whose outbound list omits `c/` — for the loss of MedlinePlus's best inbound signal, and would invalidate every sidecar in the field. |
 | Dropping the reranker extra, or publishing an improvement figure | Declined. "No measured effect at n=44 on two warc2zim archives" is not "no effect" — the sample rules out a large effect, not a small one, and says nothing about Wikipedia-shaped corpora — and a published figure would be invented. The docs give the measured numbers and let a reader price the trade. |
 | Demoting index pagination (`/page/N/`) as a crawl artefact | Declined on measurement. It matched nothing on MedlinePlus and two IEP entries, both false positives: `category/…/metaphysics/page/2/` continues the topic index `/category/` is kept for, 19 more articles with no overlap. |
-| Over-fetching so a small title or suggest `limit` evicts artefacts | Declined. The demote reorders the page the data layer returns, so at `limit` 1 or 2 a page holding no real article still leads with an artefact, and a larger `limit` can change which row leads. Over-fetching means recomputing `total`, `done` and the paging arithmetic, in the same spot where the first placement broke promotion. Documented in the API reference. |
-| Exempting MedlinePlus's per-language portals from `/languages/` | Accepted cost. The shape also matches about 53 "Health Information in *Language*" portals, which now sink below other rows on their page — `title 'Italian'` leads with a recipe. They are still returned. Telling a portal from a translation hub needs a language list or MedlinePlus-specific title matching. |
+| Over-fetching so a small title or suggest `limit` evicts artefacts | Declined. The demote reorders the page the data layer returns, so at `limit` 1 or 2 a page holding no real article still leads with an artefact, and a larger `limit` can change which row leads. Over-fetching means recomputing `total`, `done` and the paging arithmetic, in the same spot where the first placement broke promotion. Documented in the API reference. Fulltext is declined on the same grounds and one more: it pages, so pulling an article forward from page two would have to move `next_offset` and the cursor with it, and a walk would then see pages whose boundaries depend on what the demote found. |
+| Exempting MedlinePlus's per-language portals from `/languages/` | Accepted cost. The shape also matches about 53 "Health Information in *Language*" portals, which now sink below other rows on their page — `title 'Italian'` leads with a recipe, and fulltext does the same. They are still returned. Telling a portal from a translation hub needs a language list or MedlinePlus-specific title matching. |
 | Versioning the inbound cursor across the ranking change | Recorded. A cursor minted before the upgrade resumes at the same offset in the new order, so a paging walk that spans the upgrade can repeat or skip a row. Within one server version paging is exact. Rejecting every pre-upgrade cursor is a contract change for a one-time effect. |
 | Malformed-frame classification on the `sse` transport | Not wired, recorded. `MCPServer.run(transport="sse")` builds its own ASGI app inside the SDK, so no middleware this server adds reaches it. Covering it means reimplementing `run_sse_async`'s uvicorn and transport-security setup for a transport already deprecated for removal in 4.0.0. The gap is named where the gate is wired, in the transport table, and in the deprecation warning an operator sees when they choose SSE — and asserted by tests, so it cannot be re-discovered as a surprise. |
 
@@ -126,11 +178,19 @@ Recorded rather than closed, in rough order of value:
 
 - **Ranking headroom beyond artefacts.** Both reranker configurations put a
   relevant article at #1 of `zim_query` search results only 63–64% of the
-  time. The follow-up sank scraper output on title, suggest and the chooser
-  only: fulltext and `zim_query` search still carry it (12% of top-5 rows
-  on the 40 MedlinePlus queries, 4 of them at #1), alongside real articles
-  in the wrong order — a supplement monograph outranking "High blood
-  pressure medications".
+  time. That was measured before either artefact demote and has not been
+  measured since. Scraper output no longer leads or outranks an article on
+  any fulltext surface (see the fulltext follow-up), but the evaluation's
+  other failure shape — real articles in the wrong order, such as a
+  supplement monograph outranking "High blood pressure medications" — is
+  untouched.
+- **fid 70's title completion needs the cache.** A search row's truncated
+  title ("Alzheimer" for "Alzheimer's Disease") is completed from the
+  snippet render the row just cached, so with the cache disabled no title
+  is completed, and `tell me about alzheimer's disease` fetches the
+  encyclopedia article instead of offering the three-way chooser the default
+  configuration offers. Found while comparing cache-on and cache-off runs
+  for the fulltext follow-up; identical on the release before it.
 - `zim_browse(mode='page')` renders a `preview` that is empty on 99.8% of
   IEP rows, making the default mode far slower than `mode='walk'` for
   identical rows.

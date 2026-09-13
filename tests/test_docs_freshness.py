@@ -2994,5 +2994,14 @@ def test_the_api_reference_says_row_order_is_authoritative() -> None:
         "match-quality signal",
         "re-sorting rows by `score` undoes the demote",
         "re-sorting rows on `inbound_degree` puts the navigation pages back on top",
+        # Fulltext half of fid 71: the surfaces, the paging contract, and the
+        # one-page limit a caller could otherwise mistake for a filter.
+        '`mode="fulltext"` sinks the same scraper output',
+        "`zim_query` search intents and `synthesize=True` do too, after any "
+        "cross-encoder rerank",
+        "within each page: `total`, `next_offset` and every offset are unchanged",
+        "scraper output on a later page stays there",
+        "section attribution and heading-affinity boost → scraper output sunk "
+        "below articles → budget enforcement",
     ):
         assert phrase in prose, phrase

@@ -3265,7 +3265,33 @@ class SimpleToolsHandler(
         fabricated "(canonical title match)" row and a real BM25 hit dropped,
         and two concurrent requests raced mutating the same dict. Copying keeps
         the cached object byte-identical to what the backend produced.
+
+        v3.3.1 field report (fid 71): the page arrives with crawl artefacts
+        already sunk, and both steps here can undo that — the catalog demote
+        moves list articles below them, and the title index can answer with
+        scraper output (``title 'migraine headache'`` returns only an image
+        stub), which the splice then puts first. So the artefact demote runs
+        again on the way out, on every path, after the splice has read the
+        top row it gates on. A real canonical keeps its lead because the
+        partition is stable; an artefact canonical sinks with the rest, as it
+        does in the ``tell me about`` chooser.
         """
+        spliced = self._splice_canonical_title_row(payload, zim_file_path, search_query)
+        rows = spliced.get("results")
+        if rows:
+            spliced["results"] = demote_crawl_artefacts(
+                cast(List[Dict[str, Any]], rows)
+            )
+        return spliced
+
+    def _splice_canonical_title_row(
+        self,
+        payload: Dict[str, Any],
+        zim_file_path: str,
+        search_query: str,
+    ) -> Dict[str, Any]:
+        """The splice itself, before the crawl-artefact demote: always a
+        shallow copy of ``payload``, see ``_splice_title_match_into_search``."""
         payload = dict(payload)
         results = payload.get("results") or []
         if not results:
