@@ -3025,3 +3025,97 @@ def test_the_api_reference_says_row_order_is_authoritative() -> None:
         "subtitle sidecars, other topics' hubs and the per-language portals",
     ):
         assert phrase in prose, phrase
+
+
+def _pinned_paragraph_drift(page: str, sentences: tuple[str, ...]) -> list[str]:
+    """How the visible paragraph carrying ``sentences`` departs from them.
+
+    The paragraph is the one holding the most of the pinned sentences, with
+    whitespace collapsed. Every pinned sentence must be in it verbatim, and
+    nothing else may be: a phrase pin let a sentence change around the phrase
+    (the surfaces a demote covers, "cannot lift" turned into "can lift"),
+    and a sentence pin alone would still let a contradicting sentence be
+    added next to it. Returns one message per departure, naming the sentence.
+    """
+    prose = _visible_prose((REPO / page).read_text(encoding="utf-8"))
+    paragraphs = [" ".join(p.split()) for p in re.split(r"\n\s*\n", prose)]
+    paragraph = max(paragraphs, key=lambda p: sum(s in p for s in sentences))
+    if not any(s in paragraph for s in sentences):
+        return [f"{page}: no visible paragraph carries any pinned sentence"]
+    drift = [
+        f"{page}: pinned sentence changed or gone: {s!r}"
+        for s in sentences
+        if s not in paragraph
+    ]
+    rest = paragraph
+    for s in sentences:
+        rest = rest.replace(s, " ", 1)
+    if rest.strip():
+        drift.append(f"{page}: unpinned text in the pinned paragraph: {rest.strip()!r}")
+    return drift
+
+
+# The fulltext half of fid 71, sentence by sentence. Each is a contract a test
+# holds the code to: the surfaces (test_fr_crawl_artifacts_fulltext's
+# per-route tests), the reranker (its rerank tests), which rows have a score
+# a client could re-sort on, and the one-page scope (its paging test).
+_API_REFERENCE_FULLTEXT_DEMOTE = (
+    '`mode="fulltext"` sinks the same scraper output below real articles — '
+    "single-archive, filtered, and within each archive's block when "
+    "`cross_file=True` — and `zim_query` search intents and `synthesize=True` do "
+    "too, after any cross-encoder rerank, so the optional reranker cannot lift a "
+    "translation hub back above the article it translates.",
+    "Fulltext search rows carry no score, so there is nothing to re-sort on.",
+    "`synthesize=True` passages, and compact-mode citations, do carry a `score`, "
+    "but the demote reorders them without rescoring, so scraper output can sit "
+    "below an article with a lower `score`.",
+    "Read their order, which `rank` is renumbered to match, as authoritative; "
+    "re-sorting them by `score` can put the scraper output back on top.",
+    "The reorder happens within each page: `total`, `next_offset` and every "
+    "offset are unchanged, an article on page two is never pulled forward onto "
+    "page one, and scraper output on a later page stays there.",
+)
+
+# The reranking page's opening paragraph: what the extra reorders, and that
+# scraper output is sunk after it, with the one exception the translation
+# tests pin.
+_RERANKING_PAGE_SCRAPER_OUTPUT = (
+    "The `[reranker]` extra re-scores Xapian's BM25 candidates with a "
+    "cross-encoder and reorders the top-K that `zim_query` search intents and "
+    "`synthesize` mode return.",
+    "The advanced `zim_search` tool is not reranked.",
+    "The caller's arguments and response shape are unchanged.",
+    "Scraper output — per-language translation hubs, image-caption stubs, "
+    "subtitle sidecars — is sunk below real articles after the reorder, so the "
+    "cross-encoder cannot put it back on top.",
+    "The one exception is a translation hub the query itself asks for (`asthma "
+    "in spanish`), which stays where the reorder put it.",
+)
+
+
+@pytest.mark.parametrize(
+    "page, sentences",
+    [
+        (
+            "website/src/content/docs/api-reference.mdx",
+            _API_REFERENCE_FULLTEXT_DEMOTE,
+        ),
+        (
+            "website/src/content/docs/search-reranking.mdx",
+            _RERANKING_PAGE_SCRAPER_OUTPUT,
+        ),
+    ],
+    ids=["api-reference", "search-reranking"],
+)
+def test_the_fulltext_demote_paragraphs_say_exactly_what_is_pinned(
+    page: str, sentences: tuple[str, ...]
+) -> None:
+    """The row-order test above pins five phrases of the API reference's
+    fulltext paragraph, and review inverted six other claims on these two
+    pages with every test green: the surfaces narrowed to single-archive, the
+    reranker able to lift a hub back, fulltext rows re-sortable by ``score``,
+    an article on page two pulled forward, and the reranking page's sentence
+    deleted or turned into "can put it back on top". So both paragraphs are
+    pinned whole."""
+    drift = _pinned_paragraph_drift(page, sentences)
+    assert not drift, "\n".join(drift)
