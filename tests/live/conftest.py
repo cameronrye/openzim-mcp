@@ -12,6 +12,12 @@ Run them explicitly with ``make test-live`` or ``uv run pytest -m live``.
 A ZIM directory must be reachable; set ``ZIM_TEST_DATA_DIR`` to override
 the default of ``~/Developer/zim``. The fixtures skip the test if no
 ``.zim`` files are found there.
+
+That directory is READ-ONLY to this suite: it is whatever library the
+operator happens to keep there. A test that rewrites an archive, or builds a
+sidecar beside one, takes ``disposable_corpus`` and gets a writable copy, and
+``_zim_dir_stays_read_only`` fails the session if anything in the configured
+directory moves.
 """
 
 from __future__ import annotations
@@ -19,6 +25,7 @@ from __future__ import annotations
 import contextlib
 import os
 import secrets
+import shutil
 import socket
 import subprocess
 import sys
@@ -89,12 +96,101 @@ def resolve_zim_dir(d: Path) -> Optional[Path]:
 
 @pytest.fixture(scope="session")
 def zim_dir() -> Path:
-    """Resolve the directory of ZIM files; skip if none present."""
+    """Resolve the directory of ZIM files; skip if none present.
+
+    READ-ONLY. This is whatever library the operator pointed
+    ``ZIM_TEST_DATA_DIR`` at, defaulting to ``~/Developer/zim``. A test that
+    writes to an archive, or beside one, takes ``disposable_corpus`` instead.
+    """
     d = _zim_dir()
     resolved = resolve_zim_dir(d)
     if resolved is None:
         pytest.skip(f"No .zim files found in {d}. Set ZIM_TEST_DATA_DIR to override.")
     return resolved
+
+
+def smallest_usable_zim(d: Path) -> Optional[Path]:
+    """The smallest archive in ``d`` a test may assert on, or None."""
+    candidates = usable_zims(d)
+    return min(candidates, key=lambda f: f.stat().st_size) if candidates else None
+
+
+def writable_copy(archive: Path, dest_dir: Path) -> Path:
+    """Copy ``archive`` into ``dest_dir`` so a test may write to or beside it.
+
+    On APFS this is a clone: instant, and it occupies no extra space until
+    something writes. Elsewhere it is a plain copy, which is cheap on the
+    archives CI actually ships.
+    """
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    dest = dest_dir / archive.name
+    if sys.platform == "darwin":
+        cloned = subprocess.run(
+            ["/bin/cp", "-c", str(archive), str(dest)],
+            capture_output=True,
+            check=False,
+        )
+        if cloned.returncode == 0:
+            return dest
+    shutil.copyfile(archive, dest)
+    return dest
+
+
+@pytest.fixture
+def disposable_corpus(zim_dir: Path, tmp_path: Path) -> Path:
+    """A directory holding a writable copy of the smallest usable archive.
+
+    For the tests that rewrite what they watch, or build a sidecar beside it.
+    Pointed at a real library, those tests used to do that in place: same
+    bytes, new mtime — which invalidates every cache key derived from the
+    file — and a sidecar rebuilt by whichever builder the branch under test
+    happened to carry.
+    """
+    archive = smallest_usable_zim(zim_dir)
+    if archive is None:  # pragma: no cover - zim_dir skips first
+        pytest.skip(f"no usable .zim files in {zim_dir}")
+    corpus = tmp_path / "corpus"
+    writable_copy(archive, corpus)
+    return corpus
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _zim_dir_stays_read_only() -> Iterator[None]:
+    """Fail the session if anything under the configured ZIM directory moved.
+
+    Three runs rewrote an archive or its sidecar in place before this existed
+    and nothing noticed, because the bytes were identical and only the mtime
+    moved. Compares name, mtime and size of every file in the directory,
+    which is what a rewrite-in-place changes and what every cache key derived
+    from an archive depends on.
+    """
+    resolved = resolve_zim_dir(_zim_dir())
+    if resolved is None:
+        yield
+        return
+
+    def snapshot() -> dict:
+        return {
+            entry.name: (entry.stat().st_mtime_ns, entry.stat().st_size)
+            for entry in sorted(resolved.iterdir())
+            if entry.is_file()
+        }
+
+    before = snapshot()
+    try:
+        yield
+    finally:
+        after = snapshot()
+        changed = sorted(
+            name
+            for name in set(before) | set(after)
+            if before.get(name) != after.get(name)
+        )
+        assert not changed, (
+            f"the live suite modified {resolved}: {changed}. That directory is "
+            "the operator's library, not a fixture — take a copy with the "
+            "disposable_corpus fixture instead."
+        )
 
 
 @dataclass
@@ -311,11 +407,15 @@ def spawn_live_server(zim_dir: Path, tmp_path: Path) -> Iterator:
         def test_x(spawn_live_server):
             srv = spawn_live_server(transport="http", token="secret")
             assert srv.healthz().status_code == 200
+
+    Pass ``zim_dir=`` to serve a different directory — ``disposable_corpus``
+    for a test that writes to what the server is watching.
     """
     spawned: List[LiveServer] = []
 
     def _factory(**kwargs) -> LiveServer:
-        srv = _spawn(zim_dir=zim_dir, tmp_path=tmp_path, **kwargs)
+        served = kwargs.pop("zim_dir", zim_dir)
+        srv = _spawn(zim_dir=served, tmp_path=tmp_path, **kwargs)
         spawned.append(srv)
         return srv
 
