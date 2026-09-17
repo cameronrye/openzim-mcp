@@ -42,7 +42,12 @@ import pytest
 from libzim.writer import Creator
 
 from openzim_mcp.async_operations import AsyncZimOperations
-from openzim_mcp.config import CacheConfig, OpenZimMcpConfig, RateLimitConfig
+from openzim_mcp.config import (
+    CacheConfig,
+    OpenZimMcpConfig,
+    RateLimitConfig,
+    SynthesizeConfig,
+)
 from openzim_mcp.constants import CANONICAL_TITLE_MATCH_SNIPPET
 from openzim_mcp.server import OpenZimMcpServer
 from openzim_mcp.simple_tools import SimpleToolsHandler
@@ -78,18 +83,35 @@ def _html(title: str, words: str) -> str:
     )
 
 
-@pytest.fixture
-def zim(tmp_path: Path) -> Path:
-    out = tmp_path / "medlineplus_like.zim"
+def _build_zim(out: Path, pages: List[tuple]) -> Path:
     with Creator(out).config_indexing(True, "eng") as creator:
-        for path, title, words in _PAGES:
+        for path, title, words in pages:
             creator.add_item(_HtmlItem(path, title, _html(title, words)))
         creator.set_mainpath(_ASTHMA)
     return out
 
 
 @pytest.fixture
-def server(tmp_path: Path, zim: Path) -> OpenZimMcpServer:
+def zim(tmp_path: Path) -> Path:
+    return _build_zim(tmp_path / "medlineplus_like.zim", _PAGES)
+
+
+# The same archive plus a list article, for the orderings where the catalog
+# demote and the artefact demote meet. Bare ``List_of_…`` so ``_is_list_article``
+# reads it as one; checked un-spliced, the fulltext page is [list, asthma,
+# copd, hub, stub].
+_LIST = "List_of_asthma_drugs"
+
+
+@pytest.fixture
+def zim_with_list(tmp_path: Path) -> Path:
+    return _build_zim(
+        tmp_path / "medlineplus_with_list.zim",
+        [*_PAGES, (_LIST, "List of asthma drugs", "asthma drugs inhaler " * 12)],
+    )
+
+
+def _make_server(tmp_path: Path, **config: Any) -> OpenZimMcpServer:
     # Cache ON: every surface below is asked twice, so a demote that ran on
     # the cold path only — or rewrote a cached page in place — shows up as a
     # second call that disagrees with the first.
@@ -103,8 +125,14 @@ def server(tmp_path: Path, zim: Path) -> OpenZimMcpServer:
                 persistence_path=str(tmp_path / "cache"),
             ),
             rate_limit=RateLimitConfig(enabled=False),
+            **config,
         )
     )
+
+
+@pytest.fixture
+def server(tmp_path: Path, zim: Path) -> OpenZimMcpServer:
+    return _make_server(tmp_path)
 
 
 def _paths(rows: List[Dict[str, Any]]) -> List[str]:
@@ -289,6 +317,29 @@ def test_the_list_demote_does_not_sink_a_list_article_below_an_artefact():
     ]
 
 
+def test_the_list_demote_does_not_sink_a_list_article_below_an_artefact_it_follows():
+    """The same rule when the page arrives with the list article already
+    below the article, as a data-layer page does. The splice leaves the top
+    row where it was, but its catalog demote still moves the list article to
+    the end, past the hub, so the exit demote must run even when the top row
+    did not change."""
+    page = _page(
+        [
+            {"path": "A/Asthma", "title": "Asthma"},
+            {"path": "A/List_of_asthma_drugs", "title": "List of asthma drugs"},
+            {"path": "A/languages/asthma.html", "title": "Asthma - Languages"},
+        ]
+    )
+
+    out = _bare_handler()._splice_title_match_into_search(page, "a.zim", "asthma")
+
+    assert _paths(out["results"]) == [
+        "A/Asthma",
+        "A/List_of_asthma_drugs",
+        "A/languages/asthma.html",
+    ]
+
+
 def test_the_filtered_canonical_splice_sinks_an_artefact_canonical(
     server, zim, monkeypatch
 ):
@@ -308,6 +359,67 @@ def test_the_filtered_canonical_splice_sinks_an_artefact_canonical(
     )
 
     assert _rendered_paths(text) == [_ASTHMA, _COPD, _STUB, _HUB], text
+
+
+@pytest.mark.parametrize("route", ["data-layer", "zim_query-legacy"])
+def test_the_filtered_canonical_splice_sinks_a_prepended_artefact_canonical(
+    server, zim, monkeypatch, route
+):
+    """The other branch of the same splice: the title-index hit is NOT on the
+    filtered page, so it is prepended as a synthetic "(canonical title match)"
+    row instead of moved. ``breathing`` reaches it — the page holds only the
+    two articles, and neither title is the query."""
+    from openzim_mcp.zim import search as search_mod
+
+    monkeypatch.setattr(
+        search_mod,
+        "find_title_match",
+        lambda *_a, **_k: {"path": _STUB, "title": "Asthma image"},
+    )
+    ops = server.zim_operations
+    # Guard: were the stub on the page, this would be the reorder branch,
+    # which the test above already covers.
+    page = ops.search_with_filters_data(str(zim), "breathing", "C", None, 5, 0)
+    assert _paths(page["results"]) == [_COPD, _ASTHMA]
+
+    for _call in range(2):
+        if route == "data-layer":
+            text = ops.search_with_filters_with_canonical_splice(
+                str(zim), "breathing", "C", None, 5, 0
+            )
+        else:
+            text = server.simple_tools_handler.handle_zim_query(
+                "search for breathing in namespace C",
+                str(zim),
+                {"limit": 5, "compact": False},
+            )
+
+        assert "Match type: canonical title match" in text, text
+        assert _rendered_paths(text) == [_COPD, _ASTHMA, _STUB], text
+
+
+def test_the_filtered_canonical_splice_keeps_a_list_article_above_artefacts(
+    tmp_path, zim_with_list, monkeypatch
+):
+    """The filtered splice's own catalog demote moves the list article to the
+    end of the page, below the artefacts the data layer sank there. The
+    canonical here is a real article, so nothing about it calls for a demote;
+    the demote is still needed, because a list article is still an article."""
+    from openzim_mcp.zim import search as search_mod
+
+    monkeypatch.setattr(
+        search_mod,
+        "find_title_match",
+        lambda *_a, **_k: {"path": _COPD, "title": "COPD"},
+    )
+    ops = _make_server(tmp_path).zim_operations
+
+    for _call in range(2):
+        text = ops.search_with_filters_with_canonical_splice(
+            str(zim_with_list), "asthma", "C", None, 10, 0
+        )
+
+        assert _rendered_paths(text) == [_COPD, _ASTHMA, _LIST, _HUB, _STUB], text
 
 
 def _artefact_loving_reranker() -> MagicMock:
@@ -343,6 +455,35 @@ def test_the_compact_rerank_cannot_lift_an_artefact_back(server, zim):
 
     assert "reranker=engaged" in text, text
     assert _rendered_paths(text) == _DEMOTED, text
+
+
+def test_the_compact_rerank_sinks_a_pinned_artefact_canonical(server, zim, monkeypatch):
+    """The rerank holds the splice's "(canonical title match)" row out of the
+    cross-encoder and pins it ahead of everything it scored, which undoes the
+    splice's exit demote when the title index answered with an image stub.
+    So the demote runs over the pinned rows too, not only the scored ones.
+    ``breathing`` reaches it: no row's title is a strong match, so the splice
+    probes the title index, and the stub it gets back is not on the page."""
+    from openzim_mcp import simple_tools as st
+
+    monkeypatch.setattr(
+        st,
+        "find_title_match",
+        lambda *_a, **_k: {"path": _STUB, "title": "Asthma image"},
+    )
+    reranker = _artefact_loving_reranker()
+    with patch("openzim_mcp.ml.reranker.BGEReranker.get", return_value=reranker):
+        text = server.simple_tools_handler.handle_zim_query(
+            "search for breathing", str(zim), {"limit": 5, "compact": True}
+        )
+
+    assert "reranker=engaged" in text, text
+    # The stub was pinned, not scored: were it handed to the cross-encoder,
+    # the demote after the rerank would be tested only on scored rows.
+    scored = [c["path"] for c in reranker.rerank.call_args.kwargs["candidates"]]
+    assert scored == [_COPD, _ASTHMA], scored
+    assert "Match type: canonical title match" in text, text
+    assert _rendered_paths(text) == [_COPD, _ASTHMA, _STUB], text
 
 
 def test_the_cross_archive_rerank_cannot_lift_an_artefact_back():
@@ -413,6 +554,81 @@ def test_synthesize_lists_considered_articles_before_artefacts(server, zim):
 
     assert {_HUB, _STUB, _COPD} <= set(considered), considered
     assert _is_artefact_order(considered), considered
+
+
+def test_synthesize_considers_a_list_article_before_artefacts(tmp_path, zim_with_list):
+    """The hit demote runs after the list-article demote, which moves list
+    articles to the end, below any artefact. Run the other way round, the
+    list article is last, behind the hub and the stub, and with three
+    ``considered_articles`` slots it drops out of the list altogether."""
+    from openzim_mcp.zim.search import is_crawl_artefact
+
+    body = _make_server(tmp_path).simple_tools_handler.handle_zim_query(
+        "asthma", str(zim_with_list), {"synthesize": True, "compact": True}
+    )
+    considered = [a["entry_path"] for a in body["considered_articles"]]
+
+    assert _LIST in considered, considered
+    assert any(is_crawl_artefact(p) for p in considered), considered
+    assert _is_artefact_order(considered), considered
+
+
+def test_synthesize_sinks_a_title_promoted_artefact(server, zim, monkeypatch):
+    """The list-article demote exempts a title-promoted hit; the artefact
+    demote must not. The title index can answer with an image stub
+    (``title 'migraine headache'`` does on MedlinePlus), and a promoted stub
+    left on top leads ``considered_articles``."""
+    from openzim_mcp import synthesize as syn
+
+    monkeypatch.setattr(
+        syn,
+        "find_title_match",
+        lambda *_a, **_k: {"path": _STUB, "title": "Asthma image"},
+    )
+    promotions: List[Any] = []
+    real_promote = syn._promote_title_match
+
+    def _spy(*args: Any, **kwargs: Any) -> Any:
+        out = real_promote(*args, **kwargs)
+        promotions.append(out)
+        return out
+
+    monkeypatch.setattr(syn, "_promote_title_match", _spy)
+
+    body = _synthesize(server, zim)
+    considered = [a["entry_path"] for a in body["considered_articles"]]
+
+    # The stub really was promoted; otherwise this tests the demote of an
+    # ordinary hit, which the test above already does.
+    (_archive, top), *_rest = promotions[0]
+    assert top["path"] == _STUB and top.get("promoted"), promotions[0]
+    assert _STUB in considered, considered
+    assert _is_artefact_order(considered), considered
+
+
+def test_the_budget_cap_cuts_scraper_output_before_articles(tmp_path, zim):
+    """The passage demote runs before ``_enforce_budget``. The cap keeps
+    passages in order until the budget runs out, so if it ran on the
+    reranked order — hub and stub first — it would keep the scraper output
+    and cut the articles, and the demote after it could only reorder what
+    was left. 500 characters is the smallest budget the config accepts, and
+    less than the four passages need."""
+    from openzim_mcp.zim.search import is_crawl_artefact
+
+    handler = _make_server(
+        tmp_path, synthesize=SynthesizeConfig(output_char_budget=500)
+    ).simple_tools_handler
+    reranker = _artefact_loving_reranker()
+    with patch("openzim_mcp.ml.reranker.BGEReranker.get", return_value=reranker):
+        body = handler.handle_zim_query(
+            "asthma", str(zim), {"synthesize": True, "compact": True}
+        )
+    cited = [c["entry_path"] for c in body["citations"]]
+
+    assert reranker.rerank.called, "the reranker never ran"
+    assert body["_meta"]["truncated"] is True, body["_meta"]
+    assert [p for p in cited if not is_crawl_artefact(p)] == [_ASTHMA, _COPD], cited
+    assert _is_artefact_order(cited), cited
 
 
 def test_the_synthesize_rerank_cannot_lift_an_artefact_back(server, zim):
