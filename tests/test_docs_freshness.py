@@ -3013,12 +3013,14 @@ def test_the_api_reference_says_row_order_is_authoritative() -> None:
         "leaves that topic's own hub, `/languages/<topic>.html`, where the "
         "archive (or the optional reranker) ranked it",
         "it ends with one or more language names",
-        "`english` does not count — optionally preceded by `in`, with a topic "
-        "before them",
+        "`english` does not count — optionally followed by the word `language` "
+        "or `languages`, and optionally preceded by `in` and `the`, with a "
+        "topic before them",
         "The hub is matched on its path, with the topic lowercased and stripped "
         "to letters and digits",
         "Only a trailing language counts: `japanese encephalitis` and `german "
-        "measles` ask for nothing, and neither does `in chinese` alone.",
+        "measles` ask for nothing, and neither does `in chinese` alone, nor "
+        "`sign language`, whose trailing noun names no language.",
         "The hub is not promoted — an article the archive ranked above it stays "
         "above it",
         "everything else still sinks for that query: image-caption stubs, "
@@ -3076,6 +3078,42 @@ _API_REFERENCE_FULLTEXT_DEMOTE = (
     "page one, and scraper output on a later page stays there.",
 )
 
+# The translation exemption's own paragraph, sentence by sentence. The row-
+# order test above pins nine phrases of it and review still negated the rule
+# around them, appended a sentence contradicting it, and relabelled the whole
+# thing a historical note, with every test green — the same four shapes that
+# forced the two paragraphs below to be pinned whole. Each sentence is a
+# contract tests/test_fr_crawl_artifacts_translation.py holds the code to:
+# the surfaces, which queries ask, how the hub is recognised, what does NOT
+# ask, the operator limit, and that the exemption never promotes.
+_API_REFERENCE_TRANSLATION_EXEMPTION = (
+    "**A translation the query asks for is not demoted.** On every surface "
+    "above — title, suggest, fulltext, the `zim_query` routes and "
+    "`synthesize=True` — a query that asks for a topic's translation leaves "
+    "that topic's own hub, `/languages/<topic>.html`, where the archive (or "
+    "the optional reranker) ranked it.",
+    "A query asks for one when it ends with one or more language names — "
+    "MedlinePlus's languages, such as `spanish`, `chinese` or `haitian "
+    "creole`, and the qualifiers `simplified`, `traditional`, `mandarin`, "
+    "`cantonese`, `persian` and `filipino`; `english` does not count — "
+    "optionally followed by the word `language` or `languages`, and "
+    "optionally preceded by `in` and `the`, with a topic before them: `asthma "
+    "in spanish`, `asthma spanish`, `anemia in the chinese language` and "
+    "`alzheimer's disease chinese` each keep their topic's hub in place.",
+    "The hub is matched on its path, with the topic lowercased and stripped "
+    "to letters and digits (`alzheimersdisease`), and quotes around a term "
+    "are ignored wherever they fall.",
+    "Only a trailing language counts: `japanese encephalitis` and `german "
+    "measles` ask for nothing, and neither does `in chinese` alone, nor `sign "
+    "language`, whose trailing noun names no language.",
+    "Query syntax is read as topic text, not parsed, so `asthma AND chinese` "
+    "asks for a hub no archive has and exempts nothing.",
+    "The hub is not promoted — an article the archive ranked above it stays "
+    "above it — and everything else still sinks for that query: image-caption "
+    "stubs, subtitle sidecars, other topics' hubs and the per-language "
+    "portals such as `/languages/french.html`.",
+)
+
 # The reranking page's opening paragraph: what the extra reorders, and that
 # scraper output is sunk after it, with the one exception the translation
 # tests pin.
@@ -3101,11 +3139,15 @@ _RERANKING_PAGE_SCRAPER_OUTPUT = (
             _API_REFERENCE_FULLTEXT_DEMOTE,
         ),
         (
+            "website/src/content/docs/api-reference.mdx",
+            _API_REFERENCE_TRANSLATION_EXEMPTION,
+        ),
+        (
             "website/src/content/docs/search-reranking.mdx",
             _RERANKING_PAGE_SCRAPER_OUTPUT,
         ),
     ],
-    ids=["api-reference", "search-reranking"],
+    ids=["api-reference-fulltext", "api-reference-translation", "search-reranking"],
 )
 def test_the_fulltext_demote_paragraphs_say_exactly_what_is_pinned(
     page: str, sentences: tuple[str, ...]
