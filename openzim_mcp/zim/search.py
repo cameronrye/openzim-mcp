@@ -451,6 +451,18 @@ _TRANSLATION_LANGUAGES = (
 # Hyphens split words as whitespace does, so "serbo-croatian" and "serbo
 # croatian" are the same two-word phrase.
 _QUERY_WORD_SPLIT_RE = re.compile(r"[\s-]+")
+# Quotes a caller wraps a term in are not part of the word. Stripped at each
+# word's EDGES, so "alzheimer's" keeps its apostrophe: without this, only the
+# last word of the query lost its punctuation, and '"asthma" chinese' parsed
+# while 'asthma "spanish"' did not.
+_WORD_EDGE_QUOTES = "\"'`‘’“”«»"
+# "in chinese language" asks what "in chinese" asks. The noun is dropped
+# BEFORE the language scan and is never itself a language word, so "sign
+# language" and "american sign language" still name a topic and ask for no
+# translation: something must match the language list for anything to be
+# exempt.
+_TRANSLATION_LANGUAGE_NOUNS = ("language", "languages")
+_TRANSLATION_REQUEST_FILLERS = ("in", "the")
 _TRANSLATION_PHRASES = tuple(
     tuple(_QUERY_WORD_SPLIT_RE.split(name)) for name in _TRANSLATION_LANGUAGES
 )
@@ -480,16 +492,26 @@ def requested_translation_topic(query: Optional[str]) -> Optional[str]:
     """The topic key of a query that asks for a translation, else ``None``.
 
     A query asks for one when, lowercased and stripped of surrounding
-    whitespace and trailing punctuation, it ENDS with one or more language
-    words, optionally preceded by ``in``, and a topic remains before them:
-    "asthma in children chinese" -> ``asthmainchildren``, "Alzheimer's
-    disease in Chinese?" -> ``alzheimersdisease``. The key is that topic with
-    every non-alphanumeric character removed, which is how MedlinePlus spells
-    a hub's slug.
+    whitespace, of trailing punctuation and of quotes at each word's edges,
+    it ENDS with one or more language words — after an optional trailing
+    "language" or "languages" — optionally preceded by "in" and "the", and a
+    topic remains before them: "asthma in children chinese" ->
+    ``asthmainchildren``, "Alzheimer's disease in Chinese?" ->
+    ``alzheimersdisease``, "anemia in the chinese language" -> ``anemia``.
+    The key is that topic with every non-alphanumeric character removed,
+    which is how MedlinePlus spells a hub's slug.
 
     Suffix only, deliberately. "japanese encephalitis" and "german measles"
     lead with the language word and are asking about the disease; "chinese"
-    and "in chinese" name no topic, so they ask for no topic's hub.
+    and "in chinese" name no topic, so they ask for no topic's hub. The
+    trailing noun is dropped, never matched: "sign language" and "american
+    sign language" name a topic and ask for no translation.
+
+    Words only, no query syntax. Xapian's operators are read as topic text,
+    so "asthma AND chinese" asks for the hub of ``asthmaand``, which no
+    archive has, and every artefact on that page is demoted as it was before
+    this exemption existed. The cost of the limit is a demote that still
+    fires, never a wrong row promoted.
     """
     if not query:
         return None
@@ -497,8 +519,17 @@ def requested_translation_topic(query: Optional[str]) -> Optional[str]:
     cut = len(text)
     while cut and not text[cut - 1].isalnum():
         cut -= 1
-    words = [w for w in _QUERY_WORD_SPLIT_RE.split(text[:cut]) if w]
+    words = [
+        word
+        for word in (
+            w.strip(_WORD_EDGE_QUOTES) for w in _QUERY_WORD_SPLIT_RE.split(text[:cut])
+        )
+        if word
+    ]
     end = len(words)
+    if end and words[end - 1] in _TRANSLATION_LANGUAGE_NOUNS:
+        end -= 1
+    language_scan_start = end
     while True:
         phrase = next(
             (
@@ -511,9 +542,9 @@ def requested_translation_topic(query: Optional[str]) -> Optional[str]:
         if phrase is None:
             break
         end -= len(phrase)
-    if end == len(words):
+    if end == language_scan_start:
         return None
-    if end and words[end - 1] == "in":
+    while end and words[end - 1] in _TRANSLATION_REQUEST_FILLERS:
         end -= 1
     return _NON_SLUG_CHARS_RE.sub("", "".join(words[:end])) or None
 

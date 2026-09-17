@@ -17,10 +17,15 @@ the only surface that answered it.
 The exemption, in full:
 
 * A query asks for a translation of a topic when, lowercased and stripped of
-  surrounding whitespace and trailing punctuation, it ENDS with one or more
-  language words, optionally preceded by ``in``, and a topic remains before
-  them. The topic's key is that text with every non-alphanumeric character
-  removed, which is how MedlinePlus spells a hub's slug.
+  surrounding whitespace, of trailing punctuation and of quotes at each
+  word's edges, it ENDS with one or more language words — after an optional
+  trailing "language" or "languages" — optionally preceded by "in" and
+  "the", and a topic remains before them. The topic's key is that text with
+  every non-alphanumeric character removed, which is how MedlinePlus spells
+  a hub's slug.
+* Words, not query syntax: a boolean operator is read as part of the topic,
+  so "asthma AND chinese" asks for a hub no archive has and exempts
+  nothing.
 * The row exempt from the demote is exactly ``/languages/<key>.html``. Image
   stubs, ``.srt`` sidecars, other topics' hubs and the language portals still
   sink, for every query.
@@ -88,6 +93,24 @@ _ASTHMA_HUB = f"{_M}/languages/asthma.html"
         ("asthma in cantonese", "asthma"),
         ("asthma persian", "asthma"),
         ("asthma in filipino", "asthma"),
+        # "<topic> in <language> language" is how a caller writes it often
+        # enough to matter: on 150 such queries the hub led 66 pages on the
+        # release before the demote and 35 with it, and the phrasing was
+        # invisible to the first version of this rule.
+        ("anemia in chinese language", "anemia"),
+        ("anemia chinese language", "anemia"),
+        ("asthma in spanish languages", "asthma"),
+        ("asthma in the chinese language", "asthma"),
+        ("asthma the spanish", "asthma"),
+        ("anemia in the traditional chinese language", "anemia"),
+        # Quotes are the caller's syntax, not part of a word, at either end.
+        # Only the whole query's tail used to lose its punctuation, so
+        # '"asthma" chinese' parsed and 'asthma "spanish"' did not.
+        ('asthma "spanish"', "asthma"),
+        ('"asthma" chinese', "asthma"),
+        ('"asthma" "in" "spanish"', "asthma"),
+        ('"asthma in spanish"', "asthma"),
+        ("'asthma' in 'spanish'", "asthma"),
         # A language word LEADING the topic is part of the topic.
         ("japanese encephalitis in japanese", "japaneseencephalitis"),
         ("german measles german", "germanmeasles"),
@@ -120,6 +143,17 @@ def test_a_trailing_language_asks_for_that_topics_translation(query, topic):
         ("asthma cape verdean", "asthma cape verdean creole"),
         ("asthmachinese", "asthma chinese"),
         ("", "asthma spanish"),
+        # A trailing "language" is DROPPED, never matched. With no language
+        # word in front of it there is nothing to ask for, so the sign
+        # languages — which are topics MedlinePlus writes about — are safe.
+        ("american sign language", "american sign language in spanish"),
+        ("sign language", "sign language in spanish"),
+        ("asthma language", "asthma in chinese language"),
+        ("language", "language in spanish"),
+        # And dropping it conjures no topic either.
+        ("chinese language", "asthma chinese language"),
+        ("in the chinese language", "asthma in the chinese language"),
+        ("the spanish", "asthma the spanish"),
     ],
 )
 def test_nothing_is_asked_for_without_a_topic_and_a_trailing_language(
@@ -132,6 +166,32 @@ def test_nothing_is_asked_for_without_a_topic_and_a_trailing_language(
 def test_no_query_asks_for_nothing():
     assert requested_translation_topic(None) is None
     assert requested_translation_topic("asthma in spanish") == "asthma"
+
+
+@pytest.mark.parametrize(
+    "query, topic",
+    [
+        ("asthma AND chinese", "asthmaand"),
+        ("asthma OR chinese", "asthmaor"),
+        ("asthma NOT chinese", "asthmanot"),
+        ("title:asthma chinese", "titleasthma"),
+    ],
+)
+def test_query_operators_are_read_as_topic_text(query, topic):
+    """The documented limit, pinned so it cannot change unnoticed.
+
+    This rule reads words, not query syntax: a boolean operator or a field
+    prefix becomes part of the topic, so the key names a hub no archive has
+    and nothing is exempt. That is the safe direction — the demote fires as
+    it always did, and the caller sees the ranking they saw before the
+    exemption existed. Widening it to parse operators would be a new
+    decision, and this test is where that decision would have to be made.
+    """
+    assert requested_translation_topic(query) == topic
+    assert is_crawl_artefact(_ASTHMA_HUB, query) is True
+    # Paired with the same question asked in words, so the line above pins
+    # the operator and not a rule that stopped firing everywhere.
+    assert is_crawl_artefact(_ASTHMA_HUB, "asthma chinese") is False
 
 
 # ---------------------------------------------------------------------------
