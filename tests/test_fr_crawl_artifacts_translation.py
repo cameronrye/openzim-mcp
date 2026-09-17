@@ -496,11 +496,13 @@ def _zim_query(template: str, **kwargs: Any) -> Callable[..., List[str]]:
 
 def _reranked(surface: Callable[..., List[str]]) -> Callable[..., List[str]]:
     def run(server, zim, topic):
-        with patch(
-            "openzim_mcp.ml.reranker.BGEReranker.get",
-            return_value=_artefact_loving_reranker(),
-        ):
-            return surface(server, zim, topic)
+        reranker = _artefact_loving_reranker()
+        with patch("openzim_mcp.ml.reranker.BGEReranker.get", return_value=reranker):
+            paths = surface(server, zim, topic)
+        # A surface that skipped the rerank would pass on the demote before it
+        # and prove nothing about the one after it.
+        assert reranker.rerank.called, "the reranker never ran"
+        return paths
 
     return run
 
