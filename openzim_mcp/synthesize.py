@@ -1865,10 +1865,26 @@ def _demote_crawl_artefact_hits(
     canonical can itself be an image-caption stub, and it sinks with the
     rest, as it does in the ``tell me about`` chooser. Stable, drops nothing.
 
-    Reordering here decides which article the answer FEATURES
-    (``_redirect_to_answering_section`` reads the first passage) and the
-    order of ``considered_articles``; ``_demote_crawl_artefact_passages``
-    restores the order after the stages that re-sort passages by score.
+    Reordering here decides the order of ``considered_articles`` and, with
+    the reranker off, which article the answer FEATURES
+    (``_redirect_to_answering_section`` reads the first passage).
+    ``_demote_crawl_artefact_passages`` restores the order after the stages
+    that re-sort passages by score, but one of them, the cross-encoder
+    rerank, runs BEFORE that redirect: with the ``[reranker]`` extra
+    engaged, an artefact it scores first is the passage the redirect
+    evaluates, finds no answering section in, and leaves alone, so the
+    article the passage demote then puts first keeps its un-redirected
+    passage. A known gap, not a regression (without the passage demote the
+    artefact itself is featured); recorded as open in
+    docs/field-report-disposition.md.
+
+    The demote drops nothing itself, but it runs before
+    ``_drop_cross_archive_leakage``, which picks the primary archive by
+    position. In a multi-archive answer, sinking an artefact that leads the
+    fused hits can change which archive is primary, and so which hits
+    survive that floor — as ``_demote_list_articles`` in the same slot
+    already could. Also recorded as open; the follow-up is to run both
+    demotes after the floor.
 
     ``query`` is the pipeline's search string — what ``search_top_k`` ran —
     so a hub it asks for ("asthma in spanish") is not demoted and can be the

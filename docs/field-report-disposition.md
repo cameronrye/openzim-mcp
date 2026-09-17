@@ -214,7 +214,7 @@ omissions — reopen one only with evidence that changes its premise.
 | Dropping the reranker extra, or publishing an improvement figure | Declined. "No measured effect at n=44 on two warc2zim archives" is not "no effect" — the sample rules out a large effect, not a small one, and says nothing about Wikipedia-shaped corpora — and a published figure would be invented. The docs give the measured numbers and let a reader price the trade. |
 | Demoting index pagination (`/page/N/`) as a crawl artefact | Declined on measurement. It matched nothing on MedlinePlus and two IEP entries, both false positives: `category/…/metaphysics/page/2/` continues the topic index `/category/` is kept for, 19 more articles with no overlap. |
 | Over-fetching so a small title or suggest `limit` evicts artefacts | Declined. The demote reorders the page the data layer returns, so at `limit` 1 or 2 a page holding no real article still leads with an artefact, and a larger `limit` can change which row leads. Over-fetching means recomputing `total`, `done` and the paging arithmetic, in the same spot where the first placement broke promotion. Documented in the API reference. Fulltext is declined on the same grounds and one more: it pages, so pulling an article forward from page two would have to move `next_offset` and the cursor with it, and a walk would then see pages whose boundaries depend on what the demote found. |
-| Exempting MedlinePlus's per-language portals from `/languages/` | Accepted cost. The shape also matches about 53 "Health Information in *Language*" portals, which now sink below other rows on their page — `title 'Italian'` leads with a recipe, and fulltext does the same. They are still returned. Telling a portal from a translation hub needs a language list or MedlinePlus-specific title matching. |
+| Exempting MedlinePlus's per-language portals from `/languages/` | Accepted cost. The shape also matches about 53 "Health Information in *Language*" portals, which now sink below other rows on their page — `title 'Italian'` leads with a recipe, and fulltext does the same: review asked each of the 55 portal names as both `<language>` and `health information in <language>` at `limit=5`, and the portal lost #1 on 21 of those 110 fulltext queries — `spanish` drops it to #5, `french` to #3 behind a French-toast recipe. The translation exemption never exempts a portal, so the figure stands. They are still returned. Telling a portal from a translation hub needs a language list or MedlinePlus-specific title matching; the translation exemption has since added a language list, used only so that a portal never counts as a requested hub, and exempting the portals with it is still not done. |
 | Versioning the inbound cursor across the ranking change | Recorded. A cursor minted before the upgrade resumes at the same offset in the new order, so a paging walk that spans the upgrade can repeat or skip a row. Within one server version paging is exact. Rejecting every pre-upgrade cursor is a contract change for a one-time effect. |
 | Malformed-frame classification on the `sse` transport | Not wired, recorded. `MCPServer.run(transport="sse")` builds its own ASGI app inside the SDK, so no middleware this server adds reaches it. Covering it means reimplementing `run_sse_async`'s uvicorn and transport-security setup for a transport already deprecated for removal in 4.0.0. The gap is named where the gate is wired, in the transport table, and in the deprecation warning an operator sees when they choose SSE — and asserted by tests, so it cannot be re-discovered as a surprise. |
 
@@ -225,11 +225,16 @@ Recorded rather than closed, in rough order of value:
 - **Ranking headroom beyond artefacts.** Both reranker configurations put a
   relevant article at #1 of `zim_query` search results only 63–64% of the
   time. That was measured before either artefact demote and has not been
-  measured since. Scraper output no longer leads or outranks an article on
-  any fulltext surface (see the fulltext follow-up), but the evaluation's
-  other failure shape — real articles in the wrong order, such as a
-  supplement monograph outranking "High blood pressure medications" — is
-  untouched.
+  measured since. On every fulltext surface scraper output now sits below
+  every article on the same page, unless it is the translation hub the
+  query asks for (see the fulltext follow-up). It can still lead a page
+  that holds no article, because the demote reorders the page it is handed
+  and never fetches past it (the over-fetch row under "Deliberately not
+  fixed" says why): `zim_query 'search for hepatitis b'` at `limit=1` still
+  leads with `languages/hepatitisb.html`, as on `main`, and the article is
+  the one row of page two. The evaluation's other failure shape — real
+  articles in the wrong order, such as a supplement monograph outranking
+  "High blood pressure medications" — is untouched.
 - **fid 70's title completion needs the cache.** A search row's truncated
   title ("Alzheimer" for "Alzheimer's Disease") is completed from the
   snippet render the row just cached, so with the cache disabled no title
@@ -237,6 +242,34 @@ Recorded rather than closed, in rough order of value:
   encyclopedia article instead of offering the three-way chooser the default
   configuration offers. Found while comparing cache-on and cache-off runs
   for the fulltext follow-up; identical on the release before it.
+- **With the reranker on, synthesize can still feature the wrong section.**
+  `_redirect_to_answering_section` swaps the featured passage for the
+  section whose heading restates the question, and it reads the first
+  passage. With the `[reranker]` extra engaged, the cross-encoder re-sorts
+  passages before that redirect, so when it scores a translation hub or
+  image stub first, the redirect looks inside the artefact, finds no
+  answering section, and gives up; the passage demote then puts the real
+  article back on top with the passage BM25 highlighted, not the section
+  that answers. Review reproduced it with the real cross-encoder on
+  MedlinePlus. With the reranker off the redirect sees the article, and
+  `main` is worse either way — it features and cites the hub — so this is
+  a gap, not a regression. Follow-up: run the redirect after the passage
+  demote, or demote the passages, keeping `hit_keys` parallel, straight
+  after the rerank.
+- **Multi-archive synthesize: the hit demote can change which hits
+  survive.** `_demote_crawl_artefact_hits` runs before
+  `_drop_cross_archive_leakage`, and that floor picks the primary archive
+  by position: the first archive seen when no hit's path shares a query
+  token, the earliest on a tie. Sinking an artefact that leads the fused
+  list can hand primary to another archive, and the old primary is then
+  capped at `max_secondary_archive_hits`, so a different set of passages
+  is cited, not the same set reordered. `main`'s `_demote_list_articles`
+  sits in the same slot and can already do the same. Review reproduced it
+  with two fixture archives, one MedlinePlus-shaped and one whose paths
+  sort after `medlineplus.gov/`; it cannot fire on the IEP + MedlinePlus
+  library, where `iep.utm.edu` sorts first, and the cited sets matched
+  `main` on 12 real queries. Follow-up: move both demotes after the floor,
+  so the floor sees the fused order.
 - `zim_browse(mode='page')` renders a `preview` that is empty on 99.8% of
   IEP rows, making the default mode far slower than `mode='walk'` for
   identical rows.
