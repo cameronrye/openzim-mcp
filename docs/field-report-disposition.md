@@ -166,13 +166,19 @@ suggest and `tell me about` never surfaced the hub for this phrasing on
 `main`, so fulltext was the only surface that answered these queries at all.
 
 The fix is an exemption, not a new ranking. A query asks for a translation
-when, lowercased and stripped of surrounding whitespace and trailing
-punctuation, it ends with one or more language words — MedlinePlus's
-languages, multi-word names such as "cape verdean creole" included, plus
-"simplified", "traditional", "mandarin", "cantonese", "persian" and
-"filipino"; not "english" — optionally preceded by "in", with a topic left
-before them. The topic's key is that text with every non-alphanumeric
-character removed, and the one row exempt from the demote is
+when, lowercased and stripped of surrounding whitespace, of trailing
+punctuation and of quotes at each word's edges, it ends with one or more
+language words — MedlinePlus's languages, multi-word names such as "cape
+verdean creole" included, plus "simplified", "traditional", "mandarin",
+"cantonese", "persian" and "filipino"; not "english" — optionally followed
+by the word "language" or "languages" and optionally preceded by "in" and
+"the", with a topic left before them, so that "anemia in the chinese
+language" asks what "anemia chinese" asks. The noun is dropped rather than
+matched, which is what keeps "american sign language" a topic. The
+languages are MedlinePlus's own, pinned in the tests against the 53
+per-language portals the archive files, so dropping one is a failed
+contract and not a fingerprint to re-pin. The topic's key is that text with
+every non-alphanumeric character removed, and the one row exempt is
 `/languages/<key>.html`, matched on the path because some stored hub titles
 are cut at the apostrophe ("Alzheimer") while the slug never is. Exempt
 means not demoted: the hub keeps the position the archive ranked it at and
@@ -191,8 +197,66 @@ every query, and so do the per-language portals and the index and help pages
 beside them (`languages/french.html` for "health information in french"):
 the accepted-cost row for portals under "Deliberately not fixed" stands.
 
-TODO(owner): re-measure the 700 fulltext and 147 `synthesize=True`
-translation queries on the fixed branch and record the numbers here.
+Two costs of the rule itself, named rather than hidden. The qualifier words
+are language words in their own right, so a query that merely ends in one —
+"asthma traditional", "asthma simplified" — exempts that topic's hub; the
+effect is only ever a demote declining to fire, never a row promoted past
+an article. And the rule reads words, not query syntax: "asthma AND
+chinese" has the key `asthmaand`, which no archive has a hub for, so that
+page is demoted exactly as it was before the exemption existed.
+
+**Re-measured on the fixed branch.** Same archive and same method as the
+review run — a real MCP `ClientSession` per tree, rate limiter and reranker
+off, cache warm with every call issued twice — and it reproduced the `main`
+and demote-only baselines above exactly. On the 700 fulltext queries the
+requested hub is #1 on 424 pages on `zim_search` `mode="fulltext"` and on
+"search all files", and on 428 on `zim_query 'search for …'` compact and
+legacy, against 332 on `main` and 106 with the demote alone. Queries where
+the hub lost #1 against `main`: 226 with the demote alone, **0** on the
+fixed branch. The 92–96 pages where the fixed branch beats `main` are not
+promotions — on every one of them each row above the hub on `main` was
+itself an artefact — and across 2,800 page comparisons the sequence of
+non-artefact rows above the hub is identical to `main`'s.
+
+It is still a page-scoped reorder. The set of rows on a page matches
+`main`'s on 700 of 700 pages on all four surfaces, and the fixed branch's
+page equals demote(`main`'s page, query) on 700 of 700 warm and on 100 of
+100 with the cache off. The cache-off subsample of 100 queries: the hub
+is #1 on 44 on `main`, on 14 with the demote alone, and on 56 (fulltext,
+search-all) or 58 (compact, legacy) on the fixed branch, with no page
+losing #1 against `main`.
+
+On `synthesize=True` — 150 queries, 147 of them answered on every tree —
+the requested hub is the first citation, the featured article, on 63 on
+`main`, on 7 with the demote alone and on 76 on the fixed branch, and the
+hub's requested-language section is in the answer in exactly those cases.
+The hub is cited somewhere on 109, 101 and 109. No query features the hub
+on `main` and fails to on the fixed branch.
+
+Nothing else moved. 40 plain topic queries with no language word, over four
+fulltext surfaces, warm and cache-off — 320 page comparisons — plus 80
+synthesize comparisons are byte-identical between the demote alone and the
+fixed branch, as are 12 side-effect probes ("japanese encephalitis",
+"german measles", "spanish flu", "chinese medicine", "korean ginseng",
+"health information in chinese", "asthma in children"). The first pass's
+own gain is intact: 40 of 40 plain-topic pages lead with an article,
+against 34 of 40 on `main`.
+
+The "<topic> in <language> language" phrasing was a regression the first
+version of the exemption did not cover, found after the run above and
+fixed here; it is measured separately because the fix is the reason it now
+passes. 50 hub topics — sampled evenly across the 302 topic hubs whose
+stored title spells their own slug — × Spanish, Chinese and French, as
+"<topic> in <language> language", `zim_search` `mode="fulltext"` at
+`limit=5`, cache warm, on the archive's own paths. The requested hub was #1
+on 66 of 150 pages on `main` (71560f1), on 35 with the demote alone
+(6b2953a6) and on 35 with the first version of the exemption (057e875),
+whose pages are identical to the demote-only ones query for query because
+that parser reads none of these 150 as a translation request. With the
+trailing noun droppable it is #1 on 77 of 150, no page loses #1 against
+`main`, and the 11 pages that gain it are again not promotions: every row
+above the hub on `main` in those cases was an artefact, and the
+non-artefact rows are in `main`'s order on all 150 pages.
 
 ## Deliberately not fixed
 
@@ -214,7 +278,7 @@ omissions — reopen one only with evidence that changes its premise.
 | Dropping the reranker extra, or publishing an improvement figure | Declined. "No measured effect at n=44 on two warc2zim archives" is not "no effect" — the sample rules out a large effect, not a small one, and says nothing about Wikipedia-shaped corpora — and a published figure would be invented. The docs give the measured numbers and let a reader price the trade. |
 | Demoting index pagination (`/page/N/`) as a crawl artefact | Declined on measurement. It matched nothing on MedlinePlus and two IEP entries, both false positives: `category/…/metaphysics/page/2/` continues the topic index `/category/` is kept for, 19 more articles with no overlap. |
 | Over-fetching so a small title or suggest `limit` evicts artefacts | Declined. The demote reorders the page the data layer returns, so at `limit` 1 or 2 a page holding no real article still leads with an artefact, and a larger `limit` can change which row leads. Over-fetching means recomputing `total`, `done` and the paging arithmetic, in the same spot where the first placement broke promotion. Documented in the API reference. Fulltext is declined on the same grounds and one more: it pages, so pulling an article forward from page two would have to move `next_offset` and the cursor with it, and a walk would then see pages whose boundaries depend on what the demote found. |
-| Exempting MedlinePlus's per-language portals from `/languages/` | Accepted cost. The shape also matches about 53 "Health Information in *Language*" portals, which now sink below other rows on their page — `title 'Italian'` leads with a recipe, and fulltext does the same: review asked each of the 55 portal names as both `<language>` and `health information in <language>` at `limit=5`, and the portal lost #1 on 21 of those 110 fulltext queries — `spanish` drops it to #5, `french` to #3 behind a French-toast recipe. The translation exemption never exempts a portal, so the figure stands. They are still returned. Telling a portal from a translation hub needs a language list or MedlinePlus-specific title matching; the translation exemption has since added a language list, used only so that a portal never counts as a requested hub, and exempting the portals with it is still not done. |
+| Exempting MedlinePlus's per-language portals from `/languages/` | Accepted cost. The shape also matches the archive's 53 per-language "Health Information in *Language*" portals, which now sink below other rows on their page — `title 'Italian'` leads with a recipe, and fulltext does the same. Measured to be reproducible: 53 portals, because 55 entries under `/languages/` carry that title and two of them name no language (the Multiple-Languages index and its all-topics list); each portal's language taken from its own title, up to the first "(" or ":" (`Chinese, Simplified`); each asked twice, bare and as `health information in <language>`, through `zim_search` `mode="fulltext"` at `limit=5`, cache warm, on the shipped MedlinePlus archive — 106 queries. The portal was #1 on all 106 of them on `main` (71560f1) and on 86 with the demote, so it lost #1 — was #1 before and is not now, which here is also every page that fails to lead, since it led all 106 before — on 20: `spanish` drops it to #5, `french` to #3 behind a French-toast recipe. The translation exemption changes none of this: all 106 pages are identical to the demote-only ones, row for row, because a portal is never a requested hub. They are still returned. Telling a portal from a translation hub needs a language list or MedlinePlus-specific title matching; the translation exemption has since added a language list, used only so that a portal never counts as a requested hub, and exempting the portals with it is still not done. |
 | Versioning the inbound cursor across the ranking change | Recorded. A cursor minted before the upgrade resumes at the same offset in the new order, so a paging walk that spans the upgrade can repeat or skip a row. Within one server version paging is exact. Rejecting every pre-upgrade cursor is a contract change for a one-time effect. |
 | Malformed-frame classification on the `sse` transport | Not wired, recorded. `MCPServer.run(transport="sse")` builds its own ASGI app inside the SDK, so no middleware this server adds reaches it. Covering it means reimplementing `run_sse_async`'s uvicorn and transport-security setup for a transport already deprecated for removal in 4.0.0. The gap is named where the gate is wired, in the transport table, and in the deprecation warning an operator sees when they choose SSE — and asserted by tests, so it cannot be re-discovered as a surprise. |
 
