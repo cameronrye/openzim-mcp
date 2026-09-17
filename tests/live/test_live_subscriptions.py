@@ -57,16 +57,22 @@ async def _collect(subscription: Any, events: List[Any], seen: asyncio.Event) ->
 
 @pytest.mark.asyncio
 async def test_listen_stream_receives_both_notification_kinds(
-    spawn_live_server, zim_dir: Path
+    spawn_live_server, disposable_corpus: Path
 ) -> None:
-    """A replace fires ``updated``; an add fires ``list_changed``."""
+    """A replace fires ``updated``; an add fires ``list_changed``.
+
+    Served from a copy: this test rewrites the archive it watches and drops a
+    second file beside it, and doing that to the operator's own library moved
+    the mtime of a 128 MB archive every time the suite ran.
+    """
     srv = spawn_live_server(
         transport="http",
         token=TOKEN,
+        zim_dir=disposable_corpus,
         extra_env={"OPENZIM_MCP_WATCH_INTERVAL_SECONDS": WATCH_INTERVAL},
     )
 
-    zims = sorted(zim_dir.glob("*.zim"))
+    zims = sorted(disposable_corpus.glob("*.zim"))
     assert zims, "no .zim files to exercise"
     target = zims[0]
     archive_uri = f"zim://{target.stem}"
@@ -119,7 +125,7 @@ async def test_listen_stream_receives_both_notification_kinds(
 
                         # (2) Add a new file -> list_changed.
                         seen.clear()
-                        added = zim_dir / "live_subscription_probe.zim"
+                        added = disposable_corpus / "live_subscription_probe.zim"
                         shutil.copyfile(target, added)
                         try:
                             await asyncio.wait_for(
