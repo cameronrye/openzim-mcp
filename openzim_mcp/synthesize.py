@@ -47,7 +47,7 @@ from openzim_mcp.tool_schemas import (
     SynthesizePassage,
     SynthesizeResponse,
 )
-from openzim_mcp.zim.search import is_crawl_artefact
+from openzim_mcp.zim.search import crawl_artefact_classifier
 
 logger = logging.getLogger(__name__)
 
@@ -1854,6 +1854,8 @@ def _demote_list_articles(
 
 def _demote_crawl_artefact_hits(
     top_hits: list[tuple[str, dict]],
+    *,
+    query: str,
 ) -> list[tuple[str, dict]]:
     """v3.3.1 field report (fid 71): sink scraper output below real articles.
 
@@ -1867,8 +1869,13 @@ def _demote_crawl_artefact_hits(
     (``_redirect_to_answering_section`` reads the first passage) and the
     order of ``considered_articles``; ``_demote_crawl_artefact_passages``
     restores the order after the stages that re-sort passages by score.
+
+    ``query`` is the pipeline's search string — what ``search_top_k`` ran —
+    so a hub it asks for ("asthma in spanish") is not demoted and can be the
+    article the answer features.
     """
-    flags = [is_crawl_artefact(str(hit.get("path", ""))) for _, hit in top_hits]
+    sinks = crawl_artefact_classifier(query)
+    flags = [sinks(str(hit.get("path", ""))) for _, hit in top_hits]
     if not any(flags):
         return top_hits
     return [t for t, f in zip(top_hits, flags) if not f] + [
@@ -1878,6 +1885,8 @@ def _demote_crawl_artefact_hits(
 
 def _demote_crawl_artefact_passages(
     passages: list[SynthesizePassage],
+    *,
+    query: str,
 ) -> list[SynthesizePassage]:
     """Fid 71 again, on the passages the answer is rendered from.
 
@@ -1887,9 +1896,11 @@ def _demote_crawl_artefact_passages(
     boost, which can lift a passage past its neighbour. Classified on the
     cite_id's entry path — the ``#section`` suffix would hide a ``.srt``
     from the end-anchored pattern. Ranks are renumbered, as each of those
-    stages does after it reorders.
+    stages does after it reorders. ``query`` is the same search string
+    ``_demote_crawl_artefact_hits`` is given.
     """
-    flags = [is_crawl_artefact(_parse_cite_id(p["cite_id"])[1]) for p in passages]
+    sinks = crawl_artefact_classifier(query)
+    flags = [sinks(_parse_cite_id(p["cite_id"])[1]) for p in passages]
     if not any(flags):
         return passages
     ordered = [p for p, f in zip(passages, flags) if not f] + [
@@ -2253,8 +2264,11 @@ def synthesize_query(
     # ``List_of_songs_about_Berlin`` to the bottom BEFORE promotion lets
     # ``Berlin_(disambiguation)`` claim rank 0 and skip the canonical
     # promotion. Demoting AFTER preserves the promotion's decision and
-    # only reorders the survivors.
-    top_hits = _demote_crawl_artefact_hits(_demote_list_articles(top_hits))
+    # only reorders the survivors. ``query`` — the string ``search_top_k``
+    # ran, after the handler stripped the intent prefix — not
+    # ``original_query``: "tell me about asthma in spanish" searched
+    # "asthma in spanish", and it is that search's hub that is asked for.
+    top_hits = _demote_crawl_artefact_hits(_demote_list_articles(top_hits), query=query)
     # A11 G2 (post-a10): drop hits whose Xapian relevance score is
     # < 25% of the top hit's score. ``tell me about cats`` was
     # returning ``Rephlex_Records_discography`` at rank 2 with score
@@ -2351,8 +2365,9 @@ def synthesize_query(
         # not land inside a link construct).
         attributed = [_strip_links_in_passage(p) for p in attributed]
     # After every stage that re-sorts on score, before the budget cap — so a
-    # cap that cuts the answer short cuts scraper output first.
-    attributed = _demote_crawl_artefact_passages(attributed)
+    # cap that cuts the answer short cuts scraper output first. The same
+    # ``query`` as the hit demote, so the two cannot disagree about the hub.
+    attributed = _demote_crawl_artefact_passages(attributed, query=query)
     pre_cap_chars = sum(len(p["text_markdown"]) for p in attributed)
     capped = _enforce_budget(attributed, char_budget=config.output_char_budget)
     truncated = sum(len(p["text_markdown"]) for p in capped) < pre_cap_chars

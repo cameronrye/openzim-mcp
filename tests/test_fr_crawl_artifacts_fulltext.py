@@ -442,7 +442,7 @@ def test_a_sectioned_subtitle_passage_is_still_an_artefact():
         {"cite_id": "med/medlineplus.gov/asthma.html#summary", "rank": 2},
     ]
 
-    out = _demote_crawl_artefact_passages(passages)
+    out = _demote_crawl_artefact_passages(passages, query="asthma")
 
     assert [p["cite_id"] for p in out] == [
         "med/medlineplus.gov/asthma.html#summary",

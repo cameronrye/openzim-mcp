@@ -91,7 +91,8 @@ _BUNDLE_KEY_PREFIX = "bundle:v2h"
 # cached ranking that comes from anywhere else: check that by hand.
 #
 # r3 -> r4: fulltext and filtered search pages now sink crawl artefacts before
-# they are cached (fid 71, fulltext half).
+# they are cached (fid 71, fulltext half), except the translation hub a query
+# asks for ("asthma in spanish"), which keeps its archive position.
 _RENDER_EPOCH = "r4"
 
 

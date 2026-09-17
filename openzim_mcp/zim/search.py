@@ -19,7 +19,7 @@ import urllib.parse
 from dataclasses import dataclass
 from pathlib import Path
 from time import monotonic as _monotonic
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, cast
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, cast
 
 from libzim.reader import Archive  # type: ignore[import-untyped]
 
@@ -374,21 +374,205 @@ _CRAWL_ARTEFACT_RE = re.compile(
 # rule that, measured, only ever threw away real content.
 
 
-def is_crawl_artefact(path: str) -> bool:
+# A caller who ASKS for a translation wants the hub the demote above sinks.
+# Review of the fulltext demote measured it on the shipped MedlinePlus archive:
+# 700 "<topic> <language>" and "<topic> in <language>" queries over 50 hub
+# topics, and the requested hub led 332 pages before the demote and 106 after,
+# with an unrelated page taking #1 on most of the 226 it lost ("asthma in
+# children chinese" -> Dong Quai), because fulltext matches the language word
+# inside product names and citations. Title, suggest and ``tell me about``
+# never surfaced the hub for that phrasing, so fulltext was the only answer.
+#
+# The words are MedlinePlus's languages plus the qualifiers and aliases people
+# type next to them. "english" is deliberately absent: the archive IS English,
+# so "<topic> english" asks for the article.
+_TRANSLATION_LANGUAGES = (
+    "albanian",
+    "amharic",
+    "arabic",
+    "armenian",
+    "bengali",
+    "bosnian",
+    "burmese",
+    "cape verdean creole",
+    "chinese",
+    "chuukese",
+    "dari",
+    "farsi",
+    "french",
+    "german",
+    "haitian creole",
+    "hindi",
+    "hmong",
+    "ilocano",
+    "indonesian",
+    "italian",
+    "japanese",
+    "karen",
+    "khmer",
+    "kinyarwanda",
+    "kirundi",
+    "korean",
+    "lao",
+    "malay",
+    "marshallese",
+    "nepali",
+    "oromo",
+    "pashto",
+    "pohnpeian",
+    "polish",
+    "portuguese",
+    "punjabi",
+    "russian",
+    "samoan",
+    "serbo-croatian",
+    "somali",
+    "spanish",
+    "swahili",
+    "tagalog",
+    "thai",
+    "tibetan",
+    "tigrinya",
+    "tongan",
+    "turkish",
+    "ukrainian",
+    "urdu",
+    "vietnamese",
+    "yiddish",
+    # Qualifiers and aliases: "chinese simplified", "traditional chinese",
+    # "persian" for Farsi, "filipino" for Tagalog.
+    "simplified",
+    "traditional",
+    "mandarin",
+    "cantonese",
+    "persian",
+    "filipino",
+)
+# Hyphens split words as whitespace does, so "serbo-croatian" and "serbo
+# croatian" are the same two-word phrase.
+_QUERY_WORD_SPLIT_RE = re.compile(r"[\s-]+")
+_TRANSLATION_PHRASES = tuple(
+    tuple(_QUERY_WORD_SPLIT_RE.split(name)) for name in _TRANSLATION_LANGUAGES
+)
+_NON_SLUG_CHARS_RE = re.compile(r"[^a-z0-9]")
+# A topic hub is ``<host>/languages/<slug>.html``, and its slug is the topic
+# lowercased with every non-alphanumeric character removed — "Alzheimer's
+# Disease" -> ``alzheimersdisease``. Matched on the PATH: some stored titles
+# are cut at the apostrophe ("Alzheimer"), the slug never is.
+_TRANSLATION_HUB_RE = re.compile(r"/languages/([a-z0-9]+)\.html$", re.IGNORECASE)
+# Pages under ``/languages/`` that are not a topic's hub: one portal per
+# language ("Health Information in French"), the index of every language and
+# two help pages. No query exempts these — "french in spanish" names a topic
+# whose key is ``french``, and that is still not a request for the portal.
+_LANGUAGES_NAVIGATION_SLUGS = frozenset(
+    {
+        *(_NON_SLUG_CHARS_RE.sub("", name) for name in _TRANSLATION_LANGUAGES),
+        "chinesesimplifiedmandarindialect",
+        "chinesetraditionalcantonesedialect",
+        "languages",
+        "display",
+        "criteria",
+    }
+)
+
+
+def requested_translation_topic(query: Optional[str]) -> Optional[str]:
+    """The topic key of a query that asks for a translation, else ``None``.
+
+    A query asks for one when, lowercased and stripped of surrounding
+    whitespace and trailing punctuation, it ENDS with one or more language
+    words, optionally preceded by ``in``, and a topic remains before them:
+    "asthma in children chinese" -> ``asthmainchildren``, "Alzheimer's
+    disease in Chinese?" -> ``alzheimersdisease``. The key is that topic with
+    every non-alphanumeric character removed, which is how MedlinePlus spells
+    a hub's slug.
+
+    Suffix only, deliberately. "japanese encephalitis" and "german measles"
+    lead with the language word and are asking about the disease; "chinese"
+    and "in chinese" name no topic, so they ask for no topic's hub.
+    """
+    if not query:
+        return None
+    text = query.strip().lower()
+    cut = len(text)
+    while cut and not text[cut - 1].isalnum():
+        cut -= 1
+    words = [w for w in _QUERY_WORD_SPLIT_RE.split(text[:cut]) if w]
+    end = len(words)
+    while True:
+        phrase = next(
+            (
+                p
+                for p in _TRANSLATION_PHRASES
+                if len(p) <= end and tuple(words[end - len(p) : end]) == p
+            ),
+            None,
+        )
+        if phrase is None:
+            break
+        end -= len(phrase)
+    if end == len(words):
+        return None
+    if end and words[end - 1] == "in":
+        end -= 1
+    return _NON_SLUG_CHARS_RE.sub("", "".join(words[:end])) or None
+
+
+def _is_requested_translation_hub(path: str, topic: str) -> bool:
+    """Whether ``path`` is the hub of ``topic`` (a key from
+    ``requested_translation_topic``) — never a language portal."""
+    match = _TRANSLATION_HUB_RE.search(path)
+    if match is None:
+        return False
+    slug = match.group(1).lower()
+    return slug == topic and slug not in _LANGUAGES_NAVIGATION_SLUGS
+
+
+def crawl_artefact_classifier(
+    query: Optional[str] = None,
+) -> Callable[[str], bool]:
+    """``is_crawl_artefact`` for one query, parsed once: the predicate a
+    demote applies to every row of a page."""
+    topic = requested_translation_topic(query)
+
+    def sinks(path: str) -> bool:
+        if not path or not _CRAWL_ARTEFACT_RE.search(path):
+            return False
+        return topic is None or not _is_requested_translation_hub(path, topic)
+
+    return sinks
+
+
+def is_crawl_artefact(path: str, query: Optional[str] = None) -> bool:
     """Whether ``path`` is scraper output rather than an article.
 
     Shape only: no archive access, so this is safe to call inside a ranking
     loop. See ``_CRAWL_ARTEFACT_RE`` for what is deliberately excluded.
+
+    ``query`` is the search the row answers. When it asks for a translation
+    of a topic (``requested_translation_topic``), that topic's hub is not an
+    artefact for this query; every other artefact — image stubs, subtitle
+    sidecars, other topics' hubs, the language portals — still is. ``None``
+    classifies on the path alone. A loop over rows should build
+    ``crawl_artefact_classifier(query)`` once instead of calling this.
     """
-    return bool(path) and bool(_CRAWL_ARTEFACT_RE.search(path))
+    return crawl_artefact_classifier(query)(path)
 
 
-def demote_crawl_artefacts(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def demote_crawl_artefacts(
+    rows: List[Dict[str, Any]], query: Optional[str] = None
+) -> List[Dict[str, Any]]:
     """Sink crawl artefacts below real articles, stably, dropping nothing.
 
     A DEMOTE, not a filter: every row the caller would have had is still
     there, and relative order inside each group is the archive's own ranking,
     which this has no opinion about.
+
+    ``query`` is the search the page answers — at every call site, the string
+    that site's cache key is built from, so a cached page cannot disagree with
+    a cold one. A hub the query asks for (see ``is_crawl_artefact``) is simply
+    not demoted: it keeps the place the archive ranked it at, and is never
+    promoted past an article that ranked above it.
 
     Never apply it upstream of a consumer that reads the list as
     score-descending. The title surface's promotion probes read
@@ -408,11 +592,13 @@ def demote_crawl_artefacts(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
     if not rows:
         return rows
-    artefacts = [r for r in rows if is_crawl_artefact(str(r.get("path", "")))]
-    if not artefacts:
+    sinks = crawl_artefact_classifier(query)
+    flags = [sinks(str(r.get("path", ""))) for r in rows]
+    if not any(flags):
         return rows
-    keep = [r for r in rows if not is_crawl_artefact(str(r.get("path", "")))]
-    return keep + artefacts
+    return [r for r, f in zip(rows, flags) if not f] + [
+        r for r, f in zip(rows, flags) if f
+    ]
 
 
 def _snippet_query(query: str) -> Optional[str]:
@@ -1096,8 +1282,10 @@ class _SearchMixin:
         # cross-archive fan-out and the markdown renderer — wants an article
         # ahead of a translation hub. ``zim_query 'search for hepatitis b'``
         # led with ``languages/hepatitisb.html``. A reorder within the page:
-        # ``consumed`` and every offset derived from it are untouched.
-        results = demote_crawl_artefacts(results)
+        # ``consumed`` and every offset derived from it are untouched. A hub
+        # the query asks for ("hepatitis b in spanish") is not demoted, and
+        # ``query`` is the string ``search_zim_file_data`` keys this page on.
+        results = demote_crawl_artefacts(results, query=query)
 
         returned_count = len(results)
         last_index = offset + consumed
@@ -1900,8 +2088,10 @@ class _SearchMixin:
         # can undo that — the catalog demote moves list articles below them,
         # and the title index can itself answer with an image stub, which the
         # reorder just moved to the top. Last, so a real canonical keeps its
-        # lead and an artefact canonical sinks with the rest.
-        results = demote_crawl_artefacts(results)
+        # lead and an artefact canonical sinks with the rest. ``query``, not
+        # ``display_query``: the match string the filtered page is cached and
+        # searched under.
+        results = demote_crawl_artefacts(results, query=query)
 
         # Synthesise a ``_FilteredScanState`` from the structured
         # payload so the render path stays unchanged. Honor the
@@ -2692,9 +2882,10 @@ class _SearchMixin:
                 )
         # Fid 71, same placement as ``_perform_search``: this projection is the
         # one point both filtered surfaces share — the structured page and the
-        # markdown renderer, each with its own cache key. Error rows were
-        # labelled with their ranked position above, before the reorder.
-        return demote_crawl_artefacts(results)
+        # markdown renderer, each with its own cache key — both built from the
+        # ``query`` passed here. Error rows were labelled with their ranked
+        # position above, before the reorder.
+        return demote_crawl_artefacts(results, query=query)
 
     def get_search_suggestions_data(
         self, zim_file_path: str, partial_query: str, limit: int = 10
@@ -2774,7 +2965,10 @@ class _SearchMixin:
             # archive, against title's 26.1%: comparable. Note the
             # pool is already capped at ``limit`` by the generator above, so
             # this reorders the page it is given and cannot evict from it.
-            suggestions = demote_crawl_artefacts(raw.get("suggestions", []))
+            # Keyed on ``partial_query``, like the cached page.
+            suggestions = demote_crawl_artefacts(
+                raw.get("suggestions", []), query=partial_query
+            )
             actual_count = len(suggestions)
 
             # The suggestion pool is capped at ``limit``; we don't enumerate

@@ -264,7 +264,9 @@ def test_render_fingerprint_is_pinned_to_the_current_epoch(
 # that ranked differently re-serves that build's order until its TTL — which
 # is what reverting this release's ``r2`` -> ``r3`` bump did, with every
 # suite green. Every shape the demote treats specially is in the fixture,
-# including the two it deliberately leaves alone.
+# including the two it deliberately leaves alone. It is ordered with no query;
+# the one shape a query changes, the hub a translation request asks for, is
+# pinned on the fulltext caches below.
 _RANKING_FIXTURE_PATHS = (
     "a/languages/x.html",
     "a/real.html",
@@ -303,18 +305,28 @@ def test_ranking_fingerprint_is_pinned_to_the_current_epoch() -> None:
 # The fixture above only sees a change that moves one of its seven paths: a
 # new artefact shape, a dropped regex flag or a new rule inside the demote all
 # passed it, and a persisted snapshot then served the old order. So the CODE
-# the suggestions cache's order comes from is pinned as well — read through
-# ``ast``, so comments and docstrings can change freely. If this fails and the
-# cached ordering provably does not change, re-pin it with the same epoch;
-# otherwise bump the epoch.
+# the cached orders come from is pinned as well — the demote, and the
+# translation-request exemption it applies per query (the language list, the
+# parser, the hub and portal shapes) — read through ``ast``, so comments and
+# docstrings can change freely. The suggestions cache and the three fulltext
+# search caches all hold what this code decides.
 _RANKING_CODE_NAMES = (
     "_CRAWL_ARTEFACT_RE",
+    "_TRANSLATION_LANGUAGES",
+    "_QUERY_WORD_SPLIT_RE",
+    "_TRANSLATION_PHRASES",
+    "_NON_SLUG_CHARS_RE",
+    "_TRANSLATION_HUB_RE",
+    "_LANGUAGES_NAVIGATION_SLUGS",
+    "requested_translation_topic",
+    "_is_requested_translation_hub",
+    "crawl_artefact_classifier",
     "is_crawl_artefact",
     "demote_crawl_artefacts",
 )
 _PINNED_RANKING_CODE = (
     "r4",
-    "d8cdb6b474b72f0f6fe73971a01d483540d48b9da34d4014ee13f5b2e8e0544b",
+    "18528d67714564613f6f7447c1fd9baa638de4f1345eb3ac5883b8885ba25c63",
 )
 
 
@@ -349,9 +361,12 @@ def test_ranking_code_is_pinned_to_the_current_epoch() -> None:
 
     assert observed == _PINNED_RANKING_CODE, (
         f"the crawl-artefact demote's code, or the epoch, changed (observed "
-        f"{observed}). If what the suggestions cache holds changes, bump "
-        f"_RENDER_EPOCH in openzim_mcp/bundle.py and re-pin every pair here; "
-        f"if it provably does not, re-pin this one with the same epoch."
+        f"{observed}). If what the suggestions or fulltext search caches hold "
+        f"for some query changes, bump _RENDER_EPOCH in openzim_mcp/bundle.py "
+        f"and re-pin every pair here — unless the current epoch has not been "
+        f"released yet, since no persisted value carries it, in which case "
+        f"re-pin with the same epoch. If what they hold provably does not "
+        f"change, re-pin this one with the same epoch."
     )
 
 
@@ -362,16 +377,28 @@ def test_ranking_code_is_pinned_to_the_current_epoch() -> None:
 # all three now hold a different order for the same archive. So the ORDER
 # those caches hold is pinned too, as literals, on a small archive Xapian
 # ranks with both artefacts first. A wiring removed, a wiring added, or a bump
-# reverted each fails here.
+# reverted each fails here. The order is query-dependent — a query that asks
+# for a translation keeps that topic's hub where the archive ranked it — so
+# each cache is pinned for a translation request too: a site that stops being
+# handed its query fails on the second, not the first.
 _FULLTEXT_FIXTURE_PAGES = (
-    ("med.gov/languages/asthma.html", "Asthma - Multiple Languages", "asthma " * 30),
+    (
+        "med.gov/languages/asthma.html",
+        "Asthma - Multiple Languages",
+        "asthma " * 30 + "in spanish",
+    ),
     (
         "med.gov/asthma.html",
         "Asthma",
-        "asthma is a chronic disease of the airways " + "lungs breathing inhaler " * 10,
+        "asthma is a chronic disease of the airways, also in spanish "
+        + "lungs breathing inhaler " * 10,
     ),
-    ("med.gov/ency/imagepages/1.htm", "Asthma image", "asthma " * 20),
-    ("med.gov/copd.html", "COPD", "copd lungs asthma differs " + "breathing " * 10),
+    ("med.gov/ency/imagepages/1.htm", "Asthma image", "asthma " * 20 + "in spanish"),
+    (
+        "med.gov/copd.html",
+        "COPD",
+        "copd lungs asthma differs, also in spanish " + "breathing " * 10,
+    ),
 )
 _DEMOTED_FULLTEXT_ORDER = [
     "med.gov/asthma.html",
@@ -379,12 +406,26 @@ _DEMOTED_FULLTEXT_ORDER = [
     "med.gov/languages/asthma.html",
     "med.gov/ency/imagepages/1.htm",
 ]
+# Xapian's own order for this query is stub, hub, COPD, asthma.
+_TRANSLATION_FULLTEXT_ORDER = [
+    "med.gov/languages/asthma.html",
+    "med.gov/copd.html",
+    "med.gov/asthma.html",
+    "med.gov/ency/imagepages/1.htm",
+]
 _PINNED_FULLTEXT_ORDER = (
     "r4",
     {
-        "search": _DEMOTED_FULLTEXT_ORDER,
-        "filtered": _DEMOTED_FULLTEXT_ORDER,
-        "filtered_markdown": _DEMOTED_FULLTEXT_ORDER,
+        "asthma": {
+            "search": _DEMOTED_FULLTEXT_ORDER,
+            "filtered": _DEMOTED_FULLTEXT_ORDER,
+            "filtered_markdown": _DEMOTED_FULLTEXT_ORDER,
+        },
+        "asthma in spanish": {
+            "search": _TRANSLATION_FULLTEXT_ORDER,
+            "filtered": _TRANSLATION_FULLTEXT_ORDER,
+            "filtered_markdown": _TRANSLATION_FULLTEXT_ORDER,
+        },
     },
 )
 
@@ -426,24 +467,29 @@ def test_the_order_fulltext_caches_hold_is_pinned_to_the_current_epoch(
     observed = (
         _RENDER_EPOCH,
         {
-            "search": paths(
-                ops.search_zim_file_data(str(zim), "asthma", limit=5)["results"]
-            ),
-            "filtered": paths(
-                ops.search_with_filters_data(str(zim), "asthma", "C", None, 5, 0)[
-                    "results"
-                ]
-            ),
-            "filtered_markdown": re.findall(
-                r"^Path: (.+)$",
-                ops.search_with_filters(str(zim), "asthma", "C", None, 5, 0),
-                re.M,
-            ),
+            query: {
+                "search": paths(
+                    ops.search_zim_file_data(str(zim), query, limit=5)["results"]
+                ),
+                "filtered": paths(
+                    ops.search_with_filters_data(str(zim), query, "C", None, 5, 0)[
+                        "results"
+                    ]
+                ),
+                "filtered_markdown": re.findall(
+                    r"^Path: (.+)$",
+                    ops.search_with_filters(str(zim), query, "C", None, 5, 0),
+                    re.M,
+                ),
+            }
+            for query in ("asthma", "asthma in spanish")
         },
     )
 
     assert observed == _PINNED_FULLTEXT_ORDER, (
         f"what the fulltext search caches hold, or the epoch, changed (observed "
         f"{observed}). Bump _RENDER_EPOCH in openzim_mcp/bundle.py so an "
-        f"upgrade invalidates persisted pages, then re-pin every pair here."
+        f"upgrade invalidates persisted pages, then re-pin every pair here — "
+        f"unless the current epoch has not been released yet, in which case no "
+        f"persisted page carries it and re-pinning with the same epoch is enough."
     )

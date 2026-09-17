@@ -3274,13 +3274,15 @@ class SimpleToolsHandler(
         again on the way out, on every path, after the splice has read the
         top row it gates on. A real canonical keeps its lead because the
         partition is stable; an artefact canonical sinks with the rest, as it
-        does in the ``tell me about`` chooser.
+        does in the ``tell me about`` chooser. A hub ``search_query`` asks for
+        ("asthma in spanish") is not demoted — ``search_query`` being the
+        string the payload was searched and cached under.
         """
         spliced = self._splice_canonical_title_row(payload, zim_file_path, search_query)
         rows = spliced.get("results")
         if rows:
             spliced["results"] = demote_crawl_artefacts(
-                cast(List[Dict[str, Any]], rows)
+                cast(List[Dict[str, Any]], rows), query=search_query
             )
         return spliced
 
@@ -3923,8 +3925,10 @@ class SimpleToolsHandler(
         # artefact twin. Demoted last, after the canonical
         # prepend: a real canonical keeps its lead because the partition is
         # stable, and a canonical that is itself an artefact — an image stub
-        # offered as "(canonical title match)" — sinks with the rest.
-        return demote_crawl_artefacts(strong_matches)
+        # offered as "(canonical title match)" — sinks with the rest. ``topic``
+        # is what these rows were searched for (and cached under), so the hub
+        # of "asthma in spanish" is offered where the archive ranked it.
+        return demote_crawl_artefacts(strong_matches, query=topic)
 
     def _auto_pick_or_render_disambiguation(
         self,
