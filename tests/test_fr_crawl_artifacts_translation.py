@@ -56,6 +56,7 @@ from openzim_mcp.config import CacheConfig, OpenZimMcpConfig, RateLimitConfig
 from openzim_mcp.server import OpenZimMcpServer
 from openzim_mcp.zim import search as search_mod
 from openzim_mcp.zim.search import (
+    _TRANSLATION_LANGUAGES,
     demote_crawl_artefacts,
     is_crawl_artefact,
     requested_translation_topic,
@@ -192,6 +193,130 @@ def test_query_operators_are_read_as_topic_text(query, topic):
     # Paired with the same question asked in words, so the line above pins
     # the operator and not a rule that stopped firing everywhere.
     assert is_crawl_artefact(_ASTHMA_HUB, "asthma chinese") is False
+
+
+# ---------------------------------------------------------------------------
+# Which languages
+# ---------------------------------------------------------------------------
+
+# MedlinePlus's own languages: the one named by each "Health Information in
+# <language>" portal filed under ``/languages/`` in the shipped archive, up
+# to the first "(" or ":", 53 of them. (Two more pages carry that title and
+# name no language: the Multiple-Languages index and its all-topics list.)
+#
+# This list is the product contract, not a fingerprint. Every name here is a
+# language a reader asks for their health information in, and a name missing
+# from ``_TRANSLATION_LANGUAGES`` means every "<topic> in <that language>"
+# query sinks the very hub it asks for, on every surface, silently — the
+# regression this whole file exists to prevent, for the speakers of one
+# language at a time. A failure below is a language the server stopped
+# recognising: put it back. There is nothing here to re-pin.
+_MEDLINEPLUS_PORTAL_LANGUAGES = (
+    "Albanian",
+    "Amharic",
+    "Arabic",
+    "Armenian",
+    "Bengali",
+    "Bosnian",
+    "Burmese",
+    "Cape Verdean Creole",
+    "Chinese, Simplified",
+    "Chinese, Traditional",
+    "Chuukese",
+    "Dari",
+    "Farsi",
+    "French",
+    "German",
+    "Haitian Creole",
+    "Hindi",
+    "Hmong",
+    "Ilocano",
+    "Indonesian",
+    "Italian",
+    "Japanese",
+    "Karen",
+    "Khmer",
+    "Kinyarwanda",
+    "Kirundi",
+    "Korean",
+    "Lao",
+    "Malay",
+    "Marshallese",
+    "Nepali",
+    "Oromo",
+    "Pashto",
+    "Pohnpeian",
+    "Polish",
+    "Portuguese",
+    "Punjabi",
+    "Russian",
+    "Samoan",
+    "Serbo-Croatian",
+    "Somali",
+    "Spanish",
+    "Swahili",
+    "Tagalog",
+    "Thai",
+    "Tibetan",
+    "Tigrinya",
+    "Tongan",
+    "Turkish",
+    "Ukrainian",
+    "Urdu",
+    "Vietnamese",
+    "Yiddish",
+)
+# What a caller types beside a language rather than instead of one: the two
+# Chinese portals' dialect qualifiers, and the names people use for Farsi
+# and Tagalog. These are the only words in the code's list that are not one
+# of the portal languages above.
+_LANGUAGE_QUALIFIERS_AND_ALIASES = frozenset(
+    {"simplified", "traditional", "mandarin", "cantonese", "persian", "filipino"}
+)
+
+
+def _spoken(portal_language: str) -> str:
+    """What a caller types for a portal: the name without its dialect
+    qualifier, since "Chinese, Simplified" is asked for as "chinese"."""
+    return portal_language.split(",")[0].lower()
+
+
+@pytest.mark.parametrize("language", _MEDLINEPLUS_PORTAL_LANGUAGES)
+def test_every_language_medlineplus_translates_into_keeps_its_hub(language):
+    spoken = _spoken(language)
+    query = f"asthma in {spoken}"
+
+    assert requested_translation_topic(query) == "asthma", (
+        f"MedlinePlus publishes a {language} portal, so {query!r} asks for "
+        f"asthma's translation hub — and this rule no longer reads "
+        f"{spoken!r} as a language. Restore it in _TRANSLATION_LANGUAGES: "
+        f"which languages the server serves is a product decision, not a "
+        f"value to re-pin."
+    )
+    assert is_crawl_artefact(_ASTHMA_HUB, query) is False, (
+        f"the hub {query!r} asks for is being demoted as scraper output, so "
+        f"{spoken!r} speakers get an unrelated page at #1."
+    )
+
+
+def test_the_language_list_is_those_languages_plus_named_qualifiers():
+    """Closed both ways: nothing MedlinePlus translates into is missing, and
+    nothing else is in the list except the qualifiers and aliases named
+    above. A word added here changes which queries stop demoting, so it is a
+    decision to take deliberately — "english" in particular, which would
+    make "<topic> english" stop asking for the article."""
+    spoken = {_spoken(language) for language in _MEDLINEPLUS_PORTAL_LANGUAGES}
+    listed = set(_TRANSLATION_LANGUAGES)
+
+    assert not spoken - listed, (
+        f"languages MedlinePlus has a portal for that this rule no longer "
+        f"recognises: {sorted(spoken - listed)}"
+    )
+    assert not listed - spoken - _LANGUAGE_QUALIFIERS_AND_ALIASES, (
+        f"words treated as languages that are neither a MedlinePlus portal "
+        f"language nor a named qualifier: "
+        f"{sorted(listed - spoken - _LANGUAGE_QUALIFIERS_AND_ALIASES)}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -351,6 +476,31 @@ def test_everything_else_still_sinks(path, query, exempt_path, exempt_query):
     # Paired: the exemption is live for this shape of question, so the
     # assertion above is about THIS row, not a rule that never fires.
     assert is_crawl_artefact(exempt_path, exempt_query) is False
+
+
+@pytest.mark.parametrize(
+    "path, what_it_is",
+    [
+        # The hub's name is the WHOLE tail of the path. A sidecar filed
+        # beside it borrows the name and is still a subtitle file: matching
+        # ``/languages/<slug>.html`` anywhere in the path instead of at its
+        # end exempts this row and puts a .srt at #1 for "asthma in spanish".
+        (f"{_M}/languages/asthma.html.srt", "a subtitle sidecar named after the hub"),
+        (f"{_M}/languages/asthma.html/index.html", "a page filed under the hub"),
+        # The hub lives under ``/languages/``. Dropping that from the shape
+        # exempts every artefact whose file happens to be named after the
+        # topic — the image stub for the very article asked about.
+        (f"{_M}/ency/imagepages/asthma.html", "an image-caption stub for the topic"),
+        (f"{_M}/imagepages/asthma.html", "an image-caption stub at the root"),
+    ],
+)
+def test_only_the_hub_path_itself_is_exempt(path, what_it_is):
+    """``/languages/<topic>.html``, anchored and in that directory: both
+    halves of the shape are load-bearing, and dropping either one leaves
+    every behavioural test in this file green."""
+    assert is_crawl_artefact(path, "asthma in spanish") is True, what_it_is
+    # Paired with the row that IS the hub, under the same query.
+    assert is_crawl_artefact(_ASTHMA_HUB, "asthma in spanish") is False
 
 
 def _paths(rows: List[Dict[str, Any]]) -> List[str]:
