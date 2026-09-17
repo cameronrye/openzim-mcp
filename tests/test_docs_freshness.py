@@ -3002,6 +3002,26 @@ def test_the_api_reference_says_row_order_is_authoritative() -> None:
         "within each page: `total`, `next_offset` and every offset are unchanged",
         "scraper output on a later page stays there",
         "section attribution and heading-affinity boost → scraper output sunk "
-        "below articles → budget enforcement",
+        "below articles, except the translation hub a query ending in a "
+        "language asks for (see `zim_search` below) → budget enforcement",
+        # The translation-request exemption: which queries, which row, and
+        # what still sinks. Each clause is a behaviour a test pins, and each
+        # is one a rewrite could quietly widen or drop.
+        "A translation the query asks for is not demoted.",
+        "On every surface above — title, suggest, fulltext, the `zim_query` "
+        "routes and `synthesize=True` —",
+        "leaves that topic's own hub, `/languages/<topic>.html`, where the "
+        "archive (or the optional reranker) ranked it",
+        "it ends with one or more language names",
+        "`english` does not count — optionally preceded by `in`, with a topic "
+        "before them",
+        "The hub is matched on its path, with the topic lowercased and stripped "
+        "to letters and digits",
+        "Only a trailing language counts: `japanese encephalitis` and `german "
+        "measles` ask for nothing, and neither does `in chinese` alone.",
+        "The hub is not promoted — an article the archive ranked above it stays "
+        "above it",
+        "everything else still sinks for that query: image-caption stubs, "
+        "subtitle sidecars, other topics' hubs and the per-language portals",
     ):
         assert phrase in prose, phrase

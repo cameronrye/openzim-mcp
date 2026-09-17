@@ -14,7 +14,8 @@ cross-encoder and reorders the top-K that `zim_query` search intents and
 The caller's arguments and response shape are unchanged. Scraper output —
 per-language translation hubs, image-caption stubs, subtitle sidecars — is
 sunk below real articles after the reorder, so the cross-encoder cannot put
-it back on top.
+it back on top. The one exception is a translation hub the query itself asks
+for (`asthma in spanish`), which stays where the reorder put it.
 
 **Whether that reordering is an improvement is unmeasured.** The one blind
 evaluation run against this server — 50 queries, 44 of them rerank-eligible,

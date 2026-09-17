@@ -148,6 +148,52 @@ score. The fulltext search caches now hold a different order for the same
 archive, so the render epoch moved r3 → r4, and a new pin on the order
 those caches hold fails when the wiring changes without a bump.
 
+**A translation the caller asks for is not demoted (found in review).** The
+40-query measurement above asked only for topics, so it could not see what
+the demote does to a caller who asks for the hub itself. Review measured it
+on the same archive with 700 queries — 50 hub topics × Spanish, Chinese,
+French, Korean, Vietnamese, Arabic and Russian × both "<topic> <language>"
+and "<topic> in <language>" — cache warm, the real code of both trees. On
+fulltext the requested hub was #1 on 332 of 700 on `main` and on 106 with
+the demote: it lost #1 on 226, and on about 190 of those the new #1 was
+unrelated ("asthma in children chinese" → Dong Quai, "breast cancer in
+french" → Maritime Pine), because fulltext matches the language word inside
+product names and citations. On `synthesize=True`, 147 "<topic> in
+<language>" queries in Spanish, Chinese and French, the hub was the first
+citation — the featured article — on 63 on `main` and on 7 with the demote,
+and the requested language's section dropped out of the answer. Title,
+suggest and `tell me about` never surfaced the hub for this phrasing on
+`main`, so fulltext was the only surface that answered these queries at all.
+
+The fix is an exemption, not a new ranking. A query asks for a translation
+when, lowercased and stripped of surrounding whitespace and trailing
+punctuation, it ends with one or more language words — MedlinePlus's
+languages, multi-word names such as "cape verdean creole" included, plus
+"simplified", "traditional", "mandarin", "cantonese", "persian" and
+"filipino"; not "english" — optionally preceded by "in", with a topic left
+before them. The topic's key is that text with every non-alphanumeric
+character removed, and the one row exempt from the demote is
+`/languages/<key>.html`, matched on the path because some stored hub titles
+are cut at the apostrophe ("Alzheimer") while the slug never is. Exempt
+means not demoted: the hub keeps the position the archive ranked it at and
+is never promoted past an article above it. Every demote call site — the
+fulltext ones above and the title, suggest and chooser ones from the first
+pass — is handed the same query string its cache key is built from, so a
+cached page cannot disagree with a cold one. The render epoch stays r4,
+which has not shipped; the code pin was re-pinned, and the order pin gained
+a translation query.
+
+The limits are deliberate. Suffix only: "japanese encephalitis" and "german
+measles" lead with the language word and ask about the disease, so they
+exempt nothing, and neither do "chinese" or "in chinese", which name no
+topic. Image stubs, `.srt` sidecars and other topics' hubs still sink for
+every query, and so do the per-language portals and the index and help pages
+beside them (`languages/french.html` for "health information in french"):
+the accepted-cost row for portals under "Deliberately not fixed" stands.
+
+TODO(owner): re-measure the 700 fulltext and 147 `synthesize=True`
+translation queries on the fixed branch and record the numbers here.
+
 ## Deliberately not fixed
 
 Each of these was reproduced and understood. They are decisions, not
