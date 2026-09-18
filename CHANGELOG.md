@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.3.4](https://github.com/cameronrye/openzim-mcp/compare/v3.3.3...v3.3.4) (2026-09-18)
+
+
+### Fixed
+
+* sink crawl artefacts on fulltext and synthesize, except one the caller asked for ([#435](https://github.com/cameronrye/openzim-mcp/issues/435)) ([c14258c](https://github.com/cameronrye/openzim-mcp/commit/c14258ce3b37b99dcdba9f44a6d463aab41424dc))
+
 ## [3.3.3](https://github.com/cameronrye/openzim-mcp/compare/v3.3.2...v3.3.3) (2026-09-11)
 
 
