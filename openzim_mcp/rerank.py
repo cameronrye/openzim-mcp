@@ -17,6 +17,7 @@ import contextvars
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from .constants import CANONICAL_TITLE_MATCH_SNIPPET
+from .zim.search import demote_crawl_artefacts
 
 # Names this module deliberately exports to ``simple_tools`` (the reranker
 # telemetry contract + the mixin). Declaring it documents the cross-module
@@ -198,7 +199,16 @@ class _RerankMixin:
         if not (reranked and "rerank_score" in reranked[0]):
             self._record_rerank_event(_RERANKER_SKIPPED_PASSTHROUGH)
             return payload
-        payload = {**payload, results_key: [*pinned, *reranked]}
+        # v3.3.1 field report (fid 71): a cross-encoder scores the snippet it
+        # is handed, and a translation hub's "Hepatitis B - Multiple Languages"
+        # is as on-topic as snippets get. The page arrived with artefacts
+        # sunk; sorting on ``rerank_score`` alone would put them back on top.
+        # ``query`` is the search string the page was fetched and cached
+        # under, so a hub it asks for stays where the rerank put it.
+        payload = {
+            **payload,
+            results_key: demote_crawl_artefacts([*pinned, *reranked], query=query),
+        }
         self._record_rerank_event(_RERANKER_ENGAGED)
         return payload
 
@@ -219,11 +229,14 @@ class _RerankMixin:
     def _redistribute_reranked_hits(
         per_file: List[Dict[str, Any]],
         reranked_tagged: List[Dict[str, Any]],
+        *,
+        query: str,
     ) -> None:
         """Group reranked tagged hits back into per-archive buckets in place.
 
         Strips the ``_rerank_src_idx`` tag and updates each entry's ``results``
-        + ``has_hits`` fields. Mutates ``per_file``."""
+        + ``has_hits`` fields. Mutates ``per_file``. ``query`` is the string
+        every archive's page was searched and cached under."""
         grouped: Dict[int, List[Dict[str, Any]]] = {}
         for hit in reranked_tagged:
             src_idx = hit.get("_rerank_src_idx", -1)
@@ -232,7 +245,9 @@ class _RerankMixin:
         for entry_idx, entry in enumerate(per_file):
             if entry.get("error") or not isinstance(entry.get("result"), dict):
                 continue
-            new_hits = grouped.get(entry_idx, [])
+            # Fid 71, per archive: each bucket renders as its own list, and
+            # the global rerank sorted it on ``rerank_score`` alone.
+            new_hits = demote_crawl_artefacts(grouped.get(entry_idx, []), query=query)
             entry["result"] = {**entry["result"], "results": new_hits}
             entry["has_hits"] = bool(new_hits)
 
@@ -282,6 +297,6 @@ class _RerankMixin:
         if not scored:
             self._record_rerank_event(_RERANKER_SKIPPED_PASSTHROUGH)
             return per_file
-        self._redistribute_reranked_hits(per_file, reranked_tagged)
+        self._redistribute_reranked_hits(per_file, reranked_tagged, query=query)
         self._record_rerank_event(_RERANKER_ENGAGED)
         return per_file

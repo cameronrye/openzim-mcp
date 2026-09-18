@@ -85,10 +85,15 @@ _BUNDLE_KEY_PREFIX = "bundle:v2h"
 # Bump this in any release that changes what the server renders OR RANKS into
 # a cache from an unchanged archive. tests/test_v3_cache_render_epoch.py pins
 # the epoch to fingerprints of the rendering, of the crawl-artefact demote's
-# code, and of how that demote orders a fixture, so it fails when any of them
-# changes without a bump, or when a bump is reverted. It cannot see a cached
-# ranking that comes from anywhere else: check that by hand.
-_RENDER_EPOCH = "r3"
+# code, of how that demote orders a fixture, and of the order the three
+# fulltext search caches hold for a fixture archive, so it fails when any of
+# them changes without a bump, or when a bump is reverted. It cannot see a
+# cached ranking that comes from anywhere else: check that by hand.
+#
+# r3 -> r4: fulltext and filtered search pages now sink crawl artefacts before
+# they are cached (fid 71, fulltext half), except the translation hub a query
+# asks for ("asthma in spanish"), which keeps its archive position.
+_RENDER_EPOCH = "r4"
 
 
 def archive_stat_token(validated_path: Any) -> str:

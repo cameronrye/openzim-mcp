@@ -733,7 +733,7 @@ async def _handle_title_mode(
         )
         # The fan-out is a title surface too: without this, the same lookup
         # sank ``imagepages/`` stubs when pinned and led with them here.
-        return _demote_artefacts_in_response(raw)
+        return _demote_artefacts_in_response(raw, query=preprocessed)
 
     resolved_path = _resolve_path(server, zim_file_path)
     if resolved_path is None:
@@ -779,10 +779,10 @@ async def _handle_title_mode(
     # score-descending, which blanks the canonical probe and hoists a weaker
     # fallback to rank 1 at a fabricated 1.0. Promotion has run by here, so
     # reordering this response is safe — but only as a copy, see below.
-    return _demote_artefacts_in_response(merged)
+    return _demote_artefacts_in_response(merged, query=preprocessed)
 
 
-def _demote_artefacts_in_response(payload: Any) -> Any:
+def _demote_artefacts_in_response(payload: Any, *, query: str) -> Any:
     """Sink crawl artefacts in a title-mode response, leaving ``_meta`` sized.
 
     Reorders ``results`` only: no row is added or dropped, so ``total``,
@@ -795,13 +795,18 @@ def _demote_artefacts_in_response(payload: Any) -> Any:
     page as score-descending. Reordering it in place brought back the very
     defect the edge placement avoids, one call late: a second identical
     ``title 'swollen glands'`` led with ``hormones.html`` at a fabricated 1.0.
+
+    ``query`` is the preprocessed title string the lookup ran and its
+    ``find_title:v2`` page is cached under, so the hub a translation request
+    names ("asthma spanish") keeps its place on both the cold and the cached
+    call.
     """
     if not isinstance(payload, dict) or payload.get("error"):
         return payload
     rows = payload.get("results")
     if not isinstance(rows, list):
         return payload
-    demoted = demote_crawl_artefacts(rows)
+    demoted = demote_crawl_artefacts(rows, query=query)
     if demoted is rows:
         return payload
     return {**payload, "results": demoted}

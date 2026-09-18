@@ -212,7 +212,7 @@ _RENDER_FIXTURE_HTML = """
 # digest. The epoch is part of the pin so that reverting a bump fails too —
 # pinning the digest alone let ``r3`` go back to ``r2`` with every suite green.
 _PINNED_RENDER_FINGERPRINT = (
-    "r3",
+    "r4",
     "d62d668001dd2a7ca972108f82ff6e49d7f2b2d5bebeb40af0890a607ba89c18",
 )
 
@@ -264,7 +264,9 @@ def test_render_fingerprint_is_pinned_to_the_current_epoch(
 # that ranked differently re-serves that build's order until its TTL — which
 # is what reverting this release's ``r2`` -> ``r3`` bump did, with every
 # suite green. Every shape the demote treats specially is in the fixture,
-# including the two it deliberately leaves alone.
+# including the two it deliberately leaves alone. It is ordered with no query;
+# the one shape a query changes, the hub a translation request asks for, is
+# pinned on the fulltext caches below.
 _RANKING_FIXTURE_PATHS = (
     "a/languages/x.html",
     "a/real.html",
@@ -275,7 +277,7 @@ _RANKING_FIXTURE_PATHS = (
     "a/category/c/page/2/",
 )
 _PINNED_RANKING_FINGERPRINT = (
-    "r3",
+    "r4",
     "5d5745359f1eaa811b415ce912d61851e74d0fcc475704852100369c371896f4",
 )
 
@@ -303,18 +305,31 @@ def test_ranking_fingerprint_is_pinned_to_the_current_epoch() -> None:
 # The fixture above only sees a change that moves one of its seven paths: a
 # new artefact shape, a dropped regex flag or a new rule inside the demote all
 # passed it, and a persisted snapshot then served the old order. So the CODE
-# the suggestions cache's order comes from is pinned as well — read through
-# ``ast``, so comments and docstrings can change freely. If this fails and the
-# cached ordering provably does not change, re-pin it with the same epoch;
-# otherwise bump the epoch.
+# the cached orders come from is pinned as well — the demote, and the
+# translation-request exemption it applies per query (the language list, the
+# parser, the hub and portal shapes) — read through ``ast``, so comments and
+# docstrings can change freely. The suggestions cache and the three fulltext
+# search caches all hold what this code decides.
 _RANKING_CODE_NAMES = (
     "_CRAWL_ARTEFACT_RE",
+    "_TRANSLATION_LANGUAGES",
+    "_QUERY_WORD_SPLIT_RE",
+    "_WORD_EDGE_QUOTES",
+    "_TRANSLATION_LANGUAGE_NOUNS",
+    "_TRANSLATION_REQUEST_FILLERS",
+    "_TRANSLATION_PHRASES",
+    "_NON_SLUG_CHARS_RE",
+    "_TRANSLATION_HUB_RE",
+    "_LANGUAGES_NAVIGATION_SLUGS",
+    "requested_translation_topic",
+    "_is_requested_translation_hub",
+    "crawl_artefact_classifier",
     "is_crawl_artefact",
     "demote_crawl_artefacts",
 )
 _PINNED_RANKING_CODE = (
-    "r3",
-    "d8cdb6b474b72f0f6fe73971a01d483540d48b9da34d4014ee13f5b2e8e0544b",
+    "r4",
+    "4373b37abb6d2593b636d9a3f2980b06454fb63cb42a014100f8094d7772006a",
 )
 
 
@@ -349,7 +364,135 @@ def test_ranking_code_is_pinned_to_the_current_epoch() -> None:
 
     assert observed == _PINNED_RANKING_CODE, (
         f"the crawl-artefact demote's code, or the epoch, changed (observed "
-        f"{observed}). If what the suggestions cache holds changes, bump "
-        f"_RENDER_EPOCH in openzim_mcp/bundle.py and re-pin every pair here; "
-        f"if it provably does not, re-pin this one with the same epoch."
+        f"{observed}). If what the suggestions or fulltext search caches hold "
+        f"for some query changes, bump _RENDER_EPOCH in openzim_mcp/bundle.py "
+        f"and re-pin every pair here — unless the current epoch has not been "
+        f"released yet, since no persisted value carries it, in which case "
+        f"re-pin with the same epoch. If what they hold provably does not "
+        f"change, re-pin this one with the same epoch."
+    )
+
+
+# Both pins above watch the demote's own code, so neither saw the fid 71
+# fulltext change, which calls that unchanged code from new places: the
+# fulltext page, the structured filtered page and the markdown filtered page
+# are all cached under keys whose only build-sensitive part is the epoch, and
+# all three now hold a different order for the same archive. So the ORDER
+# those caches hold is pinned too, as literals, on a small archive Xapian
+# ranks with both artefacts first. A wiring removed, a wiring added, or a bump
+# reverted each fails here. The order is query-dependent — a query that asks
+# for a translation keeps that topic's hub where the archive ranked it — so
+# each cache is pinned for a translation request too: a site that stops being
+# handed its query fails on the second, not the first.
+_FULLTEXT_FIXTURE_PAGES = (
+    (
+        "med.gov/languages/asthma.html",
+        "Asthma - Multiple Languages",
+        "asthma " * 30 + "in spanish",
+    ),
+    (
+        "med.gov/asthma.html",
+        "Asthma",
+        "asthma is a chronic disease of the airways, also in spanish "
+        + "lungs breathing inhaler " * 10,
+    ),
+    ("med.gov/ency/imagepages/1.htm", "Asthma image", "asthma " * 20 + "in spanish"),
+    (
+        "med.gov/copd.html",
+        "COPD",
+        "copd lungs asthma differs, also in spanish " + "breathing " * 10,
+    ),
+)
+_DEMOTED_FULLTEXT_ORDER = [
+    "med.gov/asthma.html",
+    "med.gov/copd.html",
+    "med.gov/languages/asthma.html",
+    "med.gov/ency/imagepages/1.htm",
+]
+# Xapian's own order for this query is stub, hub, COPD, asthma.
+_TRANSLATION_FULLTEXT_ORDER = [
+    "med.gov/languages/asthma.html",
+    "med.gov/copd.html",
+    "med.gov/asthma.html",
+    "med.gov/ency/imagepages/1.htm",
+]
+_PINNED_FULLTEXT_ORDER = (
+    "r4",
+    {
+        "asthma": {
+            "search": _DEMOTED_FULLTEXT_ORDER,
+            "filtered": _DEMOTED_FULLTEXT_ORDER,
+            "filtered_markdown": _DEMOTED_FULLTEXT_ORDER,
+        },
+        "asthma in spanish": {
+            "search": _TRANSLATION_FULLTEXT_ORDER,
+            "filtered": _TRANSLATION_FULLTEXT_ORDER,
+            "filtered_markdown": _TRANSLATION_FULLTEXT_ORDER,
+        },
+    },
+)
+
+
+def test_the_order_fulltext_caches_hold_is_pinned_to_the_current_epoch(
+    tmp_path: Path,
+) -> None:
+    import re
+
+    from libzim.writer import Creator
+
+    from openzim_mcp.cache import OpenZimMcpCache
+    from openzim_mcp.config import CacheConfig
+    from openzim_mcp.content_processor import ContentProcessor
+    from openzim_mcp.security import PathValidator
+    from tests.conftest_v2_fixtures import _HtmlItem
+
+    zim = tmp_path / "fixture.zim"
+    with Creator(zim).config_indexing(True, "eng") as creator:
+        for path, title, words in _FULLTEXT_FIXTURE_PAGES:
+            html = (
+                f"<html><body><main><h1>{title}</h1><p>{words}</p></main></body></html>"
+            )
+            creator.add_item(_HtmlItem(path, title, html))
+        creator.set_mainpath(_FULLTEXT_FIXTURE_PAGES[1][0])
+    config = OpenZimMcpConfig(
+        allowed_directories=[str(tmp_path)], cache=CacheConfig(enabled=False)
+    )
+    ops = ZimOperations(
+        config,
+        PathValidator(config.allowed_directories),
+        OpenZimMcpCache(config.cache),
+        ContentProcessor(),
+    )
+
+    def paths(rows: Any) -> List[str]:
+        return [r["path"] for r in rows]
+
+    observed = (
+        _RENDER_EPOCH,
+        {
+            query: {
+                "search": paths(
+                    ops.search_zim_file_data(str(zim), query, limit=5)["results"]
+                ),
+                "filtered": paths(
+                    ops.search_with_filters_data(str(zim), query, "C", None, 5, 0)[
+                        "results"
+                    ]
+                ),
+                "filtered_markdown": re.findall(
+                    r"^Path: (.+)$",
+                    ops.search_with_filters(str(zim), query, "C", None, 5, 0),
+                    re.M,
+                ),
+            }
+            for query in ("asthma", "asthma in spanish")
+        },
+    )
+
+    assert observed == _PINNED_FULLTEXT_ORDER, (
+        f"what the fulltext search caches hold, or the epoch, changed (observed "
+        f"{observed}). Bump _RENDER_EPOCH in openzim_mcp/bundle.py so an "
+        f"upgrade invalidates persisted pages, then re-pin every pair here — "
+        f"unless the current epoch has not been released yet, in which case no "
+        f"persisted page carries it and re-pinning with the same epoch is enough."
     )

@@ -96,6 +96,168 @@ while median latency roughly doubled and the model costs about 1.1 GB. The
 reranking page now says that, with the numbers; the install page carries the
 hedge and the latency cost, and links to them.
 
+### The fulltext follow-up
+
+A third branch took the first "Still open" item: crawl artefacts on the
+surfaces the 64% figure was measured on.
+
+**Crawl artefacts sink on fulltext too (fid 71, second half).** The same
+three shapes now sink below real articles on every fulltext-shaped route:
+`zim_search(mode="fulltext")` single-archive, filtered and cross-archive;
+`zim_query` search, filtered search and "search all files", compact and
+legacy; and `synthesize=True`. Measured on the shipped MedlinePlus archive
+with the same 40 topic queries at `limit=5`, rate limiter, cache and
+reranker off, `main` against the branch, every route driven through an MCP
+client session:
+
+| Surface | Artefact at #1 | Pages with an artefact above an article |
+| --- | --- | --- |
+| Fulltext page 1, each of seven routes | 4 → 0 | 14 of 40 → 0 |
+| Fulltext page 2 (`offset=5`), each of two routes | 2 → 0 | 8 of 40 → 0 |
+| `synthesize=True`, first five citations | 1 → 0 | 12 of 40 → 0 |
+
+Every changed page is exactly the stable demote of `main`'s page on the
+same route: the same rows, so the artefact share (12.0% of page-1 rows,
+7.5% of page 2) does not move, and `total`, `done`, `next_offset` and
+`source_consumed` match on every structured page. Synthesize cites the same
+205 passages across the 40 answers; the 25 that are scraper output now come
+after the articles in each answer, which is why the first-five share falls
+from 12.5% to 11.5%. The four #1s were `/languages/` hubs for
+`hepatitis b`, `covid-19`, `chickenpox` and `shingles`; each now leads with
+the topic article. `tell me about`, which reads the same fulltext page,
+returns byte-identical text on all 40 queries, and nothing moves on the
+four IEP queries. The live suite gives 26 passed and 11 skipped on both trees. With
+the in-memory cache on and every call made twice, 967 of 968 comparisons
+match the cache-off run on both trees; the one that does not is a
+cache-dependent title completion from the first pass, recorded under
+"Still open".
+
+The placement is the opposite of title mode's, for a reason worth keeping.
+Title mode demotes at the response edge because its canonical promotion
+probe reads the title page as score-descending. Fulltext rows carry no
+score and no consumer reads their order as one, so the demote runs where
+the page is assembled — `_perform_search`, and `_build_filtered_results`
+for both filtered renderers — before the cache write, so a cached page can
+never disagree with a cold one. It then runs again after each step that
+reorders a page later: the two canonical-title splices (whose list-article
+demote moves articles below the artefacts, and whose title-index hit can
+itself be an image stub), the cross-encoder rerank on both `zim_query`
+routes, and synthesize, once on the selected hits and once on the final
+passages, after the rerank and section-affinity boost that re-sort them on
+score. The fulltext search caches now hold a different order for the same
+archive, so the render epoch moved r3 → r4, and a new pin on the order
+those caches hold fails when the wiring changes without a bump.
+
+**A translation the caller asks for is not demoted (found in review).** The
+40-query measurement above asked only for topics, so it could not see what
+the demote does to a caller who asks for the hub itself. Review measured it
+on the same archive with 700 queries — 50 hub topics × Spanish, Chinese,
+French, Korean, Vietnamese, Arabic and Russian × both "<topic> <language>"
+and "<topic> in <language>" — cache warm, the real code of both trees. On
+fulltext the requested hub was #1 on 332 of 700 on `main` and on 106 with
+the demote: it lost #1 on 226, and on about 190 of those the new #1 was
+unrelated ("asthma in children chinese" → Dong Quai, "breast cancer in
+french" → Maritime Pine), because fulltext matches the language word inside
+product names and citations. On `synthesize=True`, 147 "<topic> in
+<language>" queries in Spanish, Chinese and French, the hub was the first
+citation — the featured article — on 63 on `main` and on 7 with the demote,
+and the requested language's section dropped out of the answer. Title,
+suggest and `tell me about` never surfaced the hub for this phrasing on
+`main`, so fulltext was the only surface that answered these queries at all.
+
+The fix is an exemption, not a new ranking. A query asks for a translation
+when, lowercased and stripped of surrounding whitespace, of trailing
+punctuation and of quotes at each word's edges, it ends with one or more
+language words — MedlinePlus's languages, multi-word names such as "cape
+verdean creole" included, plus "simplified", "traditional", "mandarin",
+"cantonese", "persian" and "filipino"; not "english" — optionally followed
+by the word "language" or "languages" and optionally preceded by "in" and
+"the", with a topic left before them, so that "anemia in the chinese
+language" asks what "anemia chinese" asks. The noun is dropped rather than
+matched, which is what keeps "american sign language" a topic. The
+languages are MedlinePlus's own, pinned in the tests against the 53
+per-language portals the archive files, so dropping one is a failed
+contract and not a fingerprint to re-pin. The topic's key is that text with
+every non-alphanumeric character removed, and the one row exempt is
+`/languages/<key>.html`, matched on the path because some stored hub titles
+are cut at the apostrophe ("Alzheimer") while the slug never is. Exempt
+means not demoted: the hub keeps the position the archive ranked it at and
+is never promoted past an article above it. Every demote call site — the
+fulltext ones above and the title, suggest and chooser ones from the first
+pass — is handed the same query string its cache key is built from, so a
+cached page cannot disagree with a cold one. The render epoch stays r4,
+which has not shipped; the code pin was re-pinned, and the order pin gained
+a translation query.
+
+The limits are deliberate. Suffix only: "japanese encephalitis" and "german
+measles" lead with the language word and ask about the disease, so they
+exempt nothing, and neither do "chinese" or "in chinese", which name no
+topic. Image stubs, `.srt` sidecars and other topics' hubs still sink for
+every query, and so do the per-language portals and the index and help pages
+beside them (`languages/french.html` for "health information in french"):
+the accepted-cost row for portals under "Deliberately not fixed" stands.
+
+Two costs of the rule itself, named rather than hidden. The qualifier words
+are language words in their own right, so a query that merely ends in one —
+"asthma traditional", "asthma simplified" — exempts that topic's hub; the
+effect is only ever a demote declining to fire, never a row promoted past
+an article. And the rule reads words, not query syntax: "asthma AND
+chinese" has the key `asthmaand`, which no archive has a hub for, so that
+page is demoted exactly as it was before the exemption existed.
+
+**Re-measured on the fixed branch.** Same archive and same method as the
+review run — a real MCP `ClientSession` per tree, rate limiter and reranker
+off, cache warm with every call issued twice — and it reproduced the `main`
+and demote-only baselines above exactly. On the 700 fulltext queries the
+requested hub is #1 on 424 pages on `zim_search` `mode="fulltext"` and on
+"search all files", and on 428 on `zim_query 'search for …'` compact and
+legacy, against 332 on `main` and 106 with the demote alone. Queries where
+the hub lost #1 against `main`: 226 with the demote alone, **0** on the
+fixed branch. The 92–96 pages where the fixed branch beats `main` are not
+promotions — on every one of them each row above the hub on `main` was
+itself an artefact — and across 2,800 page comparisons the sequence of
+non-artefact rows above the hub is identical to `main`'s.
+
+It is still a page-scoped reorder. The set of rows on a page matches
+`main`'s on 700 of 700 pages on all four surfaces, and the fixed branch's
+page equals demote(`main`'s page, query) on 700 of 700 warm and on 100 of
+100 with the cache off. The cache-off subsample of 100 queries: the hub
+is #1 on 44 on `main`, on 14 with the demote alone, and on 56 (fulltext,
+search-all) or 58 (compact, legacy) on the fixed branch, with no page
+losing #1 against `main`.
+
+On `synthesize=True` — 150 queries, 147 of them answered on every tree —
+the requested hub is the first citation, the featured article, on 63 on
+`main`, on 7 with the demote alone and on 76 on the fixed branch, and the
+hub's requested-language section is in the answer in exactly those cases.
+The hub is cited somewhere on 109, 101 and 109. No query features the hub
+on `main` and fails to on the fixed branch.
+
+Nothing else moved. 40 plain topic queries with no language word, over four
+fulltext surfaces, warm and cache-off — 320 page comparisons — plus 80
+synthesize comparisons are byte-identical between the demote alone and the
+fixed branch, as are 12 side-effect probes ("japanese encephalitis",
+"german measles", "spanish flu", "chinese medicine", "korean ginseng",
+"health information in chinese", "asthma in children"). The first pass's
+own gain is intact: 40 of 40 plain-topic pages lead with an article,
+against 34 of 40 on `main`.
+
+The "<topic> in <language> language" phrasing was a regression the first
+version of the exemption did not cover, found after the run above and
+fixed here; it is measured separately because the fix is the reason it now
+passes. 50 hub topics — sampled evenly across the 302 topic hubs whose
+stored title spells their own slug — × Spanish, Chinese and French, as
+"<topic> in <language> language", `zim_search` `mode="fulltext"` at
+`limit=5`, cache warm, on the archive's own paths. The requested hub was #1
+on 66 of 150 pages on `main` (71560f1), on 35 with the demote alone
+(6b2953a6) and on 35 with the first version of the exemption (057e875),
+whose pages are identical to the demote-only ones query for query because
+that parser reads none of these 150 as a translation request. With the
+trailing noun droppable it is #1 on 77 of 150, no page loses #1 against
+`main`, and the 11 pages that gain it are again not promotions: every row
+above the hub on `main` in those cases was an artefact, and the
+non-artefact rows are in `main`'s order on all 150 pages.
+
 ## Deliberately not fixed
 
 Each of these was reproduced and understood. They are decisions, not
@@ -115,8 +277,8 @@ omissions — reopen one only with evidence that changes its premise.
 | The builder-scoping half of fid 86 | Declined. Feeding the sidecar builder `select_main_content` would make outbound and inbound describe the same graph, but it inherits the furniture strips, which on MedlinePlus delete "Related Health Topics": 165 of 174 strip-only removals in a 250-page sample were genuine topic pages. That trades an inconsistency between the two directions — `c/`'s inbound list includes `hume-causation/`, whose outbound list omits `c/` — for the loss of MedlinePlus's best inbound signal, and would invalidate every sidecar in the field. |
 | Dropping the reranker extra, or publishing an improvement figure | Declined. "No measured effect at n=44 on two warc2zim archives" is not "no effect" — the sample rules out a large effect, not a small one, and says nothing about Wikipedia-shaped corpora — and a published figure would be invented. The docs give the measured numbers and let a reader price the trade. |
 | Demoting index pagination (`/page/N/`) as a crawl artefact | Declined on measurement. It matched nothing on MedlinePlus and two IEP entries, both false positives: `category/…/metaphysics/page/2/` continues the topic index `/category/` is kept for, 19 more articles with no overlap. |
-| Over-fetching so a small title or suggest `limit` evicts artefacts | Declined. The demote reorders the page the data layer returns, so at `limit` 1 or 2 a page holding no real article still leads with an artefact, and a larger `limit` can change which row leads. Over-fetching means recomputing `total`, `done` and the paging arithmetic, in the same spot where the first placement broke promotion. Documented in the API reference. |
-| Exempting MedlinePlus's per-language portals from `/languages/` | Accepted cost. The shape also matches about 53 "Health Information in *Language*" portals, which now sink below other rows on their page — `title 'Italian'` leads with a recipe. They are still returned. Telling a portal from a translation hub needs a language list or MedlinePlus-specific title matching. |
+| Over-fetching so a small title or suggest `limit` evicts artefacts | Declined. The demote reorders the page the data layer returns, so at `limit` 1 or 2 a page holding no real article still leads with an artefact, and a larger `limit` can change which row leads. Over-fetching means recomputing `total`, `done` and the paging arithmetic, in the same spot where the first placement broke promotion. Documented in the API reference. Fulltext is declined on the same grounds and one more: it pages, so pulling an article forward from page two would have to move `next_offset` and the cursor with it, and a walk would then see pages whose boundaries depend on what the demote found. |
+| Exempting MedlinePlus's per-language portals from `/languages/` | Accepted cost. The shape also matches the archive's 53 per-language "Health Information in *Language*" portals, which now sink below other rows on their page — `title 'Italian'` leads with a recipe, and fulltext does the same. Measured to be reproducible: 53 portals, because 55 entries under `/languages/` carry that title and two of them name no language (the Multiple-Languages index and its all-topics list); each portal's language taken from its own title, up to the first "(" or ":" (`Chinese, Simplified`); each asked twice, bare and as `health information in <language>`, through `zim_search` `mode="fulltext"` at `limit=5`, cache warm, on the shipped MedlinePlus archive — 106 queries. The portal was #1 on all 106 of them on `main` (71560f1) and on 86 with the demote, so it lost #1 — was #1 before and is not now, which here is also every page that fails to lead, since it led all 106 before — on 20: `spanish` drops it to #5, `french` to #3 behind a French-toast recipe. The translation exemption changes none of this: all 106 pages are identical to the demote-only ones, row for row, because a portal is never a requested hub. They are still returned. Telling a portal from a translation hub needs a language list or MedlinePlus-specific title matching; the translation exemption has since added a language list, used only so that a portal never counts as a requested hub, and exempting the portals with it is still not done. |
 | Versioning the inbound cursor across the ranking change | Recorded. A cursor minted before the upgrade resumes at the same offset in the new order, so a paging walk that spans the upgrade can repeat or skip a row. Within one server version paging is exact. Rejecting every pre-upgrade cursor is a contract change for a one-time effect. |
 | Malformed-frame classification on the `sse` transport | Not wired, recorded. `MCPServer.run(transport="sse")` builds its own ASGI app inside the SDK, so no middleware this server adds reaches it. Covering it means reimplementing `run_sse_async`'s uvicorn and transport-security setup for a transport already deprecated for removal in 4.0.0. The gap is named where the gate is wired, in the transport table, and in the deprecation warning an operator sees when they choose SSE — and asserted by tests, so it cannot be re-discovered as a surprise. |
 
@@ -126,11 +288,52 @@ Recorded rather than closed, in rough order of value:
 
 - **Ranking headroom beyond artefacts.** Both reranker configurations put a
   relevant article at #1 of `zim_query` search results only 63–64% of the
-  time. The follow-up sank scraper output on title, suggest and the chooser
-  only: fulltext and `zim_query` search still carry it (12% of top-5 rows
-  on the 40 MedlinePlus queries, 4 of them at #1), alongside real articles
-  in the wrong order — a supplement monograph outranking "High blood
-  pressure medications".
+  time. That was measured before either artefact demote and has not been
+  measured since. On every fulltext surface scraper output now sits below
+  every article on the same page, unless it is the translation hub the
+  query asks for (see the fulltext follow-up). It can still lead a page
+  that holds no article, because the demote reorders the page it is handed
+  and never fetches past it (the over-fetch row under "Deliberately not
+  fixed" says why): `zim_query 'search for hepatitis b'` at `limit=1` still
+  leads with `languages/hepatitisb.html`, as on `main`, and the article is
+  the one row of page two. The evaluation's other failure shape — real
+  articles in the wrong order, such as a supplement monograph outranking
+  "High blood pressure medications" — is untouched.
+- **fid 70's title completion needs the cache.** A search row's truncated
+  title ("Alzheimer" for "Alzheimer's Disease") is completed from the
+  snippet render the row just cached, so with the cache disabled no title
+  is completed, and `tell me about alzheimer's disease` fetches the
+  encyclopedia article instead of offering the three-way chooser the default
+  configuration offers. Found while comparing cache-on and cache-off runs
+  for the fulltext follow-up; identical on the release before it.
+- **With the reranker on, synthesize can still feature the wrong section.**
+  `_redirect_to_answering_section` swaps the featured passage for the
+  section whose heading restates the question, and it reads the first
+  passage. With the `[reranker]` extra engaged, the cross-encoder re-sorts
+  passages before that redirect, so when it scores a translation hub or
+  image stub first, the redirect looks inside the artefact, finds no
+  answering section, and gives up; the passage demote then puts the real
+  article back on top with the passage BM25 highlighted, not the section
+  that answers. Review reproduced it with the real cross-encoder on
+  MedlinePlus. With the reranker off the redirect sees the article, and
+  `main` is worse either way — it features and cites the hub — so this is
+  a gap, not a regression. Follow-up: run the redirect after the passage
+  demote, or demote the passages, keeping `hit_keys` parallel, straight
+  after the rerank.
+- **Multi-archive synthesize: the hit demote can change which hits
+  survive.** `_demote_crawl_artefact_hits` runs before
+  `_drop_cross_archive_leakage`, and that floor picks the primary archive
+  by position: the first archive seen when no hit's path shares a query
+  token, the earliest on a tie. Sinking an artefact that leads the fused
+  list can hand primary to another archive, and the old primary is then
+  capped at `max_secondary_archive_hits`, so a different set of passages
+  is cited, not the same set reordered. `main`'s `_demote_list_articles`
+  sits in the same slot and can already do the same. Review reproduced it
+  with two fixture archives, one MedlinePlus-shaped and one whose paths
+  sort after `medlineplus.gov/`; it cannot fire on the IEP + MedlinePlus
+  library, where `iep.utm.edu` sorts first, and the cited sets matched
+  `main` on 12 real queries. Follow-up: move both demotes after the floor,
+  so the floor sees the fused order.
 - `zim_browse(mode='page')` renders a `preview` that is empty on 99.8% of
   IEP rows, making the default mode far slower than `mode='walk'` for
   identical rows.

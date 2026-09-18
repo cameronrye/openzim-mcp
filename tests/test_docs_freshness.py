@@ -2994,5 +2994,170 @@ def test_the_api_reference_says_row_order_is_authoritative() -> None:
         "match-quality signal",
         "re-sorting rows by `score` undoes the demote",
         "re-sorting rows on `inbound_degree` puts the navigation pages back on top",
+        # Fulltext half of fid 71: the surfaces, the paging contract, and the
+        # one-page limit a caller could otherwise mistake for a filter.
+        '`mode="fulltext"` sinks the same scraper output',
+        "`zim_query` search intents and `synthesize=True` do too, after any "
+        "cross-encoder rerank",
+        "within each page: `total`, `next_offset` and every offset are unchanged",
+        "scraper output on a later page stays there",
+        "section attribution and heading-affinity boost → scraper output sunk "
+        "below articles, except the translation hub a query ending in a "
+        "language asks for (see `zim_search` below) → budget enforcement",
+        # The translation-request exemption: which queries, which row, and
+        # what still sinks. Each clause is a behaviour a test pins, and each
+        # is one a rewrite could quietly widen or drop.
+        "A translation the query asks for is not demoted.",
+        "On every surface above — title, suggest, fulltext, the `zim_query` "
+        "routes and `synthesize=True` —",
+        "leaves that topic's own hub, `/languages/<topic>.html`, where the "
+        "archive (or the optional reranker) ranked it",
+        "it ends with one or more language names",
+        "`english` does not count — optionally followed by the word `language` "
+        "or `languages`, and optionally preceded by `in` and `the`, with a "
+        "topic before them",
+        "The hub is matched on its path, with the topic lowercased and stripped "
+        "to letters and digits",
+        "Only a trailing language counts: `japanese encephalitis` and `german "
+        "measles` ask for nothing, and neither does `in chinese` alone, nor "
+        "`sign language`, whose trailing noun names no language.",
+        "The hub is not promoted — an article the archive ranked above it stays "
+        "above it",
+        "everything else still sinks for that query: image-caption stubs, "
+        "subtitle sidecars, other topics' hubs and the per-language portals",
     ):
         assert phrase in prose, phrase
+
+
+def _pinned_paragraph_drift(page: str, sentences: tuple[str, ...]) -> list[str]:
+    """How the visible paragraph carrying ``sentences`` departs from them.
+
+    The paragraph is the one holding the most of the pinned sentences, with
+    whitespace collapsed. Every pinned sentence must be in it verbatim, and
+    nothing else may be: a phrase pin let a sentence change around the phrase
+    (the surfaces a demote covers, "cannot lift" turned into "can lift"),
+    and a sentence pin alone would still let a contradicting sentence be
+    added next to it. Returns one message per departure, naming the sentence.
+    """
+    prose = _visible_prose((REPO / page).read_text(encoding="utf-8"))
+    paragraphs = [" ".join(p.split()) for p in re.split(r"\n\s*\n", prose)]
+    paragraph = max(paragraphs, key=lambda p: sum(s in p for s in sentences))
+    if not any(s in paragraph for s in sentences):
+        return [f"{page}: no visible paragraph carries any pinned sentence"]
+    drift = [
+        f"{page}: pinned sentence changed or gone: {s!r}"
+        for s in sentences
+        if s not in paragraph
+    ]
+    rest = paragraph
+    for s in sentences:
+        rest = rest.replace(s, " ", 1)
+    if rest.strip():
+        drift.append(f"{page}: unpinned text in the pinned paragraph: {rest.strip()!r}")
+    return drift
+
+
+# The fulltext half of fid 71, sentence by sentence. Each is a contract a test
+# holds the code to: the surfaces (test_fr_crawl_artifacts_fulltext's
+# per-route tests), the reranker (its rerank tests), which rows have a score
+# a client could re-sort on, and the one-page scope (its paging test).
+_API_REFERENCE_FULLTEXT_DEMOTE = (
+    '`mode="fulltext"` sinks the same scraper output below real articles — '
+    "single-archive, filtered, and within each archive's block when "
+    "`cross_file=True` — and `zim_query` search intents and `synthesize=True` do "
+    "too, after any cross-encoder rerank, so the optional reranker cannot lift a "
+    "translation hub back above the article it translates.",
+    "Fulltext search rows carry no score, so there is nothing to re-sort on.",
+    "`synthesize=True` passages, and compact-mode citations, do carry a `score`, "
+    "but the demote reorders them without rescoring, so scraper output can sit "
+    "below an article with a lower `score`.",
+    "Read their order, which `rank` is renumbered to match, as authoritative; "
+    "re-sorting them by `score` can put the scraper output back on top.",
+    "The reorder happens within each page: `total`, `next_offset` and every "
+    "offset are unchanged, an article on page two is never pulled forward onto "
+    "page one, and scraper output on a later page stays there.",
+)
+
+# The translation exemption's own paragraph, sentence by sentence. The row-
+# order test above pins nine phrases of it and review still negated the rule
+# around them, appended a sentence contradicting it, and relabelled the whole
+# thing a historical note, with every test green — the same four shapes that
+# forced the two paragraphs below to be pinned whole. Each sentence is a
+# contract tests/test_fr_crawl_artifacts_translation.py holds the code to:
+# the surfaces, which queries ask, how the hub is recognised, what does NOT
+# ask, the operator limit, and that the exemption never promotes.
+_API_REFERENCE_TRANSLATION_EXEMPTION = (
+    "**A translation the query asks for is not demoted.** On every surface "
+    "above — title, suggest, fulltext, the `zim_query` routes and "
+    "`synthesize=True` — a query that asks for a topic's translation leaves "
+    "that topic's own hub, `/languages/<topic>.html`, where the archive (or "
+    "the optional reranker) ranked it.",
+    "A query asks for one when it ends with one or more language names — "
+    "MedlinePlus's languages, such as `spanish`, `chinese` or `haitian "
+    "creole`, and the qualifiers `simplified`, `traditional`, `mandarin`, "
+    "`cantonese`, `persian` and `filipino`; `english` does not count — "
+    "optionally followed by the word `language` or `languages`, and "
+    "optionally preceded by `in` and `the`, with a topic before them: `asthma "
+    "in spanish`, `asthma spanish`, `anemia in the chinese language` and "
+    "`alzheimer's disease chinese` each keep their topic's hub in place.",
+    "The hub is matched on its path, with the topic lowercased and stripped "
+    "to letters and digits (`alzheimersdisease`), and quotes around a term "
+    "are ignored wherever they fall.",
+    "Only a trailing language counts: `japanese encephalitis` and `german "
+    "measles` ask for nothing, and neither does `in chinese` alone, nor `sign "
+    "language`, whose trailing noun names no language.",
+    "Query syntax is read as topic text, not parsed, so `asthma AND chinese` "
+    "asks for a hub no archive has and exempts nothing.",
+    "The hub is not promoted — an article the archive ranked above it stays "
+    "above it — and everything else still sinks for that query: image-caption "
+    "stubs, subtitle sidecars, other topics' hubs and the per-language "
+    "portals such as `/languages/french.html`.",
+)
+
+# The reranking page's opening paragraph: what the extra reorders, and that
+# scraper output is sunk after it, with the one exception the translation
+# tests pin.
+_RERANKING_PAGE_SCRAPER_OUTPUT = (
+    "The `[reranker]` extra re-scores Xapian's BM25 candidates with a "
+    "cross-encoder and reorders the top-K that `zim_query` search intents and "
+    "`synthesize` mode return.",
+    "The advanced `zim_search` tool is not reranked.",
+    "The caller's arguments and response shape are unchanged.",
+    "Scraper output — per-language translation hubs, image-caption stubs, "
+    "subtitle sidecars — is sunk below real articles after the reorder, so the "
+    "cross-encoder cannot put it back on top.",
+    "The one exception is a translation hub the query itself asks for (`asthma "
+    "in spanish`), which stays where the reorder put it.",
+)
+
+
+@pytest.mark.parametrize(
+    "page, sentences",
+    [
+        (
+            "website/src/content/docs/api-reference.mdx",
+            _API_REFERENCE_FULLTEXT_DEMOTE,
+        ),
+        (
+            "website/src/content/docs/api-reference.mdx",
+            _API_REFERENCE_TRANSLATION_EXEMPTION,
+        ),
+        (
+            "website/src/content/docs/search-reranking.mdx",
+            _RERANKING_PAGE_SCRAPER_OUTPUT,
+        ),
+    ],
+    ids=["api-reference-fulltext", "api-reference-translation", "search-reranking"],
+)
+def test_the_fulltext_demote_paragraphs_say_exactly_what_is_pinned(
+    page: str, sentences: tuple[str, ...]
+) -> None:
+    """The row-order test above pins five phrases of the API reference's
+    fulltext paragraph, and review inverted six other claims on these two
+    pages with every test green: the surfaces narrowed to single-archive, the
+    reranker able to lift a hub back, fulltext rows re-sortable by ``score``,
+    an article on page two pulled forward, and the reranking page's sentence
+    deleted or turned into "can put it back on top". So both paragraphs are
+    pinned whole."""
+    drift = _pinned_paragraph_drift(page, sentences)
+    assert not drift, "\n".join(drift)
