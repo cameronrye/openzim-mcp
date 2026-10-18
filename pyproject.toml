@@ -83,18 +83,24 @@ dependencies = [
     # ``tests/test_sdk_seam_audit.py`` pins what that audit established, and
     # fails if the lockfile is left below the cap's top series.
     #
-    # ``OPENZIM_MCP_STATELESS_HTTP`` (#452) adds three behaviours to re-check.
+    # ``OPENZIM_MCP_STATELESS_HTTP`` (#452) adds four behaviours to re-check.
     # Era routing sends a 2026-07-28 request to its own handler *ahead of* the
     # stateful/stateless switch, so that path is the same in both modes. The
     # stateless transport has no session id, so it skips session validation:
     # a GET reaching it would open an SSE stream nothing can write to, held
     # until the client hangs up, which is why SessionlessRequestGateMiddleware
-    # answers every non-POST first. And ``terminate()`` logs ``Terminating
+    # answers every non-POST first. ``terminate()`` logs ``Terminating
     # session: None`` once per stateless request, the exact record http_app's
-    # filter drops. Separately, 2.2 fixes #453 (a DELETE there removes its
-    # session from the table), so the docstrings and docs that describe
-    # 2.1.1's retention change when the ceiling moves; the seam audit pins it
-    # so that move fails by name.
+    # filter drops. And the stateless path calls ``terminate()`` only when the
+    # request returns normally — there is no ``finally`` — so a request
+    # cancelled mid-flight leaves its transport and server task behind until
+    # restart, and nothing in front of the SDK may cancel one (2.2 moves the
+    # call into a shielded ``finally``). Separately, 2.2 fixes #453 (a DELETE
+    # there removes its session from the table) and has the app builder expire
+    # idle sessions after 30 minutes by default, so the docstrings and docs
+    # that describe 2.1.1's retention — sessions kept until restart — change
+    # when the ceiling moves; the seam audit pins it so that move fails by
+    # name.
     #
     # None of that retires the ping shim: 2026-07-28 defines no ping, so no SDK
     # release is going to supply those rows (see sdk_compat and issue #371).

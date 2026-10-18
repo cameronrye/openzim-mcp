@@ -604,8 +604,10 @@ class TestStatelessHttpSeams:
         The stateless transport's ``_validate_session`` passes when it has no
         id of its own, so the GET handler answers ``200 text/event-stream``
         and holds that stream — one nothing can ever write to — until the
-        client hangs up. That is the only reason the gate answers every
-        non-POST on a stateless server itself. Driven directly, hanging up as
+        client hangs up. That is the main reason the gate answers every
+        non-POST on a stateless server itself; the other is the ``Allow``
+        headers the SDK gets wrong there (none on a DELETE's 405, and
+        ``GET, POST, DELETE`` on the rest). Driven directly, hanging up as
         soon as the stream starts.
         """
         from starlette.testclient import TestClient
@@ -622,8 +624,9 @@ class TestStatelessHttpSeams:
         assert exchange.status == 200 and exchange.is_event_stream, (
             f"the SDK's stateless path now answers a sessionless GET with "
             f"{exchange.status} {exchange.headers}: the stateless branch of "
-            "SessionlessRequestGateMiddleware exists to stop a held stream, "
-            "so revisit it and its docstring"
+            "SessionlessRequestGateMiddleware exists mainly to stop a held "
+            "stream, so revisit it and its docstring (it still corrects the "
+            "SDK's Allow headers, unless those changed too)"
         )
 
     def test_each_stateless_request_logs_a_none_session_ending(
@@ -669,9 +672,10 @@ class TestStatelessHttpSeams:
         """mcp 2.1.1 ends a session on DELETE but never removes its entry (#453).
 
         The HTTP gates' docstrings say so, and so do the deployment docs'
-        reasons to run without sessions. 2.2 fixes it, so raising the ceiling
-        fails this — on purpose, naming everything that describes the old
-        behaviour.
+        reasons to run without sessions. 2.2 fixes it — and has the app
+        builder expire idle sessions after 30 minutes by default — so raising
+        the ceiling fails this, on purpose, naming everything that describes
+        the old behaviour of keeping every session until restart.
         """
         from tests.test_stateless_http import (
             HANDSHAKE_HEADERS,
@@ -693,11 +697,14 @@ class TestStatelessHttpSeams:
 
         assert retained, (
             "mcp now removes a session from its table on DELETE (#453 is fixed "
-            "in the resolved SDK). Revise what describes 2.1.1's retention: "
+            "in the resolved SDK, which may also expire idle sessions). Revise "
+            "what describes 2.1.1's retention of every session until restart: "
             "the TransportSecurityGateMiddleware and "
             "SessionlessRequestGateMiddleware docstrings in "
             "openzim_mcp/http_app.py, the module docstring of "
             "tests/test_sweep8_transport_security_gate.py, pyproject's mcp "
-            "comment, and the memory note under Scaling considerations in "
-            "website/src/content/docs/http-and-docker-deployment.mdx."
+            "comment, and two passages under Scaling considerations in "
+            "website/src/content/docs/http-and-docker-deployment.mdx: the "
+            "memory note, and the session that lingers until restart under "
+            '"Switching a running fleet".'
         )

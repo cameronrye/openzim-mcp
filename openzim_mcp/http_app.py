@@ -867,8 +867,8 @@ class SessionlessRequestGateMiddleware:
 
     All of the above is the default, stateful server. With ``stateless``
     (``OPENZIM_MCP_STATELESS_HTTP``) the SDK serves each handshake-era POST on
-    a fresh transport that is never registered and is torn down once the
-    response is sent: nothing is minted, and a sessionless follow-up such as
+    a fresh transport that is never registered and is torn down when its
+    request returns: nothing is minted, and a sessionless follow-up such as
     ``notifications/initialized`` is exactly what a client is meant to send.
     Turning those away with ``Missing session ID`` is what broke stateless
     mode (#452), so every POST passes through unread — with or without an
@@ -913,7 +913,7 @@ class SessionlessRequestGateMiddleware:
         )
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        """Pass through every request that cannot leak; answer the rest."""
+        """Pass through what the SDK serves safely in this mode; answer the rest."""
         if self._stateless:
             await self._gate_stateless(scope, receive, send)
             return
@@ -1148,6 +1148,11 @@ def serve_streamable_http(
     # ``stateless_http`` moves handshake-era clients onto the SDK's
     # per-request path, which issues no ``Mcp-Session-Id``. The 2026-07-28
     # path is era-routed ahead of that switch, so it is the same either way.
+    # On mcp 2.1.1 that path tears a request's transport down only when the
+    # request returns normally, so nothing in front of the SDK may cancel a
+    # stateless request mid-flight (a request-timeout layer, say): each one
+    # it cancelled would leave a transport and its server task behind until
+    # restart.
     stateless = server.config.stateless_http
     app = server.mcp.streamable_http_app(
         host=server.config.host,
@@ -1155,14 +1160,16 @@ def serve_streamable_http(
         stateless_http=stateless,
     )
     # Replicas that disagree on the mode break handshake-era clients
-    # mid-sequence, and nothing a client sees names it, so each replica says
-    # once at startup how it serves them.
+    # mid-sequence, and nothing in a client's ordinary traffic names it, so
+    # each replica says once at startup how it serves them. The line and the
+    # filter both belong ahead of ``runner``, which blocks for as long as the
+    # server runs.
     if stateless:
         _quiet_stateless_terminate_records()
         logger.info(
             "Serving handshake-era clients statelessly "
             "(OPENZIM_MCP_STATELESS_HTTP=true): no Mcp-Session-Id is issued, "
-            "and every method on %s but POST is answered 405",
+            "and a GET or DELETE on %s is answered 405",
             MCP_PATH,
         )
     else:
