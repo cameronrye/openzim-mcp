@@ -797,7 +797,7 @@ class TestLogNoise:
     SDK_LOGGER = "mcp.server.streamable_http"
 
     def test_stateless_requests_log_no_session_ending_and_sessions_still_do(
-        self, tmp_path: Path
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Both directions through one installed filter, on real traffic.
 
@@ -807,6 +807,10 @@ class TestLogNoise:
         logger reach a handler at all — without it, a raised level or a filter
         that swallowed every termination would pass the first half.
         """
+        # The servers below configure logging from the environment, so an
+        # ``OPENZIM_MCP_LOGGING__LEVEL`` above INFO left in the shell would
+        # drop the very records this test reads (the live tier pins it too).
+        monkeypatch.setenv("OPENZIM_MCP_LOGGING__LEVEL", "INFO")
         sdk_logger = logging.getLogger(self.SDK_LOGGER)
         level_before = sdk_logger.level
         stateless, _ = _build_client(tmp_path / "on", stateless_http=True)
