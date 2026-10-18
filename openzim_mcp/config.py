@@ -441,6 +441,30 @@ class OpenZimMcpConfig(BaseSettings):
             "'*' alone is rejected. Honored only when transport='http'."
         ),
     )
+    stateless_http: bool = Field(
+        default=False,
+        description=(
+            "Serve handshake-era clients — those that open with `initialize`, "
+            "on a protocol revision before 2026-07-28 — without sessions. "
+            "2026-07-28 clients are unaffected: they are sessionless in "
+            "either mode, and their `subscriptions/listen` streams work as "
+            "before. For handshake-era clients the server issues no "
+            "`Mcp-Session-Id` and answers each POST on its own, so any "
+            "replica can answer any of their requests and a load balancer "
+            "needs no session affinity for them; every other method on the "
+            "MCP endpoint (GET, DELETE, and the rest) is answered 405 with "
+            "`Allow: POST`, so none of them holds a GET stream open through "
+            "the proxy. The cost is cancellation: a handshake-era "
+            "`notifications/cancelled` arrives on its own POST and cannot "
+            "reach a call in flight on another, so it is ignored, and a "
+            "client cancels a call by closing that call's connection "
+            "instead. Nothing else rides on the session here: this server "
+            "sends handshake-era clients no requests and no "
+            "connection-scoped notifications (it offers them no "
+            "subscriptions in either mode). Set it on every replica or none. "
+            "Honored only when transport='http'."
+        ),
+    )
     watch_interval_seconds: int = Field(
         default=5,
         ge=1,
@@ -627,6 +651,7 @@ class OpenZimMcpConfig(BaseSettings):
             "port": self.port,
             "cors_origins": sorted(self.cors_origins),
             "allowed_hosts": sorted(self.allowed_hosts),
+            "stateless_http": self.stateless_http,
             "watch_interval_seconds": self.watch_interval_seconds,
             "resource_cache_ttl_seconds": self.resource_cache_ttl_seconds,
             "subscriptions_enabled": self.subscriptions_enabled,

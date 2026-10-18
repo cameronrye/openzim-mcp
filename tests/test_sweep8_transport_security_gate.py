@@ -6,7 +6,8 @@ manager's session table and starts its task *before* the handler validates
 Host/Origin. So a request answered ``403 Invalid Origin header`` had already
 allocated a session and a live task, and nothing reaps them: the app builder
 exposes no ``session_idle_timeout``, so the manager's idle-expiry branch never
-runs and the table empties only on an explicit DELETE or process exit.
+runs, and on mcp 2.1.1 nothing but process exit removes them — a DELETE
+terminates its session but leaves the entry behind (#453).
 
 The default HTTP deployment is the exposed one — ``127.0.0.1``, no token
 (which ``check_safe_startup`` permits), no CORS origins — so neither of the

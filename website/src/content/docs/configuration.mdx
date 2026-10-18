@@ -60,6 +60,7 @@ export OPENZIM_MCP_CORS_ORIGINS='["https://app.example"]'  # JSON list; "*" reje
 | `cors_origins` | `OPENZIM_MCP_CORS_ORIGINS` | `[]` | JSON list of allowed origins. Wildcard `"*"` is rejected at startup (whitespace-padded `" * "` too). |
 | `host` | `OPENZIM_MCP_HOST` | `127.0.0.1` | Bind address. Non-loopback hosts require `auth_token` for `http`; `sse` always rejects non-loopback. |
 | `port` | `OPENZIM_MCP_PORT` | `8000` | 1-65535. |
+| `stateless_http` | `OPENZIM_MCP_STATELESS_HTTP` | `false` | `http` only. Serves clients on the `initialize` handshake without sessions: no `Mcp-Session-Id` is issued, every POST is answered on its own, and every other method on `/mcp` gets `405` with `Allow: POST`. Replicas then need no session affinity. Set it on all of them or none, and see [Scaling considerations](/openzim-mcp/docs/http-and-docker-deployment/#scaling-considerations) before switching a running fleet. 2026-07-28 clients are unaffected. |
 | `transport` | `OPENZIM_MCP_TRANSPORT` | `stdio` | One of `stdio`/`http`/`sse`. `sse` has no auth middleware and is loopback-only, and is **deprecated** — it warns on every start and is removed in 4.0.0. |
 
 **Safe-default startup check** — the server *refuses* to bind if either:
@@ -251,6 +252,7 @@ Sorted alphabetically by field name within each grouping.
 | `rate_limit.requests_per_second` | `OPENZIM_MCP_RATE_LIMIT__REQUESTS_PER_SECOND` | `20.0` | positive float (work units/s) |
 | `resource_cache_ttl_seconds` | `OPENZIM_MCP_RESOURCE_CACHE_TTL_SECONDS` | `3600` | 0-86400; `0` disables |
 | `server_name` | `OPENZIM_MCP_SERVER_NAME` | `openzim-mcp` | reported in serverInfo |
+| `stateless_http` | `OPENZIM_MCP_STATELESS_HTTP` | `false` | `http` only: handshake-era clients get no session, so replicas need no affinity |
 | `subscriptions_enabled` | `OPENZIM_MCP_SUBSCRIPTIONS_ENABLED` | `true` | watcher master switch |
 | `tool_mode` | `OPENZIM_MCP_TOOL_MODE` | `simple` | `simple` or `advanced` |
 | `transport` | `OPENZIM_MCP_TRANSPORT` | `stdio` | `stdio`/`http`/`sse` (`sse` deprecated, removed in 4.0.0) |

@@ -389,7 +389,7 @@ Re-read on each notification to refresh your local view: `resources/list` after 
 
 ### Legacy clients
 
-The SDK serves the pre-2026-07-28 handshake era on the same endpoint, so a 2025-era client still initializes, carries an `Mcp-Session-Id`, and calls tools, resources, and prompts exactly as before. It cannot receive change notifications, though: `resources/subscribe` and `resources/unsubscribe` are not registered on this build, so they answer `-32601 Method not found`, and `resources.subscribe` is advertised as `false` to a handshake-era client. Live updates require negotiating 2026-07-28 and calling `subscriptions/listen`.
+The SDK serves the pre-2026-07-28 handshake era on the same endpoint, so a 2025-era client still initializes, carries an `Mcp-Session-Id` (unless the server runs with `OPENZIM_MCP_STATELESS_HTTP=1`, which issues none), and calls tools, resources, and prompts exactly as before. It cannot receive change notifications, though: `resources/subscribe` and `resources/unsubscribe` are not registered on this build, so they answer `-32601 Method not found`, and `resources.subscribe` is advertised as `false` to a handshake-era client. Live updates require negotiating 2026-07-28 and calling `subscriptions/listen`.
 
 ### Implementation note
 

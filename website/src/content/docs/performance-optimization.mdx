@@ -209,7 +209,7 @@ curl -sS -X POST http://localhost:8000/mcp \
     -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"zim_health","arguments":{},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}'
 ```
 
-The endpoint still serves the deprecated handshake era for clients that haven't moved: omit `MCP-Protocol-Version` (or name a 2025 revision) and the transport becomes stateful — session ids are issued by the server in the `initialize` response header, not chosen by the client, so a made-up `Mcp-Session-Id` gets `404 Session not found`. The full handshake:
+The endpoint still serves the deprecated handshake era for clients that haven't moved: omit `MCP-Protocol-Version` (or name a 2025 revision) and the transport becomes stateful — session ids are issued by the server in the `initialize` response header, not chosen by the client, so a made-up `Mcp-Session-Id` gets `404 Session not found`. (A server run with `OPENZIM_MCP_STATELESS_HTTP=1` issues none and ignores any a POST carries: `SID` below comes back empty, and the later calls are answered without it.) The full handshake:
 
 ```bash
 # 1. Initialize; capture the server-issued session id from the response headers

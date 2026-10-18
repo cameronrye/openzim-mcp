@@ -22,6 +22,10 @@ code or comments in this repo:
 * 2.1.1's ``read_resource`` moved ``get_resource`` inside the ``try`` and
   added a runtime ``str | bytes`` check on ``Resource.read()``.
 
+``TestStatelessHttpSeams`` pins what ``OPENZIM_MCP_STATELESS_HTTP`` (#452)
+leans on that its own tests cannot see past the gate and the log filter, and
+the 2.1.1 session retention (#453) that the HTTP gates' docstrings describe.
+
 What is deliberately *not* here: the advertised schema footprint (already
 measured live and asserted against the allocation table in
 ``test_phase_f_schema_budget.py`` and against the docs in
@@ -564,4 +568,136 @@ class TestDeclaredRangeIsTheTestedRange:
             f"series is {top[0]}.{top[1]}.x, but uv.lock pins {locked}. Run "
             "`uv lock --upgrade-package mcp` so CI tests the wheel a fresh "
             "install would get."
+        )
+
+
+class TestStatelessHttpSeams:
+    """What ``OPENZIM_MCP_STATELESS_HTTP`` leans on, and #453's retention.
+
+    Era routing ahead of the stateful/stateless switch is pinned where it
+    bites, in ``test_stateless_http.py``: a 2026-07-28 GET to a stateless
+    server must still reach the SDK's own 405. The two pins below cover what
+    http_app's own layers hide from that file — the gate answers every
+    stateless GET before the SDK can, and the log filter drops the record
+    before any handler sees it — so each drives the SDK's app with none of
+    those layers in front. If either behaviour moves, the layer built for it
+    is dead weight or misdirected, and the failure says which.
+    """
+
+    @staticmethod
+    def _sdk_app(tmp_path: Path, *, stateless_http: bool) -> Any:
+        """The SDK's own app, built the way ``serve_streamable_http`` asks for it."""
+        server = OpenZimMcpServer(
+            OpenZimMcpConfig(allowed_directories=[str(tmp_path)], transport="http")
+        )
+        return server.mcp.streamable_http_app(
+            host=server.config.host,
+            transport_security=server._transport_security,
+            stateless_http=stateless_http,
+        )
+
+    def test_the_stateless_path_would_hold_a_sessionless_get_open(
+        self, tmp_path: Path
+    ) -> None:
+        """No session id means no session check, so a GET opens a stream.
+
+        The stateless transport's ``_validate_session`` passes when it has no
+        id of its own, so the GET handler answers ``200 text/event-stream``
+        and holds that stream — one nothing can ever write to — until the
+        client hangs up. That is the only reason the gate answers every
+        non-POST on a stateless server itself. Driven directly, hanging up as
+        soon as the stream starts.
+        """
+        from starlette.testclient import TestClient
+
+        from tests.test_stateless_http import _drive
+
+        app = self._sdk_app(tmp_path, stateless_http=True)
+        with TestClient(app, base_url="http://127.0.0.1") as client:
+            exchange = _drive(
+                client,
+                "GET",
+                {"accept": "text/event-stream", "mcp-protocol-version": "2025-11-25"},
+            )
+        assert exchange.status == 200 and exchange.is_event_stream, (
+            f"the SDK's stateless path now answers a sessionless GET with "
+            f"{exchange.status} {exchange.headers}: the stateless branch of "
+            "SessionlessRequestGateMiddleware exists to stop a held stream, "
+            "so revisit it and its docstring"
+        )
+
+    def test_each_stateless_request_logs_a_none_session_ending(
+        self, tmp_path: Path
+    ) -> None:
+        """The record http_app's filter drops, as the SDK really writes it.
+
+        ``terminate()`` runs once per stateless request and logs the transport's
+        session id, ``None`` there. The filter is lifted for the duration,
+        since serving any stateless app in this process installs it.
+        """
+        import logging
+
+        from starlette.testclient import TestClient
+
+        from openzim_mcp import http_app
+        from tests.test_stateless_http import NEGOTIATED, TOOLS_LIST, _collected
+
+        sdk_logger = logging.getLogger(http_app._SDK_TRANSPORT_LOGGER)
+        installed = http_app._STATELESS_TERMINATE_FILTER in sdk_logger.filters
+        level = sdk_logger.level
+        sdk_logger.removeFilter(http_app._STATELESS_TERMINATE_FILTER)
+        sdk_logger.setLevel(logging.INFO)
+        try:
+            app = self._sdk_app(tmp_path, stateless_http=True)
+            with _collected(http_app._SDK_TRANSPORT_LOGGER) as records:
+                with TestClient(app, base_url="http://127.0.0.1") as client:
+                    listed = client.post("/mcp", json=TOOLS_LIST, headers=NEGOTIATED)
+                    assert listed.status_code == 200, listed.text
+        finally:
+            sdk_logger.setLevel(level)
+            if installed:
+                sdk_logger.addFilter(http_app._STATELESS_TERMINATE_FILTER)
+
+        messages = [record.getMessage() for record in records]
+        assert http_app._STATELESS_TERMINATE_RECORD in messages, (
+            f"the SDK no longer logs {http_app._STATELESS_TERMINATE_RECORD!r} per "
+            f"stateless request (it logged {messages}): update or drop "
+            "http_app's _StatelessTerminateFilter"
+        )
+
+    def test_a_delete_leaves_its_session_in_the_table(self, tmp_path: Path) -> None:
+        """mcp 2.1.1 ends a session on DELETE but never removes its entry (#453).
+
+        The HTTP gates' docstrings say so, and so do the deployment docs'
+        reasons to run without sessions. 2.2 fixes it, so raising the ceiling
+        fails this — on purpose, naming everything that describes the old
+        behaviour.
+        """
+        from tests.test_stateless_http import (
+            HANDSHAKE_HEADERS,
+            NEGOTIATED,
+            _build_client,
+            _initialize,
+        )
+
+        client, server = _build_client(tmp_path)
+        with client:
+            opened = client.post("/mcp", json=_initialize(), headers=HANDSHAKE_HEADERS)
+            session_id = opened.headers["mcp-session-id"]
+            ended = client.request(
+                "DELETE", "/mcp", headers={**NEGOTIATED, "Mcp-Session-Id": session_id}
+            )
+            assert ended.status_code == 200, ended.text
+            table = server.mcp.session_manager._server_instances
+            retained = session_id in table and table[session_id].is_terminated
+
+        assert retained, (
+            "mcp now removes a session from its table on DELETE (#453 is fixed "
+            "in the resolved SDK). Revise what describes 2.1.1's retention: "
+            "the TransportSecurityGateMiddleware and "
+            "SessionlessRequestGateMiddleware docstrings in "
+            "openzim_mcp/http_app.py, the module docstring of "
+            "tests/test_sweep8_transport_security_gate.py, pyproject's mcp "
+            "comment, and the memory note under Scaling considerations in "
+            "website/src/content/docs/http-and-docker-deployment.mdx."
         )
