@@ -7,8 +7,9 @@ proxy hop carry a long-lived SSE stream. The SDK can serve those clients
 statelessly, but forcing its flag alone broke them: the sessionless gate
 answered their sessionless follow-ups ``400 Missing session ID``.
 
-``TestTheSetting`` checks the config model itself, and the tripwire at the end
-reads the package's source. Everything else drives the app
+``TestTheSetting`` checks the config model, and that stdio and sse start
+exactly as they would without the setting; the tripwire at the end reads the
+package's source against the SDK's API. Everything else drives the app
 ``serve_streamable_http`` hands to uvicorn — session manager, gates, auth —
 because the behaviour lives in how the setting, the SDK's app builder and the
 gate agree, which no stub can show.
@@ -25,19 +26,34 @@ from __future__ import annotations
 
 import ast
 import contextlib
+import importlib
 import json
 import logging
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterator, List, Mapping, Optional, Tuple
+from types import FunctionType
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    FrozenSet,
+    Iterator,
+    List,
+    Mapping,
+    Optional,
+    Set,
+    Tuple,
+)
 from unittest.mock import MagicMock
 from uuid import uuid4
 
 import anyio
 import pytest
+from mcp_types.version import HANDSHAKE_PROTOCOL_VERSIONS
 from starlette.testclient import TestClient
 
+from openzim_mcp import http_app
 from openzim_mcp.config import OpenZimMcpConfig
 from openzim_mcp.http_app import serve_streamable_http
 from openzim_mcp.server import OpenZimMcpServer
@@ -52,6 +68,13 @@ HANDSHAKE_HEADERS = {
 # What a 2025-06-18-or-later handshake-era client sends on every request after
 # ``initialize``. A 2025-03-26 client sends ``HANDSHAKE_HEADERS`` alone.
 NEGOTIATED = {**HANDSHAKE_HEADERS, "MCP-Protocol-Version": "2025-11-25"}
+
+# Every way a request can be handshake-era: no ``MCP-Protocol-Version`` at all
+# — what a 2025-03-26 client sends after ``initialize``, and what a bare curl
+# sends — or any revision before 2026-07-28, read from the SDK so a new one is
+# covered the day it lands.
+HANDSHAKE_ERAS: List[Optional[str]] = [None, *HANDSHAKE_PROTOCOL_VERSIONS]
+HANDSHAKE_ERA_IDS = ["no-version-header", *HANDSHAKE_PROTOCOL_VERSIONS]
 
 INITIALIZED = {"jsonrpc": "2.0", "method": "notifications/initialized"}
 TOOLS_LIST = {"jsonrpc": "2.0", "id": 2, "method": "tools/list"}
@@ -86,10 +109,15 @@ def _initialize(protocol_version: str = "2025-11-25") -> Dict[str, Any]:
     }
 
 
-def _build_client(
-    tmp_path: Path, **overrides: Any
-) -> Tuple[TestClient, OpenZimMcpServer]:
-    """The production-wired app over a directory holding one stub archive."""
+def _naming_era(headers: Dict[str, str], version: Optional[str]) -> Dict[str, str]:
+    """``headers``, plus an ``MCP-Protocol-Version`` unless ``version`` is None."""
+    if version is None:
+        return dict(headers)
+    return {**headers, "mcp-protocol-version": version}
+
+
+def _server(tmp_path: Path, **overrides: Any) -> OpenZimMcpServer:
+    """An HTTP server over a directory holding one stub archive."""
     tmp_path.mkdir(parents=True, exist_ok=True)
     (tmp_path / "sample.zim").write_bytes(b"placeholder")
     config = OpenZimMcpConfig(
@@ -98,7 +126,14 @@ def _build_client(
         tool_mode="advanced",
         **overrides,
     )
-    server = OpenZimMcpServer(config)
+    return OpenZimMcpServer(config)
+
+
+def _build_client(
+    tmp_path: Path, **overrides: Any
+) -> Tuple[TestClient, OpenZimMcpServer]:
+    """The production-wired app over a directory holding one stub archive."""
+    server = _server(tmp_path, **overrides)
     captured: Dict[str, Any] = {}
     serve_streamable_http(
         server, runner=lambda app, host, port: captured.update(app=app)
@@ -466,8 +501,13 @@ class TestEveryOtherMethodIsRefused:
     @pytest.mark.parametrize(
         "session_id", [None, uuid4().hex], ids=["no-session-id", "session-id"]
     )
+    @pytest.mark.parametrize("version", HANDSHAKE_ERAS, ids=HANDSHAKE_ERA_IDS)
     def test_get_and_delete_are_refused_rather_than_served(
-        self, tmp_path: Path, method: str, session_id: Optional[str]
+        self,
+        tmp_path: Path,
+        method: str,
+        session_id: Optional[str],
+        version: Optional[str],
     ) -> None:
         """No session means no stream to open and nothing to end.
 
@@ -478,10 +518,12 @@ class TestEveryOtherMethodIsRefused:
         ``notifications/initialized``) treats ``405`` as "no stream here". A
         stateless DELETE gets the SDK's ``405`` without the ``Allow`` header
         RFC 9110 requires. An ``Mcp-Session-Id`` — say, one a stateful
-        replica issued before this one switched mode — changes neither.
+        replica issued before this one switched mode — changes neither, and
+        nor does which handshake revision the request names, or that it
+        names none: era routing reads a missing header as the handshake era.
         """
         client, server = _build_client(tmp_path, stateless_http=True)
-        headers = {"accept": "text/event-stream", "mcp-protocol-version": "2025-11-25"}
+        headers = _naming_era({"accept": "text/event-stream"}, version)
         if session_id is not None:
             headers["mcp-session-id"] = session_id
         with client:
@@ -490,8 +532,9 @@ class TestEveryOtherMethodIsRefused:
         _assert_refused_by_the_gate(exchange)
 
     @pytest.mark.parametrize("method", ["PUT", "PATCH", "HEAD", "OPTIONS"])
+    @pytest.mark.parametrize("version", HANDSHAKE_ERAS, ids=HANDSHAKE_ERA_IDS)
     def test_the_rest_are_refused_with_the_same_allow(
-        self, tmp_path: Path, method: str
+        self, tmp_path: Path, method: str, version: Optional[str]
     ) -> None:
         """``Allow`` must list what the endpoint supports *here*: POST alone.
 
@@ -503,12 +546,20 @@ class TestEveryOtherMethodIsRefused:
         """
         client, _server = _build_client(tmp_path, stateless_http=True)
         with client:
-            exchange = _drive(client, method, dict(NEGOTIATED))
+            exchange = _drive(client, method, _naming_era(HANDSHAKE_HEADERS, version))
         _assert_refused_by_the_gate(exchange)
 
     @pytest.mark.parametrize(
         ("path", "status"),
-        [("/healthz", 200), ("/readyz", 200), ("/not-a-route", 404)],
+        [
+            ("/healthz", 200),
+            ("/readyz", 200),
+            ("/not-a-route", 404),
+            # Next to the MCP route rather than on it: the gate must match
+            # the path exactly, or a typo is blamed on the method.
+            ("/mcp/extra", 404),
+            ("/mcpx", 404),
+        ],
     )
     def test_only_the_mcp_route_is_gated(
         self, tmp_path: Path, path: str, status: int
@@ -523,6 +574,39 @@ class TestEveryOtherMethodIsRefused:
         with client:
             response = client.get(path)
         assert response.status_code == status, response.text
+
+
+class TestTheDocumentedModeCheck:
+    """The deployment docs' way to tell a replica's mode from outside."""
+
+    @pytest.mark.parametrize(
+        ("overrides", "status"),
+        [({"stateless_http": True}, 405), ({}, 400)],
+        ids=["stateless", "default"],
+    )
+    def test_a_bare_get_is_answered_at_once_in_either_mode(
+        self, tmp_path: Path, overrides: Dict[str, Any], status: int
+    ) -> None:
+        """``curl http://<replica>:8000/mcp``, exactly as the docs give it.
+
+        curl sends ``Accept: */*`` and no ``MCP-Protocol-Version``: a
+        handshake-era GET, which the SDK would take as asking for an event
+        stream. The docs promise a status line from each replica — ``405``
+        stateless, ``400 Missing session ID`` with sessions — and a curl
+        with no timeout would hang on a held stream instead of printing one.
+        """
+        client, server = _build_client(tmp_path, **overrides)
+        with client:
+            exchange = _drive(client, "GET", {"accept": "*/*", "user-agent": "curl"})
+            assert _sessions(server) == {}
+        if status == 405:
+            _assert_refused_by_the_gate(exchange)
+            return
+        assert exchange.returned, "the request was held open until the ceiling"
+        assert exchange.status == 400, (exchange.status, exchange.body)
+        assert json.loads(exchange.body)["error"]["message"] == (
+            "Bad Request: Missing session ID"
+        )
 
 
 class TestTheDefaultIsUnchanged:
@@ -641,46 +725,66 @@ class TestModernTrafficIsUnaffected:
 
 
 class TestEachReplicaNamesItsMode:
-    """Nothing a client sees names the mode, so each replica logs it at startup."""
+    """Nothing in ordinary client traffic names the mode, so each replica logs it."""
 
     @pytest.mark.parametrize(
-        ("overrides", "named", "not_named"),
+        ("overrides", "line"),
         [
-            ({"stateless_http": True}, "statelessly", "with sessions"),
-            ({}, "with sessions", "statelessly"),
+            (
+                {"stateless_http": True},
+                "Serving handshake-era clients statelessly "
+                "(OPENZIM_MCP_STATELESS_HTTP=true): no Mcp-Session-Id is issued, "
+                "and a GET or DELETE on /mcp is answered 405",
+            ),
+            (
+                {},
+                "Serving handshake-era clients with sessions "
+                "(OPENZIM_MCP_STATELESS_HTTP=false): each Mcp-Session-Id is known "
+                "only to the replica that issued it",
+            ),
         ],
         ids=["stateless", "default"],
     )
     def test_startup_logs_one_line_naming_the_mode(
-        self,
-        tmp_path: Path,
-        overrides: Dict[str, Any],
-        named: str,
-        not_named: str,
+        self, tmp_path: Path, overrides: Dict[str, Any], line: str
     ) -> None:
-        """One INFO line per start, quoted by the deployment docs.
+        """One INFO line per start, written before serving, quoted by the docs.
 
         Replicas that disagree break handshake-era clients mid-sequence, and
         the docs tell an operator to check this line on every replica — so the
-        line the docs quote has to be the one the server writes.
+        line the docs quote has to be the one the server writes, every word of
+        it: a line naming one mode beside the other's setting would mislead.
+        It is read at the moment ``runner`` is called, because uvicorn blocks
+        there until shutdown: a line logged after it would never be seen by an
+        operator looking at a running replica.
         """
         logger = logging.getLogger("openzim_mcp.http_app")
         level = logger.level
         logger.setLevel(logging.INFO)
+        server = _server(tmp_path, **overrides)
+        announced: List[str] = []
+
+        def mode_lines(records: List[logging.LogRecord]) -> List[str]:
+            return [
+                record.getMessage()
+                for record in records
+                if record.levelno == logging.INFO
+                and record.getMessage().startswith("Serving handshake-era clients")
+            ]
+
         try:
             with _collected("openzim_mcp.http_app") as records:
-                _build_client(tmp_path, **overrides)
+                serve_streamable_http(
+                    server,
+                    runner=lambda app, host, port: announced.extend(
+                        mode_lines(records)
+                    ),
+                )
         finally:
             logger.setLevel(level)
-        lines = [
-            record.getMessage()
-            for record in records
-            if record.levelno == logging.INFO
-            and record.getMessage().startswith("Serving handshake-era clients")
-        ]
-        assert len(lines) == 1, lines
-        assert named in lines[0] and not_named not in lines[0], lines[0]
-        quoted = lines[0].split(" (", 1)[0]
+        assert announced == [line], announced
+        assert mode_lines(records) == [line], "logged again after serving began"
+        quoted = line.split(" (", 1)[0]
         assert quoted in DEPLOYMENT_DOC.read_text(encoding="utf-8"), (
             f"the deployment docs tell operators to look for {quoted!r} at "
             "startup, but no longer quote it"
@@ -733,6 +837,42 @@ class TestLogNoise:
             if record.getMessage().startswith("Terminating session:")
         ]
         assert terminations == [f"Terminating session: {session_id}"], terminations
+
+    def test_the_filter_is_in_place_before_serving_starts(self, tmp_path: Path) -> None:
+        """uvicorn blocks inside ``runner`` until shutdown, so the filter goes in first.
+
+        Installed after it, the filter would only start dropping records once
+        the server had stopped, every request in between logging the noise
+        again — and a runner that returns at once, as ``_build_client``'s
+        does, would never notice. So the SDK's two records are written from
+        inside the runner, the moment serving would begin: the ``None`` one
+        must be dropped there, and a real session's must still get through.
+        """
+        sdk_logger = logging.getLogger(self.SDK_LOGGER)
+        terminate_filter = http_app._STATELESS_TERMINATE_FILTER
+        was_installed = terminate_filter in sdk_logger.filters
+        level = sdk_logger.level
+        # Lifted first: any stateless app built earlier in this process
+        # installed it, which would pass this test for the wrong reason.
+        sdk_logger.removeFilter(terminate_filter)
+        sdk_logger.setLevel(logging.INFO)
+        server = _server(tmp_path, stateless_http=True)
+        session_id = uuid4().hex
+
+        def runner(app: Any, host: str, port: int) -> None:
+            sdk_logger.info("Terminating session: None")
+            sdk_logger.info("Terminating session: %s", session_id)
+
+        try:
+            with _collected(self.SDK_LOGGER) as records:
+                serve_streamable_http(server, runner=runner)
+        finally:
+            sdk_logger.setLevel(level)
+            if not was_installed:
+                sdk_logger.removeFilter(terminate_filter)
+        assert [record.getMessage() for record in records] == [
+            f"Terminating session: {session_id}"
+        ]
 
     def test_the_filter_is_installed_once(self, tmp_path: Path) -> None:
         """Serving twice, or building several apps, must not stack filters."""
@@ -824,63 +964,126 @@ class TestWhatTheSessionCarried:
 # The tripwire: stateless mode depends on this server never needing a session.
 # --------------------------------------------------------------------------
 
-# Every SDK API (mcp 2.1.1) through which a server reaches a client outside
-# the response to that client's own request: a server-to-client request,
-# which needs a back-channel, or a notification on the connection's
-# standalone stream. A handshake-era client served statelessly has neither —
-# the request raises ``NoBackChannelError``, the notification is dropped — so
-# any of these appearing in the package is a feature that would silently
+# Every public method the SDK defines on its server-side contexts and channels,
+# sorted by whether a call can reach a client outside the response to that
+# client's own request. A handshake-era client served statelessly has no
+# session: a server-to-client request raises ``NoBackChannelError`` there, and
+# a notification on the connection's standalone stream is dropped. So any
+# back-channel name appearing in the package is a feature that would silently
 # degrade under OPENZIM_MCP_STATELESS_HTTP. Keyed by where the SDK defines
-# them, so the names can be checked against the SDK rather than trusted.
+# each method, so the table is checked against the SDK both ways rather than
+# trusted: a method a release adds or drops fails until it is sorted here.
 #
-# Request-scoped traffic is deliberately absent: ``report_progress`` and
-# ``Context.log`` / ``info`` / ``warning`` ride the POST's own response
-# stream, which stateless mode keeps. So is the 2026-07-28 subscription bus
-# (``SubscriptionBus.publish`` and ``Context.notify_*``), which reaches only
-# ``subscriptions/listen`` streams — era-routed ahead of the stateful/stateless
-# switch, and unaffected by it. Generic names the SDK shares with the standard
-# library (``Connection.notify`` / ``ping`` / ``log``, ``ClientPeer.sample``)
-# are covered through the wire methods below and the ``ClientPeer`` name
-# instead, since ``Condition.notify`` or ``Logger.log`` would trip them.
-_BACK_CHANNEL_APIS: Dict[str, Tuple[str, ...]] = {
-    "mcp.server.mcpserver.context:Context": ("elicit", "elicit_url"),
-    "mcp.server.session:ServerSession": (
-        # elicitation
-        "elicit",
-        "elicit_form",
-        "elicit_url",
-        "send_elicit_complete",
-        # sampling
-        "create_message",
-        # roots
-        "list_roots",
-        # resources/updated and the list_changed notifications
-        "send_resource_updated",
-        "send_resource_list_changed",
-        "send_tool_list_changed",
-        "send_prompt_list_changed",
-        # the generic channels; a log or progress notification sent without
-        # a related request id goes out on the standalone stream too
-        "send_request",
-        "send_notification",
-        "send_ping",
-        "send_log_message",
-        "send_progress_notification",
-    ),
-    "mcp.server.connection:Connection": (
-        "send_request",
-        "send_raw_request",
-        "send_resource_updated",
-        "send_resource_list_changed",
-        "send_tool_list_changed",
-        "send_prompt_list_changed",
-    ),
-    "mcp.server.elicitation": ("elicit_with_validation", "elicit_url"),
+# Banned wherever the name appears.
+_BACK_CHANNEL = "back-channel"
+# Back-channel as well — a Connection's own channel is its standalone stream —
+# but under names the standard library shares (``Logger.log``,
+# ``Condition.notify``), so banned only where a Connection is the receiver.
+_ON_A_CONNECTION = "back-channel on a Connection"
+# Rides the response stream of the request being handled, which stateless
+# mode keeps: ``Context.log`` and its level helpers pass the request id.
+_REQUEST_SCOPED = "request-scoped"
+# The 2026-07-28 subscription bus: it reaches only ``subscriptions/listen``
+# streams, which are era-routed ahead of the stateful/stateless switch.
+_BUS = "subscription bus"
+_SENDS_NOTHING = "sends nothing"
+
+_SDK_SURFACE: Dict[str, Dict[str, Tuple[str, ...]]] = {
+    "mcp.server.mcpserver.context:Context": {
+        _BACK_CHANNEL: ("elicit", "elicit_url"),
+        _REQUEST_SCOPED: (
+            "debug",
+            "error",
+            "info",
+            "log",
+            "report_progress",
+            "warning",
+        ),
+        _BUS: (
+            "notify_prompts_changed",
+            "notify_resource_updated",
+            "notify_resources_changed",
+            "notify_tools_changed",
+        ),
+        _SENDS_NOTHING: (
+            "close_sse_stream",
+            "close_standalone_sse_stream",
+            "model_post_init",
+            "read_resource",
+        ),
+    },
+    "mcp.server.context:Context": {_REQUEST_SCOPED: ("log",)},
+    "mcp.shared.context:BaseContext": {
+        _BACK_CHANNEL: ("send_raw_request",),
+        _REQUEST_SCOPED: ("notify", "report_progress"),
+    },
+    "mcp.server.session:ServerSession": {
+        _BACK_CHANNEL: (
+            "create_message",
+            "elicit",
+            "elicit_form",
+            "elicit_url",
+            "list_roots",
+            "send_elicit_complete",
+            "send_notification",
+            "send_ping",
+            "send_prompt_list_changed",
+            "send_request",
+            "send_resource_list_changed",
+            "send_resource_updated",
+            "send_tool_list_changed",
+            # Request-scoped only when handed a related request id, and on
+            # the standalone stream otherwise: counted as the latter.
+            "send_log_message",
+            "send_progress_notification",
+        ),
+        _REQUEST_SCOPED: ("report_progress",),
+        _SENDS_NOTHING: ("check_client_capability",),
+    },
+    "mcp.server.connection:Connection": {
+        _BACK_CHANNEL: (
+            "send_prompt_list_changed",
+            "send_raw_request",
+            "send_request",
+            "send_resource_list_changed",
+            "send_resource_updated",
+            "send_tool_list_changed",
+        ),
+        _ON_A_CONNECTION: ("log", "notify", "ping"),
+        _SENDS_NOTHING: ("check_capability", "for_loop", "from_envelope"),
+    },
+    "mcp.server.subscriptions:SubscriptionBus": {
+        _BUS: ("publish",),
+        _SENDS_NOTHING: ("subscribe",),
+    },
+}
+# Module-level names, which have no class to enumerate. ``ClientPeer`` wraps
+# any outbound channel in typed server-to-client requests; nothing in the SDK
+# hands one out, so banning the class name covers every method it has or gains.
+_BACK_CHANNEL_HELPERS: Dict[str, Tuple[str, ...]] = {
+    "mcp.server.elicitation": ("elicit_url", "elicit_with_validation"),
     "mcp.shared.peer": ("ClientPeer",),
 }
-_BACK_CHANNEL_NAMES = frozenset(
-    name for names in _BACK_CHANNEL_APIS.values() for name in names
+
+
+def _sorted_as(category: str) -> FrozenSet[str]:
+    """Every name ``_SDK_SURFACE`` sorts into ``category``, on any owner."""
+    return frozenset(
+        name for groups in _SDK_SURFACE.values() for name in groups.get(category, ())
+    )
+
+
+_BACK_CHANNEL_NAMES = _sorted_as(_BACK_CHANNEL) | frozenset(
+    name for names in _BACK_CHANNEL_HELPERS.values() for name in names
 )
+_ON_A_CONNECTION_NAMES = _sorted_as(_ON_A_CONNECTION)
+# Where the package could reach a Connection: the lowlevel context's
+# ``connection``, or the ``_connection`` a ServerSession keeps. Nothing in the
+# package touches either today. The rule reads the receiver only, so a
+# Connection first bound to a name of its own would slip past it: the wire
+# methods below would still catch that alias's ``notify`` of one of them, but
+# not its ``log`` or ``ping``.
+_CONNECTION_ATTRIBUTES = frozenset({"connection", "_connection"})
 # What a raw channel would be handed to send the same traffic.
 _BACK_CHANNEL_METHODS = frozenset(
     {
@@ -895,13 +1098,18 @@ _BACK_CHANNEL_METHODS = frozenset(
         "notifications/prompts/list_changed",
     }
 )
-_ERA_ROUTED_BUS_APIS = (
-    "publish",
-    "notify_tools_changed",
-    "notify_prompts_changed",
-    "notify_resources_changed",
-    "notify_resource_updated",
-)
+
+
+def _sdk_methods(owner: str) -> Set[str]:
+    """The public methods ``owner`` defines itself, in the resolved SDK."""
+    module_name, _, class_name = owner.partition(":")
+    cls = getattr(importlib.import_module(module_name), class_name)
+    return {
+        name
+        for name, value in vars(cls).items()
+        if not name.startswith("_")
+        and isinstance(value, (FunctionType, classmethod, staticmethod))
+    }
 
 
 def _back_channel_uses() -> Tuple[List[str], List[Tuple[str, str]]]:
@@ -921,6 +1129,14 @@ def _back_channel_uses() -> Tuple[List[str], List[Tuple[str, str]]]:
             if isinstance(node, ast.Attribute):
                 if node.attr in _BACK_CHANNEL_NAMES:
                     offences.append(f"{relative}:{node.lineno} .{node.attr}")
+                elif (
+                    node.attr in _ON_A_CONNECTION_NAMES
+                    and isinstance(node.value, ast.Attribute)
+                    and node.value.attr in _CONNECTION_ATTRIBUTES
+                ):
+                    offences.append(
+                        f"{relative}:{node.lineno} .{node.value.attr}.{node.attr}"
+                    )
             elif isinstance(node, ast.Name):
                 if node.id in _BACK_CHANNEL_NAMES:
                     offences.append(f"{relative}:{node.lineno} {node.id}")
@@ -943,23 +1159,40 @@ def _back_channel_uses() -> Tuple[List[str], List[Tuple[str, str]]]:
 class TestNothingNeedsASession:
     """Stateless mode is only lossless while the server never talks first."""
 
-    def test_the_tripwire_names_real_sdk_apis(self) -> None:
-        """A misspelt or renamed entry would leave the scan blind to it.
+    def test_the_tripwire_sorts_every_sdk_method(self) -> None:
+        """Every public method on the SDK's contexts and channels is sorted.
 
-        Checked against the resolved SDK, so a release that renames one of
-        these fails here, in the seam audit's way, rather than silently
-        shrinking the tripwire.
+        Checked against the resolved SDK both ways — a listed name it no
+        longer has, and a method it has that no list names — so neither a
+        dropped entry nor a server-to-client API a new release adds can narrow
+        the tripwire unnoticed: the failure names the method to sort.
         """
-        import importlib
-
-        for owner, names in _BACK_CHANNEL_APIS.items():
-            module_name, _, attribute = owner.partition(":")
-            target: Any = importlib.import_module(module_name)
-            if attribute:
-                target = getattr(target, attribute)
+        for owner, groups in _SDK_SURFACE.items():
+            listed = [name for names in groups.values() for name in names]
+            assert len(listed) == len(set(listed)), f"{owner} sorts a name twice"
+            actual = _sdk_methods(owner)
+            unsorted = sorted(actual - set(listed))
+            gone = sorted(set(listed) - actual)
+            assert not unsorted and not gone, (
+                f"{owner} has {unsorted} that _SDK_SURFACE does not sort, and "
+                f"no longer has {gone}. Sort each new method by whether it can "
+                "reach a client outside the response to its own request; a "
+                "back-channel one is what OPENZIM_MCP_STATELESS_HTTP cannot "
+                "carry."
+            )
+        for module_name, names in _BACK_CHANNEL_HELPERS.items():
+            module = importlib.import_module(module_name)
             for name in names:
-                assert hasattr(target, name), f"{owner} has no {name}"
-        assert not _BACK_CHANNEL_NAMES & set(_ERA_ROUTED_BUS_APIS)
+                assert hasattr(module, name), f"{module_name} has no {name}"
+        # A name banned wherever it appears must not be legitimate on another
+        # owner, or the scan would flag every legitimate use of it.
+        legitimate = (
+            _sorted_as(_REQUEST_SCOPED)
+            | _sorted_as(_BUS)
+            | _sorted_as(_SENDS_NOTHING)
+            | _ON_A_CONNECTION_NAMES
+        )
+        assert not _BACK_CHANNEL_NAMES & legitimate
 
     def test_openzim_mcp_sends_no_server_to_client_traffic(self) -> None:
         """Fails the day the package grows a request or a standalone notification.

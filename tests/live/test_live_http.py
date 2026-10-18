@@ -28,6 +28,18 @@ _MODES = pytest.mark.parametrize(
 )
 
 
+def _mode_env(stateless_http: str) -> Dict[str, str]:
+    """The mode, and the log level the server's stderr is read back at.
+
+    Pinned for the same reason as the mode: an ``OPENZIM_MCP_LOGGING__LEVEL``
+    above INFO left in the shell would drop the INFO lines these tests read.
+    """
+    return {
+        "OPENZIM_MCP_STATELESS_HTTP": stateless_http,
+        "OPENZIM_MCP_LOGGING__LEVEL": "INFO",
+    }
+
+
 @_MODES
 def test_healthz_returns_ok(spawn_live_server, stateless_http: str) -> None:
     """``GET /healthz`` returns 200 on a freshly-started HTTP server.
@@ -37,23 +49,23 @@ def test_healthz_returns_ok(spawn_live_server, stateless_http: str) -> None:
     The startup line the deployment docs tell operators to check is read
     back from the process too, so the variable is known to have reached it.
     """
-    srv = spawn_live_server(
-        transport="http", extra_env={"OPENZIM_MCP_STATELESS_HTTP": stateless_http}
-    )
+    srv = spawn_live_server(transport="http", extra_env=_mode_env(stateless_http))
     resp = srv.healthz()
     assert resp.status_code == 200
     mode = "statelessly" if stateless_http == "true" else "with sessions"
+    line = (
+        f"Serving handshake-era clients {mode} "
+        f"(OPENZIM_MCP_STATELESS_HTTP={stateless_http})"
+    )
     assert srv.stderr_path is not None
     startup = srv.stderr_path.read_text(encoding="utf-8", errors="replace")
-    assert f"Serving handshake-era clients {mode}" in startup, startup[-2000:]
+    assert line in startup, startup[-2000:]
 
 
 @_MODES
 def test_readyz_returns_ok(spawn_live_server, stateless_http: str) -> None:
     """``GET /readyz`` returns 200 when allowed dirs are readable, in both modes."""
-    srv = spawn_live_server(
-        transport="http", extra_env={"OPENZIM_MCP_STATELESS_HTTP": stateless_http}
-    )
+    srv = spawn_live_server(transport="http", extra_env=_mode_env(stateless_http))
     resp = srv.readyz()
     assert resp.status_code == 200
 
@@ -71,15 +83,23 @@ def test_stateless_handshake_sequence_over_a_real_socket(spawn_live_server) -> N
 
     The frames Open WebUI's client sends (mcp 1.27.2): ``initialize``, then
     ``notifications/initialized``, ``tools/list`` and ``tools/call``, each a
-    POST standing alone. Then the GET a TypeScript client opens after
-    ``notifications/initialized``, which must be refused rather than held:
-    read through ``stream`` so a regression to a held stream fails on the
-    status line instead of waiting on a body that never ends.
+    POST standing alone. Then two GETs that must be refused rather than held:
+    the one a TypeScript client opens after ``notifications/initialized``,
+    and the deployment docs' mode check — a bare curl, with no
+    ``MCP-Protocol-Version`` at all. Both are read through ``stream`` so a
+    regression to a held stream fails on the status line instead of waiting
+    on a body that never ends.
+
+    Last, the server is stopped and its log read: the SDK's per-request
+    ``Terminating session: None`` must not be there. Read only once the
+    process has exited, because the SDK logs it after each response is sent,
+    and the filter that drops it has to be in place while uvicorn serves, not
+    merely by the time it returns.
     """
     srv = spawn_live_server(
         transport="http",
         token=TOKEN,
-        extra_env={"OPENZIM_MCP_STATELESS_HTTP": "true"},
+        extra_env=_mode_env("true"),
     )
     url = f"{srv.base_url}/mcp"
     base = {
@@ -114,19 +134,21 @@ def test_stateless_handshake_sequence_over_a_real_socket(spawn_live_server) -> N
             },
         ),
     ]
+    gets = {
+        "typescript-client": {
+            **srv.auth_headers,
+            "Accept": "text/event-stream",
+            "MCP-Protocol-Version": "2025-11-25",
+        },
+        # What the docs' curl sends: httpx, like curl, says ``Accept: */*``.
+        "docs-mode-check": dict(srv.auth_headers),
+    }
+    refusals: Dict[str, Any] = {}
     with httpx.Client(timeout=30) as client:
         answers = [client.post(url, json=body, headers=hdrs) for hdrs, body in frames]
-        with client.stream(
-            "GET",
-            url,
-            headers={
-                **srv.auth_headers,
-                "Accept": "text/event-stream",
-                "MCP-Protocol-Version": "2025-11-25",
-            },
-        ) as stream:
-            stream_status = stream.status_code
-            stream_headers = dict(stream.headers)
+        for name, headers in gets.items():
+            with client.stream("GET", url, headers=headers) as stream:
+                refusals[name] = (stream.status_code, dict(stream.headers))
 
     assert [answer.status_code for answer in answers] == [200, 202, 200, 200], [
         answer.text[:200] for answer in answers
@@ -141,9 +163,18 @@ def test_stateless_handshake_sequence_over_a_real_socket(spawn_live_server) -> N
     called = _sse_payload(answers[3].text)
     assert called is not None and called["result"]["isError"] is False, called
 
-    assert stream_status == 405, stream_headers
-    assert stream_headers.get("allow") == "POST", stream_headers
-    assert "mcp-session-id" not in stream_headers
+    for name, (status, headers) in refusals.items():
+        assert status == 405, (name, status, headers)
+        assert headers.get("allow") == "POST", (name, headers)
+        assert "mcp-session-id" not in headers, (name, headers)
+
+    srv.process.terminate()
+    srv.process.wait(timeout=10)
+    assert srv.stderr_path is not None
+    log = srv.stderr_path.read_text(encoding="utf-8", errors="replace")
+    # INFO reached the log at all, or the next check would pass vacuously.
+    assert "Serving handshake-era clients statelessly" in log, log[-2000:]
+    assert "Terminating session: None" not in log, log[-2000:]
 
 
 def test_no_auth_returns_401(spawn_live_server) -> None:
