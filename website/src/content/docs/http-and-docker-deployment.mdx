@@ -88,6 +88,8 @@ Mcp-Method: tools/list
 
 2026-07-28 requests are stateless: there is no `initialize` handshake, no `Mcp-Session-Id` (the server issues none), and `Mcp-Method` must name the same method as the body — `tools/call` additionally needs `Mcp-Name` matching the tool name. A client that sends no `MCP-Protocol-Version`, or one naming a 2025 revision, gets the handshake-era path instead: `initialize` first, then a server-issued `Mcp-Session-Id` echoed on every later request.
 
+A handshake-era session ends when its client sends `DELETE`, or after 30 minutes with no request in flight. An open `GET` stream counts as a request in flight, so a client that never sends `DELETE` but keeps its stream open holds its session for as long as that connection lasts. Each process holds at most 10,000 sessions; while that many are open, an `initialize` that would open another is answered `503`. Both limits are the MCP SDK's defaults. Until the server required mcp 2.3, it ran on an SDK that freed no session before restart, `DELETE` included ([GHSA-84m7-p3x7-pcfv](https://github.com/advisories/GHSA-84m7-p3x7-pcfv)).
+
 Failures return `401 {"error":"unauthorized"}` with `WWW-Authenticate: Bearer`.
 
 Rotate by setting a new value and restarting the container; there is no in-flight rotation.

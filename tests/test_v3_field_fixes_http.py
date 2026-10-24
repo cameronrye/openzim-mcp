@@ -8,7 +8,9 @@ stubbed app would prove nothing.
 
 D62: a sessionless request on the handshake-era path made the SDK mint,
 register and task-start a session before rejecting the request with
-``400 Missing session ID``; nothing ever reaped it.
+``400 Missing session ID``; on mcp 2.1 nothing ever reaped it. From 2.2 the
+SDK discards it again, so these tests assert on what the gate prevents, a
+transport ever being built (``minted_transports``), not on the session table.
 
 D63: the deployment page claimed every ``OPTIONS /mcp`` needs a Bearer
 token; with CORS origins configured a preflight is answered without one.
@@ -16,7 +18,7 @@ token; with CORS origins configured a preflight is answered without one.
 
 import json
 from pathlib import Path
-from typing import Any, Dict, Iterator, Optional, Tuple
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 import pytest
 from starlette.testclient import TestClient
@@ -34,7 +36,7 @@ LEGACY_HEADERS = {
 
 # The SDK's verbatim rejection for a sessionless non-initialize request. The
 # gate must answer identically, so a client sees no behavior change — only
-# the leak goes away.
+# the throwaway session goes away.
 MISSING_SESSION_BODY = {
     "jsonrpc": "2.0",
     "id": None,
@@ -110,7 +112,9 @@ def _sse_result(text: str) -> Optional[Dict[str, Any]]:
     ],
 )
 def test_d62_sessionless_post_is_rejected_without_minting_a_session(
-    http_client: Tuple[TestClient, OpenZimMcpServer], raw_body: str
+    http_client: Tuple[TestClient, OpenZimMcpServer],
+    raw_body: str,
+    minted_transports: List[object],
 ) -> None:
     """The packet repro: 30 sessionless POSTs → 30 × 400, created=0.
 
@@ -123,12 +127,15 @@ def test_d62_sessionless_post_is_rejected_without_minting_a_session(
         assert resp.status_code == 400
         assert resp.json() == MISSING_SESSION_BODY
         assert "mcp-session-id" not in resp.headers
+    assert minted_transports == []
     assert _sessions(server) == {}
 
 
 @pytest.mark.parametrize("method", ["GET", "DELETE"])
 def test_d62_sessionless_get_and_delete_are_rejected_without_minting(
-    http_client: Tuple[TestClient, OpenZimMcpServer], method: str
+    http_client: Tuple[TestClient, OpenZimMcpServer],
+    method: str,
+    minted_transports: List[object],
 ) -> None:
     """A bare GET (stream open) or DELETE without a session id leaked too."""
     client, server = http_client
@@ -136,11 +143,13 @@ def test_d62_sessionless_get_and_delete_are_rejected_without_minting(
     assert resp.status_code == 400
     assert resp.json() == MISSING_SESSION_BODY
     assert "mcp-session-id" not in resp.headers
+    assert minted_transports == []
     assert _sessions(server) == {}
 
 
 def test_d62_legacy_version_header_without_session_is_gated_too(
     http_client: Tuple[TestClient, OpenZimMcpServer],
+    minted_transports: List[object],
 ) -> None:
     """Naming a 2025 revision keeps a request on the handshake path."""
     client, server = http_client
@@ -151,17 +160,24 @@ def test_d62_legacy_version_header_without_session_is_gated_too(
     )
     assert resp.status_code == 400
     assert resp.json() == MISSING_SESSION_BODY
+    assert "mcp-session-id" not in resp.headers
+    assert minted_transports == []
     assert _sessions(server) == {}
 
 
 def test_d62_initialize_still_opens_a_session_and_delete_terminates_it(
     http_client: Tuple[TestClient, OpenZimMcpServer],
+    minted_transports: List[object],
 ) -> None:
     """The one legitimate sessionless request must still pass the gate.
 
     Exercises the full handshake-era lifecycle through the gate: initialize
     (no session yet) → server-issued id → initialized notification →
-    tools/list reuse → DELETE → the id is dead afterwards.
+    tools/list reuse → DELETE → the id is dead afterwards, and gone from the
+    table (mcp 2.2+; on 2.1 a deleted session stayed there until restart,
+    #453). The single minted transport is also what shows
+    ``minted_transports`` counting at all, so the zero the sibling tests
+    assert means something.
     """
     client, server = http_client
 
@@ -170,6 +186,7 @@ def test_d62_initialize_still_opens_a_session_and_delete_terminates_it(
     session_id = resp.headers.get("mcp-session-id")
     assert session_id
     assert session_id in _sessions(server)
+    assert len(minted_transports) == 1
     payload = _sse_result(resp.text)
     assert payload is not None, resp.text
     assert "result" in payload, resp.text
@@ -193,11 +210,13 @@ def test_d62_initialize_still_opens_a_session_and_delete_terminates_it(
     assert resp.status_code == 200, resp.text
     assert resp.headers.get("mcp-session-id") == session_id
 
+    assert _sessions(server) == {}
+
     resp = client.post("/mcp", json=TOOLS_LIST_BODY, headers=with_session)
     assert resp.status_code == 404
-    assert "terminated" in resp.json()["error"]["message"].lower()
+    assert resp.json()["error"]["message"] == "Session not found"
     # Only the one session the handshake legitimately created ever existed.
-    assert list(_sessions(server)) == [session_id]
+    assert len(minted_transports) == 1
 
 
 def test_d62_modern_stateless_post_passes_the_gate(

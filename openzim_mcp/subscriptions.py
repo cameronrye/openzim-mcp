@@ -479,10 +479,11 @@ def install_bounded_listen_handler(mcp: Any, bus: "SubscriptionBus") -> None:
     """Swap the SDK's ``subscriptions/listen`` handler for the bounded one.
 
     ``MCPServer`` constructs its ``ListenHandler`` internally and exposes no
-    seam for supplying one, so the registration is replaced after the fact —
-    the same private-registry seam ``server.py`` already uses to *withhold* the
-    handler when subscriptions are disabled, and the reason both live behind
-    named helpers rather than inline attribute pokes.
+    seam for supplying one, so the registration is replaced after the fact,
+    through the lowlevel server's private handler registry. Withholding the
+    handler has a public spelling since mcp 2.3 (``subscriptions=False``,
+    which ``server.py`` passes); replacing it still has none, which is why
+    this pokes the registry from behind one named helper.
 
     Silently does nothing if the SDK stops registering the method under this
     name; the capability itself is derived from that same registry entry, so a

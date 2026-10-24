@@ -356,24 +356,22 @@ class OpenZimMcpServer:
             icons=[Icon(src=PROJECT_ICON_URL, mime_type="image/svg+xml")],
             instructions=instructions_for(config.tool_mode),
             version=__version__,
-            subscriptions=self.subscription_bus,
+            # ``False``, not ``None``: for ``None`` the SDK substitutes its own
+            # bus and still registers ``subscriptions/listen``, and the modern
+            # capability derivation reports ``resources.subscribe`` and every
+            # ``listChanged`` flag purely from that handler's presence.
+            # ``False`` (mcp 2.3) leaves the method unserved, so the
+            # advertisement stays honest and a listen request fails fast with
+            # method-not-found instead of acking a stream that nothing will
+            # ever publish to.
+            subscriptions=(
+                self.subscription_bus if self.subscription_bus is not None else False
+            ),
             cache_hints=_cache_hints(config),
             archive_read_ttl_ms=config.resource_cache_ttl_seconds * 1000,
             sole_archive=self._sole_loaded_archive,
         )
-        if self.subscription_bus is None:
-            # Withholding the bus is not enough to withhold the capability:
-            # the SDK substitutes its own private bus for ``None`` and
-            # registers ``subscriptions/listen`` unconditionally, and the
-            # modern capability derivation reports ``resources.subscribe``
-            # and every ``listChanged`` flag purely from that handler's
-            # presence. Drop the handler so the advertisement stays honest
-            # and a listen request fails fast with method-not-found instead
-            # of acking a stream that nothing will ever publish to.
-            self.mcp._lowlevel_server._request_handlers.pop(
-                "subscriptions/listen", None
-            )
-        else:
+        if self.subscription_bus is not None:
             # Bound the one dimension the SDK's handler leaves open: the
             # client-supplied URI set it holds for the stream's lifetime.
             from .subscriptions import install_bounded_listen_handler

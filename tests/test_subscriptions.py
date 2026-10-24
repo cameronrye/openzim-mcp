@@ -515,13 +515,15 @@ class TestSubscriptionCapabilityGate:
     """The wire advertisement must track the subscriptions gate.
 
     ``OpenZimMcpServer`` withholds the subscription bus outside
-    HTTP-with-subscriptions-enabled, but SDK v2 substitutes its own private
-    bus for ``None`` and registers ``subscriptions/listen`` regardless — and
-    the modern capability derivation reports ``resources.subscribe`` and every
-    ``listChanged`` flag purely from that handler's presence. Unless the
-    handler is dropped too, a stdio (default) deployment advertises a
-    capability whose events can never fire: the MtimeWatcher only runs under
-    the HTTP lifespan, so an acked listen stream stays silent forever.
+    HTTP-with-subscriptions-enabled, but for ``subscriptions=None`` SDK v2
+    substitutes its own private bus and registers ``subscriptions/listen``
+    regardless — and the modern capability derivation reports
+    ``resources.subscribe`` and every ``listChanged`` flag purely from that
+    handler's presence. Unless the server passes ``subscriptions=False``
+    (mcp 2.3) so the handler is never registered, a stdio (default)
+    deployment advertises a capability whose events can never fire: the
+    MtimeWatcher only runs under the HTTP lifespan, so an acked listen stream
+    stays silent forever.
     """
 
     @staticmethod

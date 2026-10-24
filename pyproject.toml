@@ -54,8 +54,8 @@ dependencies = [
     # One audited minor series at a time. Upstream's VERSIONING.md excludes
     # underscore-prefixed names and undocumented modules from its compatibility
     # promise, and this server depends on a spread of them: sdk_compat.py
-    # patches the dicts under the method tables, server.py/subscriptions.py
-    # install handlers through ``_request_handlers`` + ``HandlerEntry``,
+    # patches the dicts under the method tables, subscriptions.py installs a
+    # handler through ``_request_handlers`` + ``HandlerEntry``,
     # resource_tools.py writes into ``_resource_manager._templates``,
     # http_app.py imports ``check_accept_headers`` /
     # ``MCP_SESSION_ID_HEADER`` / ``DEFAULT_MAX_REQUEST_BODY_SIZE``, and
@@ -65,15 +65,23 @@ dependencies = [
     # suite green.
     #
     # The floor moves with the ceiling on purpose, so the declared range is
-    # exactly the one series CI resolves and tests. 2.0.x is not merely
-    # unaudited, it is behaviourally different: a crashing tool body's
-    # exception text reaches the client verbatim (upstream #3314 landed in
-    # 2.1.0), the SSE message endpoint answers a GET with 400 rather than 405,
-    # and ``DEFAULT_MAX_REQUEST_BODY_SIZE`` has not yet moved to
-    # ``transport_security`` — which makes building the HTTP app raise
-    # ImportError, though stdio still starts. An ``except ImportError``
-    # fallback would restore the import and none of the rest, on a branch no
-    # CI job runs.
+    # exactly the one series CI resolves and tests. Every earlier series is
+    # behaviourally different, not merely unaudited:
+    #
+    # * 2.2.x has no ``subscriptions=False``. server.py passes it to withhold
+    #   ``subscriptions/listen``, and 2.2 would take ``False`` for a bus and
+    #   wrap it in a ``ListenHandler``.
+    # * 2.1.x never frees a handshake-era session: not on DELETE, not when it
+    #   refuses the request that opened it, and not on idle, because its app
+    #   builder takes no ``session_idle_timeout``. That is GHSA-84m7-p3x7-pcfv
+    #   / CVE-2026-59951 (issue #453), fixed by upstream #3395 in 2.2.0.
+    # * 2.0.x leaks a crashing tool body's exception text to the client
+    #   verbatim (upstream #3314 landed in 2.1.0), answers a GET on the SSE
+    #   message endpoint with 400 rather than 405, and has not yet moved
+    #   ``DEFAULT_MAX_REQUEST_BODY_SIZE`` to ``transport_security``, which
+    #   makes building the HTTP app raise ImportError, though stdio still
+    #   starts. An ``except ImportError`` fallback would restore the import
+    #   and none of the rest, on a branch no CI job runs.
     #
     # To raise the ceiling: re-audit the seams against the new wheel, run the
     # full suite AND ``pytest -m live``, re-measure the advertised schema
@@ -85,7 +93,7 @@ dependencies = [
     #
     # None of that retires the ping shim: 2026-07-28 defines no ping, so no SDK
     # release is going to supply those rows (see sdk_compat and issue #371).
-    "mcp[cli]>=2.1.0,<2.2",
+    "mcp[cli]>=2.3.0,<2.4",
     "pydantic>=2.13.3,<3.0",
     "pydantic-settings>=2.14.0,<3.0",
     "tiktoken>=0.7.0,<1.0",
