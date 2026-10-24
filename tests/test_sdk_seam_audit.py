@@ -48,6 +48,9 @@ server sends the client no requests); ``func_metadata``'s dict output model
 (no tool here declares structured output); and ``initialize`` omitting an
 empty ``capabilities.experimental``.
 
+``TestStatelessHttpSeams`` pins what ``OPENZIM_MCP_STATELESS_HTTP`` (#452)
+leans on that its own tests cannot see past the gate and the log filter.
+
 What is deliberately *not* here: the advertised schema footprint (already
 measured live and asserted against the allocation table in
 ``test_phase_f_schema_budget.py`` and against the docs in
@@ -718,4 +721,167 @@ class TestDeclaredRangeIsTheTestedRange:
             f"series is {top[0]}.{top[1]}.x, but uv.lock pins {locked}. Run "
             "`uv lock --upgrade-package mcp` so CI tests the wheel a fresh "
             "install would get."
+        )
+
+
+class TestStatelessHttpSeams:
+    """What ``OPENZIM_MCP_STATELESS_HTTP`` leans on in the SDK.
+
+    Era routing ahead of the stateful/stateless switch is pinned where it
+    bites, in ``test_stateless_http.py``: a 2026-07-28 GET to a stateless
+    server must still reach the SDK's own 405. The two pins below cover what
+    http_app's own layers hide from that file — the gate answers every
+    stateless GET before the SDK can, and the log filter drops the record
+    before any handler sees it — so each drives the SDK's app with none of
+    those layers in front. If either behaviour moves, the layer built for it
+    is dead weight or misdirected, and the failure says which.
+    """
+
+    @staticmethod
+    def _sdk_app(tmp_path: Path, *, stateless_http: bool) -> Any:
+        """The SDK's own app, built the way ``serve_streamable_http`` asks for it."""
+        server = OpenZimMcpServer(
+            OpenZimMcpConfig(allowed_directories=[str(tmp_path)], transport="http")
+        )
+        return server.mcp.streamable_http_app(
+            host=server.config.host,
+            transport_security=server._transport_security,
+            stateless_http=stateless_http,
+        )
+
+    def test_the_stateless_path_would_hold_a_sessionless_get_open(
+        self, tmp_path: Path
+    ) -> None:
+        """No session id means no session check, so a GET opens a stream.
+
+        The stateless transport's ``_validate_session`` passes when it has no
+        id of its own, so the GET handler answers ``200 text/event-stream``
+        and holds that stream — one nothing can ever write to — until the
+        client hangs up. That is the main reason the gate answers every
+        non-POST on a stateless server itself; the other is the ``Allow``
+        headers the SDK gets wrong there (none on a DELETE's 405, and
+        ``GET, POST, DELETE`` on the rest). Driven directly, hanging up as
+        soon as the stream starts.
+        """
+        from starlette.testclient import TestClient
+
+        from tests.test_stateless_http import _drive
+
+        app = self._sdk_app(tmp_path, stateless_http=True)
+        with TestClient(app, base_url="http://127.0.0.1") as client:
+            exchange = _drive(
+                client,
+                "GET",
+                {"accept": "text/event-stream", "mcp-protocol-version": "2025-11-25"},
+            )
+        assert exchange.status == 200 and exchange.is_event_stream, (
+            f"the SDK's stateless path now answers a sessionless GET with "
+            f"{exchange.status} {exchange.headers}: the stateless branch of "
+            "SessionlessRequestGateMiddleware exists mainly to stop a held "
+            "stream, so revisit it and its docstring (it still corrects the "
+            "SDK's Allow headers, unless those changed too)"
+        )
+
+    def test_each_stateless_request_logs_a_none_session_ending(
+        self, tmp_path: Path
+    ) -> None:
+        """The record http_app's filter drops, as the SDK really writes it.
+
+        ``terminate()`` runs once per stateless request and logs the transport's
+        session id, ``None`` there. The filter is lifted for the duration,
+        since serving any stateless app in this process installs it.
+        """
+        import logging
+
+        from starlette.testclient import TestClient
+
+        from openzim_mcp import http_app
+        from tests.test_stateless_http import NEGOTIATED, TOOLS_LIST, _collected
+
+        sdk_logger = logging.getLogger(http_app._SDK_TRANSPORT_LOGGER)
+        installed = http_app._STATELESS_TERMINATE_FILTER in sdk_logger.filters
+        level = sdk_logger.level
+        sdk_logger.removeFilter(http_app._STATELESS_TERMINATE_FILTER)
+        sdk_logger.setLevel(logging.INFO)
+        try:
+            app = self._sdk_app(tmp_path, stateless_http=True)
+            with _collected(http_app._SDK_TRANSPORT_LOGGER) as records:
+                with TestClient(app, base_url="http://127.0.0.1") as client:
+                    listed = client.post("/mcp", json=TOOLS_LIST, headers=NEGOTIATED)
+                    assert listed.status_code == 200, listed.text
+        finally:
+            sdk_logger.setLevel(level)
+            if installed:
+                sdk_logger.addFilter(http_app._STATELESS_TERMINATE_FILTER)
+
+        messages = [record.getMessage() for record in records]
+        assert http_app._STATELESS_TERMINATE_RECORD in messages, (
+            f"the SDK no longer logs {http_app._STATELESS_TERMINATE_RECORD!r} per "
+            f"stateless request (it logged {messages}): update or drop "
+            "http_app's _StatelessTerminateFilter"
+        )
+
+    @pytest.mark.asyncio
+    async def test_a_cancelled_stateless_request_leaves_no_task(self) -> None:
+        """The stateless path tears its transport down even when cancelled.
+
+        2.2 moved ``terminate()`` into a shielded ``finally``. 2.1 called it
+        only when the request returned normally, so a request cancelled
+        mid-flight (by a timeout layer in front of the SDK, say) left three
+        tasks behind until restart. Measured on a bare ``MCPServer`` whose
+        one tool blocks, so the cancellation lands while the transport and
+        its server task are live. The first round is a warm-up: serving SSE
+        starts sse-starlette's process-wide shutdown watcher once, and that
+        task is not the request's.
+        """
+        import asyncio
+
+        import anyio
+        from mcp.server.mcpserver import MCPServer
+
+        entered = anyio.Event()
+        probe = MCPServer("cancel-probe")
+
+        @probe.tool()
+        async def block() -> str:
+            entered.set()
+            await anyio.sleep_forever()
+            return "unreachable"
+
+        app = probe.streamable_http_app(host="127.0.0.1", stateless_http=True)
+        call = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {"name": "block", "arguments": {}},
+        }
+        headers = {**_LEGACY_HEADERS, "MCP-Protocol-Version": "2025-11-25"}
+
+        async def cancelled_call(client: httpx.AsyncClient) -> None:
+            nonlocal entered
+            entered = anyio.Event()
+            async with anyio.create_task_group() as tg:
+                tg.start_soon(lambda: client.post("/mcp", json=call, headers=headers))
+                with anyio.fail_after(5):
+                    await entered.wait()
+                tg.cancel_scope.cancel()
+            for _ in range(10):
+                await anyio.sleep(0.02)
+
+        transport = httpx.ASGITransport(app=app)
+        async with app.router.lifespan_context(app):
+            async with httpx.AsyncClient(
+                transport=transport, base_url="http://127.0.0.1:8000"
+            ) as client:
+                await cancelled_call(client)
+                before = len(asyncio.all_tasks())
+                await cancelled_call(client)
+                after = len(asyncio.all_tasks())
+
+        assert after == before, (
+            f"a cancelled stateless request left {after - before} task(s) "
+            "behind: the SDK no longer terminates the stateless transport in a "
+            "finally. Revisit pyproject's stateless note and http_app's "
+            "comment above streamable_http_app(), which say cancelling one is "
+            "safe."
         )

@@ -2,10 +2,15 @@
 
 Covers v1.0 items: HTTP transport (auth, CORS, /healthz, /readyz,
 OPTIONS-requires-auth, safe-default refusal) and multi-instance HTTP
-coexistence.
+coexistence — and, for ``OPENZIM_MCP_STATELESS_HTTP``, the probes and a
+handshake-era client's whole sequence against a spawned server, where env
+parsing, the real uvicorn runner, the gates and the SDK all take part.
 """
 
 from __future__ import annotations
+
+import json
+from typing import Any, Dict, Optional
 
 import httpx
 import pytest
@@ -16,19 +21,160 @@ pytestmark = pytest.mark.live
 
 TOKEN = fresh_token()
 
+# Both values spelled out, so a variable left in the shell cannot pick the
+# mode the "default" case runs in.
+_MODES = pytest.mark.parametrize(
+    "stateless_http", ["false", "true"], ids=["stateful", "stateless"]
+)
 
-def test_healthz_returns_ok(spawn_live_server) -> None:
-    """``GET /healthz`` returns 200 on a freshly-started HTTP server."""
-    srv = spawn_live_server(transport="http")
+
+def _mode_env(stateless_http: str) -> Dict[str, str]:
+    """The mode, and the log level the server's stderr is read back at.
+
+    Pinned for the same reason as the mode: an ``OPENZIM_MCP_LOGGING__LEVEL``
+    above INFO left in the shell would drop the INFO lines these tests read.
+    """
+    return {
+        "OPENZIM_MCP_STATELESS_HTTP": stateless_http,
+        "OPENZIM_MCP_LOGGING__LEVEL": "INFO",
+    }
+
+
+@_MODES
+def test_healthz_returns_ok(spawn_live_server, stateless_http: str) -> None:
+    """``GET /healthz`` returns 200 on a freshly-started HTTP server.
+
+    In both modes: the stateless gate answers every non-POST method on the
+    MCP route, and a probe that strayed into it would pull every replica.
+    The startup line the deployment docs tell operators to check is read
+    back from the process too, so the variable is known to have reached it.
+    """
+    srv = spawn_live_server(transport="http", extra_env=_mode_env(stateless_http))
     resp = srv.healthz()
     assert resp.status_code == 200
+    mode = "statelessly" if stateless_http == "true" else "with sessions"
+    line = (
+        f"Serving handshake-era clients {mode} "
+        f"(OPENZIM_MCP_STATELESS_HTTP={stateless_http})"
+    )
+    assert srv.stderr_path is not None
+    startup = srv.stderr_path.read_text(encoding="utf-8", errors="replace")
+    assert line in startup, startup[-2000:]
 
 
-def test_readyz_returns_ok(spawn_live_server) -> None:
-    """``GET /readyz`` returns 200 when allowed dirs are readable."""
-    srv = spawn_live_server(transport="http")
+@_MODES
+def test_readyz_returns_ok(spawn_live_server, stateless_http: str) -> None:
+    """``GET /readyz`` returns 200 when allowed dirs are readable, in both modes."""
+    srv = spawn_live_server(transport="http", extra_env=_mode_env(stateless_http))
     resp = srv.readyz()
     assert resp.status_code == 200
+
+
+def _sse_payload(text: str) -> Optional[Dict[str, Any]]:
+    """The JSON-RPC payload inside the SDK's one-event SSE response."""
+    for line in text.splitlines():
+        if line.startswith("data:"):
+            return json.loads(line[len("data:") :])
+    return None
+
+
+def test_stateless_handshake_sequence_over_a_real_socket(spawn_live_server) -> None:
+    """A handshake-era client's whole sequence, with no session anywhere.
+
+    The frames Open WebUI's client sends (mcp 1.27.2): ``initialize``, then
+    ``notifications/initialized``, ``tools/list`` and ``tools/call``, each a
+    POST standing alone. Then two GETs that must be refused rather than held:
+    the one a TypeScript client opens after ``notifications/initialized``,
+    and the deployment docs' mode check — a bare curl, with no
+    ``MCP-Protocol-Version`` at all. Both are read through ``stream`` so a
+    regression to a held stream fails on the status line instead of waiting
+    on a body that never ends.
+
+    Last, the server is stopped and its log read: the SDK's per-request
+    ``Terminating session: None`` must not be there. Read only once the
+    process has exited, because the SDK logs it after each response is sent,
+    and the filter that drops it has to be in place while uvicorn serves, not
+    merely by the time it returns.
+    """
+    srv = spawn_live_server(
+        transport="http",
+        token=TOKEN,
+        extra_env=_mode_env("true"),
+    )
+    url = f"{srv.base_url}/mcp"
+    base = {
+        **srv.auth_headers,
+        "Content-Type": "application/json",
+        "Accept": "application/json, text/event-stream",
+    }
+    negotiated = {**base, "MCP-Protocol-Version": "2025-11-25"}
+    frames = [
+        (
+            base,
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": "2025-11-25",
+                    "capabilities": {},
+                    "clientInfo": {"name": "live-stateless", "version": "0"},
+                },
+            },
+        ),
+        (negotiated, {"jsonrpc": "2.0", "method": "notifications/initialized"}),
+        (negotiated, {"jsonrpc": "2.0", "id": 2, "method": "tools/list"}),
+        (
+            negotiated,
+            {
+                "jsonrpc": "2.0",
+                "id": 3,
+                "method": "tools/call",
+                "params": {"name": "zim_health", "arguments": {}},
+            },
+        ),
+    ]
+    gets = {
+        "typescript-client": {
+            **srv.auth_headers,
+            "Accept": "text/event-stream",
+            "MCP-Protocol-Version": "2025-11-25",
+        },
+        # What the docs' curl sends: httpx, like curl, says ``Accept: */*``.
+        "docs-mode-check": dict(srv.auth_headers),
+    }
+    refusals: Dict[str, Any] = {}
+    with httpx.Client(timeout=30) as client:
+        answers = [client.post(url, json=body, headers=hdrs) for hdrs, body in frames]
+        for name, headers in gets.items():
+            with client.stream("GET", url, headers=headers) as stream:
+                refusals[name] = (stream.status_code, dict(stream.headers))
+
+    assert [answer.status_code for answer in answers] == [200, 202, 200, 200], [
+        answer.text[:200] for answer in answers
+    ]
+    for answer in answers:
+        assert "mcp-session-id" not in answer.headers, answer.headers
+    opened = _sse_payload(answers[0].text)
+    assert opened is not None and opened["result"]["protocolVersion"] == "2025-11-25"
+    listed = _sse_payload(answers[2].text)
+    assert listed is not None
+    assert "zim_health" in {tool["name"] for tool in listed["result"]["tools"]}
+    called = _sse_payload(answers[3].text)
+    assert called is not None and called["result"]["isError"] is False, called
+
+    for name, (status, headers) in refusals.items():
+        assert status == 405, (name, status, headers)
+        assert headers.get("allow") == "POST", (name, headers)
+        assert "mcp-session-id" not in headers, (name, headers)
+
+    srv.process.terminate()
+    srv.process.wait(timeout=10)
+    assert srv.stderr_path is not None
+    log = srv.stderr_path.read_text(encoding="utf-8", errors="replace")
+    # INFO reached the log at all, or the next check would pass vacuously.
+    assert "Serving handshake-era clients statelessly" in log, log[-2000:]
+    assert "Terminating session: None" not in log, log[-2000:]
 
 
 def test_no_auth_returns_401(spawn_live_server) -> None:

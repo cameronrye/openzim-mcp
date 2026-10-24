@@ -91,6 +91,20 @@ dependencies = [
     # ``tests/test_sdk_seam_audit.py`` pins what that audit established, and
     # fails if the lockfile is left below the cap's top series.
     #
+    # ``OPENZIM_MCP_STATELESS_HTTP`` (#452) adds four behaviours to re-check.
+    # Era routing sends a 2026-07-28 request to its own handler *ahead of* the
+    # stateful/stateless switch, so that path is the same in both modes. The
+    # stateless transport has no session id, so it skips session validation:
+    # a GET reaching it would open an SSE stream nothing can write to, held
+    # until the client hangs up, which is why SessionlessRequestGateMiddleware
+    # answers every non-POST first. ``terminate()`` logs ``Terminating
+    # session: None`` once per stateless request, the exact record http_app's
+    # filter drops. And the stateless path calls ``terminate()`` in a shielded
+    # ``finally`` (2.1 called it only when the request returned normally), so
+    # a request cancelled mid-flight leaves no task behind, and a timeout layer
+    # in front of the SDK is safe. ``test_stateless_http.py`` pins the first,
+    # ``TestStatelessHttpSeams`` in the seam audit the other three.
+    #
     # None of that retires the ping shim: 2026-07-28 defines no ping, so no SDK
     # release is going to supply those rows (see sdk_compat and issue #371).
     "mcp[cli]>=2.3.0,<2.4",

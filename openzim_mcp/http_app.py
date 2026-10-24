@@ -49,11 +49,13 @@ logger = logging.getLogger(__name__)
 HEALTHZ_PATH = "/healthz"
 READYZ_PATH = "/readyz"
 
-# The one route the SDK mints sessions on — its ``streamable_http_path``
-# default, which the app builder below is left to apply. The sessionless gate
-# answers only here, so the two must agree: a gate on the wrong path would
-# answer URLs the router owns, turning a typo into a session complaint instead
-# of a 404. A test asserts the built app really routes this path.
+# The one route the SDK serves MCP on — and, on the default stateful server,
+# the one it mints sessions on — its ``streamable_http_path`` default, which
+# the app builder below is left to apply. The sessionless gate answers only
+# here, so the two must agree: a gate on the wrong path would answer URLs the
+# router owns, turning a typo into a session complaint (or, on a stateless
+# server, a 405) instead of a 404. A test asserts the built app really routes
+# this path.
 MCP_PATH = "/mcp"
 
 # Health endpoints exempt from auth.
@@ -425,11 +427,15 @@ def apply_cors_middleware(app: Starlette, config: object) -> None:
         allow_origins=list(origins),
         # The SDK serves both protocol eras on this one endpoint, so the
         # allow-list is the union of what each needs rather than just the
-        # 2026-07-28 set. A 2025-era client still opens a session (GET stream,
-        # DELETE to terminate, Mcp-Session-Id on every subsequent request);
-        # a 2026-era client is stateless and uses none of them. Dropping the
-        # legacy entries here would break browser-based legacy clients while
-        # the deprecation window is still open.
+        # 2026-07-28 set. On the default stateful server a 2025-era client
+        # still opens a session (GET stream, DELETE to terminate,
+        # Mcp-Session-Id on every subsequent request); a 2026-era client is
+        # stateless and uses none of them. On a server run with
+        # OPENZIM_MCP_STATELESS_HTTP neither does a 2025-era client — its GET
+        # and DELETE are answered 405 there — so the entries are inert rather
+        # than wrong. Dropping the legacy entries here would break
+        # browser-based legacy clients while the deprecation window is still
+        # open.
         #
         # ``Last-Event-ID`` stays in the allow-list but does NOT resume
         # anything: this server configures no event store and never emits SSE
@@ -502,9 +508,10 @@ class TransportSecurityGateMiddleware(BaseHTTPMiddleware):
 
     The SDK does the same validation, but on the legacy branch it does it
     after the expensive part. Era routing sends any request without an
-    ``MCP-Protocol-Version`` header down the legacy path, and that path creates
-    the transport, registers it in the manager's session table and starts its
-    task *before* calling into the handler where Host/Origin is checked.
+    ``MCP-Protocol-Version`` header down the legacy path, and on the default
+    stateful server that path creates the transport, registers it in the
+    manager's session table and starts its task *before* calling into the
+    handler where Host/Origin is checked.
 
     On mcp 2.1 that was a leak: a request answered ``403 Invalid Origin
     header`` left its session and task in place until the process exited, so
@@ -519,6 +526,11 @@ class TransportSecurityGateMiddleware(BaseHTTPMiddleware):
     The default HTTP deployment is the exposed one: ``127.0.0.1`` with no token
     (which ``check_safe_startup`` permits) and no CORS origins, so neither of
     the other two middlewares stops anything.
+
+    A stateless server (``OPENZIM_MCP_STATELESS_HTTP``) registers nothing in
+    that table at all, but the SDK still builds a transport and starts a task
+    for each request before checking it, so the gate spares a stateless
+    server the same churn.
 
     Health endpoints are exempt for the same reason they are exempt from auth.
     """
@@ -535,7 +547,7 @@ class TransportSecurityGateMiddleware(BaseHTTPMiddleware):
         request: Request,
         call_next: Callable[[Request], Awaitable[Response]],
     ) -> Response:
-        """Reject a request the SDK would reject, before it costs a session."""
+        """Reject what the SDK would reject, before it builds anything for it."""
         if request.url.path in AUTH_EXEMPT_PATHS:
             return await call_next(request)
         error = await self._validator.validate_request(
@@ -825,7 +837,7 @@ class TrailingSlashMcpPathMiddleware:
 
 
 class SessionlessRequestGateMiddleware:
-    """Refuse handshake-era requests that have no session and are not ``initialize``.
+    """Answer the handshake-era requests the SDK cannot serve, before it mints.
 
     The SDK's stateful request path mints a transport, registers it in the
     session table and starts its serve loop for *any* request that lacks an
@@ -859,6 +871,30 @@ class SessionlessRequestGateMiddleware:
     replay is explicit and bounded. It answers only on the MCP route: the
     health endpoints and every unrouted path belong to Starlette, which still
     404s them.
+
+    All of the above is the default, stateful server. With ``stateless``
+    (``OPENZIM_MCP_STATELESS_HTTP``) the SDK serves each handshake-era POST on
+    a fresh transport that is never registered and is torn down when its
+    request ends: nothing is minted, and a sessionless follow-up such as
+    ``notifications/initialized`` is exactly what a client is meant to send.
+    Turning those away with ``Missing session ID`` is what broke stateless
+    mode (#452), so every POST passes through unread — with or without an
+    ``MCP-Protocol-Version``, which a 2025-03-26 client never sends after
+    ``initialize``. What remains is the rest of the handshake-era method set,
+    which the stateless path cannot serve. The SDK would answer a GET with an
+    SSE stream that nothing can ever write to — a server-initiated message
+    needs a session to be addressed to — and hold it open, transport and
+    tasks included, for as long as the client keeps the connection; that
+    long-lived stream through every proxy hop is the cost stateless mode
+    exists to remove. A DELETE has no session to end, and the SDK's own 405
+    for it carries no ``Allow`` header, while PUT and the rest would be told
+    ``Allow: GET, POST, DELETE``. So every method but POST is answered here,
+    ``405`` with ``Allow: POST`` — the spec's answer for an endpoint that
+    offers no SSE stream, and the one the SDK's own 2026-07-28 path gives a
+    GET — and an ``Mcp-Session-Id`` changes nothing, because on a stateless
+    server it names no session. The 2026-07-28 path keeps its own answers in
+    either mode: era routing sends it to its own handler ahead of the SDK's
+    stateful/stateless switch.
     """
 
     def __init__(
@@ -866,16 +902,28 @@ class SessionlessRequestGateMiddleware:
         app: ASGIApp,
         max_body_size: Optional[int] = None,
         mcp_path: str = MCP_PATH,
+        stateless: bool = False,
     ) -> None:
-        """Wrap ``app``; ``max_body_size`` defaults to the SDK's request cap."""
+        """Wrap ``app``; ``max_body_size`` defaults to the SDK's request cap.
+
+        ``stateless`` must match the ``stateless_http`` the app was built
+        with. A stateful gate in front of a stateless app refuses the
+        sessionless follow-ups that app is built to serve (#452); a stateless
+        gate in front of a stateful app lets sessionless requests through to
+        mint sessions.
+        """
         self.app = app
         self._mcp_path = mcp_path
+        self._stateless = stateless
         self._max_body_size = (
             max_body_size if max_body_size is not None else _sdk_request_body_cap()
         )
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        """Pass through every request that cannot mint a session; answer the rest."""
+        """Pass through what the SDK serves safely in this mode; answer the rest."""
+        if self._stateless:
+            await self._gate_stateless(scope, receive, send)
+            return
         if scope["type"] != "http" or self._never_mints(scope):
             await self.app(scope, receive, send)
             return
@@ -954,6 +1002,48 @@ class SessionlessRequestGateMiddleware:
             and protocol_version not in HANDSHAKE_PROTOCOL_VERSIONS
         )
 
+    async def _gate_stateless(self, scope: Scope, receive: Receive, send: Send) -> None:
+        """Pass every POST through; answer every other handshake-era method 405.
+
+        Only a handshake-era request on the MCP route is ever answered here.
+        Non-HTTP scopes, the health endpoints and every unrouted path belong
+        to Starlette, and a 2026-07-28 request belongs to the SDK's modern
+        handler, which gives its own non-POST methods the same ``405``.
+        """
+        if (
+            scope["type"] != "http"
+            or scope["path"] != self._mcp_path
+            or scope["method"] == "POST"
+            or self._routed_to_modern_handler(scope)
+        ):
+            await self.app(scope, receive, send)
+            return
+        await self._send_jsonrpc_error(
+            scope,
+            receive,
+            send,
+            "Method Not Allowed: this server runs without sessions and accepts "
+            "only POST",
+            405,
+            extra_headers={"Allow": "POST"},
+        )
+
+    @staticmethod
+    def _routed_to_modern_handler(scope: Scope) -> bool:
+        """Whether era routing sends this request to the 2026-07-28 handler.
+
+        The SDK's own test, on the header alone: present and not one of the
+        handshake revisions. A missing header is the handshake era.
+        """
+        from mcp.shared.inbound import MCP_PROTOCOL_VERSION_HEADER
+        from mcp_types.version import HANDSHAKE_PROTOCOL_VERSIONS
+
+        protocol_version = Headers(scope=scope).get(MCP_PROTOCOL_VERSION_HEADER)
+        return (
+            protocol_version is not None
+            and protocol_version not in HANDSHAKE_PROTOCOL_VERSIONS
+        )
+
     async def _reject_missing_session(
         self, scope: Scope, receive: Receive, send: Send
     ) -> None:
@@ -980,6 +1070,50 @@ class SessionlessRequestGateMiddleware:
         )
         response = _jsonrpc_error_response(error, status_code, extra_headers)
         await response(scope, receive, send)
+
+
+# The SDK transport module's logger, and the one record of its that stateless
+# mode turns into noise.
+_SDK_TRANSPORT_LOGGER = "mcp.server.streamable_http"
+_STATELESS_TERMINATE_RECORD = "Terminating session: None"
+
+
+class _StatelessTerminateFilter(logging.Filter):
+    """Drop the SDK's ``Terminating session: None`` record, and nothing else.
+
+    The stateless path builds a transport per request and calls
+    ``terminate()`` on it once the response is sent, and ``terminate()`` logs
+    ``Terminating session: <id>`` at INFO. With no session the id is
+    ``None``, so every POST adds a line announcing the end of a session that
+    never existed — next to uvicorn's own access line for the same request.
+    It is the only INFO record that module emits, but raising the logger's
+    level instead would also hide its DEBUG output from an operator who asks
+    for it, so the record is matched exactly. A stateful transport's
+    ``Terminating session: <hex id>`` ends a real session and still gets
+    through.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        """Keep every record but the per-request ``None`` termination."""
+        if record.levelno != logging.INFO:
+            return True
+        try:
+            message = record.getMessage()
+        except Exception:  # noqa: BLE001 - a filter must never raise into the SDK
+            return True
+        return message != _STATELESS_TERMINATE_RECORD
+
+
+_STATELESS_TERMINATE_FILTER = _StatelessTerminateFilter()
+
+
+def _quiet_stateless_terminate_records() -> None:
+    """Install the filter once; ``addFilter`` skips an instance already there.
+
+    Process-wide, because the logger is. Serving a stateful app afterwards in
+    the same process loses nothing: no stateful transport has a ``None`` id.
+    """
+    logging.getLogger(_SDK_TRANSPORT_LOGGER).addFilter(_STATELESS_TERMINATE_FILTER)
 
 
 def serve_streamable_http(
@@ -1018,17 +1152,45 @@ def serve_streamable_http(
     # Transport configuration is an argument to the app builder on the v2 SDK
     # (there is no ``settings`` object to mutate). ``host`` feeds the SDK's
     # DNS-rebinding Host allow-list; we still run uvicorn ourselves below.
+    # ``stateless_http`` moves handshake-era clients onto the SDK's
+    # per-request path, which issues no ``Mcp-Session-Id``. The 2026-07-28
+    # path is era-routed ahead of that switch, so it is the same either way.
+    # From mcp 2.2 that path terminates each request's transport in a shielded
+    # ``finally``, so a request cancelled mid-flight (by a request-timeout
+    # layer in front, say) leaves no transport or server task behind.
     #
     # ``session_idle_timeout`` and ``max_sessions`` are left at the SDK's
     # defaults (mcp 2.2+): a handshake-era session with no request in flight
     # for 30 minutes is closed, and while 10,000 are open a request that would
     # open another is answered 503. Both bound what an abandoning client can
-    # hold; neither is an operator knob yet. The seam audit pins both numbers,
-    # which the HTTP deployment guide quotes.
+    # hold; neither is an operator knob yet, and a stateless server holds no
+    # sessions for either to bound. The seam audit pins both numbers, which
+    # the HTTP deployment guide quotes.
+    stateless = server.config.stateless_http
     app = server.mcp.streamable_http_app(
         host=server.config.host,
         transport_security=server._transport_security,
+        stateless_http=stateless,
     )
+    # Replicas that disagree on the mode break handshake-era clients
+    # mid-sequence, and nothing in a client's ordinary traffic names it, so
+    # each replica says once at startup how it serves them. The line and the
+    # filter both belong ahead of ``runner``, which blocks for as long as the
+    # server runs.
+    if stateless:
+        _quiet_stateless_terminate_records()
+        logger.info(
+            "Serving handshake-era clients statelessly "
+            "(OPENZIM_MCP_STATELESS_HTTP=true): no Mcp-Session-Id is issued, "
+            "and a GET or DELETE on %s is answered 405",
+            MCP_PATH,
+        )
+    else:
+        logger.info(
+            "Serving handshake-era clients with sessions "
+            "(OPENZIM_MCP_STATELESS_HTTP=false): each Mcp-Session-Id is known "
+            "only to the replica that issued it"
+        )
     # Order matters. Starlette's add_middleware is LIFO: the LAST-added
     # middleware becomes the OUTERMOST layer. We want CORS as the outer
     # layer so 401 responses from the inner auth middleware still carry
@@ -1053,12 +1215,16 @@ def serve_streamable_http(
     # on it. See UnsupportedResumeHeaderMiddleware.
     app.add_middleware(UnsupportedResumeHeaderMiddleware)
     # Next: only a request that cleared auth and Host/Origin has its body
-    # read here. It is the last line between a sessionless request and the
-    # SDK's session-minting code. See SessionlessRequestGateMiddleware.
-    app.add_middleware(SessionlessRequestGateMiddleware)
+    # read here. On the default stateful server it is the last line between
+    # a sessionless request and the SDK's session-minting code. A stateless
+    # server mints nothing, so there it reads no body and answers only the
+    # handshake-era methods that path cannot serve: every one but POST. See
+    # SessionlessRequestGateMiddleware.
+    app.add_middleware(SessionlessRequestGateMiddleware, stateless=stateless)
     # Next-innermost: auth and CORS still get to answer first, but a request
     # that clears them is Host/Origin checked here rather than after the SDK
-    # has already minted a session for it. See TransportSecurityGateMiddleware.
+    # has already built a transport for it (and, on the stateful path,
+    # minted a session). See TransportSecurityGateMiddleware.
     if server._transport_security is not None:
         app.add_middleware(
             TransportSecurityGateMiddleware, security=server._transport_security

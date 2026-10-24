@@ -318,8 +318,10 @@ def rejection_for_http_body(body: bytes) -> JSONRPCError | None:
     used on both transports rather than a second dialect per transport.
 
     Undecodable JSON is deliberately *not* claimed: the SDK's in-session HTTP
-    path already answers it with a correct ``-32700``, and the sessionless
-    path's ``Missing session ID`` is a documented decision of its own gate.
+    path already answers it with a correct ``-32700``, and so does the
+    stateless path (``OPENZIM_MCP_STATELESS_HTTP``); on the default stateful
+    server the sessionless path's ``Missing session ID`` is a documented
+    decision of its own gate.
     """
     try:
         frame = json.loads(body)

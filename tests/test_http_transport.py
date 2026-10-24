@@ -331,6 +331,9 @@ def test_serve_streamable_http_runs_safe_check_and_serves(
     server.config.transport = "http"
     server.config.auth_token = None
     server.config.cors_origins = []
+    # Pinned, not left to MagicMock: an auto-created attribute is truthy, so
+    # it would serve the stateless wiring while reading as the default.
+    server.config.stateless_http = False
     # Stub the MCPServer-like surface. ``subscription_bus`` is pinned to None
     # so the watcher-wiring branch stays out of this test's way (it has its
     # own coverage); a bare MagicMock attribute would read as "enabled".
@@ -370,8 +373,20 @@ def test_serve_streamable_http_runs_safe_check_and_serves(
     # Transport config reaches the app builder as arguments (there is no
     # settings object to mutate ahead of the call).
     server.mcp.streamable_http_app.assert_called_once_with(
-        host="127.0.0.1", transport_security=sentinel_security
+        host="127.0.0.1",
+        transport_security=sentinel_security,
+        stateless_http=False,
     )
+    # The sessionless gate is told the same mode the builder was: a gate left
+    # stateful in front of a stateless app is issue #452's failure.
+    from openzim_mcp.http_app import SessionlessRequestGateMiddleware
+
+    gate_calls = [
+        call
+        for call in fake_app.add_middleware.call_args_list
+        if call.args and call.args[0] is SessionlessRequestGateMiddleware
+    ]
+    assert [call.kwargs for call in gate_calls] == [{"stateless": False}]
     # Auth + CORS middleware get added (auth always; CORS only if origins set)
     assert fake_app.add_middleware.called
 

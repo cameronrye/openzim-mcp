@@ -377,7 +377,7 @@ Bearer token missing or wrong. Note `OPTIONS /mcp` is **not** exempt from auth (
 
 ### Browser CORS errors when resuming sessions
 
-`Mcp-Session-Id` is in the server's `allow_headers` and `expose_headers` since v1.0, and stays there for clients on the `initialize` handshake. If you have a reverse proxy in front that strips this header, their sessions can't resume. A 2026-07-28 client has no session to resume — it needs `MCP-Protocol-Version`, `Mcp-Method`, and (for `tools/call`) `Mcp-Name` to survive the proxy instead; all three are in `allow_headers`.
+`Mcp-Session-Id` is in the server's `allow_headers` and `expose_headers` since v1.0, and stays there for clients on the `initialize` handshake. If you have a reverse proxy in front that strips this header, their sessions can't resume: have the proxy forward it, or run the server with `OPENZIM_MCP_STATELESS_HTTP=1`, which issues no session id, so there is nothing for the proxy to strip. A 2026-07-28 client has no session to resume — it needs `MCP-Protocol-Version`, `Mcp-Method`, and (for `tools/call`) `Mcp-Name` to survive the proxy instead; all three are in `allow_headers`.
 
 ### `OPENZIM_MCP_CORS_ORIGINS` rejected at startup
 
