@@ -3,7 +3,7 @@
 import os
 import tempfile
 from pathlib import Path
-from typing import Dict, Generator, Optional
+from typing import Dict, Generator, List, Optional
 
 import pytest
 
@@ -169,6 +169,36 @@ from tests.conftest_v2_fixtures import (  # noqa: F401, E402
     v2_phase_a_zim,
     v2_phase_c_zim,
 )
+
+
+@pytest.fixture
+def minted_transports(monkeypatch: pytest.MonkeyPatch) -> List[object]:
+    """Every transport the SDK's session manager constructs during the test.
+
+    The HTTP gates exist so a request that can never be served costs no
+    session. On mcp 2.1 the session table showed that, because a minted
+    session stayed in it. From 2.2 the SDK discards a refused session as soon
+    as it has answered, so an empty table no longer tells a gated request
+    from an ungated one. A transport the manager built is the direct
+    evidence, whatever the SDK does with it afterwards.
+
+    The manager looks ``StreamableHTTPServerTransport`` up in its own module
+    at construction time, stateful and stateless paths alike, so a counting
+    subclass patched there sees every one. A test asserting zero should also
+    show the fixture counting, by opening one session somewhere.
+    """
+    import mcp.server.streamable_http_manager as manager_module
+
+    minted: List[object] = []
+    real = manager_module.StreamableHTTPServerTransport
+
+    class _Counting(real):  # type: ignore[misc, valid-type]
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            super().__init__(*args, **kwargs)
+            minted.append(self)
+
+    monkeypatch.setattr(manager_module, "StreamableHTTPServerTransport", _Counting)
+    return minted
 
 
 def pytest_configure(config):

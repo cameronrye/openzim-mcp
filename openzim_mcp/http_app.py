@@ -500,21 +500,25 @@ def _default_uvicorn_runner(app: Starlette, host: str, port: int) -> None:
 class TransportSecurityGateMiddleware(BaseHTTPMiddleware):
     """Run the DNS-rebinding Host/Origin check *in front of* the SDK app.
 
-    The SDK does the same validation, but on the legacy branch it does it too
-    late to matter. Era routing sends any request without an
+    The SDK does the same validation, but on the legacy branch it does it
+    after the expensive part. Era routing sends any request without an
     ``MCP-Protocol-Version`` header down the legacy path, and that path creates
     the transport, registers it in the manager's session table and starts its
-    task *before* calling into the handler where Host/Origin is checked. So a
-    request answered ``403 Invalid Origin header`` has already allocated a
-    session and a live task — and nothing reaps them: the app builder exposes
-    no ``session_idle_timeout``, so the manager's idle-expiry branch is dead
-    and the table is only ever emptied by an explicit DELETE or process exit.
+    task *before* calling into the handler where Host/Origin is checked.
+
+    On mcp 2.1 that was a leak: a request answered ``403 Invalid Origin
+    header`` left its session and task in place until the process exited, so
+    a page the user happens to visit could ``fetch()`` the endpoint in a loop
+    until the process was killed for its memory (#453). From 2.2 (upstream
+    #3395) the SDK discards a session whose opening request it refuses, so
+    nothing accumulates. What answering here still saves is the churn: per
+    rejected request, a transport built and terminated, a serve-loop task
+    started and torn down, and two INFO log lines naming a session nobody
+    will ever use. A hostile page's loop never reaches the session machinery.
 
     The default HTTP deployment is the exposed one: ``127.0.0.1`` with no token
     (which ``check_safe_startup`` permits) and no CORS origins, so neither of
-    the other two middlewares stops anything. A page the user happens to visit
-    can ``fetch()`` the endpoint in a loop; every request is rejected and every
-    request leaks a session, until the process is killed for its memory.
+    the other two middlewares stops anything.
 
     Health endpoints are exempt for the same reason they are exempt from auth.
     """
@@ -827,11 +831,18 @@ class SessionlessRequestGateMiddleware:
     session table and starts its serve loop for *any* request that lacks an
     ``Mcp-Session-Id`` header — and only then looks at the request. Every
     sessionless request except ``initialize`` is rejected at that point
-    (``400 Missing session ID``), but the session it minted outlives the 400:
-    the caller never learns it owns one, so no DELETE comes, and the idle-expiry
-    branch is dead because the app builder exposes no ``session_idle_timeout``.
-    A plain curl, a misbehaving client, or a page the user happens to visit can
-    grow the table and the task count without bound on the default deployment.
+    (``400 Missing session ID``), and the rejection carries the id of the
+    session minted for it.
+
+    On mcp 2.1 that session outlived the 400: the caller never learned it
+    owned one, so no DELETE came, and nothing else reaped it, so a plain curl,
+    a misbehaving client, or a page the user happens to visit could grow the
+    table and the task count without bound on the default deployment (#453).
+    From 2.2 (upstream #3395) the SDK discards the session again once its
+    response is a refusal, so nothing accumulates. What answering here still
+    saves is the churn: a transport, a serve-loop task and two INFO log lines
+    per request that can never be served, and a session id handed to a caller
+    that cannot use it.
 
     This gate answers those requests itself, with the SDK's own ``400`` body,
     before the SDK can mint anything. Only two kinds of request legitimately
@@ -864,7 +875,7 @@ class SessionlessRequestGateMiddleware:
         )
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        """Pass through every request that cannot leak; answer the rest."""
+        """Pass through every request that cannot mint a session; answer the rest."""
         if scope["type"] != "http" or self._never_mints(scope):
             await self.app(scope, receive, send)
             return
@@ -904,8 +915,8 @@ class SessionlessRequestGateMiddleware:
         if not _accepts_json_and_sse(scope):
             # The SDK validates ``Accept`` inside the transport it has already
             # minted, registered and task-started, so an ``initialize`` it is
-            # about to refuse with 406 leaks a session all the same. Answer it
-            # here, in the SDK's own words, before anything is minted.
+            # about to refuse with 406 costs a throwaway session all the same.
+            # Answer it here, in the SDK's own words, before anything is minted.
             await self._send_jsonrpc_error(
                 scope,
                 receive,
@@ -1007,6 +1018,13 @@ def serve_streamable_http(
     # Transport configuration is an argument to the app builder on the v2 SDK
     # (there is no ``settings`` object to mutate). ``host`` feeds the SDK's
     # DNS-rebinding Host allow-list; we still run uvicorn ourselves below.
+    #
+    # ``session_idle_timeout`` and ``max_sessions`` are left at the SDK's
+    # defaults (mcp 2.2+): a handshake-era session with no request in flight
+    # for 30 minutes is closed, and while 10,000 are open a request that would
+    # open another is answered 503. Both bound what an abandoning client can
+    # hold; neither is an operator knob yet. The seam audit pins both numbers,
+    # which the HTTP deployment guide quotes.
     app = server.mcp.streamable_http_app(
         host=server.config.host,
         transport_security=server._transport_security,

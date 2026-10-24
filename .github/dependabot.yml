@@ -42,8 +42,8 @@ updates:
     # mcpserver) would have broken `import openzim_mcp`. That port landed in
     # v3.0.0, and under `versioning-strategy: lockfile-only` the rule could
     # not fire anyway: Dependabot resolves inside pyproject's specifier, and
-    # `mcp[cli]>=2.1.0,<2.2` admits no other major — nor any other minor. What
-    # it *does* admit is a 2.1 patch, which is precisely the update this
+    # `mcp[cli]>=2.3.0,<2.4` admits no other major — nor any other minor. What
+    # it *does* admit is a 2.3 patch, which is precisely the update this
     # ecosystem should propose, because CI runs the full suite against the
     # locked wheel. Crossing the cap stays a hand-audited PR (see the comment
     # on the requirement itself); an unreachable rule here only made the file

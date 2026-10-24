@@ -3,10 +3,11 @@
 Era routing sends any request without an ``MCP-Protocol-Version`` header down
 the SDK's legacy branch, which creates the transport, registers it in the
 manager's session table and starts its task *before* the handler validates
-Host/Origin. So a request answered ``403 Invalid Origin header`` had already
-allocated a session and a live task, and nothing reaps them: the app builder
-exposes no ``session_idle_timeout``, so the manager's idle-expiry branch never
-runs and the table empties only on an explicit DELETE or process exit.
+Host/Origin. On mcp 2.1 a request answered ``403 Invalid Origin header`` left
+that session and task in place until the process exited (#453). From 2.2 the
+SDK discards it once it has answered, so the table comes back empty with or
+without the gate; what the gate still prevents is the transport being built
+at all, which is what these tests count.
 
 The default HTTP deployment is the exposed one — ``127.0.0.1``, no token
 (which ``check_safe_startup`` permits), no CORS origins — so neither of the
@@ -51,7 +52,9 @@ def _session_manager() -> StreamableHTTPSessionManager:
 
 
 @pytest.mark.asyncio
-async def test_rejected_origin_allocates_no_session(tmp_path: Path) -> None:
+async def test_rejected_origin_allocates_no_session(
+    tmp_path: Path, minted_transports: List[object]
+) -> None:
     _server, app = _build_app(str(tmp_path))
     manager = _session_manager()
 
@@ -76,6 +79,31 @@ async def test_rejected_origin_allocates_no_session(tmp_path: Path) -> None:
                 "a rejected cross-origin request allocated a session: "
                 f"{before} -> {len(manager._server_instances)}"
             )
+            assert minted_transports == [], (
+                f"{len(minted_transports)} transports built for requests the "
+                "gate should have answered"
+            )
+            # Control: the same client, minus the hostile Origin, does reach
+            # the SDK, so the zero above is the gate and not a dead counter.
+            response = await client.post(
+                "/mcp",
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 99,
+                    "method": "initialize",
+                    "params": {
+                        "protocolVersion": "2025-06-18",
+                        "capabilities": {},
+                        "clientInfo": {"name": "control", "version": "0"},
+                    },
+                },
+                headers={
+                    "Accept": "application/json, text/event-stream",
+                    "Content-Type": "application/json",
+                },
+            )
+            assert response.status_code == 200, response.text
+            assert len(minted_transports) == 1
 
 
 @pytest.mark.asyncio
