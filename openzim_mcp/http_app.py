@@ -506,29 +506,31 @@ def _default_uvicorn_runner(app: Starlette, host: str, port: int) -> None:
 class TransportSecurityGateMiddleware(BaseHTTPMiddleware):
     """Run the DNS-rebinding Host/Origin check *in front of* the SDK app.
 
-    The SDK does the same validation, but on the legacy branch it does it too
-    late to matter. Era routing sends any request without an
+    The SDK does the same validation, but on the legacy branch it does it
+    after the expensive part. Era routing sends any request without an
     ``MCP-Protocol-Version`` header down the legacy path, and on the default
     stateful server that path creates the transport, registers it in the
     manager's session table and starts its task *before* calling into the
-    handler where Host/Origin is checked. So a request answered ``403 Invalid
-    Origin header`` has already allocated a session and a live task — and
-    nothing reaps them: the app builder exposes no ``session_idle_timeout``,
-    so the manager's idle-expiry branch is dead, and on mcp 2.1.1 nothing but
-    process exit removes them. Not even a DELETE would: it terminates its
-    session but leaves the entry in the table (#453), and the sender of a
-    rejected request never learned the id to send one with anyway.
+    handler where Host/Origin is checked.
+
+    On mcp 2.1 that was a leak: a request answered ``403 Invalid Origin
+    header`` left its session and task in place until the process exited, so
+    a page the user happens to visit could ``fetch()`` the endpoint in a loop
+    until the process was killed for its memory (#453). From 2.2 (upstream
+    #3395) the SDK discards a session whose opening request it refuses, so
+    nothing accumulates. What answering here still saves is the churn: per
+    rejected request, a transport built and terminated, a serve-loop task
+    started and torn down, and two INFO log lines naming a session nobody
+    will ever use. A hostile page's loop never reaches the session machinery.
 
     The default HTTP deployment is the exposed one: ``127.0.0.1`` with no token
     (which ``check_safe_startup`` permits) and no CORS origins, so neither of
-    the other two middlewares stops anything. A page the user happens to visit
-    can ``fetch()`` the endpoint in a loop; every request is rejected and every
-    request leaks a session, until the process is killed for its memory.
+    the other two middlewares stops anything.
 
     A stateless server (``OPENZIM_MCP_STATELESS_HTTP``) registers nothing in
-    that table, so a late rejection there leaks nothing; checking first still
-    spares each rejected request the transport and task the SDK would build,
-    and tear down again, for it.
+    that table at all, but the SDK still builds a transport and starts a task
+    for each request before checking it, so the gate spares a stateless
+    server the same churn.
 
     Health endpoints are exempt for the same reason they are exempt from auth.
     """
@@ -835,19 +837,24 @@ class TrailingSlashMcpPathMiddleware:
 
 
 class SessionlessRequestGateMiddleware:
-    """Answer the handshake-era requests the SDK would leak on, or cannot serve.
+    """Answer the handshake-era requests the SDK cannot serve, before it mints.
 
     The SDK's stateful request path mints a transport, registers it in the
     session table and starts its serve loop for *any* request that lacks an
     ``Mcp-Session-Id`` header — and only then looks at the request. Every
     sessionless request except ``initialize`` is rejected at that point
-    (``400 Missing session ID``), but the session it minted outlives the 400:
-    the caller never learns it owns one, so it can never end it, and nothing
-    else does. The idle-expiry branch is dead because the app builder exposes
-    no ``session_idle_timeout``, and on mcp 2.1.1 even a DELETE only terminates
-    a session, leaving its entry in the table until process exit (#453).
-    A plain curl, a misbehaving client, or a page the user happens to visit can
-    grow the table and the task count without bound on the default deployment.
+    (``400 Missing session ID``), and the rejection carries the id of the
+    session minted for it.
+
+    On mcp 2.1 that session outlived the 400: the caller never learned it
+    owned one, so no DELETE came, and nothing else reaped it, so a plain curl,
+    a misbehaving client, or a page the user happens to visit could grow the
+    table and the task count without bound on the default deployment (#453).
+    From 2.2 (upstream #3395) the SDK discards the session again once its
+    response is a refusal, so nothing accumulates. What answering here still
+    saves is the churn: a transport, a serve-loop task and two INFO log lines
+    per request that can never be served, and a session id handed to a caller
+    that cannot use it.
 
     This gate answers those requests itself, with the SDK's own ``400`` body,
     before the SDK can mint anything. Only two kinds of request legitimately
@@ -868,7 +875,7 @@ class SessionlessRequestGateMiddleware:
     All of the above is the default, stateful server. With ``stateless``
     (``OPENZIM_MCP_STATELESS_HTTP``) the SDK serves each handshake-era POST on
     a fresh transport that is never registered and is torn down when its
-    request returns: nothing is minted, and a sessionless follow-up such as
+    request ends: nothing is minted, and a sessionless follow-up such as
     ``notifications/initialized`` is exactly what a client is meant to send.
     Turning those away with ``Missing session ID`` is what broke stateless
     mode (#452), so every POST passes through unread — with or without an
@@ -956,8 +963,8 @@ class SessionlessRequestGateMiddleware:
         if not _accepts_json_and_sse(scope):
             # The SDK validates ``Accept`` inside the transport it has already
             # minted, registered and task-started, so an ``initialize`` it is
-            # about to refuse with 406 leaks a session all the same. Answer it
-            # here, in the SDK's own words, before anything is minted.
+            # about to refuse with 406 costs a throwaway session all the same.
+            # Answer it here, in the SDK's own words, before anything is minted.
             await self._send_jsonrpc_error(
                 scope,
                 receive,
@@ -1148,11 +1155,17 @@ def serve_streamable_http(
     # ``stateless_http`` moves handshake-era clients onto the SDK's
     # per-request path, which issues no ``Mcp-Session-Id``. The 2026-07-28
     # path is era-routed ahead of that switch, so it is the same either way.
-    # On mcp 2.1.1 that path tears a request's transport down only when the
-    # request returns normally, so nothing in front of the SDK may cancel a
-    # stateless request mid-flight (a request-timeout layer, say): each one
-    # it cancelled would leave a transport and its server task behind until
-    # restart.
+    # From mcp 2.2 that path terminates each request's transport in a shielded
+    # ``finally``, so a request cancelled mid-flight (by a request-timeout
+    # layer in front, say) leaves no transport or server task behind.
+    #
+    # ``session_idle_timeout`` and ``max_sessions`` are left at the SDK's
+    # defaults (mcp 2.2+): a handshake-era session with no request in flight
+    # for 30 minutes is closed, and while 10,000 are open a request that would
+    # open another is answered 503. Both bound what an abandoning client can
+    # hold; neither is an operator knob yet, and a stateless server holds no
+    # sessions for either to bound. The seam audit pins both numbers, which
+    # the HTTP deployment guide quotes.
     stateless = server.config.stateless_http
     app = server.mcp.streamable_http_app(
         host=server.config.host,

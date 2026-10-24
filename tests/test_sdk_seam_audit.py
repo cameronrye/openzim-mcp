@@ -1,4 +1,4 @@
-"""Seam audit for the ``mcp[cli]>=2.1.0,<2.2`` range.
+"""Seam audit for the ``mcp[cli]>=2.3.0,<2.4`` range.
 
 The seams this server reaches into are all underscore-prefixed or otherwise
 outside upstream's documented compatibility promise (``VERSIONING.md``: it
@@ -22,9 +22,34 @@ code or comments in this repo:
 * 2.1.1's ``read_resource`` moved ``get_resource`` inside the ``try`` and
   added a runtime ``str | bytes`` check on ``Resource.read()``.
 
+Between 2.1.1 and 2.3.0, these changes reach code or comments here:
+
+* upstream #3395 (2.2.0) rewrote the handshake-era session lifecycle. A
+  DELETE now frees its session, a refused opening request no longer leaves
+  one behind, a session idle for 30 minutes expires, and the manager holds at
+  most 10,000 sessions. That retires the leak the ``http_app`` gates were
+  written against (GHSA-84m7-p3x7-pcfv, issue #453), and
+  ``TestSessionLifecycleSeam`` pins it;
+* 2.3.0's ``MCPServer(subscriptions=False)`` leaves ``subscriptions/listen``
+  unregistered, the public spelling of what ``server.py`` used to do by
+  popping ``_request_handlers`` (``test_subscriptions.py``'s capability gate
+  covers it). Installing the bounded handler still goes through the private
+  registry;
+* 2.3.0 validates ``Mcp-Param-*`` headers against ``tool.parameters``
+  directly (``get_tool_input_schema``) instead of running the ``tools/list``
+  handler. ``schema_slimming`` rewrites that dict in place at registration,
+  so the schema validated against is still the one served.
+
+Audited and found inert here: mcp-types 2.3 turning ``RequestId``,
+``Cursor`` and the other single-value ``RootModel`` wrappers into plain
+aliases (only the versioned wire modules changed, not the ``mcp_types``
+names this repo imports); the dispatcher's outbound-request changes (this
+server sends the client no requests); ``func_metadata``'s dict output model
+(no tool here declares structured output); and ``initialize`` omitting an
+empty ``capabilities.experimental``.
+
 ``TestStatelessHttpSeams`` pins what ``OPENZIM_MCP_STATELESS_HTTP`` (#452)
-leans on that its own tests cannot see past the gate and the log filter, and
-the 2.1.1 session retention (#453) that the HTTP gates' docstrings describe.
+leans on that its own tests cannot see past the gate and the log filter.
 
 What is deliberately *not* here: the advertised schema footprint (already
 measured live and asserted against the allocation table in
@@ -49,8 +74,10 @@ import pytest
 from mcp.server.mcpserver.exceptions import ResourceNotFoundError, ToolError
 from packaging.requirements import Requirement
 from packaging.version import Version
+from starlette.testclient import TestClient
 
 from openzim_mcp.config import OpenZimMcpConfig
+from openzim_mcp.http_app import serve_streamable_http
 from openzim_mcp.server import OpenZimMcpServer
 from tests.test_mcp_session import _text, advanced_session
 
@@ -469,6 +496,131 @@ class TestSseTransportSeam:
         assert small.status_code != 413, small.text
 
 
+_LEGACY_HEADERS = {
+    "Content-Type": "application/json",
+    "Accept": "application/json, text/event-stream",
+}
+_INITIALIZE = {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "initialize",
+    "params": {
+        "protocolVersion": "2025-06-18",
+        "capabilities": {},
+        "clientInfo": {"name": "seam-audit", "version": "0"},
+    },
+}
+
+
+class TestSessionLifecycleSeam:
+    """2.2's handshake-era session lifecycle (upstream #3395, issue #453).
+
+    On 2.1.1 a session left the manager's table only when the process exited:
+    a DELETE terminated it in place, a refused opening request left it
+    behind, and the app builder took no ``session_idle_timeout``. The gates in
+    ``http_app`` were written against that. Their docstrings now say nothing
+    accumulates and only churn is saved, and the deployment guide quotes the
+    SDK's limits; these pin both claims to the resolved SDK.
+
+    Every assertion on the table sits inside the ``TestClient`` block: leaving
+    it runs the lifespan shutdown, which empties the table on any version.
+    """
+
+    @staticmethod
+    def _http_server(tmp_path: Path) -> OpenZimMcpServer:
+        return OpenZimMcpServer(
+            OpenZimMcpConfig(allowed_directories=[str(tmp_path)], transport="http")
+        )
+
+    @classmethod
+    def _production_app(cls, tmp_path: Path) -> tuple[OpenZimMcpServer, Any]:
+        server = cls._http_server(tmp_path)
+        box: dict[str, Any] = {}
+        serve_streamable_http(
+            server, runner=lambda app, host, port: box.update(app=app)
+        )
+        return server, box["app"]
+
+    def test_complete_sessions_leave_the_table_empty(self, tmp_path: Path) -> None:
+        """The #453 churn, through the production-wired app.
+
+        ``initialize``, ``notifications/initialized``, ``tools/list``,
+        ``DELETE``: the sequence Open WebUI runs per chat request, per MCP
+        server. On 2.1.1 each run left one entry (about 4 KB) until restart.
+        """
+        server, app = self._production_app(tmp_path)
+        table = server.mcp.session_manager._server_instances
+        with TestClient(app, base_url="http://127.0.0.1") as client:
+            for _ in range(25):
+                opened = client.post("/mcp", json=_INITIALIZE, headers=_LEGACY_HEADERS)
+                assert opened.status_code == 200, opened.text
+                session = {
+                    **_LEGACY_HEADERS,
+                    "Mcp-Session-Id": opened.headers["mcp-session-id"],
+                }
+                initialized = client.post(
+                    "/mcp",
+                    json={"jsonrpc": "2.0", "method": "notifications/initialized"},
+                    headers=session,
+                )
+                assert initialized.status_code == 202, initialized.text
+                listed = client.post(
+                    "/mcp",
+                    json={"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
+                    headers=session,
+                )
+                assert listed.status_code == 200, listed.text
+                # The session was really registered, so the empty table below
+                # is the DELETE's doing.
+                assert session["Mcp-Session-Id"] in table
+                assert client.delete("/mcp", headers=session).status_code == 200
+            assert table == {}
+
+    def test_a_refused_opening_request_is_discarded(
+        self, tmp_path: Path, minted_transports: list[object]
+    ) -> None:
+        """The bare SDK app, no gates: it mints for a refusal, then lets go.
+
+        This is the property that turned the gates' leak into churn. Should a
+        release regress it, the gates become load-bearing again and their
+        docstrings wrong, so it fails here first.
+        """
+        server = self._http_server(tmp_path)
+        app = server.mcp.streamable_http_app(
+            host=server.config.host, transport_security=server._transport_security
+        )
+        table = server.mcp.session_manager._server_instances
+        with TestClient(app, base_url="http://127.0.0.1") as client:
+            refused = client.post(
+                "/mcp",
+                json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
+                headers=_LEGACY_HEADERS,
+            )
+            hostile = client.post(
+                "/mcp",
+                json={"jsonrpc": "2.0", "id": 2, "method": "ping"},
+                headers={**_LEGACY_HEADERS, "Origin": "http://evil.example"},
+            )
+            assert refused.status_code == 400, refused.text
+            assert hostile.status_code == 403, hostile.text
+            # Both really did mint: an empty table is the SDK discarding them,
+            # not the requests never reaching the session code.
+            assert len(minted_transports) == 2
+            assert table == {}
+
+    def test_the_sdk_limits_are_the_ones_we_document(self, tmp_path: Path) -> None:
+        """``http_app`` takes the SDK's defaults; the deployment guide quotes them.
+
+        A minor that changed either default would change what the guide
+        promises without any diff here, so the numbers are pinned on the
+        manager ``serve_streamable_http`` actually builds.
+        """
+        server, _app = self._production_app(tmp_path)
+        manager = server.mcp.session_manager
+        assert manager.session_idle_timeout == 30 * 60
+        assert manager.max_sessions == 10_000
+
+
 class TestDeclaredRangeIsTheTestedRange:
     """The lockfile must not sit below the top minor of the declared cap."""
 
@@ -572,7 +724,7 @@ class TestDeclaredRangeIsTheTestedRange:
 
 
 class TestStatelessHttpSeams:
-    """What ``OPENZIM_MCP_STATELESS_HTTP`` leans on, and #453's retention.
+    """What ``OPENZIM_MCP_STATELESS_HTTP`` leans on in the SDK.
 
     Era routing ahead of the stateful/stateless switch is pinned where it
     bites, in ``test_stateless_http.py``: a 2026-07-28 GET to a stateless
@@ -668,43 +820,67 @@ class TestStatelessHttpSeams:
             "http_app's _StatelessTerminateFilter"
         )
 
-    def test_a_delete_leaves_its_session_in_the_table(self, tmp_path: Path) -> None:
-        """mcp 2.1.1 ends a session on DELETE but never removes its entry (#453).
+    @pytest.mark.asyncio
+    async def test_a_cancelled_stateless_request_leaves_no_task(self) -> None:
+        """The stateless path tears its transport down even when cancelled.
 
-        The HTTP gates' docstrings say so, and so do the deployment docs'
-        reasons to run without sessions. 2.2 fixes it — and has the app
-        builder expire idle sessions after 30 minutes by default — so raising
-        the ceiling fails this, on purpose, naming everything that describes
-        the old behaviour of keeping every session until restart.
+        2.2 moved ``terminate()`` into a shielded ``finally``. 2.1 called it
+        only when the request returned normally, so a request cancelled
+        mid-flight (by a timeout layer in front of the SDK, say) left three
+        tasks behind until restart. Measured on a bare ``MCPServer`` whose
+        one tool blocks, so the cancellation lands while the transport and
+        its server task are live. The first round is a warm-up: serving SSE
+        starts sse-starlette's process-wide shutdown watcher once, and that
+        task is not the request's.
         """
-        from tests.test_stateless_http import (
-            HANDSHAKE_HEADERS,
-            NEGOTIATED,
-            _build_client,
-            _initialize,
-        )
+        import asyncio
 
-        client, server = _build_client(tmp_path)
-        with client:
-            opened = client.post("/mcp", json=_initialize(), headers=HANDSHAKE_HEADERS)
-            session_id = opened.headers["mcp-session-id"]
-            ended = client.request(
-                "DELETE", "/mcp", headers={**NEGOTIATED, "Mcp-Session-Id": session_id}
-            )
-            assert ended.status_code == 200, ended.text
-            table = server.mcp.session_manager._server_instances
-            retained = session_id in table and table[session_id].is_terminated
+        import anyio
+        from mcp.server.mcpserver import MCPServer
 
-        assert retained, (
-            "mcp now removes a session from its table on DELETE (#453 is fixed "
-            "in the resolved SDK, which may also expire idle sessions). Revise "
-            "what describes 2.1.1's retention of every session until restart: "
-            "the TransportSecurityGateMiddleware and "
-            "SessionlessRequestGateMiddleware docstrings in "
-            "openzim_mcp/http_app.py, the module docstring of "
-            "tests/test_sweep8_transport_security_gate.py, pyproject's mcp "
-            "comment, and two passages under Scaling considerations in "
-            "website/src/content/docs/http-and-docker-deployment.mdx: the "
-            "memory note, and the session that lingers until restart under "
-            '"Switching a running fleet".'
+        entered = anyio.Event()
+        probe = MCPServer("cancel-probe")
+
+        @probe.tool()
+        async def block() -> str:
+            entered.set()
+            await anyio.sleep_forever()
+            return "unreachable"
+
+        app = probe.streamable_http_app(host="127.0.0.1", stateless_http=True)
+        call = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {"name": "block", "arguments": {}},
+        }
+        headers = {**_LEGACY_HEADERS, "MCP-Protocol-Version": "2025-11-25"}
+
+        async def cancelled_call(client: httpx.AsyncClient) -> None:
+            nonlocal entered
+            entered = anyio.Event()
+            async with anyio.create_task_group() as tg:
+                tg.start_soon(lambda: client.post("/mcp", json=call, headers=headers))
+                with anyio.fail_after(5):
+                    await entered.wait()
+                tg.cancel_scope.cancel()
+            for _ in range(10):
+                await anyio.sleep(0.02)
+
+        transport = httpx.ASGITransport(app=app)
+        async with app.router.lifespan_context(app):
+            async with httpx.AsyncClient(
+                transport=transport, base_url="http://127.0.0.1:8000"
+            ) as client:
+                await cancelled_call(client)
+                before = len(asyncio.all_tasks())
+                await cancelled_call(client)
+                after = len(asyncio.all_tasks())
+
+        assert after == before, (
+            f"a cancelled stateless request left {after - before} task(s) "
+            "behind: the SDK no longer terminates the stateless transport in a "
+            "finally. Revisit pyproject's stateless note and http_app's "
+            "comment above streamable_http_app(), which say cancelling one is "
+            "safe."
         )

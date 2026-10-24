@@ -610,7 +610,7 @@ class TestTheDocumentedModeCheck:
 
 
 class TestTheDefaultIsUnchanged:
-    """Off by default: sessions, and the gate that keeps them from leaking."""
+    """Off by default: sessions, and the gate in front of them."""
 
     def test_default_server_issues_a_session_and_gates_sessionless_requests(
         self, tmp_path: Path

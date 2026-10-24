@@ -54,8 +54,8 @@ dependencies = [
     # One audited minor series at a time. Upstream's VERSIONING.md excludes
     # underscore-prefixed names and undocumented modules from its compatibility
     # promise, and this server depends on a spread of them: sdk_compat.py
-    # patches the dicts under the method tables, server.py/subscriptions.py
-    # install handlers through ``_request_handlers`` + ``HandlerEntry``,
+    # patches the dicts under the method tables, subscriptions.py installs a
+    # handler through ``_request_handlers`` + ``HandlerEntry``,
     # resource_tools.py writes into ``_resource_manager._templates``,
     # http_app.py imports ``check_accept_headers`` /
     # ``MCP_SESSION_ID_HEADER`` / ``DEFAULT_MAX_REQUEST_BODY_SIZE``, and
@@ -65,15 +65,23 @@ dependencies = [
     # suite green.
     #
     # The floor moves with the ceiling on purpose, so the declared range is
-    # exactly the one series CI resolves and tests. 2.0.x is not merely
-    # unaudited, it is behaviourally different: a crashing tool body's
-    # exception text reaches the client verbatim (upstream #3314 landed in
-    # 2.1.0), the SSE message endpoint answers a GET with 400 rather than 405,
-    # and ``DEFAULT_MAX_REQUEST_BODY_SIZE`` has not yet moved to
-    # ``transport_security`` — which makes building the HTTP app raise
-    # ImportError, though stdio still starts. An ``except ImportError``
-    # fallback would restore the import and none of the rest, on a branch no
-    # CI job runs.
+    # exactly the one series CI resolves and tests. Every earlier series is
+    # behaviourally different, not merely unaudited:
+    #
+    # * 2.2.x has no ``subscriptions=False``. server.py passes it to withhold
+    #   ``subscriptions/listen``, and 2.2 would take ``False`` for a bus and
+    #   wrap it in a ``ListenHandler``.
+    # * 2.1.x never frees a handshake-era session: not on DELETE, not when it
+    #   refuses the request that opened it, and not on idle, because its app
+    #   builder takes no ``session_idle_timeout``. That is GHSA-84m7-p3x7-pcfv
+    #   / CVE-2026-59951 (issue #453), fixed by upstream #3395 in 2.2.0.
+    # * 2.0.x leaks a crashing tool body's exception text to the client
+    #   verbatim (upstream #3314 landed in 2.1.0), answers a GET on the SSE
+    #   message endpoint with 400 rather than 405, and has not yet moved
+    #   ``DEFAULT_MAX_REQUEST_BODY_SIZE`` to ``transport_security``, which
+    #   makes building the HTTP app raise ImportError, though stdio still
+    #   starts. An ``except ImportError`` fallback would restore the import
+    #   and none of the rest, on a branch no CI job runs.
     #
     # To raise the ceiling: re-audit the seams against the new wheel, run the
     # full suite AND ``pytest -m live``, re-measure the advertised schema
@@ -91,20 +99,15 @@ dependencies = [
     # until the client hangs up, which is why SessionlessRequestGateMiddleware
     # answers every non-POST first. ``terminate()`` logs ``Terminating
     # session: None`` once per stateless request, the exact record http_app's
-    # filter drops. And the stateless path calls ``terminate()`` only when the
-    # request returns normally — there is no ``finally`` — so a request
-    # cancelled mid-flight leaves its transport and server task behind until
-    # restart, and nothing in front of the SDK may cancel one (2.2 moves the
-    # call into a shielded ``finally``). Separately, 2.2 fixes #453 (a DELETE
-    # there removes its session from the table) and has the app builder expire
-    # idle sessions after 30 minutes by default, so the docstrings and docs
-    # that describe 2.1.1's retention — sessions kept until restart — change
-    # when the ceiling moves; the seam audit pins it so that move fails by
-    # name.
+    # filter drops. And the stateless path calls ``terminate()`` in a shielded
+    # ``finally`` (2.1 called it only when the request returned normally), so
+    # a request cancelled mid-flight leaves no task behind, and a timeout layer
+    # in front of the SDK is safe. ``test_stateless_http.py`` pins the first,
+    # ``TestStatelessHttpSeams`` in the seam audit the other three.
     #
     # None of that retires the ping shim: 2026-07-28 defines no ping, so no SDK
     # release is going to supply those rows (see sdk_compat and issue #371).
-    "mcp[cli]>=2.1.0,<2.2",
+    "mcp[cli]>=2.3.0,<2.4",
     "pydantic>=2.13.3,<3.0",
     "pydantic-settings>=2.14.0,<3.0",
     "tiktoken>=0.7.0,<1.0",
@@ -143,10 +146,11 @@ openzim_mcp = ["data/*.txt", "data/*.toml", "tools/*.md"]
 
 [tool.uv]
 # pyjwt is pulled in transitively via mcp[cli] (which depends on pyjwt[crypto]).
-# Floor it at 2.13.0 so the release pip-audit gate stays clear of
-# PYSEC-2026-175 / -177 / -178 / -179 — four advisories against pyjwt 2.12.1,
-# all fixed in 2.13.0. mcp itself sets no upper bound, so this only raises the
-# floor. Drop this constraint once mcp's own pin guarantees >= 2.13.0.
+# Floor it at 2.15.0 so the release pip-audit gate stays clear of the fourteen
+# advisories against pyjwt 2.13.0 fixed in 2.14.0 / 2.15.0 (the earlier floor,
+# 2.13.0, cleared PYSEC-2026-175 / -177 / -178 / -179 against 2.12.1). mcp
+# itself sets no upper bound, so this only raises the floor. Drop this
+# constraint once mcp's own pin guarantees >= 2.15.0.
 #
 # pip is pulled in transitively via pip-api (a pip-audit dependency); it is a
 # dev/tooling artifact, not a runtime dependency. Floor it at 26.1.2 so the
@@ -168,13 +172,30 @@ openzim_mcp = ["data/*.txt", "data/*.toml", "tools/*.md"]
 # PYSEC-2026-3071 / -3072, two advisories against soupsieve 2.8.3. beautifulsoup4
 # sets no upper bound, so this only raises the floor. Drop this constraint once
 # beautifulsoup4's own pin guarantees >= 2.8.4.
+#
+# The 2026-10 round, each floored at its first patched release. Runtime:
+# opentelemetry-api (via mcp; one advisory, < 1.45.1). Through the reranker
+# extra and tooling: urllib3 (via requests, which fastembed, cachecontrol and
+# pip-audit use; three advisories, < 2.8.0), certifi (via httpx and
+# huggingface-hub; one, < 2026.10.19) and filelock (via huggingface-hub and
+# virtualenv; three, < 4.2.1). Dev only: virtualenv (via pre-commit; nineteen,
+# the last fixed in 21.14.9) and setuptools (via pbr, under
+# bandit-sarif-formatter; one, < 84.1.0). Drop each once its parent's own pin
+# guarantees the patched version. pillow has no entry here because no release
+# fastembed accepts is patched; see .github/pip-audit-ignore.txt.
 constraint-dependencies = [
-    "pyjwt>=2.13.0",
+    "pyjwt>=2.15.0",
     "pip>=26.1.2",
     "cryptography>=50.0.0",
     "python-multipart>=0.0.31",
     "starlette>=1.3.1",
     "soupsieve>=2.8.4",
+    "opentelemetry-api>=1.45.1",
+    "urllib3>=2.8.0",
+    "certifi>=2026.10.19",
+    "filelock>=4.2.1",
+    "virtualenv>=21.14.9",
+    "setuptools>=84.1.0",
 ]
 
 [tool.black]
@@ -207,7 +228,8 @@ omit = ["tests/*"]
 
 [dependency-groups]
 dev = [
-    "black>=26.3.1",
+    # 26.10.1 is the first release clear of the one advisory against 26.5.1.
+    "black>=26.10.1",
     # Used by tests/live/ and by the in-process ASGI seam tests in
     # tests/test_sdk_seam_audit.py. Previously arrived transitively via mcp
     # 1.x; the v2 SDK ships httpx2 instead, so those suites fail to import

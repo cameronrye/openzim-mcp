@@ -88,7 +88,9 @@ security:  ## Run security scans (fails on bandit/pip-audit findings)
 	# emits "Dependency not found on PyPI and could not be audited:
 	# openzim-mcp (X.Y.ZaN)" and exits 1, blocking the release. Only
 	# our project is editable; third-party deps still get audited.
-	uv run pip-audit --skip-editable
+	# The accepted advisories live in .github/pip-audit-ignore.txt, shared
+	# with the CI gate in .github/workflows/test.yml.
+	uv run pip-audit --skip-editable $$(sed -e 's/#.*//' -e 's/[[:space:]]//g' .github/pip-audit-ignore.txt | grep -v '^$$' | sed 's/^/--ignore-vuln=/')
 
 download-test-data:  ## Download ZIM test data files
 	uv run python scripts/download_test_data.py --priority 1
