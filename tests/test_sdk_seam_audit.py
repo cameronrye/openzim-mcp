@@ -570,7 +570,8 @@ class TestSessionLifecycleSeam:
                 # The session was really registered, so the empty table below
                 # is the DELETE's doing.
                 assert session["Mcp-Session-Id"] in table
-                assert client.delete("/mcp", headers=session).status_code == 200
+                ended = client.delete("/mcp", headers=session)
+                assert ended.status_code == 200, ended.text
             assert table == {}
 
     def test_a_refused_opening_request_is_discarded(
