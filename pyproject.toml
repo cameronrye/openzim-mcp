@@ -132,10 +132,11 @@ openzim_mcp = ["data/*.txt", "data/*.toml", "tools/*.md"]
 
 [tool.uv]
 # pyjwt is pulled in transitively via mcp[cli] (which depends on pyjwt[crypto]).
-# Floor it at 2.13.0 so the release pip-audit gate stays clear of
-# PYSEC-2026-175 / -177 / -178 / -179 — four advisories against pyjwt 2.12.1,
-# all fixed in 2.13.0. mcp itself sets no upper bound, so this only raises the
-# floor. Drop this constraint once mcp's own pin guarantees >= 2.13.0.
+# Floor it at 2.15.0 so the release pip-audit gate stays clear of the fourteen
+# advisories against pyjwt 2.13.0 fixed in 2.14.0 / 2.15.0 (the earlier floor,
+# 2.13.0, cleared PYSEC-2026-175 / -177 / -178 / -179 against 2.12.1). mcp
+# itself sets no upper bound, so this only raises the floor. Drop this
+# constraint once mcp's own pin guarantees >= 2.15.0.
 #
 # pip is pulled in transitively via pip-api (a pip-audit dependency); it is a
 # dev/tooling artifact, not a runtime dependency. Floor it at 26.1.2 so the
@@ -157,13 +158,30 @@ openzim_mcp = ["data/*.txt", "data/*.toml", "tools/*.md"]
 # PYSEC-2026-3071 / -3072, two advisories against soupsieve 2.8.3. beautifulsoup4
 # sets no upper bound, so this only raises the floor. Drop this constraint once
 # beautifulsoup4's own pin guarantees >= 2.8.4.
+#
+# The 2026-10 round, each floored at its first patched release. Runtime:
+# opentelemetry-api (via mcp; one advisory, < 1.45.1). Through the reranker
+# extra and tooling: urllib3 (via requests, which fastembed, cachecontrol and
+# pip-audit use; three advisories, < 2.8.0), certifi (via httpx and
+# huggingface-hub; one, < 2026.10.19) and filelock (via huggingface-hub and
+# virtualenv; three, < 4.2.1). Dev only: virtualenv (via pre-commit; nineteen,
+# the last fixed in 21.14.9) and setuptools (via pbr, under
+# bandit-sarif-formatter; one, < 84.1.0). Drop each once its parent's own pin
+# guarantees the patched version. pillow has no entry here because no release
+# fastembed accepts is patched; see .github/pip-audit-ignore.txt.
 constraint-dependencies = [
-    "pyjwt>=2.13.0",
+    "pyjwt>=2.15.0",
     "pip>=26.1.2",
     "cryptography>=50.0.0",
     "python-multipart>=0.0.31",
     "starlette>=1.3.1",
     "soupsieve>=2.8.4",
+    "opentelemetry-api>=1.45.1",
+    "urllib3>=2.8.0",
+    "certifi>=2026.10.19",
+    "filelock>=4.2.1",
+    "virtualenv>=21.14.9",
+    "setuptools>=84.1.0",
 ]
 
 [tool.black]
@@ -196,7 +214,8 @@ omit = ["tests/*"]
 
 [dependency-groups]
 dev = [
-    "black>=26.3.1",
+    # 26.10.1 is the first release clear of the one advisory against 26.5.1.
+    "black>=26.10.1",
     # Used by tests/live/ and by the in-process ASGI seam tests in
     # tests/test_sdk_seam_audit.py. Previously arrived transitively via mcp
     # 1.x; the v2 SDK ships httpx2 instead, so those suites fail to import
