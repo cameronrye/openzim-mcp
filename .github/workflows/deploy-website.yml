@@ -35,6 +35,11 @@ jobs:
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: 22
+          # Same reason as website-ci.yml: without it, "22" is the runner's
+          # cached 22.x, which can sit below the engines floor Astro sets
+          # (mirrored in website/package.json), and the deploy dies before
+          # building.
+          check-latest: true
           cache: npm
           cache-dependency-path: website/package-lock.json
 
