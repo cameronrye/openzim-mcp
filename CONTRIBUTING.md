@@ -305,8 +305,9 @@ Test files are automatically organized by category and priority level. Set `ZIM_
 ### Documentation site
 
 The docs site lives in `website/` (Astro + an MDX content collection) and needs
-Node 22+. It is **not** built by `make check` — its gate is the `Website CI`
-workflow, which runs on any PR that touches `website/`.
+Node 22.23.4 or newer, the floor Astro declares in its `engines`. It is **not**
+built by `make check` — its gate is the `Website CI` workflow, which runs on
+any PR that touches `website/`.
 
 ```bash
 make site-install            # npm ci (once; site-dev and site-check do it for you)
