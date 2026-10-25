@@ -181,8 +181,11 @@ openzim_mcp = ["data/*.txt", "data/*.toml", "tools/*.md"]
 # virtualenv; three, < 4.2.1). Dev only: virtualenv (via pre-commit; nineteen,
 # the last fixed in 21.14.9) and setuptools (via pbr, under
 # bandit-sarif-formatter; one, < 84.1.0). Drop each once its parent's own pin
-# guarantees the patched version. pillow has no entry here because no release
-# fastembed accepts is patched; see .github/pip-audit-ignore.txt.
+# guarantees the patched version. pillow (via fastembed, reranker extra only;
+# thirty-seven advisories, all fixed in 13.0.0) is floored at 13.0.0, which
+# fastembed admits from 0.9.1; every release the extra allows before that caps
+# it below 13, so the floor also holds the lock at fastembed >= 0.9.1. Drop it
+# once fastembed's own pin guarantees >= 13.0.0.
 constraint-dependencies = [
     "pyjwt>=2.15.0",
     "pip>=26.1.2",
@@ -196,6 +199,7 @@ constraint-dependencies = [
     "filelock>=4.2.1",
     "virtualenv>=21.14.9",
     "setuptools>=84.1.0",
+    "pillow>=13.0.0",
 ]
 
 [tool.black]

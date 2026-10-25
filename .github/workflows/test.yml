@@ -257,13 +257,8 @@ jobs:
       # still upload when a dependency advisory fails this step. Scope is the
       # full extras set (see the sync step above), so an advisory in an
       # optional dependency fails the gate rather than shipping silently.
-      # The only exceptions are the IDs in .github/pip-audit-ignore.txt, each
-      # with its reason and exit condition; ``make security`` reads the same
-      # file, so the two gates cannot drift apart.
       - name: Run pip-audit dependency scan (blocking)
-        run: |
-          ignores=$(sed -e 's/#.*//' -e 's/[[:space:]]//g' .github/pip-audit-ignore.txt | grep -v '^$' | sed 's/^/--ignore-vuln=/')
-          uv run --locked pip-audit --skip-editable $ignores
+        run: uv run --locked pip-audit --skip-editable
 
       - name: Generate security scan summary
         if: always() && hashFiles('bandit-report.json') != ''
