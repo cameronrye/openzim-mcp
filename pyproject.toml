@@ -182,10 +182,10 @@ openzim_mcp = ["data/*.txt", "data/*.toml", "tools/*.md"]
 # the last fixed in 21.14.9) and setuptools (via pbr, under
 # bandit-sarif-formatter; one, < 84.1.0). Drop each once its parent's own pin
 # guarantees the patched version. pillow (via fastembed, reranker extra only;
-# forty-one advisories, all fixed in 13.0.0) is floored at 13.0.0, which
-# fastembed admits from 0.9.1; every earlier release caps it below 13, so the
-# floor also holds the lock at fastembed >= 0.9.1. Drop it once fastembed's own
-# pin guarantees >= 13.0.0.
+# thirty-seven advisories, all fixed in 13.0.0) is floored at 13.0.0, which
+# fastembed admits from 0.9.1; every release the extra allows before that caps
+# it below 13, so the floor also holds the lock at fastembed >= 0.9.1. Drop it
+# once fastembed's own pin guarantees >= 13.0.0.
 constraint-dependencies = [
     "pyjwt>=2.15.0",
     "pip>=26.1.2",
