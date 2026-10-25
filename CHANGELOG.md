@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.4.0](https://github.com/cameronrye/openzim-mcp/compare/v3.3.4...v3.4.0) (2026-10-25)
+
+
+### Added
+
+* add OPENZIM_MCP_STATELESS_HTTP so replicas need no session affinity ([#454](https://github.com/cameronrye/openzim-mcp/issues/454)) ([df6b054](https://github.com/cameronrye/openzim-mcp/commit/df6b054ed2aeb7219a81bbab6d014135a226a114))
+
+
+### Fixed
+
+* **deps:** move to mcp 2.3 so HTTP sessions are freed, and clear the blocking advisories ([#461](https://github.com/cameronrye/openzim-mcp/issues/461)) ([53b0770](https://github.com/cameronrye/openzim-mcp/commit/53b07700fc10cfc3e0f3995d91fdf5d4a7898ce6))
+* **deps:** take pillow 13.0.0 for the reranker extra's 41 advisories ([#466](https://github.com/cameronrye/openzim-mcp/issues/466)) ([e936ce8](https://github.com/cameronrye/openzim-mcp/commit/e936ce82efab49e3b19a7686fe850f3068e2bee9))
+
 ## [3.3.4](https://github.com/cameronrye/openzim-mcp/compare/v3.3.3...v3.3.4) (2026-09-18)
 
 
