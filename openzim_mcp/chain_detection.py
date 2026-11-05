@@ -149,14 +149,16 @@ class _ChainMixin:
             return None
         # Collapse whitespace runs before anything scans the raw query. Every
         # ``_CHAINED_INTENT_CONNECTORS`` pattern leads with ``\s+`` or ``\s*``
-        # and ends in a literal, so ``re.split`` over a long run retries the
-        # repeat from each position in it before the literal fails: O(n^2),
-        # GIL-held, 0.22s for a 4 KB query on a fast laptop. This is the
-        # chain-detection half the sweep-4 Q1 fix named but left quadratic.
-        # The sub itself has no failing tail, so it is linear. No pattern here
-        # depends on a run's length or on which whitespace character it is,
-        # so detection is unchanged; the echoed halves just lose their
-        # padding, which ``parse_intent`` collapses the same way.
+        # followed by a literal connector, so ``re.split`` over a long run
+        # retries the repeat from each position in it before the literal
+        # fails: O(n^2), GIL-held, 0.22s for a 4 KB query on a fast laptop.
+        # This is the chain-detection half the sweep-4 Q1 fix named but left
+        # quadratic. The sub itself has no failing tail, so it is linear.
+        # Detection becomes whitespace-invariant: a padded or tabbed query is
+        # classified exactly like its single-spaced form. That changes the
+        # verdict for a few of them, since the half checks count padding
+        # toward their 80-character cap and match " then " with literal
+        # spaces. The echoed halves lose their padding, as in parse_intent.
         query = re.sub(r"\s+", " ", query).strip()
         # Post-a24 P1-D6: peel leaked ``param=value`` suffixes before the
         # chained-operation detector runs. ``parse_intent``'s strip
@@ -504,7 +506,12 @@ class _ChainMixin:
         """
         if not topic or not top_title:
             return None
-        topic_stripped = topic.strip()
+        # Collapsed, not just stripped: every soft-connector pattern leads with
+        # ``\s+`` or ``\s*``, and the topic can carry a long run that
+        # parse_intent never saw, because URL and ZIM-path topics have their
+        # ``_`` and ``%20`` turned into spaces after it runs. Searching a raw
+        # run is O(n^2).
+        topic_stripped = " ".join(topic.split())
         if not topic_stripped:
             return None
         for pat in self._SOFT_CHAIN_CONNECTOR_PATS:
@@ -712,14 +719,15 @@ class _ChainMixin:
         existing codebase convention (see ``_search_query_tail``'s
         three-token decomposition for the same defensive shape) and
         avoid the static-analysis flag entirely. Cost is O(N · P)
-        per topic where P ≤ 6, but only because ``topic`` arrives
-        whitespace-collapsed from ``parse_intent``. Splitting a raw
-        whitespace run on any of these patterns is O(N^2), since each
-        leads with ``\\s+`` or ``\\s*``; see ``_chained_intent_guidance``.
+        per topic where P ≤ 6, because the topic is whitespace-collapsed
+        first. That is needed even after ``parse_intent``'s own collapse:
+        URL and ZIM-path topics have their ``_`` and ``%20`` turned into
+        spaces afterwards, and splitting a raw whitespace run on any of
+        these patterns is O(N^2), since each leads with ``\\s+`` or ``\\s*``.
         """
         if not topic or not topic.strip():
             return None
-        parts: List[str] = [topic.strip()]
+        parts: List[str] = [" ".join(topic.split())]
         for pat in cls._SOFT_CHAIN_CONNECTOR_PATS:
             next_parts: List[str] = []
             is_slash_pat = pat == r"\s*/\s*"
