@@ -186,6 +186,14 @@ openzim_mcp = ["data/*.txt", "data/*.toml", "tools/*.md"]
 # fastembed admits from 0.9.1; every release the extra allows before that caps
 # it below 13, so the floor also holds the lock at fastembed >= 0.9.1. Drop it
 # once fastembed's own pin guarantees >= 13.0.0.
+#
+# msgpack is pulled in transitively via cachecontrol (under
+# pip-audit[filecache]); dev only, so neither the wheel nor the image carries
+# it. Floor it at 1.2.3 so the pip-audit gate stays clear of CVE-2026-114613 /
+# GHSA-j586-36cw-2gc2 (an unbounded memory leak in the C extension on a
+# strict_map_key validation failure, < 1.2.3). cachecontrol admits anything
+# from 0.5.2, so this only raises the floor. Drop it once cachecontrol's own
+# pin guarantees >= 1.2.3.
 constraint-dependencies = [
     "pyjwt>=2.15.0",
     "pip>=26.1.2",
@@ -200,6 +208,7 @@ constraint-dependencies = [
     "virtualenv>=21.14.9",
     "setuptools>=84.1.0",
     "pillow>=13.0.0",
+    "msgpack>=1.2.3",
 ]
 
 [tool.black]
