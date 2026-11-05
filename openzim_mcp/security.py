@@ -154,7 +154,14 @@ class PathValidator:
         """
         try:
             normalized_path = self._normalize_path(requested_path)
-            relative_input = not os.path.isabs(normalized_path)
+            # A rooted input names a host location by itself, so it is not a
+            # relative one: on Windows ``\etc\passwd`` means ``C:\etc\passwd``.
+            # Python 3.13 stopped calling that absolute (``ntpath.isabs`` now
+            # requires a drive), which sent such paths down the archive-name
+            # branch and reported a not-found instead of the security framing.
+            # ``root`` is non-empty for exactly the inputs ``isabs`` accepted on
+            # Windows before 3.13, and for exactly the absolute ones on POSIX.
+            relative_input = not Path(normalized_path).root
             resolved_path = Path(normalized_path).resolve()
             if relative_input:
                 matched = self._resolve_relative_archive(normalized_path)
