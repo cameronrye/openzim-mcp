@@ -147,6 +147,17 @@ class _ChainMixin:
         """
         if not query:
             return None
+        # Collapse whitespace runs before anything scans the raw query. Every
+        # ``_CHAINED_INTENT_CONNECTORS`` pattern leads with ``\s+`` or ``\s*``
+        # and ends in a literal, so ``re.split`` over a long run retries the
+        # repeat from each position in it before the literal fails: O(n^2),
+        # GIL-held, 0.22s for a 4 KB query on a fast laptop. This is the
+        # chain-detection half the sweep-4 Q1 fix named but left quadratic.
+        # The sub itself has no failing tail, so it is linear. No pattern here
+        # depends on a run's length or on which whitespace character it is,
+        # so detection is unchanged; the echoed halves just lose their
+        # padding, which ``parse_intent`` collapses the same way.
+        query = re.sub(r"\s+", " ", query).strip()
         # Post-a24 P1-D6: peel leaked ``param=value`` suffixes before the
         # chained-operation detector runs. ``parse_intent``'s strip
         # (intent_parser.py:_strip_param_leaks) runs on the FULL query
@@ -701,8 +712,10 @@ class _ChainMixin:
         existing codebase convention (see ``_search_query_tail``'s
         three-token decomposition for the same defensive shape) and
         avoid the static-analysis flag entirely. Cost is O(N · P)
-        per topic where P ≤ 6 — a constant — so the runtime cost is
-        identical in practice.
+        per topic where P ≤ 6, but only because ``topic`` arrives
+        whitespace-collapsed from ``parse_intent``. Splitting a raw
+        whitespace run on any of these patterns is O(N^2), since each
+        leads with ``\\s+`` or ``\\s*``; see ``_chained_intent_guidance``.
         """
         if not topic or not topic.strip():
             return None

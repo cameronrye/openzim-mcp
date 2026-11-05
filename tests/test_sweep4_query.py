@@ -12,6 +12,12 @@ Five defects, all reachable from the public ``zim_query`` tool:
   burned 2.1s of GIL-held CPU and returned an error envelope
   instead of Berlin results.
 
+  The chain-connector split had the same shape and outlived that fix.
+  ``zim_query`` hands the RAW query to ``_chained_intent_guidance``,
+  and every ``_CHAINED_INTENT_CONNECTORS`` pattern leads with ``\s+``
+  or ``\s*``, so the same query still spent 0.22s there on a fast
+  laptop and over 1s on a CI runner.
+
 * **Q2 — the politeness strip eats the only operand.**
   The alternation carries ordinary words (``tack``, ``cheers``,
   ``merci``), and nothing stopped the strip from consuming the
@@ -39,7 +45,7 @@ Five defects, all reachable from the public ``zim_query`` tool:
 
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Callable, Dict, List, Tuple
 from unittest.mock import MagicMock
 
 import pytest
@@ -60,6 +66,29 @@ def _handler(tmp_path: Path, **config_kwargs: Any) -> Tuple[Any, MagicMock]:
     mock.config = OpenZimMcpConfig(allowed_directories=[str(tmp_path)], **config_kwargs)
     mock.list_zim_files_data.return_value = [{"path": "/x.zim"}]
     return SimpleToolsHandler(mock), mock
+
+
+def _cheapest(calls: List[Callable[[], object]]) -> float:
+    """Wall time of the cheapest call: the least noisy estimate of a cost
+    on a shared runner. Callers pass distinct inputs so a cache keyed on
+    the query cannot turn later calls into hits."""
+    best = float("inf")
+    for call in calls:
+        start = time.perf_counter()
+        call()
+        best = min(best, time.perf_counter() - start)
+    return best
+
+
+# Linear code collapses a whitespace run to one separator, so the run is
+# cheaper than CONTROL_WORDS. Scanning the raw run with a pattern that leads
+# with ``\s+`` costs O(n^2): at 4000 characters that measured 25x the control
+# end to end and 286x inside ``_chained_intent_guidance``. Both sides are
+# timed in the same process, so the bound holds on any machine. The absolute
+# ``< 1.0s`` budget it replaces failed twice on a macOS runner against a
+# tree that had passed there minutes earlier.
+RUN_VS_CONTROL_BOUND = 3.0
+_WORDS = ("berlin", "paris", "tokyo")
 
 
 # ===========================================================================
@@ -86,16 +115,24 @@ class TestQ1PolitenessStripLinearOnWhitespaceRuns:
     ) -> None:
         """End to end: 4016 chars is under the 4096 front-door cap, so
         the handler must dispatch the search rather than blow its regex
-        budget and emit ``**Error Processing Query**``."""
+        budget and emit ``**Error Processing Query**``, and the run must
+        cost no more than the same length of ordinary words."""
         handler, mock = _handler(tmp_path)
         query = "search for" + " " * 4000 + "berlin"
-        start = time.perf_counter()
         out = handler.handle_zim_query(query, zim_file_path="/x.zim")
-        elapsed = time.perf_counter() - start
         assert "Error Processing Query" not in str(out)
         assert mock.search_zim_file.call_args is not None
         assert mock.search_zim_file.call_args[0][1] == "berlin"
-        assert elapsed < 1.0, f"handle_zim_query took {elapsed:.3f}s"
+
+        def ask(q: str) -> Callable[[], object]:
+            return lambda: handler.handle_zim_query(q, zim_file_path="/x.zim")
+
+        run = _cheapest([ask("search for" + " " * 4000 + w) for w in _WORDS])
+        control = _cheapest([ask("search for" + " x" * 2000 + " " + w) for w in _WORDS])
+        assert run < RUN_VS_CONTROL_BOUND * control, (
+            f"whitespace run took {run * 1e3:.1f}ms against "
+            f"{control * 1e3:.1f}ms for the same length of words"
+        )
 
     @pytest.mark.parametrize(
         "raw, expected",
@@ -113,6 +150,49 @@ class TestQ1PolitenessStripLinearOnWhitespaceRuns:
         self, raw: str, expected: str
     ) -> None:
         assert IntentParser._strip_trailing_politeness(raw) == expected
+
+
+class TestQ1ChainConnectorSplitLinearOnWhitespaceRuns:
+    """``zim_query`` calls ``_chained_intent_guidance`` on the RAW query,
+    upstream of the collapse in ``parse_intent``. Every
+    ``_CHAINED_INTENT_CONNECTORS`` pattern leads with ``\\s+`` or ``\\s*``
+    and ends in a literal, so splitting a long whitespace run retries the
+    repeat from every position in it before the literal fails."""
+
+    @pytest.mark.parametrize("ws", [" ", "\t", "\n"], ids=["space", "tab", "newline"])
+    def test_whitespace_run_costs_no_more_than_words(self, ws: str) -> None:
+        def guide(q: str) -> Callable[[], object]:
+            return lambda: SimpleToolsHandler._chained_intent_guidance(q)
+
+        run = _cheapest([guide("search for" + ws * 4000 + w) for w in _WORDS])
+        control = _cheapest(
+            [guide("search for" + (ws + "x") * 2000 + ws + w) for w in _WORDS]
+        )
+        assert run < RUN_VS_CONTROL_BOUND * control, (
+            f"whitespace run took {run * 1e3:.2f}ms against "
+            f"{control * 1e3:.2f}ms for the same length of words"
+        )
+
+    def test_chain_split_by_whitespace_runs_is_still_detected(self) -> None:
+        """Collapsing the runs must not cost detection, and the echoed
+        halves come back without the padding a caller would otherwise
+        copy into the follow-up query. The runs are as long as the cost
+        test's, so skipping detection on long whitespace cannot pass both."""
+        query = (
+            "tell me about"
+            + " " * 1500
+            + "Berlin"
+            + " " * 1500
+            + "then"
+            + "\t" * 500
+            + "list"
+            + "\n" * 500
+            + "namespaces"
+        )
+        guidance = SimpleToolsHandler._chained_intent_guidance(query)
+        assert guidance is not None
+        assert "`tell me about Berlin`" in guidance
+        assert "`list namespaces`" in guidance
 
 
 # ===========================================================================
