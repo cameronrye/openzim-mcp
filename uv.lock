@@ -17,6 +17,7 @@ constraints = [
     { name = "certifi", specifier = ">=2026.10.19" },
     { name = "cryptography", specifier = ">=50.0.0" },
     { name = "filelock", specifier = ">=4.2.1" },
+    { name = "msgpack", specifier = ">=1.2.3" },
     { name = "opentelemetry-api", specifier = ">=1.45.1" },
     { name = "pillow", specifier = ">=13.0.0" },
     { name = "pip", specifier = ">=26.1.2" },
