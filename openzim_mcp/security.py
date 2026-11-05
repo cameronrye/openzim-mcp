@@ -5,6 +5,7 @@ import os
 import re
 import threading
 from pathlib import Path
+from types import ModuleType
 from typing import List, Optional
 from urllib.parse import unquote
 
@@ -24,6 +25,22 @@ MAX_PATH_LENGTH = 4096
 # Placeholder for hidden/sanitized paths in error messages
 PATH_HIDDEN_PLACEHOLDER = "<path-hidden>"
 NO_PATH_PLACEHOLDER = "<no-path>"
+
+
+def _is_relative_input(path: str, flavour: ModuleType = os.path) -> bool:
+    r"""True when ``path``, already normalized, names nothing by itself.
+
+    A path that starts with a separator is rooted. On Windows ``\etc\passwd``
+    is ``C:\etc\passwd``, and ``\\server`` and ``\\.\C:`` name a network host
+    and a device. Python 3.13 narrowed ``ntpath.isabs`` to need a drive for the
+    single-separator form (gh-44626), which sent such paths down the
+    archive-name branch. pathlib's ``root`` is no substitute: it is empty for a
+    bare UNC host and for device paths. A leading separator, or ``isabs``,
+    reproduces the pre-3.13 rule exactly on every Python; on POSIX it is just
+    ``isabs``. ``flavour`` lets tests apply the Windows rule on any OS.
+    """
+    seps = (flavour.sep, flavour.altsep) if flavour.altsep else (flavour.sep,)
+    return not (path.startswith(seps) or flavour.isabs(path))
 
 
 class PathValidator:
@@ -154,14 +171,7 @@ class PathValidator:
         """
         try:
             normalized_path = self._normalize_path(requested_path)
-            # A rooted input names a host location by itself, so it is not a
-            # relative one: on Windows ``\etc\passwd`` means ``C:\etc\passwd``.
-            # Python 3.13 stopped calling that absolute (``ntpath.isabs`` now
-            # requires a drive), which sent such paths down the archive-name
-            # branch and reported a not-found instead of the security framing.
-            # ``root`` is non-empty for exactly the inputs ``isabs`` accepted on
-            # Windows before 3.13, and for exactly the absolute ones on POSIX.
-            relative_input = not Path(normalized_path).root
+            relative_input = _is_relative_input(normalized_path)
             resolved_path = Path(normalized_path).resolve()
             if relative_input:
                 matched = self._resolve_relative_archive(normalized_path)
