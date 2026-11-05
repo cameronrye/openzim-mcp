@@ -80,14 +80,15 @@ def _cheapest(calls: List[Callable[[], object]]) -> float:
     return best
 
 
-# Linear code collapses a whitespace run to one separator, so the run is
-# cheaper than CONTROL_WORDS. Scanning the raw run with a pattern that leads
-# with ``\s+`` costs O(n^2): at 4000 characters that measured 25x the control
-# end to end and 286x inside ``_chained_intent_guidance``. Both sides are
-# timed in the same process, so the bound holds on any machine. The absolute
-# ``< 1.0s`` budget it replaces failed twice on a macOS runner against a
-# tree that had passed there minutes earlier.
-RUN_VS_CONTROL_BOUND = 3.0
+# Linear code collapses a whitespace run to one separator, so the run costs
+# less than a control query of the same length made of single-spaced words.
+# Scanning the raw run with a pattern that leads with ``\s+`` costs O(n^2):
+# at 4000 characters that measured 25x the control end to end and 286x
+# inside ``_chained_intent_guidance``. Both sides are timed in the same
+# process, so the bound holds on any machine. The absolute ``< 1.0s``
+# budget it replaces failed twice on a macOS runner against a tree that had
+# passed there minutes earlier.
+_RUN_VS_CONTROL_BOUND = 3.0
 _WORDS = ("berlin", "paris", "tokyo")
 
 
@@ -129,7 +130,7 @@ class TestQ1PolitenessStripLinearOnWhitespaceRuns:
 
         run = _cheapest([ask("search for" + " " * 4000 + w) for w in _WORDS])
         control = _cheapest([ask("search for" + " x" * 2000 + " " + w) for w in _WORDS])
-        assert run < RUN_VS_CONTROL_BOUND * control, (
+        assert run < _RUN_VS_CONTROL_BOUND * control, (
             f"whitespace run took {run * 1e3:.1f}ms against "
             f"{control * 1e3:.1f}ms for the same length of words"
         )
@@ -168,7 +169,7 @@ class TestQ1ChainConnectorSplitLinearOnWhitespaceRuns:
         control = _cheapest(
             [guide("search for" + (ws + "x") * 2000 + ws + w) for w in _WORDS]
         )
-        assert run < RUN_VS_CONTROL_BOUND * control, (
+        assert run < _RUN_VS_CONTROL_BOUND * control, (
             f"whitespace run took {run * 1e3:.2f}ms against "
             f"{control * 1e3:.2f}ms for the same length of words"
         )
