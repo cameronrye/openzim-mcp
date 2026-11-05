@@ -57,10 +57,12 @@ jobs:
       # Resolves the interpreter the same way the Makefile targets below do,
       # so anything that swaps it fails here instead of passing on 3.12.
       - name: Verify the tests run on Python ${{ matrix.python-version }}
+        env:
+          WANT_PYTHON: ${{ matrix.python-version }}
         run: |
           uv run --locked python - <<'EOF'
-          import sys
-          want = "${{ matrix.python-version }}"
+          import os, sys
+          want = os.environ["WANT_PYTHON"]
           got = "%d.%d" % sys.version_info[:2]
           print(sys.version)
           assert got == want, f"tests would run on Python {got}, matrix says {want}"
@@ -172,10 +174,12 @@ jobs:
           uv sync --extra reranker --locked
 
       - name: Verify the tests run on Python ${{ matrix.python-version }}
+        env:
+          WANT_PYTHON: ${{ matrix.python-version }}
         run: |
           uv run --locked --extra reranker python - <<'EOF'
-          import sys
-          want = "${{ matrix.python-version }}"
+          import os, sys
+          want = os.environ["WANT_PYTHON"]
           got = "%d.%d" % sys.version_info[:2]
           print(sys.version)
           assert got == want, f"tests would run on Python {got}, matrix says {want}"
