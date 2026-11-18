@@ -34,10 +34,18 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
+      # uv takes the project interpreter from .python-version (3.12) on every
+      # command, so installing the matrix version alone is not enough: the
+      # 3.13 legs installed 3.13 and ran everything on 3.12. `uv sync --python`
+      # does not hold either, because the next bare `uv run` (every Makefile
+      # target) rebuilds the venv from .python-version. setup-uv's
+      # python-version exports UV_PYTHON to every later step and keys the
+      # cache on it; a job-level UV_PYTHON reaches the steps but not the key.
       - name: Install uv
         uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           version: "latest"
+          python-version: ${{ matrix.python-version }}
 
       - name: Set up Python ${{ matrix.python-version }}
         run: uv python install ${{ matrix.python-version }}
@@ -45,6 +53,22 @@ jobs:
       - name: Install dependencies
         run: |
           uv sync --locked
+
+      # Resolves the interpreter with a bare `uv run`, as the Makefile targets
+      # below do, so a change that drops the override fails here instead of
+      # passing on 3.12.
+      - name: Verify the tests run on Python ${{ matrix.python-version }}
+        env:
+          WANT_PYTHON: ${{ matrix.python-version }}
+        run: |
+          uv run --locked python - <<'EOF'
+          import os, sys
+          want = os.environ["WANT_PYTHON"]
+          got = "%d.%d" % sys.version_info[:2]
+          print(sys.version)
+          if got != want:
+              sys.exit(f"tests would run on Python {got}, matrix says {want}")
+          EOF
 
       - name: Run linting
         run: |
@@ -136,10 +160,12 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
+      # Same .python-version override as the test job above.
       - name: Install uv
         uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           version: "latest"
+          python-version: ${{ matrix.python-version }}
 
       - name: Set up Python ${{ matrix.python-version }}
         run: uv python install ${{ matrix.python-version }}
@@ -147,6 +173,19 @@ jobs:
       - name: Install dependencies with [reranker] extra
         run: |
           uv sync --extra reranker --locked
+
+      - name: Verify the tests run on Python ${{ matrix.python-version }}
+        env:
+          WANT_PYTHON: ${{ matrix.python-version }}
+        run: |
+          uv run --locked --extra reranker python - <<'EOF'
+          import os, sys
+          want = os.environ["WANT_PYTHON"]
+          got = "%d.%d" % sys.version_info[:2]
+          print(sys.version)
+          if got != want:
+              sys.exit(f"tests would run on Python {got}, matrix says {want}")
+          EOF
 
       - name: Pre-stage reranker test model (retry transient HF outages)
         run: |
