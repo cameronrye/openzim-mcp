@@ -12,6 +12,17 @@ Five defects, all reachable from the public ``zim_query`` tool:
   burned 2.1s of GIL-held CPU and returned an error envelope
   instead of Berlin results.
 
+  The chain-connector split had the same shape and outlived that fix.
+  ``zim_query`` hands the RAW query to ``_chained_intent_guidance``,
+  and every ``_CHAINED_INTENT_CONNECTORS`` pattern leads with ``\s+``
+  or ``\s*``, so the same query still spent 0.22s there on a fast
+  laptop and over 1s on a CI runner. The soft-connector scans have the
+  same shape, and they see whitespace that ``parse_intent`` never got to
+  collapse: ``_normalize_url_topic`` and ``_handle_tell_me_about`` turn
+  ``_`` and ``%20`` into spaces after it runs, so
+  ``tell me about <wiki URL>Berlin<3900 underscores>x`` cost 130ms on a
+  mock backend.
+
 * **Q2 — the politeness strip eats the only operand.**
   The alternation carries ordinary words (``tack``, ``cheers``,
   ``merci``), and nothing stopped the strip from consuming the
@@ -37,9 +48,10 @@ Five defects, all reachable from the public ``zim_query`` tool:
   files were used regardless, with no warning.
 """
 
+import itertools
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 from unittest.mock import MagicMock
 
 import pytest
@@ -60,6 +72,38 @@ def _handler(tmp_path: Path, **config_kwargs: Any) -> Tuple[Any, MagicMock]:
     mock.config = OpenZimMcpConfig(allowed_directories=[str(tmp_path)], **config_kwargs)
     mock.list_zim_files_data.return_value = [{"path": "/x.zim"}]
     return SimpleToolsHandler(mock), mock
+
+
+def _cheapest(calls: List[Callable[[], object]]) -> float:
+    """Wall time of the cheapest call: the least noisy estimate of a cost
+    on a shared runner."""
+    best = float("inf")
+    for call in calls:
+        start = time.perf_counter()
+        call()
+        best = min(best, time.perf_counter() - start)
+    return best
+
+
+_TOKENS = itertools.count()
+
+
+def _fresh_words(n: int = 3) -> List[str]:
+    """Words no earlier call in this module has used. Every timed input ends
+    in one, so a cache keyed on the query can never turn a timed call into a
+    hit and hide the cost it is there to measure."""
+    return [f"zq{next(_TOKENS)}" for _ in range(n)]
+
+
+# Linear code collapses a whitespace run to one separator, so the run costs
+# less than a control of the same length made of single-spaced words.
+# Scanning the raw run with a pattern that leads with ``\s+`` costs O(n^2):
+# at 4000 characters the chain-connector split measured about 25x the
+# control end to end (16x under coverage tracing) and 286x on its own. Both
+# sides are timed in the same process, so the bound holds on any machine.
+# The absolute ``< 1.0s`` budget it replaces failed twice on a macOS runner
+# against a tree that had passed there minutes earlier.
+_RUN_VS_CONTROL_BOUND = 3.0
 
 
 # ===========================================================================
@@ -86,16 +130,26 @@ class TestQ1PolitenessStripLinearOnWhitespaceRuns:
     ) -> None:
         """End to end: 4016 chars is under the 4096 front-door cap, so
         the handler must dispatch the search rather than blow its regex
-        budget and emit ``**Error Processing Query**``."""
+        budget and emit ``**Error Processing Query**``, and the run must
+        cost no more than the same length of ordinary words."""
         handler, mock = _handler(tmp_path)
         query = "search for" + " " * 4000 + "berlin"
-        start = time.perf_counter()
         out = handler.handle_zim_query(query, zim_file_path="/x.zim")
-        elapsed = time.perf_counter() - start
         assert "Error Processing Query" not in str(out)
         assert mock.search_zim_file.call_args is not None
         assert mock.search_zim_file.call_args[0][1] == "berlin"
-        assert elapsed < 1.0, f"handle_zim_query took {elapsed:.3f}s"
+
+        def ask(q: str) -> Callable[[], object]:
+            return lambda: handler.handle_zim_query(q, zim_file_path="/x.zim")
+
+        run = _cheapest([ask("search for" + " " * 4000 + w) for w in _fresh_words()])
+        control = _cheapest(
+            [ask("search for" + " x" * 2000 + " " + w) for w in _fresh_words()]
+        )
+        assert run < _RUN_VS_CONTROL_BOUND * control, (
+            f"whitespace run took {run * 1e3:.1f}ms against "
+            f"{control * 1e3:.1f}ms for the same length of words"
+        )
 
     @pytest.mark.parametrize(
         "raw, expected",
@@ -113,6 +167,157 @@ class TestQ1PolitenessStripLinearOnWhitespaceRuns:
         self, raw: str, expected: str
     ) -> None:
         assert IntentParser._strip_trailing_politeness(raw) == expected
+
+
+class TestQ1ChainConnectorSplitLinearOnWhitespaceRuns:
+    """``zim_query`` calls ``_chained_intent_guidance`` on the RAW query,
+    upstream of the collapse in ``parse_intent``. Every
+    ``_CHAINED_INTENT_CONNECTORS`` pattern leads with ``\\s+`` or ``\\s*``
+    and ends in a literal, so splitting a long whitespace run retries the
+    repeat from every position in it before the literal fails."""
+
+    @pytest.mark.parametrize("ws", [" ", "\t", "\n"], ids=["space", "tab", "newline"])
+    def test_whitespace_run_costs_no_more_than_words(self, ws: str) -> None:
+        def guide(q: str) -> Callable[[], object]:
+            return lambda: SimpleToolsHandler._chained_intent_guidance(q)
+
+        run = _cheapest([guide("search for" + ws * 4000 + w) for w in _fresh_words()])
+        control = _cheapest(
+            [guide("search for" + (ws + "x") * 2000 + ws + w) for w in _fresh_words()]
+        )
+        assert run < _RUN_VS_CONTROL_BOUND * control, (
+            f"whitespace run took {run * 1e3:.2f}ms against "
+            f"{control * 1e3:.2f}ms for the same length of words"
+        )
+
+    def test_chain_split_by_whitespace_runs_is_still_detected(self) -> None:
+        """Collapsing the runs must not cost detection, and the echoed
+        halves come back without the padding a caller would otherwise
+        copy into the follow-up query. One run is as long as the cost
+        tests' runs, so a skip keyed on input or run length cannot pass
+        both."""
+        query = (
+            "tell me about"
+            + " " * 1500
+            + "Berlin"
+            + " " * 4000
+            + "then"
+            + "\t" * 500
+            + "list"
+            + "\n" * 500
+            + "namespaces"
+        )
+        guidance = SimpleToolsHandler._chained_intent_guidance(query)
+        assert guidance is not None
+        assert "`tell me about Berlin`" in guidance
+        assert "`list namespaces`" in guidance
+
+    @pytest.mark.parametrize(
+        "query, halves",
+        [
+            ("DNA then RNA\tthen\tProtein", None),
+            (
+                "Organic" + " " * 80 + "Chemistry; Biology",
+                ("tell me about Organic Chemistry", "tell me about Biology"),
+            ),
+            (
+                "tell me about Photosynthesis and then about DNA\nReplication",
+                ("tell me about Photosynthesis", "tell me about DNA Replication"),
+            ),
+            ("Biology; Chemistry\nthen\nPhysics", None),
+            (
+                "tell me about Photosynthesis\nthen about the Calvin\ncycle",
+                ("tell me about Photosynthesis", "tell me about the Calvin cycle"),
+            ),
+        ],
+        ids=[
+            "tabbed-then-chain",
+            "padded-half",
+            "newline-in-right-half",
+            "newline-connector",
+            "newline-continuation",
+        ],
+    )
+    def test_padded_query_is_classified_like_its_single_spaced_form(
+        self, query: str, halves: Optional[Tuple[str, str]]
+    ) -> None:
+        """Collapsing first changes the verdict for some padded or tabbed
+        queries: the half checks count padding toward their 80-character
+        cap and match ``" then "`` with literal spaces. Each expectation is
+        what the query's single-spaced form gets on main."""
+        guidance = SimpleToolsHandler._chained_intent_guidance(query)
+        if halves is None:
+            assert guidance is None
+        else:
+            assert guidance is not None
+            assert f"**First op (left):** `{halves[0]}`" in guidance
+            assert f"**Second op (right):** `{halves[1]}`" in guidance
+
+
+class TestQ1SoftConnectorScansLinearOnWhitespaceRuns:
+    """``_split_multi_entity`` and ``_soft_connector_footer`` scan the
+    parsed topic with ``_SOFT_CHAIN_CONNECTOR_PATS``, which all lead with
+    ``\\s+`` or ``\\s*``. That topic is not always single-spaced:
+    ``_normalize_url_topic`` and ``_handle_tell_me_about`` turn ``_`` and
+    ``%20`` into spaces after ``parse_intent`` has collapsed whitespace."""
+
+    @pytest.mark.parametrize("ws", [" ", "\t"], ids=["space", "tab"])
+    def test_multi_entity_split_costs_no_more_than_words(self, ws: str) -> None:
+        def split(topic: str) -> Callable[[], object]:
+            return lambda: SimpleToolsHandler._split_multi_entity(topic)
+
+        run = _cheapest([split("berlin" + ws * 4000 + w) for w in _fresh_words()])
+        control = _cheapest(
+            [split("berlin" + (ws + "y") * 2000 + ws + w) for w in _fresh_words()]
+        )
+        assert run < _RUN_VS_CONTROL_BOUND * control, (
+            f"whitespace run took {run * 1e3:.2f}ms against "
+            f"{control * 1e3:.2f}ms for the same length of words"
+        )
+
+    @pytest.mark.parametrize("ws", [" ", "\t"], ids=["space", "tab"])
+    def test_soft_connector_footer_costs_no_more_than_words(
+        self, ws: str, tmp_path: Path
+    ) -> None:
+        handler, _ = _handler(tmp_path)
+
+        def footer(topic: str) -> Callable[[], object]:
+            return lambda: handler._soft_connector_footer(topic, "Berlin")
+
+        run = _cheapest([footer("berlin" + ws * 4000 + w) for w in _fresh_words()])
+        control = _cheapest(
+            [footer("berlin" + (ws + "y") * 2000 + ws + w) for w in _fresh_words()]
+        )
+        assert run < _RUN_VS_CONTROL_BOUND * control, (
+            f"whitespace run took {run * 1e3:.2f}ms against "
+            f"{control * 1e3:.2f}ms for the same length of words"
+        )
+
+    def test_url_topic_with_an_underscore_run_costs_no_more_than_words(
+        self, tmp_path: Path
+    ) -> None:
+        """End to end: the wiki URL's underscores become a 3900-character
+        space run in the topic, inside the 4096-character front-door cap.
+        The backend resolves an article, so the render reaches the soft
+        footer as well as the multi-entity split."""
+        handler, mock = _handler(tmp_path)
+        hit = {"results": [{"path": "A/Berlin", "title": "Berlin"}], "total": 1}
+        mock.search_zim_file_data.return_value = hit
+        mock.find_entry_by_title_data.return_value = hit
+        mock.get_zim_entry.return_value = "stub-body"
+        url = "tell me about https://en.wikipedia.org/wiki/Berlin"
+        out = handler.handle_zim_query(url + "_" * 3900 + "x", zim_file_path="/x.zim")
+        assert str(out).startswith("# Berlin"), str(out)[:200]
+
+        def ask(q: str) -> Callable[[], object]:
+            return lambda: handler.handle_zim_query(q, zim_file_path="/x.zim")
+
+        run = _cheapest([ask(url + "_" * 3900 + w) for w in _fresh_words()])
+        control = _cheapest([ask(url + "_y" * 1950 + "_" + w) for w in _fresh_words()])
+        assert run < _RUN_VS_CONTROL_BOUND * control, (
+            f"underscore run took {run * 1e3:.1f}ms against "
+            f"{control * 1e3:.1f}ms for the same length of words"
+        )
 
 
 # ===========================================================================

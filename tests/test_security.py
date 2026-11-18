@@ -1,12 +1,15 @@
 """Tests for security module."""
 
+import itertools
+import ntpath
+import posixpath
 from pathlib import Path
 
 import pytest
 
 from openzim_mcp.config import OpenZimMcpConfig
 from openzim_mcp.exceptions import OpenZimMcpSecurityError, OpenZimMcpValidationError
-from openzim_mcp.security import PathValidator, sanitize_input
+from openzim_mcp.security import PathValidator, _is_relative_input, sanitize_input
 from openzim_mcp.server import OpenZimMcpServer
 
 
@@ -471,3 +474,85 @@ def test_redact_does_not_match_relative_path_after_basename():
     out = redact_paths_in_message(text)
     # The mid-token "/A/Article" suffix must remain intact
     assert "test.zim/A/Article" in out, out
+
+
+# ---------------------------------------------------------------------------
+# Relative-input classification under both path flavours
+# ---------------------------------------------------------------------------
+#
+# ``validate_path`` reports a relative input that matches nothing as a
+# not-found, and keeps the access-denied framing for an input that names a
+# host location by itself. Python 3.13 narrowed ``ntpath.isabs`` (gh-44626), so
+# the classifier takes the path flavour as a parameter and these tests run the
+# Windows rule on every OS and Python, not only on a Windows 3.13 runner.
+
+
+def _isabs_before_313(s: str) -> bool:
+    """CPython 3.12's ``ntpath.isabs`` (str branch), verbatim: the rule the
+    Windows classification followed before 3.13 and must keep following."""
+    sep, altsep, colon_sep = "\\", "/", ":\\"
+    s = s[:3].replace(altsep, sep)
+    if s.startswith(sep) or s.startswith(colon_sep, 1):
+        return True
+    return False
+
+
+class TestRelativeInputClassification:
+    """Which inputs ``validate_path`` may treat as an archive name."""
+
+    @pytest.mark.parametrize(
+        "raw, relative",
+        [
+            # Rooted on the current drive: the form 3.13's isabs dropped.
+            ("/etc/passwd", False),
+            ("\\etc\\passwd", False),
+            ("\\", False),
+            # Drive and root.
+            ("C:\\zims\\a.zim", False),
+            ("C:/zims/a.zim", False),
+            # A UNC share, a bare UNC host, and the device namespace. pathlib
+            # gives the last two an empty root, but they name a host location.
+            ("\\\\server\\share\\a.zim", False),
+            ("\\\\server", False),
+            ("//server/", False),
+            ("\\\\", False),
+            ("\\\\.\\C:", False),
+            ("//./PhysicalDrive0", False),
+            # Relative. Drive-relative ``C:a.zim`` stays relative, as before.
+            ("a.zim", True),
+            ("sub\\a.zim", True),
+            ("sub/a.zim", True),
+            ("C:a.zim", True),
+        ],
+    )
+    def test_windows_rule(self, raw: str, relative: bool) -> None:
+        assert _is_relative_input(ntpath.normpath(raw), ntpath) is relative
+
+    @pytest.mark.parametrize(
+        "raw, relative",
+        [
+            ("/etc/passwd", False),
+            ("//server", False),
+            ("/", False),
+            ("a.zim", True),
+            ("sub/a.zim", True),
+        ],
+    )
+    def test_posix_rule(self, raw: str, relative: bool) -> None:
+        assert _is_relative_input(posixpath.normpath(raw), posixpath) is relative
+
+    def test_windows_rule_matches_pre_313_isabs_exhaustively(self) -> None:
+        """Every path of up to five characters drawn from the ones that
+        decide the rule, normalized the way ``validate_path`` sees it."""
+        mismatches = []
+        for length in range(1, 6):
+            for chars in itertools.product("\\/C:.s", repeat=length):
+                raw = "".join(chars)
+                if ".." in raw:
+                    continue  # ``_normalize_path`` rejects traversal first
+                normalized = ntpath.normpath(raw)
+                if _is_relative_input(normalized, ntpath) is _isabs_before_313(
+                    normalized
+                ):
+                    mismatches.append(normalized)
+        assert not mismatches, mismatches[:10]
