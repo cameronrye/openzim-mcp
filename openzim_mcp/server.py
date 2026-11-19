@@ -2,6 +2,7 @@
 
 import ipaddress
 import logging
+import os
 from typing import Any, Literal, Optional
 
 from mcp.types import Icon
@@ -18,7 +19,7 @@ from .error_messages import (
     get_error_config,
 )
 from .exceptions import OpenZimMcpConfigurationError
-from .instructions import instructions_for
+from .instructions import report_instructions, resolve_instructions
 from .mcp_envelope import EnvelopeAwareMCPServer
 from .rate_limiter import RateLimiter
 from .sdk_compat import install_ping_keepalive_shim
@@ -35,7 +36,11 @@ logger = logging.getLogger(__name__)
 
 # TTL for results derived purely from the startup registration tables. One hour
 # is a cache-lifetime choice, not a claim about the process: the tables cannot
-# change without a restart, and a restart gives clients a new connection.
+# change without a restart. A restart is visible to stdio clients (a new
+# process) and to stateful handshake-era HTTP clients (their session id stops
+# working), but not to sessionless ones — every 2026-07-28 HTTP client, and
+# handshake-era clients under OPENZIM_MCP_STATELESS_HTTP — which may keep using
+# a cached result, operator instructions included, for up to this long.
 _STATIC_LIST_TTL_MS = 60 * 60 * 1000
 
 # Identity advertised in ``serverInfo``. The docs site is the project's public
@@ -112,10 +117,13 @@ def _cache_hints(config: OpenZimMcpConfig) -> dict:
     again, so each value is a promise about how stale an answer may get.
 
     The list endpoints and ``server/discover`` describe the *registration*
-    tables, which are built once at startup from ``tool_mode`` and never change
-    while the process runs — nothing short of a restart can invalidate them, so
-    they get a long TTL. That is also what makes them worth caching: a stable
-    tool block is what earns a client's prompt-cache hits.
+    tables, which are built once at startup from ``tool_mode`` (and, for
+    discover's ``instructions``, from the operator's instructions setting) and
+    never change while the process runs — nothing short of a restart can
+    invalidate them, so they get a long TTL. That is also what makes them worth
+    caching: a stable tool block is what earns a client's prompt-cache hits. A
+    sessionless client sees no restart, though, so it may keep a result for the
+    full TTL afterwards (see ``_STATIC_LIST_TTL_MS``).
 
     ``resources/read`` is capped at the watcher's polling interval instead,
     because this hint is per *method* and that one method serves both a sealed
@@ -262,6 +270,16 @@ class OpenZimMcpServer:
         config.setup_logging()
         logger.info(f"Initializing OpenZIM MCP server v{__version__}")
 
+        # Resolved before anything else is built (#479): an
+        # OPENZIM_MCP_INSTRUCTIONS_PATH that is set but unusable has to stop
+        # startup before the cache loads its persistence file or an archive
+        # is touched, and it is the first thing an operator has to fix.
+        self.server_instructions = resolve_instructions(
+            config.tool_mode,
+            inline=config.instructions,
+            path=config.instructions_path,
+        )
+
         # Initialize components
         self.path_validator = PathValidator(config.allowed_directories)
         self.cache = OpenZimMcpCache(config.cache)
@@ -309,10 +327,11 @@ class OpenZimMcpServer:
         # SDK's ``allowed_origins`` because they encode the same trust
         # decision: an origin we let into CORS is one we let past the
         # rebinding check.
-        # ``instructions`` is advertised through ``server/discover`` (the
-        # stateless protocol's replacement for the initialize handshake), so
-        # cross-tool routing guidance lives there instead of being duplicated
-        # across the tool descriptions.
+        # ``instructions`` is advertised in ``initialize`` and through
+        # ``server/discover`` (the stateless protocol's replacement for that
+        # handshake), so the built-in cross-tool routing guidance lives there
+        # instead of being duplicated across the tool descriptions. An
+        # operator's replacement keeps it only where it uses ``{{default}}``.
         #
         # Transport security is no longer a constructor kwarg on the v2 SDK —
         # it is passed to the ASGI app builder at serve time. Resolve it here
@@ -354,7 +373,7 @@ class OpenZimMcpServer:
             ),
             website_url=PROJECT_WEBSITE_URL,
             icons=[Icon(src=PROJECT_ICON_URL, mime_type="image/svg+xml")],
-            instructions=instructions_for(config.tool_mode),
+            instructions=self.server_instructions.text,
             version=__version__,
             # ``False``, not ``None``: for ``None`` the SDK substitutes its own
             # bus and still registers ``subscriptions/listen``, and the modern
@@ -378,6 +397,15 @@ class OpenZimMcpServer:
 
             install_bounded_listen_handler(self.mcp, self.subscription_bus)
         self._register_tools()
+
+        # After registration, so tool names in an operator's text are checked
+        # against the tools this mode actually serves.
+        report_instructions(
+            self.server_instructions,
+            tool_mode=config.tool_mode,
+            registered_tools=self.mcp.registered_tool_names(),
+            environ=os.environ,
+        )
 
         logger.info(
             f"OpenZIM MCP server initialized successfully in {config.tool_mode} mode"

@@ -23,7 +23,23 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from ..server import OpenZimMcpServer
 
-__all__ = ["register_phase_f_tools"]
+__all__ = ["TOOL_NAMES", "register_phase_f_tools"]
+
+# Every tool the advanced surface registers, in registration order; simple
+# mode registers the first alone. ``instructions.py`` checks an operator's
+# replacement instructions against this list, which has to exist without a
+# server because simple mode cannot show it the other seven.
+# ``tests/test_server_instructions.py`` pins it to the live advanced registry.
+TOOL_NAMES: tuple[str, ...] = (
+    "zim_query",
+    "zim_search",
+    "zim_get",
+    "zim_get_section",
+    "zim_browse",
+    "zim_metadata",
+    "zim_links",
+    "zim_health",
+)
 
 
 def register_phase_f_tools(server: "OpenZimMcpServer") -> None:

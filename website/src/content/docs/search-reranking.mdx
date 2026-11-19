@@ -69,7 +69,7 @@ matrix; FastEmbed wheels may not be available there. The base install
 
 The server never downloads the model. `ml.reranker.allow_model_download`
 defaults to `false`, so the runtime loads the cross-encoder from the
-local cache only — the MCP `instructions` payload tells callers this
+local cache only — the built-in MCP `instructions` tell callers this
 server reads content from local archives, and an unannounced 1.1 GB
 fetch to huggingface.co on someone's first question contradicts that.
 
@@ -100,7 +100,7 @@ export OPENZIM_MCP_ML__RERANKER__ALLOW_MODEL_DOWNLOAD=true
 With that set, the first rerank-eligible query fetches the model from
 HuggingFace, bounded by `first_call_timeout_seconds` (default 15 s) —
 and the "content is read from local archives" statement in the server's
-instructions no longer tells the whole story for that deployment.
+built-in instructions no longer tells the whole story for that deployment.
 
 ## Verifying it's active
 

@@ -18,6 +18,22 @@ from openzim_mcp.content_processor import ContentProcessor
 from openzim_mcp.security import PathValidator
 
 
+@pytest.fixture(autouse=True)
+def _no_ambient_instructions_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep a developer's ``OPENZIM_MCP_INSTRUCTIONS*`` out of every test.
+
+    Every ``OpenZimMcpConfig()`` reads the environment, case-insensitively.
+    A variable exported while trying the feature would silently change the
+    instructions the byte-identical default pins compare against, and a
+    missing ``OPENZIM_MCP_INSTRUCTIONS_PATH`` would make every server
+    construction in the suite fail at startup. Misspelt variants go too:
+    the server warns about them, and the warning tests count warnings.
+    """
+    for key in list(os.environ):
+        if key.upper().startswith("OPENZIM_MCP_INSTRUCTION"):
+            monkeypatch.delenv(key)
+
+
 @pytest.fixture
 def temp_dir() -> Generator[Path, None, None]:
     """Create a temporary directory for testing."""
