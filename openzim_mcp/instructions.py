@@ -129,6 +129,10 @@ BOTH_INSTRUCTION_SOURCES_SET = (
     "one: the text itself, or the path to a UTF-8 file holding it."
 )
 
+# U+FEFF is dropped wherever it appears. As a byte-order mark it is not text
+# (Notepad's UTF-8 starts with one), and as a zero-width no-break space it was
+# deprecated long ago in favour of U+2060, so nothing an operator means is
+# lost. Mid-text it comes from ``cat a.md b.md`` of two such files.
 _BOM = "\ufeff"
 _ACCEPTED_VARIABLES = frozenset({INSTRUCTIONS_ENV, INSTRUCTIONS_PATH_ENV})
 
@@ -143,27 +147,51 @@ _NEAR_MISS_TOKEN = re.compile(
     r"\$?(?<!\{)\{++\s*+(?:\.\s*+)?defaults?\s*+\}++", re.IGNORECASE
 )
 
-# A run of the characters a tool name, a path or a file name is made of. The
-# runs are found in one pass, since nothing follows the class to backtrack
-# into, and :func:`_tool_references` sorts each one out in Python. (A pattern
-# that let a match start after every ``__`` inside a run was quadratic on
-# ``zim__zim__…``.)
-_WORD_RUN = re.compile(r"[\w./\\-]+")
+# The escapes the docs teach for keeping the token away from a template
+# engine, when the engine never ran: Helm's ``{{ "{{default}}" }}`` put in a
+# values file rather than a chart template, or Jinja's ``{% raw %}`` in a file
+# copied as it is. The token inside still expands, so clients get the
+# built-in text wrapped in template syntax.
+_UNRENDERED_ESCAPE = re.compile(
+    r"""\{\{-?[ \t]*(["'`])\{\{default\}\}\1[ \t]*-?\}\}"""
+    r"|\{%-?[ \t]*raw[ \t]*-?%\}[ \t]*\{\{default\}\}"
+    r"[ \t]*\{%-?[ \t]*endraw[ \t]*-?%\}"
+)
+
+# A run of the characters a tool name, a path or a file name is made of:
+# ASCII letters, digits and ``_``, Latin letters with accents (so ``sección``
+# stays one word), and ``. / \ -``. A letter of any other script ends a run:
+# Chinese and Japanese put no space around a Latin word, and Korean attaches
+# particles to it (``zim_search를``). The runs are found in one pass, since
+# nothing follows the class to backtrack into, and :func:`_tool_references`
+# sorts each one out in Python. (A pattern that let a match start after
+# every ``__`` inside a run was quadratic on ``zim__zim__…``.)
+_WORD_RUN = re.compile(
+    r"[0-9A-Za-z_"
+    r"\u00c0-\u00d6\u00d8-\u00f6\u00f8-\u024f\u0300-\u036f\u1e00-\u1eff"
+    r"./\\-]+"
+)
 _TOOL_NAME_SHAPE = re.compile(r"zim_[a-z0-9_]+")
 _TOOLS = frozenset(TOOL_NAMES)
 
-# Calibrated on 30-odd realistic misspellings and non-tool names. Every typo
-# tried scores at least 0.889 against its tool (zim_qeury, zim_serach,
-# zim_get_secton, zim_meta_data, ...). zim_data, zim_meta and zim_queries
-# score exactly 0.8 and are a volume name, an abbreviation and a plural, not
-# typos; no parameter, resource or path name the server or its docs use
-# reaches 0.85.
+# Calibrated on realistic misspellings and non-tool names. One letter off in
+# zim_get, the shortest tool, scores 6/7 = 0.857 (zim_gte, zim_got), and every
+# other typo tried scores more (zim_qry 0.875, zim_qeury 0.889, zim_serach
+# 0.9). Below the cutoff sit zim_section and zim_get_sec (0.846), zim_list
+# (0.824), and zim_data, zim_meta and zim_queries (0.8) — a volume name, an
+# abbreviation and a plural — and no parameter, resource or path name the
+# server or its docs use reaches it.
 _TYPO_CUTOFF = 0.85
 _MAX_TOOL_NAME = 64
 
 # How a path starts: the root, a home directory, ``./`` or ``../``, a drive,
-# or a UNC share.
-_PATH_START = re.compile(r"/|~[^\s/\\]*[/\\]|\.{1,2}[/\\]|[A-Za-z]:[/\\]|\\\\")
+# a UNC share, or a variable that a JSON ``env`` block, systemd or Kubernetes
+# passed through unexpanded (``$HOME/``, ``${HOME}/``, ``$(HOME)/``,
+# ``%USERPROFILE%\``). Anchored, so even a search tries one position.
+_PATH_START = re.compile(
+    r"\A(?:/|~[^\s/\\]*[/\\]|\.{1,2}[/\\]|[A-Za-z]:[/\\]|\\\\"
+    r"|\$\{?[A-Za-z_]\w*\}?[/\\]|\$\([A-Za-z_]\w*\)[/\\]|%[A-Za-z_]\w*%[/\\])"
+)
 _TEXT_FILE_SUFFIXES = (".md", ".markdown", ".txt")
 
 
@@ -191,8 +219,7 @@ def is_blank(value: Any) -> bool:
     ``${VAR}``, a Helm value, a host's JSON ``env`` block) render an unset
     variable as ``""``, and the path field would otherwise become
     ``Path(".")`` — a directory, so a startup error. A BOM counts wherever it
-    sits: re-encoding a file that already had one doubles it, and the second
-    is not whitespace to ``str.strip``.
+    sits, as everywhere else (see :data:`_BOM`); ``str.strip`` would keep it.
     """
     return value is None or (
         isinstance(value, str) and not value.replace(_BOM, "").strip()
@@ -222,6 +249,10 @@ def instructions_path_from(value: Any) -> Any:
         # main()'s generic "Server startup error" arm without the variable.
         raise OpenZimMcpConfigurationError(
             f"{INSTRUCTIONS_PATH_ENV}={str(value)!r} cannot be expanded: {exc}"
+        ) from exc
+    except ValueError as exc:  # a NUL in a ~user name, passed in from code
+        raise OpenZimMcpConfigurationError(
+            f"{INSTRUCTIONS_PATH_ENV}={str(value)!r} is not a usable path: {exc}."
         ) from exc
 
 
@@ -315,9 +346,9 @@ def _inline_text(text: str) -> str:
     ``os.environ`` decodes an undecodable byte (a Latin-1 file pasted in with
     ``$(cat …)``) to a lone surrogate, which pydantic accepts and the SDK
     cannot serialise: the stdio writer crashed on the first ``initialize``.
-    A BOM carried in from such a file is dropped.
+    BOMs carried in from such a file are dropped (see :data:`_BOM`), after
+    the check, so a position counts every character the value holds.
     """
-    text = text.lstrip(_BOM)
     try:
         text.encode("utf-8")
     except UnicodeEncodeError as exc:
@@ -332,7 +363,7 @@ def _inline_text(text: str) -> str:
             f"character {exc.start + 1} (line {line}). Set it from UTF-8 text, "
             f"or put the text in a UTF-8 file and set {INSTRUCTIONS_PATH_ENV}."
         ) from exc
-    return _normalise_newlines(text)
+    return _normalise_newlines(text.replace(_BOM, ""))
 
 
 def _read_instructions_file(path: Path) -> str:
@@ -408,18 +439,17 @@ def _read_instructions_file(path: Path) -> str:
             f"{label} contains a NUL byte at offset {nul}, so it is not a "
             "UTF-8 text file (is it UTF-16 without a byte-order mark?)."
         )
-    body = data.removeprefix(codecs.BOM_UTF8)  # Notepad's UTF-8 is fine
     try:
-        text = body.decode("utf-8")
+        # A UTF-8 BOM decodes to U+FEFF, dropped with any others just below.
+        text = data.decode("utf-8")
     except UnicodeDecodeError as exc:
-        offset = exc.start + len(data) - len(body)
-        line = data.count(b"\n", 0, offset) + 1
+        line = data.count(b"\n", 0, exc.start) + 1
         raise OpenZimMcpConfigurationError(
-            f"{label} is not valid UTF-8: byte 0x{body[exc.start]:02x} at "
-            f"offset {offset} (line {line}); save it as UTF-8."
+            f"{label} is not valid UTF-8: byte 0x{data[exc.start]:02x} at "
+            f"offset {exc.start} (line {line}); save it as UTF-8."
         ) from exc
-    text = _normalise_newlines(text.lstrip(_BOM))
-    if not text.replace(_BOM, "").strip():
+    text = _normalise_newlines(text.replace(_BOM, ""))
+    if not text.strip():
         raise OpenZimMcpConfigurationError(
             f"{label} is empty (or holds only whitespace)."
         )
@@ -498,12 +528,32 @@ def near_miss_tokens(text: str) -> List[Tuple[str, int]]:
     clients as written (or, for ``{{{default}}}``, expand with stray braces
     around them).
     """
+    return _distinct_matches(_NEAR_MISS_TOKEN, text, skip=DEFAULT_TOKEN)
+
+
+def unrendered_escapes(text: str) -> List[Tuple[str, int]]:
+    """Each distinct template escape of the token in ``text``, with its line.
+
+    See :data:`_UNRENDERED_ESCAPE`: the token inside expands, and the escape
+    around it is sent to clients as written.
+    """
+    return _distinct_matches(_UNRENDERED_ESCAPE, text)
+
+
+def _distinct_matches(
+    pattern: "re.Pattern[str]", text: str, skip: Optional[str] = None
+) -> List[Tuple[str, int]]:
+    """Each distinct match of ``pattern`` but ``skip``, with the line it is on.
+
+    The line count runs on from one match to the next, so the whole scan
+    stays one pass over the text.
+    """
     found: List[Tuple[str, int]] = []
     seen = set()
     line, counted = 1, 0
-    for match in _NEAR_MISS_TOKEN.finditer(text):
+    for match in pattern.finditer(text):
         spelling = match.group()
-        if spelling == DEFAULT_TOKEN or spelling in seen:
+        if spelling == skip or spelling in seen:
             continue
         seen.add(spelling)
         line += text.count("\n", counted, match.start())
@@ -516,17 +566,19 @@ def _tool_references(text: str) -> Iterator[str]:
     """Each ``zim_*`` word in ``text`` that reads as a tool reference.
 
     Markdown emphasis around a name is not part of it (``__zim_search__``,
-    ``_zim_query_``), nor is a full stop after it, and a client-qualified
-    name such as ``mcp__openzim-mcp__zim_search`` counts by its last part.
-    Not references: the tail of a longer identifier (``openzim_mcp``,
-    ``my_zim_archive``), a dotted or file name (``tools.zim_search``,
-    ``zim_links.md``), a hyphenated or camel-case word (``zim_data-2024``,
-    ``zim_searchAPI``), and a path (``/srv/zim_data``, ``zim_data\\x.zim``) —
-    except that tool names joined by ``/`` and nothing else are alternatives
+    ``_zim_query_``), nor are full stops after it, even inside the closing
+    marker (``_Then call zim_get._``, which is how Prettier writes italics),
+    and a client-qualified name such as ``mcp__openzim-mcp__zim_search``
+    counts by its last part. Not references: the tail of a longer identifier
+    (``openzim_mcp``, ``my_zim_archive``, ``café_zim_search``), a dotted or
+    file name (``tools.zim_search``, ``.zim_search``, ``zim_links.md``), a
+    hyphenated or camel-case word (``zim_data-2024``, ``zim_searchAPI``), and
+    a path (``/srv/zim_data``, ``zim_data\\x.zim``) — except that tool names
+    joined by ``/`` and nothing else are alternatives
     (``zim_get/zim_get_section``).
     """
     for match in _WORD_RUN.finditer(text):
-        run = match.group().rstrip(".")
+        run = match.group().lstrip("_").rstrip("._")
         if "zim_" not in run:
             continue
         if "/" in run or "\\" in run:
@@ -534,10 +586,9 @@ def _tool_references(text: str) -> Iterator[str]:
             if len(parts) > 1 and all(part in _TOOLS for part in parts):
                 yield from parts
             continue
-        word = run.strip("_")
-        last = word.rsplit("__", 1)[-1]
+        last = run.rsplit("__", 1)[-1]
         # ``zim__search`` is a doubled underscore, not a qualified ``search``.
-        name = last if last.startswith("zim_") else word
+        name = last if last.startswith("zim_") else run
         if _TOOL_NAME_SHAPE.fullmatch(name):
             yield name
 
@@ -595,20 +646,21 @@ def _names_a_file(text: str) -> Optional[str]:
 
     The likeliest mix-up between the two variables: a path set where the text
     belongs is served to every client as the instructions. One line counts
-    when it names a file that exists, or when it is shaped like a path —
-    starting at the root, a home directory, ``./``, a drive or a share, with
-    no spaces or with a text-file extension — since the mount behind it may
-    be missing too. One pair of surrounding quotes is ignored: an
-    ``--env-file`` line keeps them.
+    when it names a file that exists; when it is one word with a text-file
+    extension; or when it starts like a path (:data:`_PATH_START`) and has no
+    spaces or has such an extension, since the mount behind it may be missing
+    too. One pair of matching quotes around it is ignored: an ``--env-file``
+    line keeps them.
     """
     candidate = text.strip()
     if len(candidate) > 1 and candidate[0] == candidate[-1] and candidate[0] in "\"'":
         candidate = candidate[1:-1].strip()
     if not candidate or "\n" in candidate:
         return None
-    if _PATH_START.match(candidate) and (
-        not any(char.isspace() for char in candidate)
-        or candidate.lower().endswith(_TEXT_FILE_SUFFIXES)
+    spaced = any(char.isspace() for char in candidate)
+    suffixed = candidate.lower().endswith(_TEXT_FILE_SUFFIXES)
+    if (suffixed and not spaced) or (
+        _PATH_START.match(candidate) and (suffixed or not spaced)
     ):
         return candidate
     try:
@@ -638,13 +690,16 @@ def report_instructions(
         return
     _warn_about_tool_names(custom, tool_mode, registered_tools)
     _warn_about_near_misses(custom)
+    _warn_about_unrendered_escapes(custom)
     if resolved.source == INSTRUCTIONS_ENV:
         _warn_about_an_inline_path(custom)
 
 
 def _printable(name: str) -> str:
-    """An environment name as logged: ``repr`` it when it would break the line."""
-    return name if name.isprintable() else repr(name)
+    """An environment name as logged: ``repr`` it when it would break the line
+    or pass for another name. cmd.exe's ``set NAME = value`` keeps the space,
+    and ``OPENZIM_MCP_INSTRUCTIONS `` would read as the real variable."""
+    return name if name.isprintable() and " " not in name else repr(name)
 
 
 def _warn_about_misspelt_variables(environ: Mapping[str, str]) -> None:
@@ -713,6 +768,18 @@ def _warn_about_near_misses(custom: str) -> None:
             "Server instructions contain %s: the %s inside expands, but the "
             "characters around it are sent to clients as written.",
             _spellings(padded),
+            DEFAULT_TOKEN,
+        )
+
+
+def _warn_about_unrendered_escapes(custom: str) -> None:
+    escapes = unrendered_escapes(custom)
+    if escapes:
+        logger.warning(
+            "Server instructions contain %s: a %s inside a template escape that "
+            "was never rendered still expands, but the escape around it is sent "
+            "to clients as written.",
+            _spellings(escapes),
             DEFAULT_TOKEN,
         )
 

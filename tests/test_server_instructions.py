@@ -60,6 +60,7 @@ from openzim_mcp.instructions import (
     report_instructions,
     resolve_instructions,
     tool_name_findings,
+    unrendered_escapes,
 )
 from openzim_mcp.server import OpenZimMcpServer
 from openzim_mcp.tools import TOOL_NAMES
@@ -175,7 +176,18 @@ class TestUnsetKeepsTheBuiltInText:
         )
 
     @pytest.mark.parametrize(
-        "value", ["", "   ", "\n", "\t\r\n", "\ufeff", "\ufeff\ufeff", " \ufeff "]
+        "value",
+        [
+            "",
+            "   ",
+            "\n",
+            "\t\r\n",
+            "\xa0",
+            "\x0c",
+            "\ufeff",
+            "\ufeff\ufeff",
+            " \ufeff ",
+        ],
     )
     @pytest.mark.parametrize("variable", [INSTRUCTIONS_ENV, INSTRUCTIONS_PATH_ENV])
     def test_a_blank_value_counts_as_unset(
@@ -283,9 +295,10 @@ class TestTheVariables:
     def test_surrounding_whitespace_in_the_path_is_ignored(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A YAML ``|`` block leaves a trailing newline on the value."""
+        """A YAML ``|`` block leaves a trailing newline on the value, and a
+        file edited on Windows a CR."""
         path = _write(tmp_path / "instructions.md", b"Padded path.\n")
-        monkeypatch.setenv(INSTRUCTIONS_PATH_ENV, f"  {path}\n")
+        monkeypatch.setenv(INSTRUCTIONS_PATH_ENV, f"\t {path}\r\n")
         assert _config(tmp_path).instructions_path == path
         assert _server(tmp_path).mcp.instructions == "Padded path.\n"
 
@@ -382,7 +395,7 @@ class TestReplaceAndExpand:
             resolve_instructions("simple", inline="One.\r\nTwo.").text == "One.\nTwo.\n"
         )
 
-    @pytest.mark.parametrize("marks", [1, 2], ids=["one", "doubled"])
+    @pytest.mark.parametrize("marks", [1, 2, 3], ids=["one", "doubled", "tripled"])
     def test_a_leading_byte_order_mark_is_dropped(
         self, tmp_path: Path, marks: int
     ) -> None:
@@ -393,8 +406,20 @@ class TestReplaceAndExpand:
         inline = "\ufeff" * marks + "Notes."
         assert resolve_instructions("simple", inline=inline).text == "Notes.\n"
 
+    def test_a_byte_order_mark_anywhere_is_dropped(self, tmp_path: Path) -> None:
+        """``cat a.md b.md`` of two Notepad files puts one mid-text, and one
+        behind leading whitespace would otherwise start what clients get."""
+        two = _write(
+            tmp_path / "two.md", b"\xef\xbb\xbfA notes.\n\xef\xbb\xbfB notes.\n"
+        )
+        assert resolve_instructions("simple", path=two).text == "A notes.\nB notes.\n"
+        hidden = _write(tmp_path / "hidden.md", b"\xef\xbb\xbf \xef\xbb\xbfHello\n")
+        assert resolve_instructions("simple", path=hidden).text == "Hello\n"
+        for inline in ("A\ufeffB", " \ufeffAB", "\n\ufeffAB"):
+            assert resolve_instructions("simple", inline=inline).text == "AB\n"
+
     def test_the_resolver_treats_blank_inline_text_as_unset(self) -> None:
-        for blank in ("", "  \n", "\ufeff", "\ufeff\ufeff", " \ufeff"):
+        for blank in ("", "  \n", "\xa0", "\ufeff", "\ufeff\ufeff", " \ufeff"):
             resolved = resolve_instructions("advanced", inline=blank)
             assert resolved.text == ADVANCED_INSTRUCTIONS
             assert resolved.source is None
@@ -440,6 +465,18 @@ class TestUnusableFiles:
         assert "does not exist" in message
         assert repr(str(tmp_path / "nope.md")) in message
 
+    def test_a_relative_path_keeps_its_dot_dot(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Collapsing ``..`` by hand, as ``os.path.abspath`` does, names a
+        different file from the one opened when the directory before it is a
+        symlink, so the message shows the path as the system will walk it."""
+        sub = tmp_path / "sub"
+        sub.mkdir()
+        monkeypatch.chdir(sub)
+        message = _file_error(Path("../nope.md"))
+        assert repr(str(sub / ".." / "nope.md")) in message
+
     @pytest.mark.skipif(
         sys.platform == "win32", reason="Windows cannot remove a working directory"
     )
@@ -468,28 +505,32 @@ class TestUnusableFiles:
         has to come first or startup hangs.
 
         A regression would hang this test rather than fail it, and with no
-        per-test timeout CI would only cancel the job. So a writer opens the
-        FIFO after a few seconds: that frees a reader stuck in ``open()``,
-        and records that one was stuck.
+        per-test timeout CI would only cancel the job. So a helper keeps
+        opening the FIFO for writing until the resolve returns: each open
+        frees a reader stuck in ``open()``, however many times the code
+        opens the path, and records that one was stuck.
         """
         fifo = tmp_path / "instructions.fifo"
         os.mkfifo(fifo)
         released: List[bool] = []
+        done = threading.Event()
 
-        def _free_a_stuck_reader() -> None:
-            try:
-                fd = os.open(fifo, os.O_WRONLY | os.O_NONBLOCK)
-            except OSError:  # ENXIO: nobody is reading, as it should be
-                return
-            released.append(True)
-            os.close(fd)
+        def _keep_freeing_stuck_readers() -> None:
+            while not done.wait(0.5):
+                try:
+                    fd = os.open(fifo, os.O_WRONLY | os.O_NONBLOCK)
+                except OSError:  # ENXIO: nobody is reading, as it should be
+                    continue
+                released.append(True)
+                os.close(fd)
 
-        timer = threading.Timer(5.0, _free_a_stuck_reader)
-        timer.start()
+        helper = threading.Thread(target=_keep_freeing_stuck_readers, daemon=True)
+        helper.start()
         try:
             message = _file_error(fifo)
         finally:
-            timer.cancel()
+            done.set()
+            helper.join()
         assert not released, "resolving blocked in open() until a writer came"
         assert message.endswith(
             "is not a regular file (it is a FIFO, socket or device)."
@@ -524,6 +565,17 @@ class TestUnusableFiles:
         raises ValueError for it, which no OSError arm catches."""
         message = _file_error(Path("instr\x00uctions.md"))
         assert " is not a usable path: " in message
+
+    def test_a_nul_in_a_user_name_set_in_code(self, tmp_path: Path) -> None:
+        """POSIX looks ``~ro<NUL>ot`` up as a user and raises ValueError from
+        there, before ``os.stat``; Windows expands it and ``os.stat`` raises.
+        Either way it is a configuration error, also through the config."""
+        with pytest.raises(OpenZimMcpConfigurationError) as excinfo:
+            resolve_instructions("simple", path="~ro\x00ot/x.md")
+        assert str(excinfo.value).startswith(f"{INSTRUCTIONS_PATH_ENV}=")
+        assert " is not a usable path: " in str(excinfo.value)
+        with pytest.raises(OpenZimMcpConfigurationError, match="not a usable path"):
+            OpenZimMcpServer(_config(tmp_path, instructions_path="~ro\x00ot/x.md"))
 
     def test_an_unreadable_file(self, tmp_path: Path) -> None:
         path = _write(tmp_path / "instructions.md", b"Secret.\n")
@@ -562,6 +614,8 @@ class TestUnusableFiles:
         [
             b"",
             b"   \n\t\r\n",
+            b"\xc2\xa0\n",  # a no-break space
+            b"\x0c\n",  # a form feed
             b"\xef\xbb\xbf",
             b"\xef\xbb\xbf \n",
             b"\xef\xbb\xbf\xef\xbb\xbf",
@@ -783,15 +837,19 @@ class TestTheSizeCap:
 
 
 class TestInlineEncoding:
-    def test_an_undecodable_byte_is_a_named_startup_error(self) -> None:
-        """``os.environ`` decodes a Latin-1 byte to a lone surrogate. Left in,
-        it crashed the stdio writer on the first ``initialize``."""
+    @pytest.mark.parametrize("byte", [0x80, 0xE9, 0xFF])
+    def test_an_undecodable_byte_is_a_named_startup_error(self, byte: int) -> None:
+        """``os.environ`` decodes a byte that is not UTF-8 (cp1252's euro sign,
+        Latin-1's e-acute or y-diaeresis) to a lone surrogate between U+DC80 and
+        U+DCFF. Left in, it crashed the stdio writer on the first
+        ``initialize``."""
+        stand_in = chr(0xDC00 + byte)
         with pytest.raises(OpenZimMcpConfigurationError) as excinfo:
-            resolve_instructions("simple", inline="Archives: caf\udce9 recipes")
+            resolve_instructions("simple", inline=f"Archives: caf{stand_in} recipes")
         assert str(excinfo.value) == (
             f"{INSTRUCTIONS_ENV} is not valid UTF-8: it holds the undecodable "
-            "byte 0xe9 at character 14 (line 1). Set it from UTF-8 text, or put "
-            f"the text in a UTF-8 file and set {INSTRUCTIONS_PATH_ENV}."
+            f"byte 0x{byte:02x} at character 14 (line 1). Set it from UTF-8 text, "
+            f"or put the text in a UTF-8 file and set {INSTRUCTIONS_PATH_ENV}."
         )
 
     def test_the_position_counts_lines(self) -> None:
@@ -1067,14 +1125,32 @@ class TestToolNameWarnings:
         assert unregistered == []
         assert typos == [("zim_serach", "zim_search", False)]
 
-    def test_the_typo_cutoff_sits_between_typos_and_words(self) -> None:
-        """zim_qeury, a transposition in the one simple-mode tool, scores
-        0.889; zim_data, a volume name, scores 0.8. The cutoff lies between."""
-        assert tool_name_findings("Use zim_qeury.", ["zim_query"]) == (
-            [],
-            [("zim_qeury", "zim_query", True)],
-        )
-        assert tool_name_findings("Mount the zim_data volume.", ["zim_query"]) == (
+    @pytest.mark.parametrize(
+        ("typo", "tool"),
+        [
+            ("zim_gte", "zim_get"),  # 0.857: one letter off in the shortest tool
+            ("zim_qry", "zim_query"),  # 0.875
+            ("zim_qeury", "zim_query"),  # 0.889: a transposition
+            ("zim_query2", "zim_query"),  # digits are part of the name
+            ("zim_get_sections", "zim_get_section"),  # longer than any tool
+        ],
+    )
+    def test_typos_close_to_a_tool_get_a_suggestion(self, typo: str, tool: str) -> None:
+        unregistered, typos = tool_name_findings(f"Use {typo}.", ["zim_query"])
+        assert (unregistered, typos) == ([], [(typo, tool, tool == "zim_query")])
+
+    @pytest.mark.parametrize(
+        "word",
+        [
+            "zim_section",  # 0.846 against zim_get_section
+            "zim_list",  # 0.824 against zim_links
+            "zim_data",  # 0.8: a volume name
+        ],
+    )
+    def test_words_further_off_are_left_alone(self, word: str) -> None:
+        """Where the 0.85 cutoff sits: below the closest typo (0.857) and
+        above the closest words that are not one."""
+        assert tool_name_findings(f"Mount the {word} volume.", ["zim_query"]) == (
             [],
             [],
         )
@@ -1101,6 +1177,12 @@ class TestToolNameWarnings:
             "The zim_searchAPI wrapper.",
             "zim_search\\wiki.zim holds it.",
             "See https://example.com/zim_search for more.",
+            "The .zim_search file is hidden.",  # only trailing dots go
+            "Logs go to /var/log/mcp__zim_search",  # a path, '__' tail or not
+            "Logs go to C:\\logs\\mcp__zim_search",
+            # A Latin letter against a name makes it part of a longer word.
+            "La table zim_get_sección.",
+            "Le café_zim_search est fermé.",
         ],
     )
     def test_names_that_are_not_tools_are_left_alone(self, text: str) -> None:
@@ -1113,6 +1195,10 @@ class TestToolNameWarnings:
             ("Use _zim_search_ here.", ["zim_search"]),
             ("Use **zim_search** and `zim_get`.", ["zim_search", "zim_get"]),
             ("End on zim_search.", ["zim_search"]),
+            ("Use zim_search... then zim_get.", ["zim_search", "zim_get"]),
+            # Prettier writes italics with the full stop inside the marker.
+            ("_Then call zim_get._", ["zim_get"]),
+            ("__Never call zim_health.__", ["zim_health"]),
             ("_Always start with zim_query_, the one tool here.", []),
         ],
     )
@@ -1122,6 +1208,33 @@ class TestToolNameWarnings:
         """The docs keep the text in a Markdown file; emphasis around a correct
         name must not turn it into a "did you mean" about itself."""
         assert tool_name_findings(text, ["zim_query"]) == (named, [])
+
+    def test_a_typo_inside_emphasis_is_still_a_typo(self) -> None:
+        assert tool_name_findings("__Then try zim_serach.__", ["zim_query"]) == (
+            [],
+            [("zim_serach", "zim_search", False)],
+        )
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "请优先使用zim_search检索词条，再用zim_get读取。",
+            "まずzim_searchで検索し、zim_getで記事を読みます。",
+            "먼저 zim_search를 사용하고, 그다음 zim_get으로 읽으세요.",
+        ],
+        ids=["chinese", "japanese", "korean"],
+    )
+    def test_names_in_text_without_spaces_around_them(self, text: str) -> None:
+        """Chinese and Japanese put no space around a Latin word, and Korean
+        attaches particles to it; their letters must not join the name."""
+        assert tool_name_findings(text, ["zim_query"]) == (
+            ["zim_search", "zim_get"],
+            [],
+        )
+        assert tool_name_findings("zim_serach를 사용하세요.", ["zim_query"]) == (
+            [],
+            [("zim_serach", "zim_search", False)],
+        )
 
     @pytest.mark.parametrize(
         "text",
@@ -1134,10 +1247,19 @@ class TestToolNameWarnings:
     def test_client_qualified_names_count(self, text: str) -> None:
         assert tool_name_findings(text, ["zim_query"]) == (["zim_search"], [])
 
-    def test_names_joined_by_a_slash_are_alternatives(self) -> None:
-        assert tool_name_findings(
-            "Use zim_get/zim_get_section for articles.", ["zim_query"]
-        ) == (["zim_get", "zim_get_section"], [])
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "Use zim_get/zim_get_section for articles.",
+            "Use _zim_get/zim_get_section_ for articles.",
+            "Use __zim_get/zim_get_section__.",
+        ],
+    )
+    def test_names_joined_by_a_slash_are_alternatives(self, text: str) -> None:
+        assert tool_name_findings(text, ["zim_query"]) == (
+            ["zim_get", "zim_get_section"],
+            [],
+        )
 
     def test_a_doubled_underscore_is_a_typo_not_a_qualifier(self) -> None:
         assert tool_name_findings("Try zim__search.", ["zim_query"]) == (
@@ -1172,6 +1294,7 @@ class TestToolNameWarnings:
 
 def _scan(text: str) -> None:
     near_miss_tokens(text)
+    unrendered_escapes(text)
     tool_name_findings(text, ["zim_query"])
 
 
@@ -1185,9 +1308,13 @@ def _cheapest(call: Callable[[], object], repeats: int = 7) -> float:
     return best
 
 
-# Each has been quadratic under some version of the patterns: a brace run
-# under a near-miss pattern without its lookbehind, and the ``__``-joined runs
-# under a tool-name pattern that let a match start after every ``__``.
+# Each of the first seven is quadratic under some form of the patterns: a
+# brace run, and braces before "default", under a near-miss pattern without
+# its lookbehind; "{{" and spaces under the natural greedy form of that
+# pattern (\s*\.?\s* in the middle); a zim_ run under a tool pattern that can
+# start a match inside a word; and the "__"-joined runs under one that let a
+# match start after every "__". The escape openers have no such history and
+# keep a broadening of that pattern honest.
 _SCAN_SHAPES: Dict[str, Callable[[int], str]] = {
     "brace-run": lambda n: "{" * n,
     "brace-then-spaces": lambda n: "{{" + " " * n,
@@ -1196,6 +1323,8 @@ _SCAN_SHAPES: Dict[str, Callable[[int], str]] = {
     "qualified-run-then-slash": lambda n: "__zim_" * (n // 6) + "/",
     "underscored-run-then-capital": lambda n: "_zim_" * (n // 5) + "X",
     "doubled-run-then-dot": lambda n: "zim__" * (n // 5) + ".x",
+    "helm-escape-openers": lambda n: '{{ "' * (n // 4),
+    "raw-escape-openers": lambda n: "{% raw %}" * (n // 9),
 }
 # Four times the text: about four times the time when linear, sixteen when
 # quadratic. Both sides are timed in one process, so the bound holds on any
@@ -1288,6 +1417,80 @@ class TestTokenWarnings:
             "written."
         )
 
+    def test_both_kinds_of_near_miss_are_told_apart(self) -> None:
+        """Each warning lists only its own spellings and counts only them."""
+        records = _report(
+            resolve_instructions("simple", inline="Ours.\n{{ default }}\n{{{default}}}")
+        )
+        assert _messages(records, logging.WARNING) == [
+            "Server instructions contain '{{ default }}' (line 2), which is not "
+            "the {{default}} token: only the exact text {{default}} is replaced, "
+            "and anything else is sent to clients as written.",
+            "Server instructions contain '{{{default}}}' (line 3): the {{default}} "
+            "inside expands, but the characters around it are sent to clients as "
+            "written.",
+        ]
+
+    @pytest.mark.parametrize("source", ["inline", "file"])
+    def test_lines_count_from_the_operators_first_line(
+        self, tmp_path: Path, source: str
+    ) -> None:
+        """Leading blank lines are trimmed from what clients get, but not
+        from what the warnings count: the operator's editor shows them."""
+        text = "\n\nSee {{ default }}."
+        if source == "file":
+            path = _write(tmp_path / "instructions.md", text.encode("utf-8"))
+            kwargs: Dict[str, Any] = {"instructions_path": path}
+        else:
+            kwargs = {"instructions": text}
+        with _collected(LOGGER) as records:
+            server = _server(tmp_path, **kwargs)
+        assert server.mcp.instructions == "See {{ default }}.\n"
+        _report_lines(records)
+        (warning,) = _messages(records, logging.WARNING)
+        assert warning.startswith(
+            "Server instructions contain '{{ default }}' (line 3), "
+        )
+
+    @pytest.mark.parametrize(
+        "escape",
+        [
+            '{{ "{{default}}" }}',
+            "{{ '{{default}}' }}",
+            "{{`{{default}}`}}",
+            '{{- "{{default}}" -}}',
+            "{% raw %}{{default}}{% endraw %}",
+            "{%- raw -%}{{default}}{%- endraw -%}",
+        ],
+    )
+    def test_an_unrendered_template_escape_is_found(self, escape: str) -> None:
+        """The escapes the docs teach, when no template engine ran: the
+        token inside still expands, inside the escape."""
+        text = f"Line one.\n\n{escape}"
+        assert unrendered_escapes(text) == [(escape, 3)]
+        assert near_miss_tokens(text) == []
+
+    @pytest.mark.parametrize(
+        "text", ["{{default}}", 'Write "{{default}}" in the file.', "{% raw %}"]
+    )
+    def test_no_escape_no_escape_warning(self, text: str) -> None:
+        assert unrendered_escapes(text) == []
+
+    def test_the_escape_warning_is_logged(self, tmp_path: Path) -> None:
+        with _collected(LOGGER) as records:
+            server = _server(tmp_path, instructions='Ours.\n{{ "{{default}}" }}')
+        (line,) = _report_lines(records)
+        assert line.endswith("guidance is included via {{default}}")
+        assert server.mcp.instructions == (
+            'Ours.\n{{ "' + SIMPLE_INSTRUCTIONS.rstrip("\n") + '" }}\n'
+        )
+        (warning,) = _messages(records, logging.WARNING)
+        assert warning == (
+            "Server instructions contain '{{ \"{{default}}\" }}' (line 2): a "
+            "{{default}} inside a template escape that was never rendered still "
+            "expands, but the escape around it is sent to clients as written."
+        )
+
     @pytest.mark.parametrize("shape", sorted(_SCAN_SHAPES))
     def test_the_scans_stay_linear(self, shape: str) -> None:
         small = _SCAN_SHAPES[shape](MAX_INSTRUCTIONS_BYTES)
@@ -1359,30 +1562,70 @@ class TestMisconfigurationWarnings:
             "settings and are ignored: "
         )
 
-    def test_a_name_that_would_break_the_log_line_is_quoted(self) -> None:
-        """POSIX allows a newline in a variable name. Logged raw, it would
-        start a line that reads as the server's own."""
-        forged = "OPENZIM_MCP_INSTRUCTIONS_FILE\n2026-11-19 10:00:00 - INFO - forged"
-        records = _report(resolve_instructions("simple"), environ={forged: "x"})
-        (warning,) = _messages(records, logging.WARNING)
-        assert "\n" not in warning
-        assert warning.startswith(f"{forged!r} is not a setting and is ignored: ")
-
     @pytest.mark.parametrize(
-        "shape",
+        "name",
         [
-            "absolute",
-            "spaced-without-an-extension",
-            "trailing-newline",
-            "double-quoted",
-            "single-quoted",
-            "home-relative",
-            "relative",
-            "missing-mount",
-            "missing-with-spaces",
-            "windows-drive",
+            "OPENZIM_MCP_INSTRUCTIONS_FILE\n2026-11-19 10:00:00 - INFO - forged",
+            "OPENZIM_MCP_INSTRUCTIONS_FILE\rINFO - forged",
+            "OPENZIM_MCP_INSTRUCTIONS_FILE\x1b[2K",
+            "OPENZIM_MCP_INSTRUCTIONS ",
         ],
+        ids=["newline", "carriage-return", "escape-sequence", "trailing-space"],
     )
+    def test_a_name_that_would_mislead_the_log_is_quoted(self, name: str) -> None:
+        """POSIX allows control characters in a variable name, and logged raw
+        they start or overwrite a line that reads as the server's own. cmd.exe's
+        ``set NAME = value`` keeps the space, which would read as the real
+        name."""
+        records = _report(resolve_instructions("simple"), environ={name: "x"})
+        (warning,) = _messages(records, logging.WARNING)
+        assert warning.isprintable()
+        assert warning.startswith(f"{name!r} is not a setting and is ignored: ")
+
+    # The inline values; ``{home}`` is the test's home directory. The files
+    # under it are real, and every other path is missing, so only its shape
+    # can make it warn. The warning quotes the value, or _QUOTED_AS's form.
+    _FILE_PATHS: Dict[str, str] = {
+        # Files that exist, found by looking.
+        "spaced-without-an-extension": "{home}/My Notes/instructions",
+        "home-relative": "~/My Notes/instructions",
+        "relative": "My Notes/instructions",
+        # Shapes, whether or not anything is there.
+        "absolute": "{home}/instructions.md",
+        "trailing-newline": "{home}/instructions.md\n",
+        "double-quoted": '"{home}/instructions.md"',
+        "single-quoted": "'{home}/instructions.md'",
+        "padded-inside-quotes": '" {home}/instructions.md "',
+        "a-stray-quote": "'/srv/notes.md",
+        "missing-mount": "/config/instructions.md",
+        "no-extension": "/config/instructions",
+        "missing-with-spaces": (
+            "/Users/me/Library/Application Support/Claude/instructions.md"
+        ),
+        "upper-case-extension": "/Users/me/My Docs/NOTES.MD",
+        "markdown-extension": "/srv/My Docs/notes.markdown",
+        "text-extension": "/srv/My Docs/notes.txt",
+        "missing-home-relative": "~/config/instructions.md",
+        "another-users-home": "~someone/instructions.md",
+        "dot-relative": "./missing-instructions.md",
+        "parent-relative": "../instructions.md",
+        "a-file-name": "notes.md",
+        "windows-drive": "C:\\Users\\me\\notes.md",
+        "windows-drive-forward-slashes": "C:/Users/me/instructions.md",
+        "unc-share": "\\\\server\\share\\instructions.md",
+        "unexpanded-home": "$HOME/instructions.md",
+        "unexpanded-home-in-braces": "${HOME}/instructions.md",
+        "unexpanded-kubernetes-variable": "$(HOME)/instructions.md",
+        "unexpanded-windows-variable": "%USERPROFILE%\\instructions.md",
+    }
+    _QUOTED_AS = {
+        "trailing-newline": "{home}/instructions.md",
+        "double-quoted": "{home}/instructions.md",
+        "single-quoted": "{home}/instructions.md",
+        "padded-inside-quotes": "{home}/instructions.md",
+    }
+
+    @pytest.mark.parametrize("shape", sorted(_FILE_PATHS))
     def test_inline_text_that_is_a_file_path(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, shape: str
     ) -> None:
@@ -1390,24 +1633,15 @@ class TestMisconfigurationWarnings:
         the text belongs is served to every client as the instructions."""
         home = tmp_path / "home"
         (home / "My Notes").mkdir(parents=True)
-        path = _write(home / "instructions.md", b"Notes.\n")
-        spaced = _write(home / "My Notes" / "instructions", b"Notes.\n")
+        _write(home / "instructions.md", b"Notes.\n")
+        _write(home / "My Notes" / "instructions", b"Notes.\n")
         monkeypatch.setenv("HOME", str(home))
         monkeypatch.setenv("USERPROFILE", str(home))
         monkeypatch.chdir(home)
-        absent = "/Users/me/Library/Application Support/Claude/instructions.md"
-        value, named = {
-            "absolute": (str(path), str(path)),
-            "spaced-without-an-extension": (str(spaced), str(spaced)),
-            "trailing-newline": (f"{path}\n", str(path)),
-            "double-quoted": (f'"{path}"', str(path)),
-            "single-quoted": (f"'{path}'", str(path)),
-            "home-relative": ("~/My Notes/instructions", "~/My Notes/instructions"),
-            "relative": ("instructions.md", "instructions.md"),
-            "missing-mount": ("/config/instructions.md", "/config/instructions.md"),
-            "missing-with-spaces": (absent, absent),
-            "windows-drive": ("C:\\Users\\me\\notes.md", "C:\\Users\\me\\notes.md"),
-        }[shape]
+        template = self._FILE_PATHS[shape]
+        value = template.replace("{home}", str(home))
+        quoted = self._QUOTED_AS.get(shape, template)
+        named = quoted.replace("{home}", str(home))
         with _collected(LOGGER) as records:
             _server(tmp_path, instructions=value)
         _report_lines(records)
@@ -1428,7 +1662,12 @@ class TestMisconfigurationWarnings:
             "~no_such_user_479 and friends",
             "x" * 300,
             "archives",
-            "Line one.\n/etc/openzim-mcp/instructions.md",
+            # Starts like a path and ends in a file name, but is two lines.
+            "/srv/zim holds the archives.\nSee notes.md for the rules.",
+            "See docs/notes.md for the rules.",
+            "https://example.org/medical",
+            "$5/hour",
+            "~a\x00b",
         ],
         ids=[
             "a-word",
@@ -1439,14 +1678,18 @@ class TestMisconfigurationWarnings:
             "too-long-for-a-file-name",
             "a-directory",
             "two-lines",
+            "a-path-inside-a-sentence",
+            "a-url",
+            "a-dollar-amount",
+            "a-nul-from-code",
         ],
     )
     def test_text_that_only_resembles_a_path_is_fine(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, text: str
     ) -> None:
         """Including what makes the file check itself raise (an unknown
-        ``~user``, a name too long for the file system): a check that only
-        warns must never stop startup."""
+        ``~user``, a name too long for the file system, a NUL from code): a
+        check that only warns must never stop startup."""
         (tmp_path / "archives").mkdir()
         monkeypatch.chdir(tmp_path)
         with _collected(LOGGER) as records:
