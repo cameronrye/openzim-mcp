@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.4.1](https://github.com/cameronrye/openzim-mcp/compare/v3.4.0...v3.4.1) (2026-11-19)
+
+
+### Fixed
+
+* **deps:** take soupsieve 4.0 and opentelemetry-api 1.45.2 to clear five advisories ([#483](https://github.com/cameronrye/openzim-mcp/issues/483)) ([22c9bbb](https://github.com/cameronrye/openzim-mcp/commit/22c9bbb157069178cff52902e6f2696c55735da6))
+* keep the security framing for rooted paths on Windows under Python 3.13 ([#476](https://github.com/cameronrye/openzim-mcp/issues/476)) ([e71fce6](https://github.com/cameronrye/openzim-mcp/commit/e71fce6ff5c578cf8557c3ede622cb2c1942eacb))
+* stop zim_query spending quadratic CPU on a long whitespace run ([#474](https://github.com/cameronrye/openzim-mcp/issues/474)) ([3044577](https://github.com/cameronrye/openzim-mcp/commit/3044577c698fab24a8f0a591cb3e4478fba07da5))
+
 ## [3.4.0](https://github.com/cameronrye/openzim-mcp/compare/v3.3.4...v3.4.0) (2026-10-25)
 
 
