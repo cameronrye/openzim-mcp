@@ -48,7 +48,7 @@ import re
 import stat
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, List, Mapping, Optional, Sequence, Tuple, Union
+from typing import Any, Iterator, List, Mapping, Optional, Sequence, Tuple, Union
 
 from .exceptions import OpenZimMcpConfigurationError
 from .tools import TOOL_NAMES
@@ -116,7 +116,7 @@ def instructions_for(tool_mode: str) -> str:
 INSTRUCTIONS_ENV = "OPENZIM_MCP_INSTRUCTIONS"
 INSTRUCTIONS_PATH_ENV = "OPENZIM_MCP_INSTRUCTIONS_PATH"
 
-DEFAULT_TOKEN = "{{default}}"
+DEFAULT_TOKEN = "{{default}}"  # nosec B105 - a template placeholder, no secret
 
 # A ceiling, not a target: hosts put the text in the model's context on every
 # turn, the built-in advanced text is about 1.2 KiB, and some hosts keep only
@@ -135,26 +135,36 @@ _ACCEPTED_VARIABLES = frozenset({INSTRUCTIONS_ENV, INSTRUCTIONS_PATH_ENV})
 # Spellings an operator plausibly meant as the token: whitespace or case
 # variants, the single-brace form an f-string or str.format renders from
 # ``{{default}}``, Mustache's triple braces, Go's ``{{ .Default }}``, shell's
-# ``${default}``. Every quantifier is possessive: the natural greedy form of
-# this pattern is quadratic on a long run of braces or spaces, and this repo
-# has shipped one quadratic regex over raw text already (#474).
+# ``${default}``. The lookbehind is what keeps this linear: a match can start
+# only at the first brace of a run, where without it every brace would start
+# a scan to the end of the run, and a run of braces would cost O(n^2) — this
+# repo has shipped one quadratic regex over raw text already (#474).
 _NEAR_MISS_TOKEN = re.compile(
     r"\$?(?<!\{)\{++\s*+(?:\.\s*+)?defaults?\s*+\}++", re.IGNORECASE
 )
 
-# A ``zim_*`` word that reads as a tool reference: not the tail of a longer
-# identifier (``openzim_mcp``, ``my_zim_archive``) or a path component
-# (``/srv/zim_data``), and not a file name (``zim_backup.zim``). A
-# client-qualified name such as ``mcp__openzim__zim_search`` counts by its
-# last part. Possessive, so a long run fails in one pass.
-_TOOL_REFERENCE = re.compile(
-    r"(?:(?<=__)|(?<![\w./\\-]))zim_[a-z0-9_]++(?![\w/\\-]|\.\w)"
-)
-# Calibrated on 30-odd realistic misspellings and non-tool names: 0.8 suggests
-# for every typo tried (zim_serach, zim_get_secton, zim_meta_data, ...) and
-# for no parameter, resource or path name the server or its docs use.
-_TYPO_CUTOFF = 0.8
+# A run of the characters a tool name, a path or a file name is made of. The
+# runs are found in one pass, since nothing follows the class to backtrack
+# into, and :func:`_tool_references` sorts each one out in Python. (A pattern
+# that let a match start after every ``__`` inside a run was quadratic on
+# ``zim__zim__…``.)
+_WORD_RUN = re.compile(r"[\w./\\-]+")
+_TOOL_NAME_SHAPE = re.compile(r"zim_[a-z0-9_]+")
+_TOOLS = frozenset(TOOL_NAMES)
+
+# Calibrated on 30-odd realistic misspellings and non-tool names. Every typo
+# tried scores at least 0.889 against its tool (zim_qeury, zim_serach,
+# zim_get_secton, zim_meta_data, ...). zim_data, zim_meta and zim_queries
+# score exactly 0.8 and are a volume name, an abbreviation and a plural, not
+# typos; no parameter, resource or path name the server or its docs use
+# reaches 0.85.
+_TYPO_CUTOFF = 0.85
 _MAX_TOOL_NAME = 64
+
+# How a path starts: the root, a home directory, ``./`` or ``../``, a drive,
+# or a UNC share.
+_PATH_START = re.compile(r"/|~[^\s/\\]*[/\\]|\.{1,2}[/\\]|[A-Za-z]:[/\\]|\\\\")
+_TEXT_FILE_SUFFIXES = (".md", ".markdown", ".txt")
 
 
 @dataclass(frozen=True)
@@ -175,15 +185,17 @@ class ServerInstructions:
 
 
 def is_blank(value: Any) -> bool:
-    """``None``, or a string with nothing in it but whitespace and a BOM.
+    """``None``, or a string with nothing in it but whitespace and BOMs.
 
     Blank means unset for both variables. Templated deployments (a compose
     ``${VAR}``, a Helm value, a host's JSON ``env`` block) render an unset
     variable as ``""``, and the path field would otherwise become
-    ``Path(".")`` — a directory, so a startup error.
+    ``Path(".")`` — a directory, so a startup error. A BOM counts wherever it
+    sits: re-encoding a file that already had one doubles it, and the second
+    is not whitespace to ``str.strip``.
     """
     return value is None or (
-        isinstance(value, str) and not value.removeprefix(_BOM).strip()
+        isinstance(value, str) and not value.replace(_BOM, "").strip()
     )
 
 
@@ -305,7 +317,7 @@ def _inline_text(text: str) -> str:
     cannot serialise: the stdio writer crashed on the first ``initialize``.
     A BOM carried in from such a file is dropped.
     """
-    text = text.removeprefix(_BOM)
+    text = text.lstrip(_BOM)
     try:
         text.encode("utf-8")
     except UnicodeEncodeError as exc:
@@ -365,6 +377,10 @@ def _read_instructions_file(path: Path) -> str:
         raise OpenZimMcpConfigurationError(
             f"{label} cannot be read: {exc.strerror or exc}."
         ) from exc
+    except ValueError as exc:  # a NUL in a path set in code; env cannot hold one
+        raise OpenZimMcpConfigurationError(
+            f"{label} is not a usable path: {exc}."
+        ) from exc
 
     if len(data) > MAX_INSTRUCTIONS_BYTES:
         # A /proc file reports size 0 however much it holds.
@@ -402,8 +418,8 @@ def _read_instructions_file(path: Path) -> str:
             f"{label} is not valid UTF-8: byte 0x{body[exc.start]:02x} at "
             f"offset {offset} (line {line}); save it as UTF-8."
         ) from exc
-    text = _normalise_newlines(text)
-    if not text.strip():
+    text = _normalise_newlines(text.lstrip(_BOM))
+    if not text.replace(_BOM, "").strip():
         raise OpenZimMcpConfigurationError(
             f"{label} is empty (or holds only whitespace)."
         )
@@ -415,18 +431,26 @@ def _over_cap_message(
 ) -> str:
     """Name what pushed the text over the cap, mode included.
 
-    The same file can fit in simple mode (about 0.5 KiB of built-in text per
-    token) and not in advanced mode (about 1.2 KiB), and the published image
-    defaults to advanced while ``uvx`` defaults to simple.
+    ``size`` is what clients would receive, not the file or the variable:
+    trimmed, ended with one newline, every token expanded. Said so, because a
+    16384-byte file without a final newline would otherwise be "16385 bytes"
+    while ``ls -l`` says 16384. The same file can fit in simple mode (about
+    0.5 KiB of built-in text per token) and not in advanced mode (about
+    1.2 KiB), and the published image defaults to advanced while ``uvx``
+    defaults to simple.
     """
     limit = f"the limit is {MAX_INSTRUCTIONS_BYTES} bytes (16 KiB)."
     if not expansions:
-        return f"{label} is {size} bytes; {limit}"
+        return (
+            f"{label} is {size} bytes as clients would receive it (trimmed, "
+            f"with one final newline); {limit}"
+        )
     each = len(default.rstrip("\n").encode("utf-8"))
     times = "once" if expansions == 1 else f"{expansions} times"
     return (
-        f"{label} is {size} bytes once {DEFAULT_TOKEN} expands ({times}, to "
-        f"the {each}-byte built-in {tool_mode}-mode text); {limit}"
+        f"{label} is {size} bytes as clients would receive it, once "
+        f"{DEFAULT_TOKEN} expands ({times}, to the {each}-byte built-in "
+        f"{tool_mode}-mode text); {limit}"
     )
 
 
@@ -442,7 +466,8 @@ def describe_instructions(resolved: ServerInstructions, tool_mode: str) -> str:
     host's ``env`` block that configures the ``docker`` CLI instead of the
     container, a compose ``${VAR}`` with nothing behind it, an image that
     predates the setting — and nothing errors, so this line is the evidence.
-    It never contains the text itself.
+    It never contains the text itself. ``OPENZIM_MCP_LOGGING__LEVEL=WARNING``
+    or above hides it, so only at INFO does its absence mean anything.
     """
     size = len(resolved.text.encode("utf-8"))
     if resolved.source is None:
@@ -487,6 +512,36 @@ def near_miss_tokens(text: str) -> List[Tuple[str, int]]:
     return found
 
 
+def _tool_references(text: str) -> Iterator[str]:
+    """Each ``zim_*`` word in ``text`` that reads as a tool reference.
+
+    Markdown emphasis around a name is not part of it (``__zim_search__``,
+    ``_zim_query_``), nor is a full stop after it, and a client-qualified
+    name such as ``mcp__openzim-mcp__zim_search`` counts by its last part.
+    Not references: the tail of a longer identifier (``openzim_mcp``,
+    ``my_zim_archive``), a dotted or file name (``tools.zim_search``,
+    ``zim_links.md``), a hyphenated or camel-case word (``zim_data-2024``,
+    ``zim_searchAPI``), and a path (``/srv/zim_data``, ``zim_data\\x.zim``) —
+    except that tool names joined by ``/`` and nothing else are alternatives
+    (``zim_get/zim_get_section``).
+    """
+    for match in _WORD_RUN.finditer(text):
+        run = match.group().rstrip(".")
+        if "zim_" not in run:
+            continue
+        if "/" in run or "\\" in run:
+            parts = run.split("/")
+            if len(parts) > 1 and all(part in _TOOLS for part in parts):
+                yield from parts
+            continue
+        word = run.strip("_")
+        last = word.rsplit("__", 1)[-1]
+        # ``zim__search`` is a doubled underscore, not a qualified ``search``.
+        name = last if last.startswith("zim_") else word
+        if _TOOL_NAME_SHAPE.fullmatch(name):
+            yield name
+
+
 def tool_name_findings(
     text: str, registered: Sequence[str]
 ) -> Tuple[List[str], List[Tuple[str, str, bool]]]:
@@ -505,12 +560,11 @@ def tool_name_findings(
     unregistered: List[str] = []
     typos: List[Tuple[str, str, bool]] = []
     seen = set()
-    for match in _TOOL_REFERENCE.finditer(text):
-        name = match.group()
+    for name in _tool_references(text):
         if name in seen or name in served or len(name) > _MAX_TOOL_NAME:
             continue
         seen.add(name)
-        if name in TOOL_NAMES:
+        if name in _TOOLS:
             unregistered.append(name)
             continue
         close = difflib.get_close_matches(name, TOOL_NAMES, n=1, cutoff=_TYPO_CUTOFF)
@@ -537,17 +591,29 @@ def misspelt_instruction_variables(environ: Mapping[str, str]) -> List[str]:
 
 
 def _names_a_file(text: str) -> Optional[str]:
-    """``text`` if it is a single word naming an existing file, else ``None``.
+    """The inline text when it is a file path rather than instructions.
 
     The likeliest mix-up between the two variables: a path set where the text
-    belongs is served to every client as the instructions.
+    belongs is served to every client as the instructions. One line counts
+    when it names a file that exists, or when it is shaped like a path —
+    starting at the root, a home directory, ``./``, a drive or a share, with
+    no spaces or with a text-file extension — since the mount behind it may
+    be missing too. One pair of surrounding quotes is ignored: an
+    ``--env-file`` line keeps them.
     """
     candidate = text.strip()
-    if not candidate or any(char.isspace() for char in candidate):
+    if len(candidate) > 1 and candidate[0] == candidate[-1] and candidate[0] in "\"'":
+        candidate = candidate[1:-1].strip()
+    if not candidate or "\n" in candidate:
         return None
+    if _PATH_START.match(candidate) and (
+        not any(char.isspace() for char in candidate)
+        or candidate.lower().endswith(_TEXT_FILE_SUFFIXES)
+    ):
+        return candidate
     try:
         return candidate if Path(candidate).expanduser().is_file() else None
-    except (OSError, RuntimeError, ValueError):
+    except (OSError, RuntimeError, ValueError):  # ENAMETOOLONG, an unknown ~user
         return None
 
 
@@ -566,63 +632,102 @@ def report_instructions(
     mode, and unusual names are all legitimate on purpose.
     """
     logger.info("%s", describe_instructions(resolved, tool_mode))
-
-    misspelt = misspelt_instruction_variables(environ)
-    if misspelt:
-        logger.warning(
-            "%s %s not a setting and %s ignored: the server reads %s (the text "
-            "itself) and %s (a file holding it).",
-            ", ".join(misspelt),
-            "is" if len(misspelt) == 1 else "are",
-            "is" if len(misspelt) == 1 else "are",
-            INSTRUCTIONS_ENV,
-            INSTRUCTIONS_PATH_ENV,
-        )
-
+    _warn_about_misspelt_variables(environ)
     custom = resolved.custom
     if custom is None:
         return
+    _warn_about_tool_names(custom, tool_mode, registered_tools)
+    _warn_about_near_misses(custom)
+    if resolved.source == INSTRUCTIONS_ENV:
+        _warn_about_an_inline_path(custom)
 
+
+def _printable(name: str) -> str:
+    """An environment name as logged: ``repr`` it when it would break the line."""
+    return name if name.isprintable() else repr(name)
+
+
+def _warn_about_misspelt_variables(environ: Mapping[str, str]) -> None:
+    misspelt = misspelt_instruction_variables(environ)
+    if not misspelt:
+        return
+    logger.warning(
+        "%s %s: the server reads %s (the text itself) and %s (a file holding it).",
+        ", ".join(_printable(key) for key in misspelt),
+        (
+            "is not a setting and is ignored"
+            if len(misspelt) == 1
+            else "are not settings and are ignored"
+        ),
+        INSTRUCTIONS_ENV,
+        INSTRUCTIONS_PATH_ENV,
+    )
+
+
+def _warn_about_tool_names(
+    custom: str, tool_mode: str, registered_tools: Sequence[str]
+) -> None:
     unregistered, typos = tool_name_findings(custom, registered_tools)
     if unregistered:
         logger.warning(
             "Server instructions name %s, which %s mode does not register; "
             "clients are offered only %s. Set OPENZIM_MCP_TOOL_MODE=advanced "
-            "(or pass --mode advanced), or remove those names.",
+            "(or pass --mode advanced), or remove %s.",
             ", ".join(unregistered),
             tool_mode,
             ", ".join(registered_tools),
+            "that name" if len(unregistered) == 1 else "those names",
         )
     if typos:
         logger.warning(
-            "Server instructions name %s, which %s not a tool on this server.",
-            ", ".join(
-                f"{name} (did you mean {suggestion}?"
-                f"{'' if served else ' It is registered in advanced mode only.'})"
-                for name, suggestion, served in typos
-            ),
-            "is" if len(typos) == 1 else "are",
+            "Server instructions name %s, which %s on this server.",
+            ", ".join(_typo_with_suggestion(*typo) for typo in typos),
+            "is not a tool" if len(typos) == 1 else "are not tools",
         )
 
+
+def _typo_with_suggestion(name: str, suggestion: str, served: bool) -> str:
+    note = "" if served else " It is registered in advanced mode only."
+    return f"{name} (did you mean {suggestion}?{note})"
+
+
+def _warn_about_near_misses(custom: str) -> None:
     misses = near_miss_tokens(custom)
-    if misses:
+    inert = [miss for miss in misses if DEFAULT_TOKEN not in miss[0]]
+    padded = [miss for miss in misses if DEFAULT_TOKEN in miss[0]]
+    if inert:
         logger.warning(
             "Server instructions contain %s, which %s not the %s token: only "
             "the exact text %s is replaced, and anything else is sent to "
             "clients as written.",
-            ", ".join(f"{spelling!r} (line {line})" for spelling, line in misses),
-            "is" if len(misses) == 1 else "are",
+            _spellings(inert),
+            "is" if len(inert) == 1 else "are",
             DEFAULT_TOKEN,
             DEFAULT_TOKEN,
         )
+    if padded:
+        # ``{{{default}}}`` and ``${{default}}`` hold the exact token, which
+        # does expand — the INFO line says so — so "sent as written" would
+        # contradict it.
+        logger.warning(
+            "Server instructions contain %s: the %s inside expands, but the "
+            "characters around it are sent to clients as written.",
+            _spellings(padded),
+            DEFAULT_TOKEN,
+        )
 
-    if resolved.source == INSTRUCTIONS_ENV:
-        named = _names_a_file(custom)
-        if named is not None:
-            logger.warning(
-                "%s holds a file path (%r), which is sent to clients as the "
-                "instructions text. To load the file, set %s instead.",
-                INSTRUCTIONS_ENV,
-                named,
-                INSTRUCTIONS_PATH_ENV,
-            )
+
+def _spellings(misses: Sequence[Tuple[str, int]]) -> str:
+    return ", ".join(f"{spelling!r} (line {line})" for spelling, line in misses)
+
+
+def _warn_about_an_inline_path(custom: str) -> None:
+    named = _names_a_file(custom)
+    if named is not None:
+        logger.warning(
+            "%s looks like a file path (%r); clients receive it as the "
+            "instructions text. To load the file, set %s instead.",
+            INSTRUCTIONS_ENV,
+            named,
+            INSTRUCTIONS_PATH_ENV,
+        )

@@ -239,7 +239,7 @@ The rules:
 - **The path** may start with `~`. Surrounding whitespace is ignored, and a relative path resolves against the server's working directory, which for a GUI-launched host is rarely the one you expect: use an absolute path.
 - **Inline text is sent as written.** A `\n` inside single quotes is two characters, not a newline: use a file, the shell's `$'…'` quoting, or your YAML or JSON's own newline escapes. Text that is not valid UTF-8 is a startup error.
 - **Every `{{default}}` expands**, inside code fences too, and there is no escape for a literal one. Leading and trailing whitespace is trimmed and the text ends with a single newline, so `{{default}}` on its own is exactly the built-in text.
-- **The limit is 16 KiB** (16384 bytes) of what clients receive, after `{{default}}` expands. A file over the limit, or text that expands past it, stops startup. The built-in text is larger in advanced mode, so a file near the limit can fit in simple mode and not in advanced.
+- **The limit is 16 KiB** (16384 bytes) of what clients receive: after `{{default}}` expands, and counting the final newline. A file over the limit, or text that expands past it, stops startup. The built-in text is larger in advanced mode, so a file near the limit can fit in simple mode and not in advanced.
 - **The text is read once, at startup.** Restart the server to apply a change.
 
 ### Checking what clients receive
@@ -252,26 +252,37 @@ Server instructions: custom, from OPENZIM_MCP_INSTRUCTIONS_PATH='/etc/openzim-mc
 Server instructions: custom, from OPENZIM_MCP_INSTRUCTIONS (80 bytes, 80 characters); the built-in guidance is not included (no {{default}} token)
 ```
 
-The first is the default; the second is the example file above in simple mode; the third is text set without the token. The line never contains the text itself. A start that logs no `Server instructions:` line at all is running a release that predates the setting and ignores both variables. Startup also logs a warning, without refusing to start, when:
+The first is the default; the second is the example file above in simple mode; the third is text set without the token. The line never contains the text itself. At the default log level, a start that logs no `Server instructions:` line at all is running a release that predates the setting and ignores both variables. `OPENZIM_MCP_LOGGING__LEVEL=WARNING` or higher hides the line, and `ERROR` or higher hides the warnings below as well; the checks that follow work at any level. Startup also logs a warning, without refusing to start, when:
 
 - your text names a tool the running mode does not register (simple mode registers only `zim_query`), or something close to a tool name, such as `zim_serach`;
-- it contains a near-miss of the token, such as `{{ default }}` or `{default}`, which is sent to clients as written;
+- it contains a near-miss of the token, such as `{{ default }}` or `{default}`, which is sent to clients as written, or the token with extra characters around it, such as `{{{default}}}`, which expands but keeps the extra braces;
 - an environment variable looks like this setting but is not one, such as `OPENZIM_MCP_INSTRUCTIONS_FILE` or `OPENZIM_MCP_INSTRUCTIONS__PATH`, and is ignored;
-- `OPENZIM_MCP_INSTRUCTIONS` holds a file path, which is sent as the text. Set `OPENZIM_MCP_INSTRUCTIONS_PATH` to load the file.
+- `OPENZIM_MCP_INSTRUCTIONS` looks like a file path (one line that names a file, or that starts like a path, such as `/config/instructions.md`), which clients would receive as the text. Set `OPENZIM_MCP_INSTRUCTIONS_PATH` to load the file.
 
-To see exactly what a client receives, ask a stdio server directly:
+To see exactly what a client receives, ask the server. A stdio server answers on stdin; run it with the deployment's environment and tool mode, since the text depends on both (the CLI defaults to simple mode, the published image to advanced):
 
 ```bash
 printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"server/discover","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}' \
   | openzim-mcp /srv/zim 2>/dev/null \
-  | python3 -c 'import json, sys; print(json.loads(sys.stdin.readline())["result"]["instructions"])'
+  | python3 -c 'import json, sys; sys.stdout.write(json.loads(sys.stdin.readline())["result"]["instructions"])'
 ```
 
-The same pipe works with `docker run -i --rm …` (and the image's usual mounts and `-e` flags) in place of `openzim-mcp /srv/zim`.
+The same pipe works with `docker run -i --rm …` (and the image's usual mounts and `-e` flags) in place of `openzim-mcp /srv/zim`. Over HTTP, ask the running service itself, so its own environment answers; `$TOKEN` holds its `OPENZIM_MCP_AUTH_TOKEN`. The `Mcp-Method` header is required, and must name the method in the body:
+
+```bash
+curl -s -X POST http://127.0.0.1:8000/mcp \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -H "MCP-Protocol-Version: 2026-07-28" \
+  -H "Mcp-Method: server/discover" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"server/discover","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}' \
+  | python3 -c 'import json, sys; sys.stdout.write(json.load(sys.stdin)["result"]["instructions"])'
+```
 
 ### When a change reaches clients
 
-The server reads the text once, at startup, so restart it after editing. Clients matter too: most hosts read the instructions once per connection, so reconnect the client or start a new conversation. Over HTTP, sessionless clients (every 2026-07-28 client, and handshake-era clients when `OPENZIM_MCP_STATELESS_HTTP` is set) see no disconnect when the server restarts. The `server/discover` result tells them they may cache it for up to an hour, so they can keep the previous text that long. On Kubernetes, editing a ConfigMap updates the mounted file but restarts nothing: run `kubectl rollout restart deployment/openzim-mcp`.
+The server reads the text once, at startup, so restart it after editing. Clients matter too: most hosts read the instructions once per connection, so reconnect the client or start a new conversation. Over HTTP, sessionless clients see no disconnect when the server restarts. Every 2026-07-28 client is one, and the `server/discover` result tells it that it may cache the result for up to an hour, so it can keep the previous text that long. Handshake-era clients are sessionless only when `OPENZIM_MCP_STATELESS_HTTP` is set, and get no such limit: they keep the text from their `initialize` until they reconnect. On Kubernetes, editing a ConfigMap updates the mounted file but restarts nothing: run `kubectl rollout restart deployment/openzim-mcp`.
 
 ### Deployment examples
 
@@ -345,7 +356,7 @@ A ConfigMap's files are world-readable by default. A key the ConfigMap lacks mou
 Environment=OPENZIM_MCP_INSTRUCTIONS_PATH=/etc/openzim-mcp/instructions.md
 ```
 
-The service's `User=` reads the file, not root (systemd itself reads `EnvironmentFile=` as root), so give it mode 0644, or 0640 with the service's group. With the [hardened unit](/openzim-mcp/docs/http-and-docker-deployment/#systemd-unit), `ProtectHome=yes` hides `/home` and `PrivateTmp=yes` gives the service its own `/tmp`, so a file in either reads as missing: keep it under `/etc`. Inline text in `Environment=` is awkward, since `%` starts a systemd specifier and must be written `%%`. Prefer the file.
+The service's `User=` reads the file, not root (systemd itself reads `EnvironmentFile=` as root), so give it mode 0644, or 0640 with the service's group. With the [hardened unit](/openzim-mcp/docs/http-and-docker-deployment/#systemd-unit), keep the file under `/etc`. `ProtectHome=yes` makes `/home` inaccessible, so a file there is refused as permission denied however its own permissions are set, and `PrivateTmp=yes` gives the service an empty `/tmp` of its own, so a file there reads as missing. Inline text in `Environment=` is awkward, since `%` starts a systemd specifier and must be written `%%`. Prefer the file.
 
 **MCP host configs** (Claude Desktop and others):
 
@@ -367,7 +378,7 @@ On Windows, write the path with forward slashes (`C:/Users/me/instructions.md`) 
 
 ### Keep secrets out
 
-The instructions go to every client that can connect: on HTTP that is every token holder, and anyone at all on a loopback bind with no token. Hosts place them in the model's context, so they also end up in transcripts and in model-provider logs. Never put credentials or internal-only details in them. They also speak with the server's authority to every connected model, so mount the file read-only and limit who can edit it, through file permissions or ConfigMap RBAC.
+The instructions go to every client that can connect: on HTTP that is every token holder, anyone at all on a loopback bind with no token, and anyone who can reach the port when `OPENZIM_MCP_INSECURE_DISABLE_AUTH` is set. Hosts place them in the model's context, so they also end up in transcripts and in model-provider logs. Never put credentials or internal-only details in them. They also speak with the server's authority to every connected model, so mount the file read-only and limit who can edit it, through file permissions or ConfigMap RBAC.
 
 ## Allowed directories
 

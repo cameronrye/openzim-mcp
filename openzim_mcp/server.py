@@ -38,9 +38,11 @@ logger = logging.getLogger(__name__)
 # is a cache-lifetime choice, not a claim about the process: the tables cannot
 # change without a restart. A restart is visible to stdio clients (a new
 # process) and to stateful handshake-era HTTP clients (their session id stops
-# working), but not to sessionless ones — every 2026-07-28 HTTP client, and
-# handshake-era clients under OPENZIM_MCP_STATELESS_HTTP — which may keep using
-# a cached result, operator instructions included, for up to this long.
+# working), but not to sessionless ones. A 2026-07-28 HTTP client may keep
+# using a cached result, operator instructions included, for up to this long.
+# A handshake-era client under OPENZIM_MCP_STATELESS_HTTP gets no TTL at all —
+# its ``initialize`` result carries none — and keeps what it was sent until it
+# initializes again.
 _STATIC_LIST_TTL_MS = 60 * 60 * 1000
 
 # Identity advertised in ``serverInfo``. The docs site is the project's public
@@ -122,8 +124,8 @@ def _cache_hints(config: OpenZimMcpConfig) -> dict:
     never change while the process runs — nothing short of a restart can
     invalidate them, so they get a long TTL. That is also what makes them worth
     caching: a stable tool block is what earns a client's prompt-cache hits. A
-    sessionless client sees no restart, though, so it may keep a result for the
-    full TTL afterwards (see ``_STATIC_LIST_TTL_MS``).
+    2026-07-28 HTTP client has no session, so it sees no restart and may keep a
+    result for the full TTL afterwards (see ``_STATIC_LIST_TTL_MS``).
 
     ``resources/read`` is capped at the watcher's polling interval instead,
     because this hint is per *method* and that one method serves both a sealed

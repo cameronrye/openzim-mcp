@@ -25,18 +25,23 @@ record the same start must have written.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import logging
 import os
+import re
 import stat
 import subprocess
 import sys
+import threading
 import time
-from pathlib import Path
-from typing import Any, List
+from pathlib import Path, PurePosixPath
+from typing import Any, Callable, Dict, List, Optional
 
+import pydantic
 import pytest
 
+from openzim_mcp import instructions as instructions_module
 from openzim_mcp import main as main_module
 from openzim_mcp.config import OpenZimMcpConfig
 from openzim_mcp.exceptions import OpenZimMcpConfigurationError
@@ -47,9 +52,12 @@ from openzim_mcp.instructions import (
     INSTRUCTIONS_PATH_ENV,
     MAX_INSTRUCTIONS_BYTES,
     SIMPLE_INSTRUCTIONS,
+    ServerInstructions,
+    describe_instructions,
     instructions_for,
     misspelt_instruction_variables,
     near_miss_tokens,
+    report_instructions,
     resolve_instructions,
     tool_name_findings,
 )
@@ -62,6 +70,8 @@ REPO = Path(__file__).resolve().parent.parent
 CONFIG_DOC = REPO / "website" / "src" / "content" / "docs" / "configuration.mdx"
 TOOL_MODES = ("simple", "advanced")
 LOGGER = "openzim_mcp.instructions"
+LIMIT = "the limit is 16384 bytes (16 KiB)."
+AS_SERVED = "as clients would receive it"
 
 
 def _write(path: Path, data: bytes) -> Path:
@@ -107,6 +117,47 @@ def _unreadable(path: Path) -> bool:
     return not os.access(path, os.R_OK)
 
 
+def _report(
+    resolved: ServerInstructions,
+    tool_mode: str = "simple",
+    environ: Optional[Dict[str, str]] = None,
+) -> List[logging.LogRecord]:
+    """``report_instructions`` on its own, with an environment of the test's
+    choosing. The logger is held at INFO: without a server construction
+    first, the process's root level would drop the INFO line."""
+    target = logging.getLogger(LOGGER)
+    previous = target.level
+    target.setLevel(logging.INFO)
+    try:
+        with _collected(LOGGER) as records:
+            report_instructions(
+                resolved,
+                tool_mode=tool_mode,
+                registered_tools=(
+                    ["zim_query"] if tool_mode == "simple" else list(TOOL_NAMES)
+                ),
+                environ=environ or {},
+            )
+    finally:
+        target.setLevel(previous)
+    _report_lines(records)
+    return records
+
+
+def _configmap(mount: Path) -> Path:
+    """The layout kubelet mounts a ConfigMap key in: a symlink through
+    ``..data`` into a timestamped directory that each update replaces."""
+    stamped = mount / "..2026_11_19_10_00_00.000000001"
+    stamped.mkdir(parents=True)
+    _write(stamped / "instructions.md", b"From the ConfigMap.\n")
+    try:
+        (mount / "..data").symlink_to(stamped.name, target_is_directory=True)
+        (mount / "instructions.md").symlink_to(Path("..data") / "instructions.md")
+    except OSError:
+        pytest.skip("symlinks unavailable")
+    return mount / "instructions.md"
+
+
 # ---------------------------------------------------------------------------
 # Neither set: today's behaviour, byte for byte.
 # ---------------------------------------------------------------------------
@@ -123,7 +174,9 @@ class TestUnsetKeepsTheBuiltInText:
             SIMPLE_INSTRUCTIONS if tool_mode == "simple" else ADVANCED_INSTRUCTIONS
         )
 
-    @pytest.mark.parametrize("value", ["", "   ", "\n", "\t\r\n", "\ufeff"])
+    @pytest.mark.parametrize(
+        "value", ["", "   ", "\n", "\t\r\n", "\ufeff", "\ufeff\ufeff", " \ufeff "]
+    )
     @pytest.mark.parametrize("variable", [INSTRUCTIONS_ENV, INSTRUCTIONS_PATH_ENV])
     def test_a_blank_value_counts_as_unset(
         self,
@@ -159,6 +212,14 @@ class TestUnsetKeepsTheBuiltInText:
 
 
 class TestTheVariables:
+    def test_the_names_are_the_documented_ones(self) -> None:
+        """The issue thread and the docs promise these two names. The other
+        tests build their expectations from the constants, so they would
+        follow a rename that broke every deployment."""
+        assert INSTRUCTIONS_ENV == "OPENZIM_MCP_INSTRUCTIONS"
+        assert INSTRUCTIONS_PATH_ENV == "OPENZIM_MCP_INSTRUCTIONS_PATH"
+        assert DEFAULT_TOKEN == "{{default}}"
+
     def test_inline_text_is_read_from_the_environment(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -181,15 +242,43 @@ class TestTheVariables:
         monkeypatch.setenv(INSTRUCTIONS_PATH_ENV, str(path))
         with pytest.raises(OpenZimMcpConfigurationError) as excinfo:
             _config(tmp_path)
-        message = str(excinfo.value)
-        assert INSTRUCTIONS_ENV in message and INSTRUCTIONS_PATH_ENV in message
-        assert "both set" in message
+        # Whole: one name is a prefix of the other, so "both names appear"
+        # also holds for a message that names the path variable twice.
+        assert str(excinfo.value) == (
+            f"{INSTRUCTIONS_ENV} and {INSTRUCTIONS_PATH_ENV} are both set; set "
+            "only one: the text itself, or the path to a UTF-8 file holding it."
+        )
 
     def test_the_resolver_refuses_both_even_past_the_config(self) -> None:
         """``model_copy`` and attribute assignment skip validators, and this
         repo's tests build servers that way, so the resolver checks itself."""
-        with pytest.raises(OpenZimMcpConfigurationError, match="both set"):
+        with pytest.raises(OpenZimMcpConfigurationError) as excinfo:
             resolve_instructions("simple", inline="Inline.", path=Path("x.md"))
+        assert str(excinfo.value).startswith(
+            f"{INSTRUCTIONS_ENV} and {INSTRUCTIONS_PATH_ENV} are both set; "
+        )
+
+    @pytest.mark.parametrize("blank", ["", " \n", "\ufeff"])
+    def test_the_resolver_lets_a_blank_beside_a_set_source_go(
+        self, tmp_path: Path, blank: str
+    ) -> None:
+        """The validators' blank-is-unset rule, again past the config: a blank
+        on either side is not the second of "both set"."""
+        path = _write(tmp_path / "instructions.md", b"From the file.\n")
+        assert resolve_instructions("simple", inline="Ours.", path=blank).text == (
+            "Ours.\n"
+        )
+        assert resolve_instructions("simple", inline=blank, path=path).text == (
+            "From the file.\n"
+        )
+
+    def test_a_path_of_the_wrong_type_is_pydantics_to_reject(
+        self, tmp_path: Path
+    ) -> None:
+        """Code can pass anything; it gets a ValidationError, not a TypeError
+        from inside the normaliser."""
+        with pytest.raises(pydantic.ValidationError, match="instructions_path"):
+            OpenZimMcpConfig(allowed_directories=[str(tmp_path)], instructions_path=123)
 
     def test_surrounding_whitespace_in_the_path_is_ignored(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -293,17 +382,30 @@ class TestReplaceAndExpand:
             resolve_instructions("simple", inline="One.\r\nTwo.").text == "One.\nTwo.\n"
         )
 
-    def test_a_leading_byte_order_mark_is_dropped(self, tmp_path: Path) -> None:
-        """Notepad saves UTF-8 with a BOM; ``$(cat file)`` carries it into env."""
-        bom = _write(tmp_path / "bom.md", b"\xef\xbb\xbfNotes.\n")
+    @pytest.mark.parametrize("marks", [1, 2], ids=["one", "doubled"])
+    def test_a_leading_byte_order_mark_is_dropped(
+        self, tmp_path: Path, marks: int
+    ) -> None:
+        """Notepad saves UTF-8 with a BOM; ``$(cat file)`` carries it into env,
+        and re-encoding a file that already had one doubles it."""
+        bom = _write(tmp_path / "bom.md", b"\xef\xbb\xbf" * marks + b"Notes.\n")
         assert resolve_instructions("simple", path=bom).text == "Notes.\n"
-        assert resolve_instructions("simple", inline="\ufeffNotes.").text == "Notes.\n"
+        inline = "\ufeff" * marks + "Notes."
+        assert resolve_instructions("simple", inline=inline).text == "Notes.\n"
 
     def test_the_resolver_treats_blank_inline_text_as_unset(self) -> None:
-        for blank in ("", "  \n", "\ufeff"):
+        for blank in ("", "  \n", "\ufeff", "\ufeff\ufeff", " \ufeff"):
             resolved = resolve_instructions("advanced", inline=blank)
             assert resolved.text == ADVANCED_INSTRUCTIONS
             assert resolved.source is None
+
+    @pytest.mark.parametrize("tool_mode", TOOL_MODES)
+    def test_the_warnings_get_the_operators_own_text(self, tool_mode: str) -> None:
+        """``custom`` is what the startup checks scan: the operator's words,
+        newlines normalised, before the token expands."""
+        resolved = resolve_instructions(tool_mode, inline="Ours.\r\n{{default}}")
+        assert resolved.custom == "Ours.\n{{default}}"
+        assert resolved.text != resolved.custom
 
     def test_the_resolver_accepts_a_string_path(self, tmp_path: Path) -> None:
         path = _write(tmp_path / "instructions.md", b"String path.\n")
@@ -325,7 +427,10 @@ def _file_error(path: Path, tool_mode: str = "simple") -> str:
 
 class TestUnusableFiles:
     def test_a_missing_file(self, tmp_path: Path) -> None:
-        assert "does not exist" in _file_error(tmp_path / "nope.md")
+        path = tmp_path / "nope.md"
+        assert _file_error(path) == (
+            f"{INSTRUCTIONS_PATH_ENV}={str(path)!r} does not exist."
+        )
 
     def test_a_relative_path_says_where_it_was_looked_for(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -334,6 +439,22 @@ class TestUnusableFiles:
         message = _file_error(Path("nope.md"))
         assert "does not exist" in message
         assert repr(str(tmp_path / "nope.md")) in message
+
+    @pytest.mark.skipif(
+        sys.platform == "win32", reason="Windows cannot remove a working directory"
+    )
+    def test_a_relative_path_once_the_working_directory_is_gone(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``Path.absolute()`` raises then. The message must still come out
+        whole, or a raw OSError reaches main()'s generic error arm."""
+        gone = tmp_path / "gone"
+        gone.mkdir()
+        monkeypatch.chdir(gone)
+        gone.rmdir()
+        assert _file_error(Path("instructions.md")) == (
+            f"{INSTRUCTIONS_PATH_ENV}='instructions.md' does not exist."
+        )
 
     def test_a_directory(self, tmp_path: Path) -> None:
         """What ``docker run -v`` leaves when the host file did not exist."""
@@ -344,17 +465,42 @@ class TestUnusableFiles:
     @pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="no FIFOs here")
     def test_a_fifo_is_refused_without_blocking(self, tmp_path: Path) -> None:
         """``open()`` on a FIFO blocks until a writer appears; the type check
-        has to come first or startup hangs."""
+        has to come first or startup hangs.
+
+        A regression would hang this test rather than fail it, and with no
+        per-test timeout CI would only cancel the job. So a writer opens the
+        FIFO after a few seconds: that frees a reader stuck in ``open()``,
+        and records that one was stuck.
+        """
         fifo = tmp_path / "instructions.fifo"
         os.mkfifo(fifo)
-        assert "not a regular file" in _file_error(fifo)
+        released: List[bool] = []
+
+        def _free_a_stuck_reader() -> None:
+            try:
+                fd = os.open(fifo, os.O_WRONLY | os.O_NONBLOCK)
+            except OSError:  # ENXIO: nobody is reading, as it should be
+                return
+            released.append(True)
+            os.close(fd)
+
+        timer = threading.Timer(5.0, _free_a_stuck_reader)
+        timer.start()
+        try:
+            message = _file_error(fifo)
+        finally:
+            timer.cancel()
+        assert not released, "resolving blocked in open() until a writer came"
+        assert message.endswith(
+            "is not a regular file (it is a FIFO, socket or device)."
+        )
 
     @pytest.mark.skipif(not Path("/dev/zero").exists(), reason="no /dev/zero")
     def test_a_device_is_refused(self) -> None:
         assert "not a regular file" in _file_error(Path("/dev/zero"))
 
     def test_a_dangling_symlink_is_missing(self, tmp_path: Path) -> None:
-        """A Kubernetes ConfigMap key that does not exist mounts this way."""
+        """A link whose target was deleted reads as missing, not unreadable."""
         link = tmp_path / "instructions.md"
         try:
             link.symlink_to(tmp_path / "gone.md")
@@ -362,15 +508,34 @@ class TestUnusableFiles:
             pytest.skip("symlinks unavailable")
         assert "does not exist" in _file_error(link)
 
+    def test_a_symlink_loop_is_named(self, tmp_path: Path) -> None:
+        """ELOOP has no arm of its own. It must still come out as a
+        configuration error naming the variable, not reach main()'s generic
+        "Server startup error" arm as a raw OSError."""
+        link = tmp_path / "instructions.md"
+        try:
+            link.symlink_to(link)
+        except OSError:
+            pytest.skip("symlinks unavailable")
+        assert " cannot be read: " in _file_error(link)
+
+    def test_a_nul_in_a_path_set_in_code(self) -> None:
+        """The environment cannot carry a NUL, but code can, and ``os.stat``
+        raises ValueError for it, which no OSError arm catches."""
+        message = _file_error(Path("instr\x00uctions.md"))
+        assert " is not a usable path: " in message
+
     def test_an_unreadable_file(self, tmp_path: Path) -> None:
         path = _write(tmp_path / "instructions.md", b"Secret.\n")
         path.chmod(0)
         try:
             if not _unreadable(path):
                 pytest.skip("chmod 000 does not lock this process out")
-            message = _file_error(path)
-            assert "cannot be read" in message
-            assert "Permission denied" in message
+            assert _file_error(path) == (
+                f"{INSTRUCTIONS_PATH_ENV}={str(path)!r} cannot be read: Permission "
+                "denied. The file, and every directory above it, must be readable "
+                "by the user the server runs as."
+            )
         finally:
             path.chmod(stat.S_IRUSR | stat.S_IWUSR)
 
@@ -384,17 +549,31 @@ class TestUnusableFiles:
         try:
             if os.access(path, os.R_OK):
                 pytest.skip("chmod 000 does not lock this process out")
-            message = _file_error(path)
-            assert "cannot be read" in message
+            assert _file_error(path).endswith(
+                " cannot be read: Permission denied. The file, and every "
+                "directory above it, must be readable by the user the server "
+                "runs as."
+            )
         finally:
             locked.chmod(stat.S_IRWXU)
 
     @pytest.mark.parametrize(
-        "data", [b"", b"   \n\t\r\n", b"\xef\xbb\xbf", b"\xef\xbb\xbf \n"]
+        "data",
+        [
+            b"",
+            b"   \n\t\r\n",
+            b"\xef\xbb\xbf",
+            b"\xef\xbb\xbf \n",
+            b"\xef\xbb\xbf\xef\xbb\xbf",
+            b"\xef\xbb\xbf \xef\xbb\xbf\n",
+        ],
     )
     def test_an_empty_file(self, tmp_path: Path, data: bytes) -> None:
         path = _write(tmp_path / "instructions.md", data)
-        assert "is empty" in _file_error(path)
+        assert _file_error(path) == (
+            f"{INSTRUCTIONS_PATH_ENV}={str(path)!r} is empty (or holds only "
+            "whitespace)."
+        )
 
     @pytest.mark.parametrize(
         "bom", [b"\xff\xfe", b"\xfe\xff"], ids=["utf-16-le", "utf-16-be"]
@@ -413,13 +592,23 @@ class TestUnusableFiles:
         message = _file_error(path)
         assert "NUL byte at offset 1" in message
 
+    @pytest.mark.parametrize(
+        ("data", "where"),
+        [
+            (b"First line.\nCaf\xe9 notes.\n", "byte 0xe9 at offset 15 (line 2)"),
+            # Offsets count the BOM: it is in the file the operator opens.
+            (b"\xef\xbb\xbfa\n\xe9", "byte 0xe9 at offset 5 (line 2)"),
+        ],
+        ids=["plain", "after-a-bom"],
+    )
     def test_text_that_is_not_utf8_names_the_byte_and_line(
-        self, tmp_path: Path
+        self, tmp_path: Path, data: bytes, where: str
     ) -> None:
-        path = _write(tmp_path / "instructions.md", b"First line.\nCaf\xe9 notes.\n")
-        message = _file_error(path)
-        assert "not valid UTF-8" in message
-        assert "0xe9" in message and "line 2" in message
+        path = _write(tmp_path / "instructions.md", data)
+        assert _file_error(path) == (
+            f"{INSTRUCTIONS_PATH_ENV}={str(path)!r} is not valid UTF-8: {where}; "
+            "save it as UTF-8."
+        )
 
 
 class TestTheSizeCap:
@@ -433,28 +622,106 @@ class TestTheSizeCap:
             MAX_INSTRUCTIONS_BYTES
         )
 
-    def test_one_byte_over_is_refused_with_the_real_size(self, tmp_path: Path) -> None:
-        path = _write(tmp_path / "instructions.md", b"x" * 20_000)
-        message = _file_error(path)
-        assert "is 20000 bytes" in message
-        assert f"limit is {MAX_INSTRUCTIONS_BYTES} bytes" in message
+    def test_a_file_at_the_cap_without_a_final_newline_is_one_over(
+        self, tmp_path: Path
+    ) -> None:
+        """The newline clients receive counts. The message says it measured
+        that, since ``ls -l`` shows the file at exactly the limit."""
+        path = _write(tmp_path / "instructions.md", b"x" * MAX_INSTRUCTIONS_BYTES)
+        assert _file_error(path) == (
+            f"{INSTRUCTIONS_PATH_ENV}={str(path)!r} is 16385 bytes {AS_SERVED} "
+            f"(trimmed, with one final newline); {LIMIT}"
+        )
+
+    @pytest.mark.parametrize("size", [MAX_INSTRUCTIONS_BYTES + 1, 20_000])
+    def test_a_larger_file_is_refused_with_its_real_size(
+        self, tmp_path: Path, size: int
+    ) -> None:
+        """Checked on the raw bytes, and sized by ``fstat`` rather than by the
+        bounded read, so 20000 does not come out as 16385."""
+        path = _write(tmp_path / "instructions.md", b"x" * size)
+        assert _file_error(path) == (
+            f"{INSTRUCTIONS_PATH_ENV}={str(path)!r} is {size} bytes; {LIMIT}"
+        )
 
     @pytest.mark.parametrize(
         "body",
         [
-            b"line\r\n" * 3000,  # CRLF shrinks when normalised
-            b"\xef\xbb\xbf" + b"y" * MAX_INSTRUCTIONS_BYTES,  # so does a BOM
+            b"x" * (MAX_INSTRUCTIONS_BYTES - 1) + b"\r\n",  # CRLF shrinks to LF
+            b"\xef\xbb\xbf" + b"y" * (MAX_INSTRUCTIONS_BYTES - 2),  # a BOM goes
         ],
         ids=["crlf", "bom"],
     )
     def test_an_oversized_file_is_never_truncated_into_range(
         self, tmp_path: Path, body: bytes
     ) -> None:
-        """Checking only the decoded text let these start, serving the first
-        16 KiB of a longer file cut off mid-line."""
-        assert len(body) > MAX_INSTRUCTIONS_BYTES
+        """One byte over as stored and under once decoded: the stored size
+        decides. Checking only the decoded text let longer files start,
+        serving their first 16 KiB cut off mid-line."""
+        assert len(body) == MAX_INSTRUCTIONS_BYTES + 1
         path = _write(tmp_path / "instructions.md", body)
-        assert "the limit is" in _file_error(path)
+        assert _file_error(path) == (
+            f"{INSTRUCTIONS_PATH_ENV}={str(path)!r} is 16385 bytes; {LIMIT}"
+        )
+
+    def test_the_read_stops_one_byte_past_the_cap(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A path pointed at an archive by mistake must not be read whole
+        before it is refused. The refusal takes its size from ``fstat``, so
+        only the read call itself shows the bound."""
+        reads: List[int] = []
+        real_open = open
+
+        class _Recording:
+            def __init__(self, handle: Any) -> None:
+                self._handle = handle
+
+            def __enter__(self) -> _Recording:
+                return self
+
+            def __exit__(self, *exc: object) -> None:
+                self._handle.close()
+
+            def read(self, size: int = -1) -> bytes:
+                reads.append(size)
+                return self._handle.read(size)
+
+            def fileno(self) -> int:
+                return self._handle.fileno()
+
+        monkeypatch.setattr(
+            instructions_module,
+            "open",
+            lambda *args, **kwargs: _Recording(real_open(*args, **kwargs)),
+            raising=False,
+        )
+        path = _write(tmp_path / "archive.zim", b"z" * (4 * MAX_INSTRUCTIONS_BYTES))
+        assert _file_error(path).endswith(f" is 65536 bytes; {LIMIT}")
+        assert reads == [MAX_INSTRUCTIONS_BYTES + 1]
+
+    def test_a_file_that_reports_no_size(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A /proc file reports size 0 however much it holds. The refusal says
+        "more than" then, and the bytes read still decide: trusting the size
+        would serve this CRLF file cut off at 16 KiB."""
+
+        class _SizelessOs:
+            def __getattr__(self, name: str) -> Any:
+                return getattr(os, name)
+
+            @staticmethod
+            def fstat(fd: int) -> os.stat_result:
+                real = os.fstat(fd)
+                return os.stat_result((*real[:6], 0, *real[7:10]))
+
+        monkeypatch.setattr(instructions_module, "os", _SizelessOs())
+        path = _write(tmp_path / "instructions.md", b"line\r\n" * 3000)
+        assert _file_error(path) == (
+            f"{INSTRUCTIONS_PATH_ENV}={str(path)!r} is more than 16384 bytes; "
+            f"{LIMIT}"
+        )
 
     def test_an_oversized_non_ascii_file_is_reported_as_too_large(
         self, tmp_path: Path
@@ -466,17 +733,53 @@ class TestTheSizeCap:
         assert "UTF-8" not in message
 
     def test_the_expansion_counts_and_is_named(self, tmp_path: Path) -> None:
-        """The same file can fit in simple mode and not in advanced mode."""
+        """The same file can fit in simple mode and not in advanced mode, so
+        the message says what each token adds, and in which mode."""
         filler = MAX_INSTRUCTIONS_BYTES - 1000
         path = _write(tmp_path / "instructions.md", b"z" * filler + b"\n{{default}}\n")
         assert resolve_instructions("simple", path=path).expansions == 1
-        message = _file_error(path, "advanced")
-        assert "{{default}}" in message and "advanced" in message
-        assert f"limit is {MAX_INSTRUCTIONS_BYTES} bytes" in message
+        each = len(ADVANCED_INSTRUCTIONS.rstrip("\n").encode("utf-8"))
+        assert _file_error(path, "advanced") == (
+            f"{INSTRUCTIONS_PATH_ENV}={str(path)!r} is {filler + 1 + each + 1} "
+            f"bytes {AS_SERVED}, once {DEFAULT_TOKEN} expands (once, to the "
+            f"{each}-byte built-in advanced-mode text); {LIMIT}"
+        )
+
+    def test_two_expansions_are_counted(self) -> None:
+        each = len(ADVANCED_INSTRUCTIONS.rstrip("\n").encode("utf-8"))
+        filler = MAX_INSTRUCTIONS_BYTES - each
+        with pytest.raises(OpenZimMcpConfigurationError) as excinfo:
+            resolve_instructions(
+                "advanced", inline="z" * filler + "{{default}}{{default}}"
+            )
+        assert str(excinfo.value) == (
+            f"{INSTRUCTIONS_ENV} is {filler + 2 * each + 1} bytes {AS_SERVED}, "
+            f"once {DEFAULT_TOKEN} expands (2 times, to the {each}-byte built-in "
+            f"advanced-mode text); {LIMIT}"
+        )
 
     def test_inline_text_has_the_same_cap(self) -> None:
-        with pytest.raises(OpenZimMcpConfigurationError, match=INSTRUCTIONS_ENV):
+        with pytest.raises(OpenZimMcpConfigurationError) as excinfo:
             resolve_instructions("simple", inline="w" * (MAX_INSTRUCTIONS_BYTES + 1))
+        assert str(excinfo.value) == (
+            f"{INSTRUCTIONS_ENV} is 16386 bytes {AS_SERVED} (trimmed, with one "
+            f"final newline); {LIMIT}"
+        )
+
+    def test_the_inline_cap_counts_the_final_newline(self) -> None:
+        """16383 characters and the newline make 16384 bytes, which fits; one
+        character more does not."""
+        fits = resolve_instructions("simple", inline="w" * (MAX_INSTRUCTIONS_BYTES - 1))
+        assert len(fits.text.encode("utf-8")) == MAX_INSTRUCTIONS_BYTES
+        with pytest.raises(OpenZimMcpConfigurationError) as excinfo:
+            resolve_instructions("simple", inline="w" * MAX_INSTRUCTIONS_BYTES)
+        assert str(excinfo.value).startswith(f"{INSTRUCTIONS_ENV} is 16385 bytes ")
+
+    def test_the_cap_counts_bytes_not_characters(self) -> None:
+        """9000 two-byte characters are well under 16384 characters."""
+        with pytest.raises(OpenZimMcpConfigurationError) as excinfo:
+            resolve_instructions("simple", inline="é" * 9000)
+        assert str(excinfo.value).startswith(f"{INSTRUCTIONS_ENV} is 18001 bytes ")
 
 
 class TestInlineEncoding:
@@ -485,9 +788,27 @@ class TestInlineEncoding:
         it crashed the stdio writer on the first ``initialize``."""
         with pytest.raises(OpenZimMcpConfigurationError) as excinfo:
             resolve_instructions("simple", inline="Archives: caf\udce9 recipes")
-        message = str(excinfo.value)
-        assert message.startswith(INSTRUCTIONS_ENV)
-        assert "not valid UTF-8" in message and "0xe9" in message
+        assert str(excinfo.value) == (
+            f"{INSTRUCTIONS_ENV} is not valid UTF-8: it holds the undecodable "
+            "byte 0xe9 at character 14 (line 1). Set it from UTF-8 text, or put "
+            f"the text in a UTF-8 file and set {INSTRUCTIONS_PATH_ENV}."
+        )
+
+    def test_the_position_counts_lines(self) -> None:
+        with pytest.raises(OpenZimMcpConfigurationError) as excinfo:
+            resolve_instructions("simple", inline="one\ntwo\ncaf\udce9")
+        assert " the undecodable byte 0xe9 at character 12 (line 3). " in str(
+            excinfo.value
+        )
+
+    def test_a_lone_surrogate_from_code_is_not_called_a_byte(self) -> None:
+        """Only code can pass a surrogate outside surrogateescape's range,
+        and it does not stand for a byte."""
+        with pytest.raises(OpenZimMcpConfigurationError) as excinfo:
+            resolve_instructions("simple", inline="x\ud800y")
+        assert " it holds the lone surrogate U+D800 at character 2 (line 1). " in (
+            str(excinfo.value)
+        )
 
     @pytest.mark.skipif(sys.platform == "win32", reason="POSIX environ bytes")
     def test_the_same_byte_through_the_environment(
@@ -495,8 +816,9 @@ class TestInlineEncoding:
     ) -> None:
         # os.environ re-encodes the surrogate as the original 0xe9 byte.
         monkeypatch.setenv(INSTRUCTIONS_ENV, "caf\udce9")
-        with pytest.raises(OpenZimMcpConfigurationError, match="not valid UTF-8"):
+        with pytest.raises(OpenZimMcpConfigurationError) as excinfo:
             _server(tmp_path)
+        assert str(excinfo.value).startswith(f"{INSTRUCTIONS_ENV} is not valid UTF-8: ")
 
 
 # ---------------------------------------------------------------------------
@@ -571,19 +893,21 @@ class TestStartupReport:
         )
         assert not _messages(records, logging.WARNING)
 
-    def test_a_file_with_the_token(self, tmp_path: Path) -> None:
+    @pytest.mark.parametrize("tool_mode", TOOL_MODES)
+    def test_a_file_with_the_token(self, tmp_path: Path, tool_mode: str) -> None:
         path = _write(tmp_path / "instructions.md", b"Notes.\n\n{{default}}\n")
         with _collected(LOGGER) as records:
-            server = _server(tmp_path, "advanced", instructions_path=path)
+            server = _server(tmp_path, tool_mode, instructions_path=path)
         (line,) = _report_lines(records)
         text = server.mcp.instructions
+        # The path appears as repr() writes it, so a Windows path shows every
+        # backslash doubled; the expectation is built the same way.
         assert line == (
             f"Server instructions: custom, from {INSTRUCTIONS_PATH_ENV}="
             f"{str(path)!r} ({len(text.encode('utf-8'))} bytes, {len(text)} "
-            "characters); the built-in advanced-mode guidance is included via "
+            f"characters); the built-in {tool_mode}-mode guidance is included via "
             "{{default}}"
         )
-        assert str(path) in line
 
     def test_inline_text_without_the_token_says_the_guidance_is_gone(
         self, tmp_path: Path
@@ -607,6 +931,37 @@ class TestStartupReport:
         (line,) = _report_lines(records)
         assert line.endswith("guidance is included 2 times via {{default}}")
 
+    def test_a_configmap_mount_is_logged_as_configured(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Resolving the key's symlink would put the timestamped directory,
+        which every update replaces, in the config, its hash and this line."""
+        path = _configmap(tmp_path / "config")
+        monkeypatch.setenv(INSTRUCTIONS_PATH_ENV, str(path))
+        config = _config(tmp_path)
+        assert config.instructions_path == path
+        with _collected(LOGGER) as records:
+            server = OpenZimMcpServer(config)
+        assert server.mcp.instructions == "From the ConfigMap.\n"
+        (line,) = _report_lines(records)
+        assert line.startswith(
+            f"Server instructions: custom, from {INSTRUCTIONS_PATH_ENV}="
+            f"{str(path)!r} ("
+        )
+
+    def test_a_relative_configmap_path_is_not_followed_either(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        mount = tmp_path / "config"
+        _configmap(mount)
+        monkeypatch.chdir(mount)
+        resolved = resolve_instructions("simple", path="instructions.md")
+        assert describe_instructions(resolved, "simple").startswith(
+            f"Server instructions: custom, from {INSTRUCTIONS_PATH_ENV}="
+            "'instructions.md' (resolved against the working directory: "
+            f"{str(mount / 'instructions.md')!r}) ("
+        )
+
 
 class TestToolNameWarnings:
     def test_simple_mode_warns_about_tools_it_does_not_register(
@@ -615,12 +970,40 @@ class TestToolNameWarnings:
         """Simple is the default mode, and the requester adds context: text
         that names ``zim_search`` describes a tool the client cannot call."""
         with _collected(LOGGER) as records:
-            _server(tmp_path, "simple", instructions="Use zim_search, then `zim_get`.")
+            _server(
+                tmp_path,
+                "simple",
+                instructions="Use zim_search, then `zim_get`, then zim_search.",
+            )
         _report_lines(records)
         (warning,) = _messages(records, logging.WARNING)
-        assert "zim_search, zim_get" in warning
-        assert "simple mode does not register" in warning
-        assert "OPENZIM_MCP_TOOL_MODE=advanced" in warning
+        assert warning == (
+            "Server instructions name zim_search, zim_get, which simple mode does "
+            "not register; clients are offered only zim_query. Set "
+            "OPENZIM_MCP_TOOL_MODE=advanced (or pass --mode advanced), or remove "
+            "those names."
+        )
+
+    def test_one_unregistered_name_reads_as_one(self, tmp_path: Path) -> None:
+        with _collected(LOGGER) as records:
+            _server(tmp_path, "simple", instructions="Use zim_search.")
+        _report_lines(records)
+        (warning,) = _messages(records, logging.WARNING)
+        assert warning.startswith("Server instructions name zim_search, which ")
+        assert warning.endswith(", or remove that name.")
+
+    def test_the_mode_hint_names_a_flag_the_cli_takes(self, tmp_path: Path) -> None:
+        """The warning tells operators what to type, so the parser must take
+        it; a flag renamed in one place only fails here."""
+        with _collected(LOGGER) as records:
+            _server(tmp_path, "simple", instructions="Use zim_search.")
+        _report_lines(records)
+        (warning,) = _messages(records, logging.WARNING)
+        found = re.search(r"\(or pass (--[\w-]+) advanced\)", warning)
+        assert found, warning
+        parser = main_module._build_arg_parser()
+        args = parser.parse_args([found.group(1), "advanced", str(tmp_path)])
+        assert args.mode == "advanced"
 
     def test_advanced_mode_registers_them(self, tmp_path: Path) -> None:
         with _collected(LOGGER) as records:
@@ -630,44 +1013,142 @@ class TestToolNameWarnings:
         _report_lines(records)
         assert not _messages(records, logging.WARNING)
 
-    def test_the_expanded_default_is_never_scanned(self, tmp_path: Path) -> None:
-        """Only the operator's words are theirs to fix."""
+    @pytest.mark.parametrize("tool_mode", TOOL_MODES)
+    def test_the_expanded_default_is_never_scanned(
+        self, tmp_path: Path, tool_mode: str
+    ) -> None:
+        """Only the operator's words are theirs to fix. A near-miss after the
+        token is reported on the operator's own line, not one shifted by the
+        built-in text's lines, so the scan did not run on the expansion."""
         with _collected(LOGGER) as records:
-            _server(tmp_path, "simple", instructions="Ours.\n{{default}}")
+            _server(tmp_path, tool_mode, instructions="{{default}}\nSee {{ default }}.")
         _report_lines(records)
-        assert not _messages(records, logging.WARNING)
+        (warning,) = _messages(records, logging.WARNING)
+        assert warning.startswith(
+            "Server instructions contain '{{ default }}' (line 2), "
+        )
 
     def test_a_close_misspelling_gets_a_suggestion(self, tmp_path: Path) -> None:
         with _collected(LOGGER) as records:
             _server(tmp_path, "advanced", instructions="Try zim_serach first.")
         _report_lines(records)
         (warning,) = _messages(records, logging.WARNING)
-        assert "zim_serach" in warning and "did you mean zim_search?" in warning
+        assert warning == (
+            "Server instructions name zim_serach (did you mean zim_search?), which "
+            "is not a tool on this server."
+        )
+
+    def test_a_suggestion_simple_mode_lacks_says_so(self, tmp_path: Path) -> None:
+        """Fixing the spelling alone would earn a second warning next start."""
+        with _collected(LOGGER) as records:
+            _server(tmp_path, "simple", instructions="Try zim_serach first.")
+        _report_lines(records)
+        (warning,) = _messages(records, logging.WARNING)
+        assert warning == (
+            "Server instructions name zim_serach (did you mean zim_search? It is "
+            "registered in advanced mode only.), which is not a tool on this "
+            "server."
+        )
+
+    def test_two_misspellings_are_named_together(self, tmp_path: Path) -> None:
+        with _collected(LOGGER) as records:
+            _server(
+                tmp_path, "advanced", instructions="Try zim_serach or zim_gett first."
+            )
+        _report_lines(records)
+        (warning,) = _messages(records, logging.WARNING)
+        assert warning == (
+            "Server instructions name zim_serach (did you mean zim_search?), "
+            "zim_gett (did you mean zim_get?), which are not tools on this server."
+        )
 
     def test_a_suggestion_this_mode_lacks_says_so(self) -> None:
         unregistered, typos = tool_name_findings("Try zim_serach.", ["zim_query"])
         assert unregistered == []
         assert typos == [("zim_serach", "zim_search", False)]
 
+    def test_the_typo_cutoff_sits_between_typos_and_words(self) -> None:
+        """zim_qeury, a transposition in the one simple-mode tool, scores
+        0.889; zim_data, a volume name, scores 0.8. The cutoff lies between."""
+        assert tool_name_findings("Use zim_qeury.", ["zim_query"]) == (
+            [],
+            [("zim_qeury", "zim_query", True)],
+        )
+        assert tool_name_findings("Mount the zim_data volume.", ["zim_query"]) == (
+            [],
+            [],
+        )
+
     @pytest.mark.parametrize(
         "text",
         [
             "Pass zim_file_path to pick an archive.",
             "This openzim_mcp server holds medicine.",
-            "Archives live in /srv/zim_data/ and /srv/zim_files.",
-            "The backup is zim_backup.zim.",
-            "Errors such as zim_path_not_found mean the path is wrong.",
             "my_zim_archive is the main one.",
+            "Errors such as zim_path_not_found mean the path is wrong.",
+            "The backup is zim_backup.zim.",
+            "Mount the zim_data volume, or zim_meta, or zim_queries.",
+            # Each of these holds a real tool name, which simple mode would
+            # report as unregistered if the rule it exercises let it through.
+            "Call tools.zim_search for terms.",
+            "Archives live in /srv/zim_search and /srv/zim_data/.",
+            "Files are in C:\\archives\\zim_search",
+            "Mirror it to backup-zim_search nightly.",
+            "See zim_links.md for the link policy.",
+            "Put archives under zim_search/wiki.zim",
+            "The zim_search/ directory holds them.",
+            "The zim_search-2024 share is read-only.",
+            "The zim_searchAPI wrapper.",
+            "zim_search\\wiki.zim holds it.",
+            "See https://example.com/zim_search for more.",
         ],
     )
     def test_names_that_are_not_tools_are_left_alone(self, text: str) -> None:
         assert tool_name_findings(text, ["zim_query"]) == ([], [])
 
-    def test_client_qualified_names_count(self) -> None:
-        unregistered, _ = tool_name_findings(
-            "Call mcp__openzim__zim_search for terms.", ["zim_query"]
+    @pytest.mark.parametrize(
+        ("text", "named"),
+        [
+            ("Use __zim_search__ for exact terms.", ["zim_search"]),
+            ("Use _zim_search_ here.", ["zim_search"]),
+            ("Use **zim_search** and `zim_get`.", ["zim_search", "zim_get"]),
+            ("End on zim_search.", ["zim_search"]),
+            ("_Always start with zim_query_, the one tool here.", []),
+        ],
+    )
+    def test_markdown_around_a_name_is_not_part_of_it(
+        self, text: str, named: List[str]
+    ) -> None:
+        """The docs keep the text in a Markdown file; emphasis around a correct
+        name must not turn it into a "did you mean" about itself."""
+        assert tool_name_findings(text, ["zim_query"]) == (named, [])
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "Call mcp__openzim__zim_search for terms.",
+            "Call mcp__openzim-mcp-local__zim_search for terms.",
+            "Call mcp__zim__zim_search for terms.",
+        ],
+    )
+    def test_client_qualified_names_count(self, text: str) -> None:
+        assert tool_name_findings(text, ["zim_query"]) == (["zim_search"], [])
+
+    def test_names_joined_by_a_slash_are_alternatives(self) -> None:
+        assert tool_name_findings(
+            "Use zim_get/zim_get_section for articles.", ["zim_query"]
+        ) == (["zim_get", "zim_get_section"], [])
+
+    def test_a_doubled_underscore_is_a_typo_not_a_qualifier(self) -> None:
+        assert tool_name_findings("Try zim__search.", ["zim_query"]) == (
+            [],
+            [("zim__search", "zim_search", False)],
         )
-        assert unregistered == ["zim_search"]
+
+    def test_a_repeated_name_is_reported_once(self) -> None:
+        assert tool_name_findings(
+            "zim_search, zim_search, zim_serach, zim_serach", ["zim_query"]
+        ) == (["zim_search"], [("zim_serach", "zim_search", False)])
 
     def test_every_identifier_the_server_publishes_is_left_alone(
         self, tmp_path: Path
@@ -687,6 +1168,39 @@ class TestToolNameWarnings:
         assert "zim_file_path" in zim_names
         text = " ".join(zim_names)
         assert tool_name_findings(text, server.mcp.registered_tool_names()) == ([], [])
+
+
+def _scan(text: str) -> None:
+    near_miss_tokens(text)
+    tool_name_findings(text, ["zim_query"])
+
+
+def _cheapest(call: Callable[[], object], repeats: int = 7) -> float:
+    """The least noisy estimate of a cost on a shared runner."""
+    best = float("inf")
+    for _ in range(repeats):
+        start = time.perf_counter()
+        call()
+        best = min(best, time.perf_counter() - start)
+    return best
+
+
+# Each has been quadratic under some version of the patterns: a brace run
+# under a near-miss pattern without its lookbehind, and the ``__``-joined runs
+# under a tool-name pattern that let a match start after every ``__``.
+_SCAN_SHAPES: Dict[str, Callable[[int], str]] = {
+    "brace-run": lambda n: "{" * n,
+    "brace-then-spaces": lambda n: "{{" + " " * n,
+    "braces-then-default": lambda n: "{" * (n // 2) + "default" + " " * (n // 2),
+    "zim-run-then-slash": lambda n: "zim_" * (n // 4) + "/",
+    "qualified-run-then-slash": lambda n: "__zim_" * (n // 6) + "/",
+    "underscored-run-then-capital": lambda n: "_zim_" * (n // 5) + "X",
+    "doubled-run-then-dot": lambda n: "zim__" * (n // 5) + ".x",
+}
+# Four times the text: about four times the time when linear, sixteen when
+# quadratic. Both sides are timed in one process, so the bound holds on any
+# machine (#474 replaced an absolute budget that failed on a slow runner).
+_GROWTH_BOUND = 10.0
 
 
 class TestTokenWarnings:
@@ -721,28 +1235,70 @@ class TestTokenWarnings:
     def test_everything_else_is_quiet(self, text: str) -> None:
         assert near_miss_tokens(text) == []
 
+    def test_each_near_miss_is_reported_once_on_its_own_line(self) -> None:
+        """Lines run on from one match to the next, across a near-miss that
+        itself spans lines; a repeat is reported where it first appears."""
+        text = (
+            "Intro.\n{{ default }}\nMore.\n{{\ndefault\n}}\n"
+            "And {default} here.\n{{ default }} again."
+        )
+        assert near_miss_tokens(text) == [
+            ("{{ default }}", 2),
+            ("{{\ndefault\n}}", 4),
+            ("{default}", 7),
+        ]
+
     def test_the_warning_is_logged(self, tmp_path: Path) -> None:
         with _collected(LOGGER) as records:
             _server(tmp_path, instructions="Ours.\n{{ default }}")
         _report_lines(records)
         (warning,) = _messages(records, logging.WARNING)
-        assert "'{{ default }}' (line 2)" in warning
-        assert "only the exact text {{default}} is replaced" in warning
+        assert warning == (
+            "Server instructions contain '{{ default }}' (line 2), which is not "
+            "the {{default}} token: only the exact text {{default}} is replaced, "
+            "and anything else is sent to clients as written."
+        )
 
-    @pytest.mark.parametrize(
-        "text",
-        ["{" * MAX_INSTRUCTIONS_BYTES, "{{" + " " * MAX_INSTRUCTIONS_BYTES],
-        ids=["brace-run", "brace-then-spaces"],
-    )
-    def test_the_scans_stay_linear_at_the_cap(self, text: str) -> None:
-        """A naive broadening of the near-miss pattern took seconds on these;
-        this repo has shipped one quadratic regex over raw text before
-        (#474)."""
-        started = time.perf_counter()
-        near_miss_tokens(text)
-        tool_name_findings(text, ["zim_query"])
-        tool_name_findings("zim_" * (MAX_INSTRUCTIONS_BYTES // 4) + "/", ["zim_query"])
-        assert time.perf_counter() - started < 1.0
+    def test_two_near_misses_share_one_warning(self) -> None:
+        records = _report(
+            resolve_instructions("simple", inline="Ours.\n{{ default }}\n{default}")
+        )
+        (warning,) = _messages(records, logging.WARNING)
+        assert warning.startswith(
+            "Server instructions contain '{{ default }}' (line 2), '{default}' "
+            "(line 3), which are not the {{default}} token: "
+        )
+
+    def test_the_token_inside_extra_braces_expands_and_is_said_to(
+        self, tmp_path: Path
+    ) -> None:
+        """The startup line says the guidance is included, so the warning
+        must not say this went out as written."""
+        with _collected(LOGGER) as records:
+            server = _server(tmp_path, instructions="Notes.\n{{{default}}}")
+        (line,) = _report_lines(records)
+        assert line.endswith("guidance is included via {{default}}")
+        assert server.mcp.instructions == (
+            "Notes.\n{" + SIMPLE_INSTRUCTIONS.rstrip("\n") + "}\n"
+        )
+        (warning,) = _messages(records, logging.WARNING)
+        assert warning == (
+            "Server instructions contain '{{{default}}}' (line 2): the {{default}} "
+            "inside expands, but the characters around it are sent to clients as "
+            "written."
+        )
+
+    @pytest.mark.parametrize("shape", sorted(_SCAN_SHAPES))
+    def test_the_scans_stay_linear(self, shape: str) -> None:
+        small = _SCAN_SHAPES[shape](MAX_INSTRUCTIONS_BYTES)
+        large = _SCAN_SHAPES[shape](4 * MAX_INSTRUCTIONS_BYTES)
+        # One pass at the cap first: a pattern gone badly quadratic takes
+        # seconds there and minutes at four times the size, so stop early.
+        start = time.perf_counter()
+        _scan(small)
+        assert time.perf_counter() - start < 1.0, f"{shape}: slow at the cap"
+        growth = _cheapest(lambda: _scan(large)) / _cheapest(lambda: _scan(small))
+        assert growth < _GROWTH_BOUND, f"{shape}: 4x the text took {growth:.1f}x"
 
 
 class TestMisconfigurationWarnings:
@@ -766,8 +1322,20 @@ class TestMisconfigurationWarnings:
         (line,) = _report_lines(records)
         assert line.startswith("Server instructions: built-in")
         (warning,) = _messages(records, logging.WARNING)
-        assert variable in warning
-        assert INSTRUCTIONS_ENV in warning and INSTRUCTIONS_PATH_ENV in warning
+        assert warning == (
+            f"{variable} is not a setting and is ignored: the server reads "
+            f"{INSTRUCTIONS_ENV} (the text itself) and {INSTRUCTIONS_PATH_ENV} (a "
+            "file holding it)."
+        )
+
+    def test_misspellings_are_found_in_any_case(self) -> None:
+        """The settings model reads names case-insensitively, so it ignores a
+        lower-case misspelling just as silently."""
+        environ = {"openzim_mcp_instructions_file": "x", "Openzim_Mcp_Instruction": "y"}
+        assert misspelt_instruction_variables(environ) == [
+            "Openzim_Mcp_Instruction",
+            "openzim_mcp_instructions_file",
+        ]
 
     def test_the_real_names_in_any_case_are_not_misspelt(self) -> None:
         environ = {
@@ -777,18 +1345,122 @@ class TestMisconfigurationWarnings:
         }
         assert misspelt_instruction_variables(environ) == []
 
-    def test_inline_text_that_is_a_file_path(self, tmp_path: Path) -> None:
-        path = _write(tmp_path / "instructions.md", b"Notes.\n")
+    def test_two_misspelt_variables_share_one_warning(self) -> None:
+        records = _report(
+            resolve_instructions("simple"),
+            environ={
+                "OPENZIM_MCP_INSTRUCTION": "x",
+                "OPENZIM_MCP_INSTRUCTIONS_FILE": "y",
+            },
+        )
+        (warning,) = _messages(records, logging.WARNING)
+        assert warning.startswith(
+            "OPENZIM_MCP_INSTRUCTION, OPENZIM_MCP_INSTRUCTIONS_FILE are not "
+            "settings and are ignored: "
+        )
+
+    def test_a_name_that_would_break_the_log_line_is_quoted(self) -> None:
+        """POSIX allows a newline in a variable name. Logged raw, it would
+        start a line that reads as the server's own."""
+        forged = "OPENZIM_MCP_INSTRUCTIONS_FILE\n2026-11-19 10:00:00 - INFO - forged"
+        records = _report(resolve_instructions("simple"), environ={forged: "x"})
+        (warning,) = _messages(records, logging.WARNING)
+        assert "\n" not in warning
+        assert warning.startswith(f"{forged!r} is not a setting and is ignored: ")
+
+    @pytest.mark.parametrize(
+        "shape",
+        [
+            "absolute",
+            "spaced-without-an-extension",
+            "trailing-newline",
+            "double-quoted",
+            "single-quoted",
+            "home-relative",
+            "relative",
+            "missing-mount",
+            "missing-with-spaces",
+            "windows-drive",
+        ],
+    )
+    def test_inline_text_that_is_a_file_path(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, shape: str
+    ) -> None:
+        """The likeliest mix-up between the two variables: a path set where
+        the text belongs is served to every client as the instructions."""
+        home = tmp_path / "home"
+        (home / "My Notes").mkdir(parents=True)
+        path = _write(home / "instructions.md", b"Notes.\n")
+        spaced = _write(home / "My Notes" / "instructions", b"Notes.\n")
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setenv("USERPROFILE", str(home))
+        monkeypatch.chdir(home)
+        absent = "/Users/me/Library/Application Support/Claude/instructions.md"
+        value, named = {
+            "absolute": (str(path), str(path)),
+            "spaced-without-an-extension": (str(spaced), str(spaced)),
+            "trailing-newline": (f"{path}\n", str(path)),
+            "double-quoted": (f'"{path}"', str(path)),
+            "single-quoted": (f"'{path}'", str(path)),
+            "home-relative": ("~/My Notes/instructions", "~/My Notes/instructions"),
+            "relative": ("instructions.md", "instructions.md"),
+            "missing-mount": ("/config/instructions.md", "/config/instructions.md"),
+            "missing-with-spaces": (absent, absent),
+            "windows-drive": ("C:\\Users\\me\\notes.md", "C:\\Users\\me\\notes.md"),
+        }[shape]
         with _collected(LOGGER) as records:
-            _server(tmp_path, instructions=str(path))
+            _server(tmp_path, instructions=value)
         _report_lines(records)
         (warning,) = _messages(records, logging.WARNING)
-        assert warning.startswith(f"{INSTRUCTIONS_ENV} holds a file path")
-        assert INSTRUCTIONS_PATH_ENV in warning
+        assert warning == (
+            f"{INSTRUCTIONS_ENV} looks like a file path ({named!r}); clients "
+            "receive it as the instructions text. To load the file, set "
+            f"{INSTRUCTIONS_PATH_ENV} instead."
+        )
 
-    def test_one_word_that_is_not_a_file_is_fine(self, tmp_path: Path) -> None:
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "Medicine.",
+            "Prefer MedlinePlus for clinical questions.",
+            "/help lists the commands",
+            "~no_such_user_479",
+            "~no_such_user_479 and friends",
+            "x" * 300,
+            "archives",
+            "Line one.\n/etc/openzim-mcp/instructions.md",
+        ],
+        ids=[
+            "a-word",
+            "a-sentence",
+            "a-leading-slash",
+            "an-unknown-user",
+            "an-unknown-user-with-spaces",
+            "too-long-for-a-file-name",
+            "a-directory",
+            "two-lines",
+        ],
+    )
+    def test_text_that_only_resembles_a_path_is_fine(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, text: str
+    ) -> None:
+        """Including what makes the file check itself raise (an unknown
+        ``~user``, a name too long for the file system): a check that only
+        warns must never stop startup."""
+        (tmp_path / "archives").mkdir()
+        monkeypatch.chdir(tmp_path)
         with _collected(LOGGER) as records:
-            _server(tmp_path, instructions="Medicine.")
+            _server(tmp_path, instructions=text)
+        _report_lines(records)
+        assert not _messages(records, logging.WARNING)
+
+    def test_a_file_holding_a_path_is_not_second_guessed(self, tmp_path: Path) -> None:
+        """The check is about the inline variable: an operator who set the
+        path variable has already chosen a file."""
+        other = _write(tmp_path / "other.md", b"Notes.\n")
+        holder = _write(tmp_path / "holder.md", f"{other}\n".encode("utf-8"))
+        with _collected(LOGGER) as records:
+            _server(tmp_path, instructions_path=holder)
         _report_lines(records)
         assert not _messages(records, logging.WARNING)
 
@@ -867,6 +1539,11 @@ class TestEntryPoint:
             env=env,
             timeout=120,
         )
+        # A server that never answered would otherwise fail on the index
+        # below with nothing of its stderr shown.
+        assert proc.returncode == 0 and proc.stdout.strip(), proc.stderr.decode(
+            errors="replace"
+        )
         answer = json.loads(proc.stdout.splitlines()[0])
         assert answer["result"]["instructions"] == (
             "Medical archives.\n\n" + SIMPLE_INSTRUCTIONS
@@ -892,14 +1569,54 @@ def test_the_config_hash_tells_the_texts_apart(tmp_path: Path) -> None:
     one = _config(tmp_path, instructions="One.").get_config_hash()
     two = _config(tmp_path, instructions="Two.").get_config_hash()
     path = _config(tmp_path, instructions_path=tmp_path / "x.md").get_config_hash()
-    assert len({base, one, two, path}) == 4
+    # Same file name, another directory: a different file.
+    elsewhere = _config(
+        tmp_path, instructions_path=tmp_path / "other" / "x.md"
+    ).get_config_hash()
+    assert len({base, one, two, path, elsewhere}) == 5
+
+
+def _docs_section() -> str:
+    page = CONFIG_DOC.read_text(encoding="utf-8")
+    return page.split("## Server instructions", 1)[1].split("\n## ", 1)[0]
+
+
+def _fenced(section: str, language: str) -> str:
+    """The body of the section's first ``language`` code fence."""
+    found = re.search(rf"^```{language}\n(.*?)^```$", section, re.M | re.S)
+    assert found, f"no {language} fence"
+    return found.group(1)
+
+
+def test_the_docs_quote_the_lines_the_code_writes(tmp_path: Path) -> None:
+    """The three example startup lines, rendered here from the code: the
+    built-in text, the page's own example file at the page's own path, and
+    an 80-byte inline text. A reworded built-in text or line format changes
+    the byte counts or the words, and the page has to follow."""
+    section = _docs_section()
+    documented = re.search(r"OPENZIM_MCP_INSTRUCTIONS_PATH=(\S+)", section)
+    assert documented
+    example = _write(
+        tmp_path / "instructions.md", _fenced(section, "markdown").encode("utf-8")
+    )
+    from_file = dataclasses.replace(
+        resolve_instructions("simple", path=example),
+        # POSIX on every OS: the page shows a POSIX path.
+        path=PurePosixPath(documented.group(1)),
+    )
+    assert _fenced(section, "text").splitlines() == [
+        describe_instructions(resolve_instructions("simple"), "simple"),
+        describe_instructions(from_file, "simple"),
+        describe_instructions(
+            resolve_instructions("simple", inline="x" * 79), "simple"
+        ),
+    ]
 
 
 def test_the_docs_describe_what_the_code_does() -> None:
-    """The section quotes the startup line and states the cap; both are
-    claims about this module, so a change to either has to reach the page."""
+    """The variables, the token and the cap, as the section states them."""
     page = CONFIG_DOC.read_text(encoding="utf-8")
-    section = page.split("## Server instructions", 1)[1].split("\n## ", 1)[0]
+    section = _docs_section()
     for fragment in (
         INSTRUCTIONS_ENV,
         INSTRUCTIONS_PATH_ENV,
