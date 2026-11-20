@@ -1205,9 +1205,11 @@ class TestToolNameWarnings:
             # A Latin letter against a name makes it part of a longer word.
             "La table zim_get_sección.",
             "Le café_zim_search est fermé.",
-            # So does an underscore against a letter of another script.
+            # So does an underscore against a letter of another script, on
+            # one side or both.
             "Поле кафе_zim_search в таблице.",
             "Колонка zim_get_раздел.",
+            "Колонка кафе_zim_search_раздел.",
             # A hyphen after a space is not a prefix.
             "Use -zim_search here.",
         ],
@@ -1266,6 +1268,22 @@ class TestToolNameWarnings:
     ) -> None:
         """The docs keep the text in a Markdown file; emphasis around a correct
         name must not turn it into a "did you mean" about itself."""
+        assert tool_name_findings(text, ["zim_query"]) == (named, [])
+
+    @pytest.mark.parametrize(
+        ("text", "named"),
+        [
+            ("그다음 _zim_get_으로 읽으세요.", ["zim_get"]),
+            ("需要某一节时，用_zim_get_section_。", ["zim_get_section"]),
+            ("Prefer _zim_search_\u00b9 for terms.", ["zim_search"]),
+        ],
+        ids=["korean-particle-after", "chinese-word-before", "footnote-after"],
+    )
+    def test_emphasis_glued_on_one_side_is_still_emphasis(
+        self, text: str, named: List[str]
+    ) -> None:
+        """Underscores at both ends with one side free are emphasis, which
+        these scripts and footnote marks glue to the other side."""
         assert tool_name_findings(text, ["zim_query"]) == (named, [])
 
     def test_a_typo_inside_emphasis_is_still_a_typo(self) -> None:
@@ -1385,9 +1403,10 @@ _SCAN_SHAPES: Dict[str, Callable[[int], str]] = {
     "underscored-run-then-capital": lambda n: "_zim_" * (n // 5) + "X",
     "doubled-run-then-dot": lambda n: "zim__" * (n // 5) + ".x",
     "helm-escape-openers": lambda n: '{{ "' * (n // 4),
-    "helm-opener-then-spaces": lambda n: "{{" + " " * n,
+    "helm-escape-then-spaces": lambda n: '{{"{{default}}"' + " " * n,
     "raw-escape-openers": lambda n: "{% raw %}" * (n // 9),
     "raw-tag-then-spaces": lambda n: "{%" + " " * n,
+    "raw-tag-name-then-spaces": lambda n: "{% raw" + " " * n,
     "raw-blocks": lambda n: "{% raw %}x{% endraw %}" * (n // 22),
 }
 # Four times the text: about four times the time when linear, sixteen when
@@ -1533,6 +1552,8 @@ class TestTokenWarnings:
             ("{% raw %} {{default}} {% endraw %}", "{% raw %}"),
             ("{% raw %}\n{{default}}\n{% endraw %}", "{% raw %}"),
             ("{% raw %}\nMedical.\n\n{{default}}\n{% endraw %}\n", "{% raw %}"),
+            # The docs' own form, quoted whole in a code span.
+            ("`{% raw %}{{default}}{% endraw %}`", "{% raw %}"),
             # Raw blocks do not nest: the first tag opens the block.
             ("{% raw %}{%- raw -%}{{default}}{% endraw %}", "{% raw %}"),
         ],
@@ -1555,6 +1576,9 @@ class TestTokenWarnings:
             "{{ \"{{default}}' }}",  # the quotes do not match
             "{% raw %}x{% endraw %} {{default}}",  # the token is outside
             "{% raw %}{{default}}",  # never closed, so never rendered either way
+            # Prose about the syntax, each tag in a code span of its own.
+            "In Jinja, `{% raw %}` starts a literal block.\n\n{{default}}\n\n"
+            "A literal block ends with `{% endraw %}`.",
         ],
     )
     def test_no_escape_no_escape_warning(self, text: str) -> None:
@@ -1600,11 +1624,13 @@ class TestTokenWarnings:
     def test_the_scans_stay_linear(self, shape: str) -> None:
         small = _SCAN_SHAPES[shape](MAX_INSTRUCTIONS_BYTES)
         large = _SCAN_SHAPES[shape](4 * MAX_INSTRUCTIONS_BYTES)
-        # One pass at the cap first: a pattern gone badly quadratic takes
-        # seconds there and minutes at four times the size, so stop early.
+        # One pass at the cap first: a pattern gone quadratic takes most of a
+        # second there and a minute or more at four times the size, so stop
+        # early. Linear scans take a millisecond or two, and under coverage
+        # and full CPU load at most about 40 ms.
         start = time.perf_counter()
         _scan(small)
-        assert time.perf_counter() - start < 1.0, f"{shape}: slow at the cap"
+        assert time.perf_counter() - start < 0.5, f"{shape}: slow at the cap"
         growth = _cheapest(lambda: _scan(large)) / _cheapest(lambda: _scan(small))
         assert growth < _GROWTH_BOUND, f"{shape}: 4x the text took {growth:.1f}x"
 
@@ -1706,6 +1732,10 @@ class TestMisconfigurationWarnings:
         # A file name or a relative path, ending in a text-file extension.
         "a-file-name": "notes.md",
         "a-relative-file": "config/notes.md",
+        "a-cyrillic-file-name": "\u0438\u043d\u0441\u0442\u0440.md",
+        "a-hebrew-file-name": "\u05d4\u05d5\u05e8\u05d0.md",
+        "an-at-file-reference": "@/config/instructions.md",
+        "a-stray-quote": "'/srv/notes.md",
         # Each way a path starts, with no extension.
         "root": "/config/instructions",
         "home": "~/config/instructions",
@@ -1730,6 +1760,10 @@ class TestMisconfigurationWarnings:
         "double-quoted": '"{home}/instructions.md"',
         "single-quoted": "'{home}/instructions.md'",
         "curly-quoted": "\u201c{home}/instructions.md\u201d",
+        "polish-quoted": "\u201e/config/instructions.md\u201d",
+        "swedish-quoted": "\u201d/config/instructions.md\u201d",
+        "danish-quoted": "\u00bb/config/instructions.md\u00ab",
+        "german-single-quoted": "\u201a/config/instructions.md\u2018",
         "padded-inside-quotes": '" {home}/instructions.md "',
         "command-substitution": "$(cat /config/instructions.md)",
         "quoted-command-substitution": '$(cat "/config/instructions.md")',
@@ -1741,6 +1775,10 @@ class TestMisconfigurationWarnings:
         "double-quoted": "{home}/instructions.md",
         "single-quoted": "{home}/instructions.md",
         "curly-quoted": "{home}/instructions.md",
+        "polish-quoted": "/config/instructions.md",
+        "swedish-quoted": "/config/instructions.md",
+        "danish-quoted": "/config/instructions.md",
+        "german-single-quoted": "/config/instructions.md",
         "padded-inside-quotes": "{home}/instructions.md",
         "command-substitution": "/config/instructions.md",
         "quoted-command-substitution": "/config/instructions.md",
@@ -1793,11 +1831,11 @@ class TestMisconfigurationWarnings:
             "https://example.org/medical",
             "$5/hour",
             "$(echo /config/instructions.md)",
-            "'/srv/notes.md",
             "~a\x00b",
             # A sentence in a script written without spaces is not one word.
             "回答请使用中文，参见说明.md",
             "詳しくはREADME.md",
+            "\u0e14\u0e39\u0e23\u0e32\u0e22README.md",
         ],
         ids=[
             "a-word",
@@ -1814,10 +1852,10 @@ class TestMisconfigurationWarnings:
             "a-url",
             "a-dollar-amount",
             "a-command-that-is-not-cat",
-            "a-stray-quote",
             "a-nul-from-code",
             "a-chinese-sentence",
             "a-japanese-sentence",
+            "a-thai-sentence",
         ],
     )
     def test_text_that_only_resembles_a_path_is_fine(
@@ -1830,6 +1868,42 @@ class TestMisconfigurationWarnings:
         monkeypatch.chdir(tmp_path)
         with _collected(LOGGER) as records:
             _server(tmp_path, instructions=text)
+        _report_lines(records)
+        assert not _messages(records, logging.WARNING)
+
+    @pytest.mark.parametrize(
+        "letter",
+        [
+            chr(0x0E14),
+            chr(0x0EC0),
+            chr(0x1000),
+            chr(0x1798),
+            chr(0x304F),
+            chr(0x30AB),
+            chr(0x3400),
+            chr(0x8A73),
+            chr(0xF900),
+        ],
+        ids=[
+            "thai",
+            "lao",
+            "myanmar",
+            "khmer",
+            "hiragana",
+            "katakana",
+            "han-extension-a",
+            "han",
+            "han-compatibility",
+        ],
+    )
+    def test_one_word_in_a_script_without_spaces_can_be_a_sentence(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, letter: str
+    ) -> None:
+        """One letter from each block of those scripts: a name ending in a
+        file name is no path there unless the file exists."""
+        monkeypatch.chdir(tmp_path)
+        with _collected(LOGGER) as records:
+            _server(tmp_path, instructions=f"{letter}README.md")
         _report_lines(records)
         assert not _messages(records, logging.WARNING)
 

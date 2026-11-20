@@ -204,9 +204,33 @@ _PATH_START = re.compile(
 )
 _TEXT_FILE_SUFFIXES = (".md", ".markdown", ".txt")
 
-# The quotes a value can arrive in, opening to closing: an ``--env-file`` line
-# keeps ASCII ones, and a word processor or chat client makes them curly.
-_QUOTE_PAIRS = {'"': '"', "'": "'", "“": "”", "‘": "’", "„": "“", "«": "»"}
+# The quotes a value can arrive in, each opening quote with the closing ones
+# it pairs with: an ``--env-file`` line keeps ASCII quotes, and a word
+# processor or chat client makes them curly in its locale's style (“…” and
+# ‘…’ in English, „…“ in German, „…” in Polish, ”…” in Swedish, «…» in French,
+# »…« in Danish).
+_QUOTE_PAIRS = {
+    '"': '"',
+    "'": "'",
+    "“": "”",
+    "‘": "’",
+    "„": "“”",
+    "‚": "‘’",
+    "”": "”",
+    "’": "’",
+    "«": "»",
+    "»": "«",
+}
+
+# Letters of the scripts written without spaces between words: Thai and
+# Lao, Myanmar, Khmer, kana, and Han in its three blocks. In them one
+# "word" can be a whole sentence that ends in a file name (Chinese
+# 参见说明.md, Japanese 詳しくはREADME.md), so a name alone is no evidence of
+# a path there.
+_SPACELESS_SCRIPT = re.compile(
+    r"[\u0e00-\u0eff\u1000-\u109f\u1780-\u17ff\u3040-\u30ff"
+    r"\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]"
+)
 
 
 @dataclass(frozen=True)
@@ -563,10 +587,18 @@ def _raw_blocks_holding_the_token(text: str) -> Iterator[Tuple[int, str]]:
     """``(position, opening tag)`` of each Jinja raw block holding the token.
 
     Raw blocks do not nest: a ``{% raw %}`` inside one is text, and only the
-    first ``{% endraw %}`` closes it.
+    first ``{% endraw %}`` closes it. A tag that is a code span of its own
+    (```{% raw %}```) is prose about the syntax, not an escape.
     """
     opened: Optional["re.Match[str]"] = None
     for tag in _JINJA_RAW_TAG.finditer(text):
+        quoted = (
+            text[tag.start() - 1 : tag.start()]
+            == "`"
+            == text[tag.end() : tag.end() + 1]
+        )
+        if quoted:
+            continue
         if tag.group(1) == "raw":
             if opened is None:
                 opened = tag
@@ -635,19 +667,25 @@ def _cleaned_run(text: str, match: "re.Match[str]") -> Optional[str]:
 
     A letter or digit just outside a run is of another script, since a Latin
     one would have continued it. An underscore against it joins the two into
-    one identifier, as Markdown reads it too (``кафе_zim_search``,
-    ``zim_get_раздел``); a hyphen after it attaches a prefix, the way Hebrew
-    writes ``ב-zim_search``. Emphasis comes off before full stops, which can
-    sit inside the closing marker.
+    one identifier (``кафе_zim_search``, ``zim_get_раздел``), unless the run
+    has underscores at both ends and one side is free: that is emphasis,
+    which Chinese and Japanese glue to the word before it and Korean to the
+    particle after it (``用_zim_get_``, ``_zim_get_으로``). A hyphen after such
+    a letter attaches a prefix, the way Hebrew writes ``ב-zim_search``.
+    Emphasis comes off before full stops, which can sit inside the closing
+    marker.
     """
     run = match.group()
-    before = text[match.start() - 1 : match.start()]
-    after = text[match.end() : match.end() + 1]
-    if (run.startswith("_") and before.isalnum()) or (
-        run.endswith("_") and after.isalnum()
-    ):
+    glued_before = text[match.start() - 1 : match.start()].isalnum()
+    glued_after = text[match.end() : match.end() + 1].isalnum()
+    leading, trailing = run.startswith("_"), run.endswith("_")
+    if leading and trailing:
+        identifier = glued_before and glued_after
+    else:
+        identifier = (leading and glued_before) or (trailing and glued_after)
+    if identifier:
         return None
-    if run.startswith("-") and before.isalnum():
+    if run.startswith("-") and glued_before:
         run = run[1:]
     return run.lstrip("_").rstrip("._")
 
@@ -705,9 +743,10 @@ def _names_a_file(text: str) -> Optional[str]:
 
     The likeliest mix-up between the two variables: a path set where the text
     belongs is served to every client as the instructions. One line counts
-    when it names a file that exists; when it is a file name or relative path
-    with a text-file extension, written in name characters (a sentence in a
-    script without spaces is not one word); or when it starts like a path
+    when it names a file that exists; when it is one word with a text-file
+    extension, such as a file name or a relative path, unless it is written
+    in a script without spaces, where one word can be a whole sentence
+    (:data:`_SPACELESS_SCRIPT`); or when it starts like a path
     (:data:`_PATH_START`) and has no spaces or has such an extension, since
     the mount behind it may be missing too. Quotes and a command
     substitution no shell ran are taken off first (:func:`_unwrapped`).
@@ -717,7 +756,7 @@ def _names_a_file(text: str) -> Optional[str]:
         return None
     spaced = any(char.isspace() for char in candidate)
     suffixed = candidate.lower().endswith(_TEXT_FILE_SUFFIXES)
-    file_name = suffixed and _WORD_RUN.fullmatch(candidate) is not None
+    file_name = suffixed and not spaced and _SPACELESS_SCRIPT.search(candidate) is None
     if file_name or (_PATH_START.match(candidate) and (suffixed or not spaced)):
         return candidate
     try:
@@ -747,7 +786,7 @@ def _unwrapped(candidate: str) -> str:
 
 
 def _without_quotes(candidate: str) -> str:
-    if len(candidate) > 1 and _QUOTE_PAIRS.get(candidate[0]) == candidate[-1]:
+    if len(candidate) > 1 and candidate[-1] in _QUOTE_PAIRS.get(candidate[0], ""):
         return candidate[1:-1].strip()
     return candidate
 
