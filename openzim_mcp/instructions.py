@@ -58,7 +58,6 @@ from typing import (
     Optional,
     Sequence,
     Tuple,
-    Union,
 )
 
 from .exceptions import OpenZimMcpConfigurationError
@@ -298,7 +297,7 @@ def resolve_instructions(
     tool_mode: str,
     *,
     inline: Optional[str] = None,
-    path: Union[str, Path, None] = None,
+    path: str | Path | None = None,
 ) -> ServerInstructions:
     """The instructions to advertise for ``tool_mode``.
 

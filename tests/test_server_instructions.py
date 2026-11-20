@@ -649,7 +649,8 @@ class TestUnusableFiles:
         encoding = "utf-16-le" if bom == b"\xff\xfe" else "utf-16-be"
         path = _write(tmp_path / "instructions.md", bom + "Notes.".encode(encoding))
         message = _file_error(path)
-        assert "UTF-16" in message and "save it as UTF-8" in message
+        assert "UTF-16" in message
+        assert "save it as UTF-8" in message
 
     def test_a_nul_byte_is_refused(self, tmp_path: Path) -> None:
         """BOM-less UTF-16 of ASCII text is valid UTF-8, NULs and all, and
@@ -1994,9 +1995,9 @@ class TestEntryPoint:
         )
         # A server that never answered would otherwise fail on the index
         # below with nothing of its stderr shown.
-        assert proc.returncode == 0 and proc.stdout.strip(), proc.stderr.decode(
-            errors="replace"
-        )
+        stderr = proc.stderr.decode(errors="replace")
+        assert proc.returncode == 0, stderr
+        assert proc.stdout.strip(), stderr
         answer = json.loads(proc.stdout.splitlines()[0])
         assert answer["result"]["instructions"] == (
             "Medical archives.\n\n" + SIMPLE_INSTRUCTIONS
