@@ -18,6 +18,32 @@ from openzim_mcp.content_processor import ContentProcessor
 from openzim_mcp.security import PathValidator
 
 
+def _is_an_instructions_variable(key: str) -> bool:
+    """``OPENZIM_MCP_INSTRUCTIONS*`` in any case, misspelt variants included.
+
+    Every ``OpenZimMcpConfig()`` reads the environment, case-insensitively.
+    A variable exported while trying the feature would silently change the
+    instructions the byte-identical default pins compare against, and a
+    missing ``OPENZIM_MCP_INSTRUCTIONS_PATH`` would make every server
+    construction in the suite fail at startup. Misspelt variants go too:
+    the server warns about them, and the warning tests count warnings.
+    """
+    return key.upper().startswith("OPENZIM_MCP_INSTRUCTION")
+
+
+@pytest.fixture(autouse=True)
+def _no_ambient_instructions_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep ``OPENZIM_MCP_INSTRUCTIONS*`` out of every test.
+
+    ``pytest_configure`` already removed the developer's own before any
+    server was built at collection time or in a session- or module-scoped
+    fixture; this catches one a test set without restoring it.
+    """
+    for key in list(os.environ):
+        if _is_an_instructions_variable(key):
+            monkeypatch.delenv(key)
+
+
 @pytest.fixture
 def temp_dir() -> Generator[Path, None, None]:
     """Create a temporary directory for testing."""
@@ -202,7 +228,16 @@ def minted_transports(monkeypatch: pytest.MonkeyPatch) -> List[object]:
 
 
 def pytest_configure(config):
-    """Configure pytest with custom markers."""
+    """Configure pytest with custom markers, and a clean environment.
+
+    The instructions variables go here, before collection: a parametrize
+    argument builds a server while test modules are collected, and session-
+    and module-scoped fixtures build theirs before any function-scoped
+    autouse fixture runs.
+    """
+    for key in list(os.environ):
+        if _is_an_instructions_variable(key):
+            del os.environ[key]
     config.addinivalue_line(
         "markers",
         "live: mark test as spawning a real openzim-mcp subprocess "
