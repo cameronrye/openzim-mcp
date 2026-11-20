@@ -235,7 +235,7 @@ Your text **replaces** the built-in instructions. Put `{{default}}` where you wa
 The rules:
 
 - **Set one variable or neither.** Both set is a startup error. An empty value counts as unset, so a template that renders an unset variable as `""` keeps the built-in text. There is no way to send no instructions; the shortest override is one line of your own.
-- **A file that is set but unusable stops the server at startup.** That covers a missing file, a directory, a FIFO or device, an unreadable file, a file that is not UTF-8 (UTF-16 included), one containing a NUL byte, and an empty file. The error starts `Configuration error:` and names the variable and the path; the server never falls back to the built-in text silently. Byte-order marks are dropped wherever they appear, and CRLF line endings become LF.
+- **A file that is set but unusable stops the server at startup.** That covers a missing file, a directory, a FIFO or device, an unreadable file, a file that is not UTF-8 (UTF-16 included), one containing a NUL byte, and an empty file. The error starts `Configuration error:` and names the variable and the path; the server never falls back to the built-in text silently. UTF-8 byte-order marks (U+FEFF) are dropped wherever they appear, in the file or in `OPENZIM_MCP_INSTRUCTIONS`, and CRLF line endings become LF.
 - **The path** may start with `~`. Surrounding whitespace is ignored, and a relative path resolves against the server's working directory, which for a GUI-launched host is rarely the one you expect: use an absolute path.
 - **Inline text is sent as written.** A `\n` inside single quotes is two characters, not a newline: use a file, the shell's `$'…'` quoting, or your YAML or JSON's own newline escapes. Text that is not valid UTF-8 is a startup error.
 - **Every `{{default}}` expands**, inside code fences too, and there is no escape for a literal one. Leading and trailing whitespace is trimmed and the text ends with a single newline, so `{{default}}` on its own is exactly the built-in text.
@@ -257,7 +257,7 @@ The first is the default; the second is the example file above in simple mode; t
 - your text names a tool the running mode does not register (simple mode registers only `zim_query`), or something close to a tool name, such as `zim_serach`;
 - it contains a near-miss of the token, such as `{{ default }}` or `{default}`, which is sent to clients as written; the token with extra braces or a `$` against it, such as `{{{default}}}`, which expands but keeps them; or one of the template escapes below in a file no template engine rendered, which expands inside the escape;
 - an environment variable looks like this setting but is not one, such as `OPENZIM_MCP_INSTRUCTIONS_FILE` or `OPENZIM_MCP_INSTRUCTIONS__PATH`, and is ignored;
-- `OPENZIM_MCP_INSTRUCTIONS` looks like a file path, which clients would receive as the text. That is one line that names an existing file, one word ending in `.md`, `.markdown` or `.txt`, or a line that starts like a path and has no spaces or one of those endings. A path starts with `/`, `~/`, `./`, `../`, a drive (`C:\` or `C:/`), a share (`\\server`), or a variable that was never expanded, such as `$HOME/` or `%USERPROFILE%\`. Set `OPENZIM_MCP_INSTRUCTIONS_PATH` to load the file.
+- `OPENZIM_MCP_INSTRUCTIONS` looks like a file path, which clients would receive as the text. That is one line that names an existing file; a file name or relative path ending in `.md`, `.markdown` or `.txt`, such as `notes.md` or `config/notes.md`; a line that starts like a path and has no spaces or one of those endings; or a command substitution that no shell ran, such as `$(cat /config/instructions.md)`. Quotes around the value, straight or curly, are ignored. A path starts with `/`, `~/`, `./`, `../`, a drive (`C:\` or `C:/`), a share (`\\server`), or a variable that was never expanded, such as `$HOME/` or `%USERPROFILE%\`. Set `OPENZIM_MCP_INSTRUCTIONS_PATH` to load the file.
 
 To see exactly what a client receives, ask the server. A stdio server answers on stdin; run it with the deployment's environment and tool mode, since the text depends on both (the CLI defaults to simple mode, the published image to advanced):
 
@@ -270,7 +270,7 @@ printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"server/discover","params":{"_me
 The same pipe works with `docker run -i --rm …` (and the image's usual mounts and `-e` flags) in place of `openzim-mcp /srv/zim`. Over HTTP, ask the running service itself, so its own environment answers; `$TOKEN` holds its `OPENZIM_MCP_AUTH_TOKEN`. Keep the `MCP-Protocol-Version` and `Mcp-Method` headers: without the first, the request is read as a handshake-era one, and the second must name the method in the body.
 
 ```bash
-curl -s -X POST http://127.0.0.1:8000/mcp \
+curl -sS -X POST http://127.0.0.1:8000/mcp \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
@@ -280,7 +280,7 @@ curl -s -X POST http://127.0.0.1:8000/mcp \
   | python3 -c 'import json, sys; sys.stdout.write(json.load(sys.stdin)["result"]["instructions"])'
 ```
 
-If either check prints a Python traceback instead of the text, run it without the final `python3` stage, and the stdio one without `2>/dev/null`, to see what the server said: a configuration error at startup, an `unauthorized` reply (the token is wrong), or an error about a missing session or the `Mcp-Method` header (a header is).
+If either check prints a Python traceback instead of the text, run it without the final `python3` stage, and the stdio one without `2>/dev/null`, to see what happened. The stdio server prints its own `Configuration error:`. An HTTP service that refused to start is not listening, so curl reports that it could not connect, and the error is in the service's own log (`docker logs`, or `journalctl` under systemd). An `unauthorized` reply means the token is wrong, and an error about a missing session or the `Mcp-Method` header means a header is.
 
 ### When a change reaches clients
 

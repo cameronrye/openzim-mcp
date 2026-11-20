@@ -42,13 +42,24 @@ small-model surface and belongs in its own commit.
 
 import codecs
 import difflib
+import itertools
 import logging
 import os
 import re
 import stat
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterator, List, Mapping, Optional, Sequence, Tuple, Union
+from typing import (
+    Any,
+    Iterable,
+    Iterator,
+    List,
+    Mapping,
+    Optional,
+    Sequence,
+    Tuple,
+    Union,
+)
 
 from .exceptions import OpenZimMcpConfigurationError
 from .tools import TOOL_NAMES
@@ -149,14 +160,13 @@ _NEAR_MISS_TOKEN = re.compile(
 
 # The escapes the docs teach for keeping the token away from a template
 # engine, when the engine never ran: Helm's ``{{ "{{default}}" }}`` put in a
-# values file rather than a chart template, or Jinja's ``{% raw %}`` in a file
-# copied as it is. The token inside still expands, so clients get the
-# built-in text wrapped in template syntax.
-_UNRENDERED_ESCAPE = re.compile(
-    r"""\{\{-?[ \t]*(["'`])\{\{default\}\}\1[ \t]*-?\}\}"""
-    r"|\{%-?[ \t]*raw[ \t]*-?%\}[ \t]*\{\{default\}\}"
-    r"[ \t]*\{%-?[ \t]*endraw[ \t]*-?%\}"
-)
+# values file rather than a chart template, or Jinja's ``{% raw %}`` around the
+# token, or around the whole file, copied as it is. The token inside still
+# expands, so clients get the built-in text wrapped in template syntax. A Go
+# action may span lines. A raw block is found by pairing its tags, which
+# scans the text between them once.
+_HELM_ESCAPE = re.compile(r"""\{\{-?\s*(["'`])\{\{default\}\}\1\s*-?\}\}""")
+_JINJA_RAW_TAG = re.compile(r"\{%[-+]?\s*(raw|endraw)\s*[-+]?%\}")
 
 # A run of the characters a tool name, a path or a file name is made of:
 # ASCII letters, digits and ``_``, Latin letters with accents (so ``sección``
@@ -193,6 +203,10 @@ _PATH_START = re.compile(
     r"|\$\{?[A-Za-z_]\w*\}?[/\\]|\$\([A-Za-z_]\w*\)[/\\]|%[A-Za-z_]\w*%[/\\])"
 )
 _TEXT_FILE_SUFFIXES = (".md", ".markdown", ".txt")
+
+# The quotes a value can arrive in, opening to closing: an ``--env-file`` line
+# keeps ASCII ones, and a word processor or chat client makes them curly.
+_QUOTE_PAIRS = {'"': '"', "'": "'", "“": "”", "‘": "’", "„": "“", "«": "»"}
 
 
 @dataclass(frozen=True)
@@ -528,38 +542,60 @@ def near_miss_tokens(text: str) -> List[Tuple[str, int]]:
     clients as written (or, for ``{{{default}}}``, expand with stray braces
     around them).
     """
-    return _distinct_matches(_NEAR_MISS_TOKEN, text, skip=DEFAULT_TOKEN)
+    matches = ((m.start(), m.group()) for m in _NEAR_MISS_TOKEN.finditer(text))
+    return _distinct_spellings(text, matches, skip=DEFAULT_TOKEN)
 
 
 def unrendered_escapes(text: str) -> List[Tuple[str, int]]:
     """Each distinct template escape of the token in ``text``, with its line.
 
-    See :data:`_UNRENDERED_ESCAPE`: the token inside expands, and the escape
-    around it is sent to clients as written.
+    See :data:`_HELM_ESCAPE`: the token inside expands, and the escape around
+    it is sent to clients as written. A Helm escape is quoted whole, a Jinja
+    raw block by its opening tag, which keeps the operator's own text inside
+    the block out of the log.
     """
-    return _distinct_matches(_UNRENDERED_ESCAPE, text)
+    helm = ((m.start(), m.group()) for m in _HELM_ESCAPE.finditer(text))
+    found = sorted(itertools.chain(helm, _raw_blocks_holding_the_token(text)))
+    return _distinct_spellings(text, found)
 
 
-def _distinct_matches(
-    pattern: "re.Pattern[str]", text: str, skip: Optional[str] = None
+def _raw_blocks_holding_the_token(text: str) -> Iterator[Tuple[int, str]]:
+    """``(position, opening tag)`` of each Jinja raw block holding the token.
+
+    Raw blocks do not nest: a ``{% raw %}`` inside one is text, and only the
+    first ``{% endraw %}`` closes it.
+    """
+    opened: Optional["re.Match[str]"] = None
+    for tag in _JINJA_RAW_TAG.finditer(text):
+        if tag.group(1) == "raw":
+            if opened is None:
+                opened = tag
+        elif opened is not None:
+            if text.find(DEFAULT_TOKEN, opened.end(), tag.start()) != -1:
+                yield opened.start(), opened.group()
+            opened = None
+
+
+def _distinct_spellings(
+    text: str, found: Iterable[Tuple[int, str]], skip: Optional[str] = None
 ) -> List[Tuple[str, int]]:
-    """Each distinct match of ``pattern`` but ``skip``, with the line it is on.
+    """Each distinct spelling in ``found`` but ``skip``, with the line it is on.
 
-    The line count runs on from one match to the next, so the whole scan
-    stays one pass over the text.
+    ``found`` holds ``(position, spelling)`` pairs in order of position, so
+    the line count runs on from one to the next and the whole scan stays one
+    pass over the text.
     """
-    found: List[Tuple[str, int]] = []
+    spellings: List[Tuple[str, int]] = []
     seen = set()
     line, counted = 1, 0
-    for match in pattern.finditer(text):
-        spelling = match.group()
+    for start, spelling in found:
         if spelling == skip or spelling in seen:
             continue
         seen.add(spelling)
-        line += text.count("\n", counted, match.start())
-        counted = match.start()
-        found.append((spelling, line))
-    return found
+        line += text.count("\n", counted, start)
+        counted = start
+        spellings.append((spelling, line))
+    return spellings
 
 
 def _tool_references(text: str) -> Iterator[str]:
@@ -570,16 +606,16 @@ def _tool_references(text: str) -> Iterator[str]:
     marker (``_Then call zim_get._``, which is how Prettier writes italics),
     and a client-qualified name such as ``mcp__openzim-mcp__zim_search``
     counts by its last part. Not references: the tail of a longer identifier
-    (``openzim_mcp``, ``my_zim_archive``, ``café_zim_search``), a dotted or
-    file name (``tools.zim_search``, ``.zim_search``, ``zim_links.md``), a
-    hyphenated or camel-case word (``zim_data-2024``, ``zim_searchAPI``), and
-    a path (``/srv/zim_data``, ``zim_data\\x.zim``) — except that tool names
-    joined by ``/`` and nothing else are alternatives
-    (``zim_get/zim_get_section``).
+    in any script (``openzim_mcp``, ``my_zim_archive``, ``café_zim_search``,
+    ``кафе_zim_search``), a dotted or file name (``tools.zim_search``,
+    ``.zim_search``, ``zim_links.md``), a hyphenated or camel-case word
+    (``zim_data-2024``, ``zim_searchAPI``), and a path (``/srv/zim_data``,
+    ``zim_data\\x.zim``) — except that tool names joined by ``/`` and nothing
+    else are alternatives (``zim_get/zim_get_section``).
     """
     for match in _WORD_RUN.finditer(text):
-        run = match.group().lstrip("_").rstrip("._")
-        if "zim_" not in run:
+        run = _cleaned_run(text, match)
+        if run is None or "zim_" not in run:
             continue
         if "/" in run or "\\" in run:
             parts = run.split("/")
@@ -591,6 +627,29 @@ def _tool_references(text: str) -> Iterator[str]:
         name = last if last.startswith("zim_") else run
         if _TOOL_NAME_SHAPE.fullmatch(name):
             yield name
+
+
+def _cleaned_run(text: str, match: "re.Match[str]") -> Optional[str]:
+    """A run without its emphasis and full stops, or ``None`` when it is part
+    of a longer identifier.
+
+    A letter or digit just outside a run is of another script, since a Latin
+    one would have continued it. An underscore against it joins the two into
+    one identifier, as Markdown reads it too (``кафе_zim_search``,
+    ``zim_get_раздел``); a hyphen after it attaches a prefix, the way Hebrew
+    writes ``ב-zim_search``. Emphasis comes off before full stops, which can
+    sit inside the closing marker.
+    """
+    run = match.group()
+    before = text[match.start() - 1 : match.start()]
+    after = text[match.end() : match.end() + 1]
+    if (run.startswith("_") and before.isalnum()) or (
+        run.endswith("_") and after.isalnum()
+    ):
+        return None
+    if run.startswith("-") and before.isalnum():
+        run = run[1:]
+    return run.lstrip("_").rstrip("._")
 
 
 def tool_name_findings(
@@ -646,27 +705,51 @@ def _names_a_file(text: str) -> Optional[str]:
 
     The likeliest mix-up between the two variables: a path set where the text
     belongs is served to every client as the instructions. One line counts
-    when it names a file that exists; when it is one word with a text-file
-    extension; or when it starts like a path (:data:`_PATH_START`) and has no
-    spaces or has such an extension, since the mount behind it may be missing
-    too. One pair of matching quotes around it is ignored: an ``--env-file``
-    line keeps them.
+    when it names a file that exists; when it is a file name or relative path
+    with a text-file extension, written in name characters (a sentence in a
+    script without spaces is not one word); or when it starts like a path
+    (:data:`_PATH_START`) and has no spaces or has such an extension, since
+    the mount behind it may be missing too. Quotes and a command
+    substitution no shell ran are taken off first (:func:`_unwrapped`).
     """
-    candidate = text.strip()
-    if len(candidate) > 1 and candidate[0] == candidate[-1] and candidate[0] in "\"'":
-        candidate = candidate[1:-1].strip()
+    candidate = _unwrapped(text.strip())
     if not candidate or "\n" in candidate:
         return None
     spaced = any(char.isspace() for char in candidate)
     suffixed = candidate.lower().endswith(_TEXT_FILE_SUFFIXES)
-    if (suffixed and not spaced) or (
-        _PATH_START.match(candidate) and (suffixed or not spaced)
-    ):
+    file_name = suffixed and _WORD_RUN.fullmatch(candidate) is not None
+    if file_name or (_PATH_START.match(candidate) and (suffixed or not spaced)):
         return candidate
     try:
         return candidate if Path(candidate).expanduser().is_file() else None
     except (OSError, RuntimeError, ValueError):  # ENAMETOOLONG, an unknown ~user
         return None
+
+
+def _unwrapped(candidate: str) -> str:
+    """``candidate`` without one pair of quotes around it, and without a
+    command substitution that no shell ran: ``$(cat PATH)``, ``$(< PATH)``
+    or a backquoted ``cat PATH``. A JSON ``env`` block or systemd passes those
+    through as written, and the path inside is what was meant to be loaded.
+    One level only, so no value can nest its way into a deep recursion.
+    """
+    candidate = _without_quotes(candidate)
+    if candidate.startswith("$(") and candidate.endswith(")"):
+        inner = candidate[2:-1].strip()
+    elif len(candidate) > 1 and candidate[0] == candidate[-1] == "`":
+        inner = candidate[1:-1].strip()
+    else:
+        return candidate
+    for command in ("cat ", "<"):
+        if inner.startswith(command):
+            return _without_quotes(inner[len(command) :].strip())
+    return candidate
+
+
+def _without_quotes(candidate: str) -> str:
+    if len(candidate) > 1 and _QUOTE_PAIRS.get(candidate[0]) == candidate[-1]:
+        return candidate[1:-1].strip()
+    return candidate
 
 
 def report_instructions(

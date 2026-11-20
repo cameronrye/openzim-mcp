@@ -566,16 +566,28 @@ class TestUnusableFiles:
         message = _file_error(Path("instr\x00uctions.md"))
         assert " is not a usable path: " in message
 
-    def test_a_nul_in_a_user_name_set_in_code(self, tmp_path: Path) -> None:
+    def test_a_nul_in_a_user_name_set_in_code(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """POSIX looks ``~ro<NUL>ot`` up as a user and raises ValueError from
-        there, before ``os.stat``; Windows expands it and ``os.stat`` raises.
-        Either way it is a configuration error, also through the config."""
+        there, so the config itself refuses it. Windows guesses another user's
+        home from the current one's and ``os.stat`` raises instead; the guess
+        is pinned here, since Windows gives up when the profile directory is
+        not named after the user. Either way it is a configuration error."""
+        monkeypatch.setenv("USERPROFILE", str(tmp_path / "runner"))
+        monkeypatch.setenv("USERNAME", "runner")
+        value = "~ro\x00ot/x.md"
+        if sys.platform != "win32":
+            with pytest.raises(OpenZimMcpConfigurationError) as excinfo:
+                _config(tmp_path, instructions_path=value)
+            assert str(excinfo.value) == (
+                f"{INSTRUCTIONS_PATH_ENV}={value!r} is not a usable path: "
+                "embedded null byte."
+            )
         with pytest.raises(OpenZimMcpConfigurationError) as excinfo:
-            resolve_instructions("simple", path="~ro\x00ot/x.md")
+            resolve_instructions("simple", path=value)
         assert str(excinfo.value).startswith(f"{INSTRUCTIONS_PATH_ENV}=")
         assert " is not a usable path: " in str(excinfo.value)
-        with pytest.raises(OpenZimMcpConfigurationError, match="not a usable path"):
-            OpenZimMcpServer(_config(tmp_path, instructions_path="~ro\x00ot/x.md"))
 
     def test_an_unreadable_file(self, tmp_path: Path) -> None:
         path = _write(tmp_path / "instructions.md", b"Secret.\n")
@@ -856,6 +868,16 @@ class TestInlineEncoding:
         with pytest.raises(OpenZimMcpConfigurationError) as excinfo:
             resolve_instructions("simple", inline="one\ntwo\ncaf\udce9")
         assert " the undecodable byte 0xe9 at character 12 (line 3). " in str(
+            excinfo.value
+        )
+
+    def test_a_position_counts_the_byte_order_marks_too(self) -> None:
+        """BOMs are dropped after the check, so a position is in the value as
+        it was set."""
+        value = chr(0xFEFF) + "caf" + chr(0xDCE9)
+        with pytest.raises(OpenZimMcpConfigurationError) as excinfo:
+            resolve_instructions("simple", inline=value)
+        assert " the undecodable byte 0xe9 at character 5 (line 1). " in str(
             excinfo.value
         )
 
@@ -1183,10 +1205,47 @@ class TestToolNameWarnings:
             # A Latin letter against a name makes it part of a longer word.
             "La table zim_get_sección.",
             "Le café_zim_search est fermé.",
+            # So does an underscore against a letter of another script.
+            "Поле кафе_zim_search в таблице.",
+            "Колонка zim_get_раздел.",
+            # A hyphen after a space is not a prefix.
+            "Use -zim_search here.",
         ],
     )
     def test_names_that_are_not_tools_are_left_alone(self, text: str) -> None:
         assert tool_name_findings(text, ["zim_query"]) == ([], [])
+
+    @pytest.mark.parametrize(
+        "letter",
+        [chr(0xC0), chr(0xF6), chr(0xF8), chr(0x1CE), chr(0x301), chr(0x1E01)],
+        ids=[
+            "a-grave",
+            "o-diaeresis",
+            "o-stroke",
+            "a-caron",
+            "combining-acute",
+            "a-ring-below",
+        ],
+    )
+    def test_a_latin_letter_continues_the_word(self, letter: str) -> None:
+        """One letter from each range of the run class: a name glued to it is
+        part of a longer word, as ``zim_get_sección`` is."""
+        assert tool_name_findings(f"Use zim_search{letter}.", ["zim_query"]) == (
+            [],
+            [],
+        )
+
+    @pytest.mark.parametrize(
+        "mark",
+        [chr(0xD7), chr(0xF7), chr(0x434), chr(0x3B1), chr(0x5D0)],
+        ids=["times-sign", "division-sign", "cyrillic", "greek", "hebrew"],
+    )
+    def test_anything_else_ends_the_name(self, mark: str) -> None:
+        """The two signs inside the Latin-1 letters, and every other script."""
+        assert tool_name_findings(f"Use zim_search{mark}2.", ["zim_query"]) == (
+            ["zim_search"],
+            [],
+        )
 
     @pytest.mark.parametrize(
         ("text", "named"),
@@ -1221,12 +1280,14 @@ class TestToolNameWarnings:
             "请优先使用zim_search检索词条，再用zim_get读取。",
             "まずzim_searchで検索し、zim_getで記事を読みます。",
             "먼저 zim_search를 사용하고, 그다음 zim_get으로 읽으세요.",
+            "השתמש ב-zim_search ואז ב-zim_get.",
         ],
-        ids=["chinese", "japanese", "korean"],
+        ids=["chinese", "japanese", "korean", "hebrew"],
     )
     def test_names_in_text_without_spaces_around_them(self, text: str) -> None:
-        """Chinese and Japanese put no space around a Latin word, and Korean
-        attaches particles to it; their letters must not join the name."""
+        """Chinese and Japanese put no space around a Latin word, Korean
+        attaches particles to it and Hebrew a prefix with a hyphen; none of
+        that may join the name."""
         assert tool_name_findings(text, ["zim_query"]) == (
             ["zim_search", "zim_get"],
             [],
@@ -1324,7 +1385,10 @@ _SCAN_SHAPES: Dict[str, Callable[[int], str]] = {
     "underscored-run-then-capital": lambda n: "_zim_" * (n // 5) + "X",
     "doubled-run-then-dot": lambda n: "zim__" * (n // 5) + ".x",
     "helm-escape-openers": lambda n: '{{ "' * (n // 4),
+    "helm-opener-then-spaces": lambda n: "{{" + " " * n,
     "raw-escape-openers": lambda n: "{% raw %}" * (n // 9),
+    "raw-tag-then-spaces": lambda n: "{%" + " " * n,
+    "raw-blocks": lambda n: "{% raw %}x{% endraw %}" * (n // 22),
 }
 # Four times the text: about four times the time when linear, sixteen when
 # quadratic. Both sides are timed in one process, so the bound holds on any
@@ -1453,32 +1517,73 @@ class TestTokenWarnings:
         )
 
     @pytest.mark.parametrize(
-        "escape",
+        ("escape", "quoted"),
         [
-            '{{ "{{default}}" }}',
-            "{{ '{{default}}' }}",
-            "{{`{{default}}`}}",
-            '{{- "{{default}}" -}}',
-            "{% raw %}{{default}}{% endraw %}",
-            "{%- raw -%}{{default}}{%- endraw -%}",
+            # Helm escapes are quoted whole.
+            ('{{ "{{default}}" }}', None),
+            ("{{ '{{default}}' }}", None),
+            ("{{`{{default}}`}}", None),
+            ('{{- "{{default}}" -}}', None),
+            ('{{\t"{{default}}"\t}}', None),
+            ('{{\n  "{{default}}"\n}}', None),  # a Go action may span lines
+            # A Jinja raw block by its opening tag, however its text is laid out.
+            ("{% raw %}{{default}}{% endraw %}", "{% raw %}"),
+            ("{%- raw -%}{{default}}{%- endraw -%}", "{%- raw -%}"),
+            ("{%+ raw %}{{default}}{%+ endraw %}", "{%+ raw %}"),
+            ("{% raw %} {{default}} {% endraw %}", "{% raw %}"),
+            ("{% raw %}\n{{default}}\n{% endraw %}", "{% raw %}"),
+            ("{% raw %}\nMedical.\n\n{{default}}\n{% endraw %}\n", "{% raw %}"),
+            # Raw blocks do not nest: the first tag opens the block.
+            ("{% raw %}{%- raw -%}{{default}}{% endraw %}", "{% raw %}"),
         ],
     )
-    def test_an_unrendered_template_escape_is_found(self, escape: str) -> None:
+    def test_an_unrendered_template_escape_is_found(
+        self, escape: str, quoted: Optional[str]
+    ) -> None:
         """The escapes the docs teach, when no template engine ran: the
         token inside still expands, inside the escape."""
         text = f"Line one.\n\n{escape}"
-        assert unrendered_escapes(text) == [(escape, 3)]
+        assert unrendered_escapes(text) == [(quoted or escape, 3)]
         assert near_miss_tokens(text) == []
 
     @pytest.mark.parametrize(
-        "text", ["{{default}}", 'Write "{{default}}" in the file.', "{% raw %}"]
+        "text",
+        [
+            "{{default}}",
+            'Write "{{default}}" in the file.',
+            "{% raw %}",
+            "{{ \"{{default}}' }}",  # the quotes do not match
+            "{% raw %}x{% endraw %} {{default}}",  # the token is outside
+            "{% raw %}{{default}}",  # never closed, so never rendered either way
+        ],
     )
     def test_no_escape_no_escape_warning(self, text: str) -> None:
         assert unrendered_escapes(text) == []
 
-    def test_the_escape_warning_is_logged(self, tmp_path: Path) -> None:
+    def test_each_escape_is_listed_once_on_its_line(self) -> None:
+        """In the order they appear, across both kinds, a repeat dropped."""
+        text = (
+            '{{ "{{default}}" }}\n\n{% raw %}{{default}}{% endraw %}\n\n'
+            "{{ '{{default}}' }}\n\n"
+            '{{ "{{default}}" }}'
+        )
+        assert unrendered_escapes(text) == [
+            ('{{ "{{default}}" }}', 1),
+            ("{% raw %}", 3),
+            ("{{ '{{default}}' }}", 5),
+        ]
+
+    @pytest.mark.parametrize("source", ["inline", "file"])
+    def test_the_escape_warning_is_logged(self, tmp_path: Path, source: str) -> None:
+        """A values file or a copied file is where the docs say this happens."""
+        text = 'Ours.\n{{ "{{default}}" }}'
+        if source == "file":
+            path = _write(tmp_path / "instructions.md", text.encode("utf-8"))
+            kwargs: Dict[str, Any] = {"instructions_path": path}
+        else:
+            kwargs = {"instructions": text}
         with _collected(LOGGER) as records:
-            server = _server(tmp_path, instructions='Ours.\n{{ "{{default}}" }}')
+            server = _server(tmp_path, **kwargs)
         (line,) = _report_lines(records)
         assert line.endswith("guidance is included via {{default}}")
         assert server.mcp.instructions == (
@@ -1569,8 +1674,15 @@ class TestMisconfigurationWarnings:
             "OPENZIM_MCP_INSTRUCTIONS_FILE\rINFO - forged",
             "OPENZIM_MCP_INSTRUCTIONS_FILE\x1b[2K",
             "OPENZIM_MCP_INSTRUCTIONS ",
+            "OPENZIM_MCP_INSTRUCTIONS PATH",
         ],
-        ids=["newline", "carriage-return", "escape-sequence", "trailing-space"],
+        ids=[
+            "newline",
+            "carriage-return",
+            "escape-sequence",
+            "trailing-space",
+            "inner-space",
+        ],
     )
     def test_a_name_that_would_mislead_the_log_is_quoted(self, name: str) -> None:
         """POSIX allows control characters in a variable name, and logged raw
@@ -1582,47 +1694,58 @@ class TestMisconfigurationWarnings:
         assert warning.isprintable()
         assert warning.startswith(f"{name!r} is not a setting and is ignored: ")
 
-    # The inline values; ``{home}`` is the test's home directory. The files
-    # under it are real, and every other path is missing, so only its shape
-    # can make it warn. The warning quotes the value, or _QUOTED_AS's form.
+    # The inline values; ``{home}`` is the test's home directory, and the
+    # warning quotes the value, or _QUOTED_AS's form of it. The files under
+    # ``{home}`` are real; every other path is missing, and each one is
+    # written so that only the rule its group names can make it warn.
     _FILE_PATHS: Dict[str, str] = {
-        # Files that exist, found by looking.
-        "spaced-without-an-extension": "{home}/My Notes/instructions",
-        "home-relative": "~/My Notes/instructions",
-        "relative": "My Notes/instructions",
-        # Shapes, whether or not anything is there.
+        # Files that exist, found by looking: spaced and with no extension.
+        "spaced-absolute": "{home}/My Notes/instructions",
+        "spaced-home-relative": "~/My Notes/instructions",
+        "spaced-relative": "My Notes/instructions",
+        # A file name or a relative path, ending in a text-file extension.
+        "a-file-name": "notes.md",
+        "a-relative-file": "config/notes.md",
+        # Each way a path starts, with no extension.
+        "root": "/config/instructions",
+        "home": "~/config/instructions",
+        "another-users-home": "~someone/config/instructions",
+        "dot": "./config/instructions",
+        "dot-dot": "../config/instructions",
+        "drive": "C:\\Users\\me\\instructions",
+        "drive-with-forward-slashes": "C:/Users/me/instructions",
+        "unc-share": "\\\\server\\share\\instructions",
+        "unexpanded-variable": "$HOME/config/instructions",
+        "unexpanded-variable-in-braces": "${HOME}/config/instructions",
+        "unexpanded-kubernetes-variable": "$(HOME)/config/instructions",
+        "unexpanded-windows-variable": "%USERPROFILE%\\config\\instructions",
+        # A path start with spaces, kept for its extension, in any case.
+        "spaced-markdown": "/Users/me/Library/Application Support/Claude/notes.md",
+        "spaced-long-markdown": "/srv/My Docs/notes.markdown",
+        "spaced-text": "/srv/My Docs/notes.txt",
+        "spaced-upper-case": "/Users/me/My Docs/NOTES.MD",
+        # What comes off first.
         "absolute": "{home}/instructions.md",
         "trailing-newline": "{home}/instructions.md\n",
         "double-quoted": '"{home}/instructions.md"',
         "single-quoted": "'{home}/instructions.md'",
+        "curly-quoted": "\u201c{home}/instructions.md\u201d",
         "padded-inside-quotes": '" {home}/instructions.md "',
-        "a-stray-quote": "'/srv/notes.md",
-        "missing-mount": "/config/instructions.md",
-        "no-extension": "/config/instructions",
-        "missing-with-spaces": (
-            "/Users/me/Library/Application Support/Claude/instructions.md"
-        ),
-        "upper-case-extension": "/Users/me/My Docs/NOTES.MD",
-        "markdown-extension": "/srv/My Docs/notes.markdown",
-        "text-extension": "/srv/My Docs/notes.txt",
-        "missing-home-relative": "~/config/instructions.md",
-        "another-users-home": "~someone/instructions.md",
-        "dot-relative": "./missing-instructions.md",
-        "parent-relative": "../instructions.md",
-        "a-file-name": "notes.md",
-        "windows-drive": "C:\\Users\\me\\notes.md",
-        "windows-drive-forward-slashes": "C:/Users/me/instructions.md",
-        "unc-share": "\\\\server\\share\\instructions.md",
-        "unexpanded-home": "$HOME/instructions.md",
-        "unexpanded-home-in-braces": "${HOME}/instructions.md",
-        "unexpanded-kubernetes-variable": "$(HOME)/instructions.md",
-        "unexpanded-windows-variable": "%USERPROFILE%\\instructions.md",
+        "command-substitution": "$(cat /config/instructions.md)",
+        "quoted-command-substitution": '$(cat "/config/instructions.md")',
+        "redirect-substitution": "$(< /config/instructions.md)",
+        "backquoted-substitution": "`cat /config/instructions.md`",
     }
     _QUOTED_AS = {
         "trailing-newline": "{home}/instructions.md",
         "double-quoted": "{home}/instructions.md",
         "single-quoted": "{home}/instructions.md",
+        "curly-quoted": "{home}/instructions.md",
         "padded-inside-quotes": "{home}/instructions.md",
+        "command-substitution": "/config/instructions.md",
+        "quoted-command-substitution": "/config/instructions.md",
+        "redirect-substitution": "/config/instructions.md",
+        "backquoted-substitution": "/config/instructions.md",
     }
 
     @pytest.mark.parametrize("shape", sorted(_FILE_PATHS))
@@ -1663,11 +1786,18 @@ class TestMisconfigurationWarnings:
             "x" * 300,
             "archives",
             # Starts like a path and ends in a file name, but is two lines.
-            "/srv/zim holds the archives.\nSee notes.md for the rules.",
+            "/srv/zim holds the archives.\nSee notes.md",
             "See docs/notes.md for the rules.",
+            "Follow the rules in notes.md",
+            "/srv/a\tb",
             "https://example.org/medical",
             "$5/hour",
+            "$(echo /config/instructions.md)",
+            "'/srv/notes.md",
             "~a\x00b",
+            # A sentence in a script written without spaces is not one word.
+            "回答请使用中文，参见说明.md",
+            "詳しくはREADME.md",
         ],
         ids=[
             "a-word",
@@ -1679,9 +1809,15 @@ class TestMisconfigurationWarnings:
             "a-directory",
             "two-lines",
             "a-path-inside-a-sentence",
+            "a-sentence-ending-in-a-file-name",
+            "a-tab-between-words",
             "a-url",
             "a-dollar-amount",
+            "a-command-that-is-not-cat",
+            "a-stray-quote",
             "a-nul-from-code",
+            "a-chinese-sentence",
+            "a-japanese-sentence",
         ],
     )
     def test_text_that_only_resembles_a_path_is_fine(
