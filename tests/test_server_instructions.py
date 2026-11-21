@@ -1507,12 +1507,16 @@ class TestTokenWarnings:
             resolve_instructions("simple", inline="Ours.\n{{ default }}\n{{{default}}}")
         )
         assert _messages(records, logging.WARNING) == [
-            "Server instructions contain '{{ default }}' (line 2), which is not "
-            "the {{default}} token: only the exact text {{default}} is replaced, "
-            "and anything else is sent to clients as written.",
-            "Server instructions contain '{{{default}}}' (line 3): the {{default}} "
-            "inside expands, but the characters around it are sent to clients as "
-            "written.",
+            (
+                "Server instructions contain '{{ default }}' (line 2), which is "
+                "not the {{default}} token: only the exact text {{default}} is "
+                "replaced, and anything else is sent to clients as written."
+            ),
+            (
+                "Server instructions contain '{{{default}}}' (line 3): the "
+                "{{default}} inside expands, but the characters around it are "
+                "sent to clients as written."
+            ),
         ]
 
     @pytest.mark.parametrize("source", ["inline", "file"])
@@ -1578,8 +1582,10 @@ class TestTokenWarnings:
             "{% raw %}x{% endraw %} {{default}}",  # the token is outside
             "{% raw %}{{default}}",  # never closed, so never rendered either way
             # Prose about the syntax, each tag in a code span of its own.
-            "In Jinja, `{% raw %}` starts a literal block.\n\n{{default}}\n\n"
-            "A literal block ends with `{% endraw %}`.",
+            (
+                "In Jinja, `{% raw %}` starts a literal block.\n\n{{default}}\n\n"
+                "A literal block ends with `{% endraw %}`."
+            ),
         ],
     )
     def test_no_escape_no_escape_warning(self, text: str) -> None:
