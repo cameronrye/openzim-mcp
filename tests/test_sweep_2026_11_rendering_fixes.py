@@ -90,3 +90,89 @@ class TestImageOnlyH1KeepsTheStoredTitle:
             assert titles.get("A/Aspirin") == "Aspirin", titles
             # A real truncated title next to it is still completed.
             assert titles.get("A/Alzheimer") == "Alzheimer's Disease", titles
+
+
+class TestCursorQueryContinuityReadsEveryScript:
+    """A replayed search cursor was refused whenever its query left ASCII.
+
+    The continuity check tokenised with ``[a-z0-9]+`` and folded nothing:
+    "Москва 2020" kept only ``2020``, "Zürich" became ``rich``, and an
+    all-Cyrillic query had no tokens at all and fell back to a substring
+    test that reordered words fail, and that fallback compared unfolded
+    text. Each replay below names the same topic as the cursor it carries.
+    """
+
+    @pytest.fixture
+    def archive(self, tmp_path: Path) -> Path:
+        topics = ("история", "культура", "транспорт")
+        return _build_zim(
+            tmp_path / "cyrillic.zim",
+            [
+                (
+                    f"A/Moscow_{i}",
+                    f"Moscow {i}",
+                    f"<html><body><h1>Moscow {i}</h1><p>Москва 2020 Zürich ёж "
+                    f"Москва культура {topic} города.</p></body></html>",
+                )
+                for i, topic in enumerate(topics)
+            ]
+            + [
+                (
+                    "A/Paris",
+                    "Paris",
+                    "<html><body><h1>Paris</h1><p>Париж 2020.</p></body></html>",
+                )
+            ],
+        )
+
+    @staticmethod
+    def _cursor(server: OpenZimMcpServer, archive: Path, query: str) -> str:
+        """The continuation cursor the search data layer mints for page 1."""
+        page = server.zim_operations.search_zim_file_data(str(archive), query, limit=1)
+        cursor = page["next_cursor"]
+        assert cursor, page
+        return str(cursor)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "issued_for, replayed_as",
+        [
+            ("Москва 2020", "search for Москва"),
+            ("Zürich", "search for Zurich"),
+            ("Москва культура", "search for культура Москва"),
+            # Too short for a token: the substring fallback must fold too.
+            ("ёж", "search for еж"),
+        ],
+    )
+    async def test_a_same_topic_replay_reads_page_two(
+        self, archive: Path, issued_for: str, replayed_as: str
+    ) -> None:
+        server = _server(archive.parent, "simple", cache=False)
+        cursor = self._cursor(server, archive, issued_for)
+
+        out = await _call(
+            server,
+            "zim_query",
+            query=replayed_as,
+            zim_file_path=str(archive),
+            cursor=cursor,
+        )
+
+        assert not isinstance(out, dict), out
+        assert "showing 2-2" in str(out), out
+
+    @pytest.mark.asyncio
+    async def test_a_different_topic_is_still_refused(self, archive: Path) -> None:
+        server = _server(archive.parent, "simple", cache=False)
+        cursor = self._cursor(server, archive, "Москва 2020")
+
+        out = await _call(
+            server,
+            "zim_query",
+            query="search for Париж",
+            zim_file_path=str(archive),
+            cursor=cursor,
+        )
+
+        assert isinstance(out, dict) and out.get("operation") == "cursor_decode", out
+        assert "shares no terms" in out["message"], out
