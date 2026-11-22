@@ -26,7 +26,6 @@ def _default_persistence_path() -> str:
 class CacheDefaults:
     """Default values for cache configuration."""
 
-    ENABLED: bool = True
     MAX_SIZE: int = 100
     TTL_SECONDS: int = 3600  # 1 hour
     # Soft cap on total approximate cache size (JSON-rendered bytes
@@ -96,11 +95,7 @@ class InputLimitDefaults:
     """Default values for input validation limits."""
 
     FILE_PATH: int = 1000
-    QUERY: int = 500
     ENTRY_PATH: int = 500
-    NAMESPACE: int = 100
-    CONTENT_TYPE: int = 100
-    PARTIAL_QUERY: int = 200
 
 
 @dataclass(frozen=True)
@@ -117,7 +112,6 @@ class NamespaceSamplingDefaults:
 
     MAX_SAMPLE_SIZE: int = 1000  # Maximum entries to sample for namespace discovery
     MAX_NAMESPACE_ENTRIES: int = 200  # Maximum entries to collect per namespace
-    MAX_SAMPLE_ATTEMPTS_MULTIPLIER: int = 3  # sample_size * multiplier = max attempts
 
 
 @dataclass(frozen=True)
@@ -125,23 +119,12 @@ class TimeoutDefaults:
     """Default values for timeouts."""
 
     REGEX_SECONDS: float = 1.0
-    ARCHIVE_OPEN_SECONDS: float = 30.0
     # ``SUBSCRIPTION_SEND_SECONDS`` lived here until the 2026-07-28 port. It
     # bounded a per-subscriber ``send_resource_updated`` inside a hand-rolled
     # ``asyncio.gather`` fan-out over a session registry — all three of which
     # the SDK's ``subscriptions/listen`` handler now owns. Left as a note
     # rather than a constant: a documented default that nothing reads is worse
     # than none, because it describes machinery a reader will go looking for.
-
-
-@dataclass(frozen=True)
-class ServerDefaults:
-    """Default values for server configuration."""
-
-    NAME: str = "openzim-mcp"
-    TOOL_MODE: str = "simple"
-    LOG_LEVEL: str = "INFO"
-    LOG_FORMAT: str = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 
 
 @dataclass(frozen=True)
@@ -156,7 +139,6 @@ class MetaDefaults:
     """Default values for the response `_meta` envelope (Phase A item #5)."""
 
     FOOTER_ENABLED: bool = True
-    TOKENIZER_ENCODING: str = "cl100k_base"
 
 
 @dataclass(frozen=True)
@@ -211,7 +193,6 @@ CONTENT = ContentDefaults()
 RATE_LIMIT = RateLimitDefaults()
 INPUT_LIMITS = InputLimitDefaults()
 TIMEOUTS = TimeoutDefaults()
-SERVER = ServerDefaults()
 CACHE_PERFORMANCE = CachePerformanceThresholds()
 NAMESPACE_SAMPLING = NamespaceSamplingDefaults()
 BATCH = BatchDefaults()

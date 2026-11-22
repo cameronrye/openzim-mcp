@@ -55,7 +55,7 @@ This also means error text is **safe to copy into bug reports**.
 
 `sanitize_input(input_string, max_length=1000, allow_empty=False)` strips ASCII control characters and enforces a length cap. It deliberately **keeps** tab, LF and CR — the C0 characters it removes are `\x00-\x08`, `\x0b`, `\x0c`, `\x0e-\x1f` and `\x7f` — because it also cleans legitimately multi-line query text.
 
-It has exactly one call site: the `{path}` component of the `zim://{name}/entry/{path}` resource template, capped at `INPUT_LIMIT_ENTRY_PATH` (500 chars). The other `INPUT_LIMIT_*` constants in `constants.py` are defined but currently unused; do not treat them as enforced limits.
+It has exactly one call site: the `{path}` component of the `zim://{name}/entry/{path}` resource template, capped at `INPUT_LIMIT_ENTRY_PATH` (500 chars). The only other one in `constants.py`, `INPUT_LIMIT_FILE_PATH`, is defined but currently unused; do not treat it as an enforced limit.
 
 The caps that tool arguments actually hit are:
 

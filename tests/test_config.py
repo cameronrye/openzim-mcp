@@ -405,7 +405,6 @@ def test_meta_config_defaults():
 
     cfg = MetaConfig()
     assert cfg.footer_enabled is True
-    assert cfg.tokenizer_encoding == "cl100k_base"
 
 
 def test_search_config_defaults():
@@ -431,6 +430,18 @@ def test_meta_env_override(monkeypatch):
     monkeypatch.setenv("OPENZIM_MCP_ALLOWED_DIRECTORIES", json.dumps([TMP_DIR]))
     cfg = OpenZimMcpConfig()
     assert cfg.meta.footer_enabled is False
+
+
+def test_removed_meta_tokenizer_encoding_env_var_is_ignored(monkeypatch):
+    """``meta.tokenizer_encoding`` was parsed but never read (the tokenizer is
+    always cl100k_base), so the field was removed. A deployment that still
+    sets the variable must keep starting: ``MetaConfig`` drops the unknown
+    nested key rather than rejecting the whole config."""
+    monkeypatch.setenv("OPENZIM_MCP_META__TOKENIZER_ENCODING", "p50k_base")
+    monkeypatch.setenv("OPENZIM_MCP_ALLOWED_DIRECTORIES", json.dumps([TMP_DIR]))
+    cfg = OpenZimMcpConfig()
+    assert "tokenizer_encoding" not in cfg.meta.model_dump()
+    assert cfg.meta.footer_enabled is True
 
 
 def test_synthesize_config_defaults() -> None:
