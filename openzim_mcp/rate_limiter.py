@@ -6,6 +6,7 @@ from abuse and ensure fair resource usage.
 """
 
 import logging
+import math
 import threading
 import time
 from collections import OrderedDict
@@ -45,7 +46,16 @@ class RateLimitConfig(BaseModel):
     @field_validator("requests_per_second")
     @classmethod
     def _validate_requests_per_second(cls, v: float) -> float:
-        """Reject non-positive refill rates."""
+        """Reject non-finite and non-positive refill rates."""
+        # Checked before the sign, because ``nan <= 0`` is False: NaN loaded,
+        # and the refill's ``min(capacity, tokens + elapsed * nan)`` answers
+        # ``capacity``, so every acquire succeeded. ``inf`` refills the same
+        # way. Neither is a rate; ``enabled=false`` is how limiting is off.
+        if not math.isfinite(v):
+            raise ValueError(
+                f"requests_per_second must be a finite number, not {v}; set "
+                "rate_limit.enabled=false to turn rate limiting off"
+            )
         if v <= 0:
             raise ValueError("requests_per_second must be positive")
         return v

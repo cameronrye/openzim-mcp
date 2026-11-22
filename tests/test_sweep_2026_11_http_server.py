@@ -652,3 +652,57 @@ class TestHealthPathsTolerateATrailingSlash:
                 "/healthz//", headers={"Authorization": "Bearer s3cret"}
             )
             assert refused.status_code == 421, refused.text
+
+
+class TestTheRefillRateMustBeFinite:
+    """``requests_per_second=nan`` turned rate limiting off.
+
+    The validator refused ``v <= 0``, which is false for NaN, so NaN loaded;
+    the bucket's refill then computed ``min(capacity, tokens + elapsed * nan)``,
+    which ``min`` answers with ``capacity``, and every acquire succeeded.
+    ``inf`` did the same through ``elapsed * inf``. Every other float in the
+    config is bounded on both sides, which pydantic already enforces for NaN.
+    """
+
+    @pytest.mark.parametrize("rate", [float("nan"), float("inf"), float("-inf")])
+    def test_a_non_finite_rate_is_refused(self, rate: float) -> None:
+        from pydantic import ValidationError
+
+        from openzim_mcp.rate_limiter import RateLimitConfig
+
+        with pytest.raises(ValidationError, match="finite"):
+            RateLimitConfig(requests_per_second=rate)
+
+    @pytest.mark.parametrize("raw", ["nan", "inf", "Infinity"])
+    def test_the_environment_variable_is_refused(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, raw: str
+    ) -> None:
+        from pydantic import ValidationError
+
+        monkeypatch.setenv("OPENZIM_MCP_RATE_LIMIT__REQUESTS_PER_SECOND", raw)
+        with pytest.raises(ValidationError, match="finite"):
+            OpenZimMcpConfig(allowed_directories=[str(tmp_path)])
+
+    def test_a_per_operation_rate_is_held_to_the_same_rule(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``json.loads`` reads a bare ``NaN``, so the override path takes one."""
+        from pydantic import ValidationError
+
+        monkeypatch.setenv(
+            "OPENZIM_MCP_RATE_LIMIT__PER_OPERATION_LIMITS",
+            '{"search": {"requests_per_second": NaN, "burst_size": 2}}',
+        )
+        with pytest.raises(ValidationError, match="finite"):
+            OpenZimMcpConfig(allowed_directories=[str(tmp_path)])
+
+    # Slow enough that no scheduling stall between the two calls refills it.
+    @pytest.mark.parametrize("rate", [0.001, 0.5])
+    def test_a_finite_positive_rate_still_limits(self, rate: float) -> None:
+        from openzim_mcp.exceptions import OpenZimMcpRateLimitError
+        from openzim_mcp.rate_limiter import RateLimitConfig, RateLimiter
+
+        limiter = RateLimiter(RateLimitConfig(requests_per_second=rate, burst_size=1))
+        limiter.check_rate_limit("get_entry", client_id="c")
+        with pytest.raises(OpenZimMcpRateLimitError):
+            limiter.check_rate_limit("get_entry", client_id="c")
