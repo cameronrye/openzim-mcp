@@ -70,7 +70,9 @@ Full details on [Resources, prompts & subscriptions](/openzim-mcp/docs/resources
 The server requires MCP Python SDK v2 (`mcp>=2.3.0,<2.4`) — relevant only if
 you embed it as a library rather than running the binary. `sse` transport
 still works but is **deprecated** and will be removed in 4.0.0; move to
-`--transport http`.
+`--transport http`. The client has to move too: `http` serves streamable HTTP
+at `/mcp` and does not serve the SSE endpoints (`/sse`, `/messages/`), so an
+SSE-only client gets a 404 until it is switched to streamable HTTP.
 
 ## v1 → v2
 
@@ -87,7 +89,7 @@ rather than moving here, because several pages link straight to that anchor.
 
 | Deprecated | Removed in | Replacement |
 |---|---|---|
-| `--transport sse` / `OPENZIM_MCP_TRANSPORT=sse` | 4.0.0 | `--transport http` (streamable HTTP). It warns on every start |
+| `--transport sse` / `OPENZIM_MCP_TRANSPORT=sse` | 4.0.0 | `--transport http` (streamable HTTP at `/mcp`), with the client switched to streamable HTTP too. It warns on every start |
 
 ## How to upgrade
 
