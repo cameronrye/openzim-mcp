@@ -1712,6 +1712,18 @@ class ZimOperations(
                     compact=compact,
                     scope_main_content=True,
                 )
+                # Strip link markup BEFORE measuring, as the path fetch does.
+                # This branch skipped it, so a compact main page shipped
+                # "[ ](Antarctica) [ ](Precipitation)…" and counted that
+                # markup in a total no path fetch of the same entry reports.
+                if compact:
+                    from openzim_mcp.zim.content import _strip_markdown_links_shared
+
+                    content = _strip_markdown_links_shared(content)
+                # A front page built of image links is left as bare
+                # whitespace, which has nothing to show or to page through.
+                if not content.strip():
+                    content = ""
                 total_length = len(content)
                 cap = (
                     max_content_length
@@ -1732,7 +1744,7 @@ class ZimOperations(
                 payload: Dict[str, Any] = {
                     "path": path,
                     "title": title,
-                    "content": truncated_content,
+                    "content": truncated_content or "(No content)",
                 }
                 if mime_type:
                     payload["content_type"] = mime_type

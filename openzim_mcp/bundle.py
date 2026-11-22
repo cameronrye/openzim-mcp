@@ -96,8 +96,9 @@ _BUNDLE_KEY_PREFIX = "bundle:v2h"
 #
 # r4 -> r5: cached search rows no longer take an image-only H1's lead
 # sentence as the page title, a snippet slid to its first hit keeps the
-# words before it, and a compact page fetched while the regex pool was busy
-# is no longer cached with its link markup.
+# words before it, a compact page fetched while the regex pool was busy is
+# no longer cached with its link markup, and a compact main page is
+# link-stripped like any other entry.
 _RENDER_EPOCH = "r5"
 
 

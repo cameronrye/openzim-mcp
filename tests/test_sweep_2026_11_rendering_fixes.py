@@ -471,3 +471,83 @@ class TestCompactLinkStripSurvivesASaturatedRegexPool:
 
         for page in pages:
             assert page["content"] == "See  and the docs first.", page
+
+
+def _body(content: str) -> str:
+    """``content`` without the truncation footer ``truncate_content`` appends."""
+    return content.split("\n\n... [Content truncated, ")[0]
+
+
+class TestMainPageStripsCompactLinks:
+    """``zim_get(main_page=True, compact=True)`` skipped the compact link strip.
+
+    The path fetch strips link markup before it measures; the main-page
+    builder never did. On mini the main page shipped "[ ](Antarctica)
+    [ ](Precipitation)…" and reported 1,945 total chars, while the same entry
+    fetched by path is 199 characters of whitespace once its image links are
+    gone.
+    """
+
+    @pytest.mark.asyncio
+    async def test_an_all_link_main_page_says_it_has_no_content(
+        self, climate_zim: Path
+    ) -> None:
+        server = _server(climate_zim.parent)
+        for _ in range(2):  # the second page is served from the cache
+            page = await _call(
+                server,
+                "zim_get",
+                zim_file_path=str(climate_zim),
+                main_page=True,
+                compact=True,
+                max_content_length=400,
+            )
+            assert "](" not in page["content"], page["content"][:200]
+            assert page["content"] == "(No content)", page
+            assert page["_meta"]["truncated"] is False, page
+
+        by_path = await _call(
+            server,
+            "zim_get",
+            zim_file_path=str(climate_zim),
+            entry_path=page["path"],
+            compact=True,
+        )
+        # The path fetch agrees there is no text left to show.
+        assert by_path["content"].strip() == "", by_path["content"][:200]
+
+    @pytest.mark.asyncio
+    async def test_the_main_page_measures_what_the_path_fetch_measures(
+        self, tmp_path: Path
+    ) -> None:
+        links = " ".join(
+            f'<a href="Topic_{i}" title="Topic {i}">Topic {i}</a>' for i in range(20)
+        )
+        archive = _build_zim(
+            tmp_path / "portal.zim",
+            [
+                (
+                    "A/Portal",
+                    "Portal",
+                    "<html><body><h1>Portal</h1>"
+                    f"<p>Welcome to the portal. Start with {links}.</p>"
+                    "</body></html>",
+                )
+            ],
+        )
+        server = _server(archive.parent, cache=False)
+        base = {"zim_file_path": str(archive), "compact": True}
+
+        main = await _call(
+            server, "zim_get", main_page=True, max_content_length=120, **base
+        )
+        by_path = await _call(
+            server, "zim_get", entry_path="A/Portal", max_content_length=120, **base
+        )
+
+        assert main["path"] == "A/Portal", main
+        assert "](" not in main["content"], main["content"]
+        assert "Topic 0 Topic 1" in main["content"], main["content"]
+        assert main["_meta"]["truncated"] is True, main
+        assert main["_meta"]["total_chars"] == by_path["_meta"]["total_chars"]
+        assert _body(main["content"]) == _body(by_path["content"])
