@@ -802,8 +802,9 @@ class TestD52BinaryNotFoundRecovery:
         out = handler.handle_zim_query(
             "get pdf easy-to-read-materials", zim_file_path="/zims/test.zim"
         )
-        assert "Error Processing Query" not in out
-        assert "max_size_bytes must be positive" in out
+        assert isinstance(out, dict) and out["operation"] == "invalid_request", out
+        assert "Error Processing Query" not in _text(out)
+        assert "max_size_bytes must be positive" in _text(out)
 
     def test_archive_level_failure_still_reaches_the_path_envelope(self) -> None:
         handler, mock = _handler_with()

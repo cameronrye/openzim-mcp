@@ -606,14 +606,15 @@ def test_cursor_rejection_leads_with_dropping_the_cursor() -> None:
     through ``_render_invalid_request(limit_capable=True)``, so a foreign
     cursor was answered with "Retry with a smaller `limit`" as the most
     prominent bullet — advice that can never clear a stale cursor."""
-    from openzim_mcp.exceptions import OpenZimMcpValidationError
+    from openzim_mcp.exceptions import OpenZimMcpCursorMismatchError
     from openzim_mcp.pagination import Cursor
 
     ops = MagicMock()
     ops.config.tool_mode = "simple"
     ops.config.meta.footer_enabled = True
     ops.list_zim_files_data.return_value = [{"path": "/zim/med.zim"}]
-    ops.walk_namespace_data.side_effect = OpenZimMcpValidationError(
+    # The type the walk data layer raises for this guard.
+    ops.walk_namespace_data.side_effect = OpenZimMcpCursorMismatchError(
         "Cursor for 'walk_namespace' was issued against a different archive. "
         "Drop the cursor and start the paginated call over."
     )
@@ -621,12 +622,14 @@ def test_cursor_rejection_leads_with_dropping_the_cursor() -> None:
         tool="walk_namespace",
         state={"o": 90, "l": 5, "ns": "C", "ai": "dff257258abf"},
     )
-    out = SimpleToolsHandler(ops).handle_zim_query(
+    result = SimpleToolsHandler(ops).handle_zim_query(
         "walk namespace C",
         zim_file_path="/zim/med.zim",
         options={"compact": True, "limit": 3, "cursor": foreign},
     )
-    assert isinstance(out, str)
+    # A cursor fault is flagged under zim_query's cursor code.
+    assert isinstance(result, dict) and result["operation"] == "cursor_decode"
+    out = result["message"]
     assert "Invalid Request" in out
     bullets = [ln for ln in out.splitlines() if ln.startswith("- ")]
     assert bullets, out
@@ -645,12 +648,13 @@ def test_limit_rejection_still_leads_with_a_smaller_limit() -> None:
     ops.walk_namespace_data.side_effect = OpenZimMcpValidationError(
         "limit must be between 1 and 500 (provided: 1000)"
     )
-    out = SimpleToolsHandler(ops).handle_zim_query(
+    result = SimpleToolsHandler(ops).handle_zim_query(
         "walk namespace C",
         zim_file_path="/zim/med.zim",
         options={"compact": True, "limit": 1000},
     )
-    assert isinstance(out, str)
+    assert isinstance(result, dict) and result["operation"] == "invalid_request"
+    out = result["message"]
     bullets = [ln for ln in out.splitlines() if ln.startswith("- ")]
     assert "smaller `limit`" in bullets[0]
     assert "Drop the `cursor`" not in out

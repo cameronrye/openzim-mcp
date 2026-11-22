@@ -101,3 +101,108 @@ class TestBrowseCursorFromAnotherArchive:
         assert resumed.get("error") is not True, resumed
         assert resumed["results"], resumed
         assert resumed["results"] != first["results"]
+
+
+def _leading_json(text: str) -> Dict[str, Any]:
+    """The JSON body of a non-compact ``zim_query`` response.
+
+    The intent / reranker telemetry comments follow the closing brace.
+    """
+    return json.loads(text[: text.rfind("}") + 1])
+
+
+class TestSimpleModeRejectionsAreErrors:
+    """Simple mode answered a backend-rejected argument as a success.
+
+    ``_render_invalid_request`` returned its "Invalid Request" prose on the
+    success path, so a client branching on ``isError`` recorded
+    ``browse namespace A`` with ``limit=300`` as a retrieval — and the
+    filtered-search variant was even wrapped in the untrusted-content fence.
+    The same mistake on the cursor-checking ``browse`` already came back as
+    a ``cursor_decode`` error; ``walk`` did not.
+    """
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "query, limit, cap",
+        [
+            ("browse namespace A", 300, "1 and 200"),
+            ("walk namespace A", 900, "1 and 500"),
+            ("search climate in namespace A", 200, "1 and 100"),
+        ],
+    )
+    async def test_out_of_range_limit_is_flagged(
+        self, withns: Path, query: str, limit: int, cap: str
+    ) -> None:
+        mini = str(withns / _MINI)
+        async with _session(withns, "simple") as session:
+            is_error, text, body = await _call(
+                session,
+                "zim_query",
+                {"query": query, "zim_file_path": mini, "limit": limit},
+            )
+            ok_error, ok_text, _ = await _call(
+                session,
+                "zim_query",
+                {"query": query, "zim_file_path": mini, "limit": 5},
+            )
+
+        assert is_error is True, text
+        assert body["operation"] == "invalid_request", body
+        # The prose is unchanged; it rides in ``message``.
+        assert body["message"].startswith("**Invalid Request**"), body
+        assert cap in body["message"], body
+        assert "retrieved_archive_content" not in text, text
+        # Positive pair: the same query at an accepted limit still succeeds.
+        assert ok_error is not True, ok_text
+        assert "Invalid Request" not in ok_text
+
+    @pytest.mark.asyncio
+    async def test_walk_rejects_another_archives_cursor_like_browse(
+        self, withns: Path
+    ) -> None:
+        mini, small = str(withns / _MINI), str(withns / "small.zim")
+        async with _session(withns, "simple") as session:
+            cursors = {}
+            for verb in ("walk", "browse"):
+                _, text, _ = await _call(
+                    session,
+                    "zim_query",
+                    {
+                        "query": f"{verb} namespace A",
+                        "zim_file_path": mini,
+                        "limit": 3,
+                        "compact": False,
+                    },
+                )
+                cursors[verb] = _leading_json(text)["next_cursor"]
+            replies = {}
+            for verb, cursor in cursors.items():
+                replies[verb] = await _call(
+                    session,
+                    "zim_query",
+                    {
+                        "query": f"{verb} namespace A",
+                        "zim_file_path": small,
+                        "cursor": cursor,
+                    },
+                )
+            resumed = await _call(
+                session,
+                "zim_query",
+                {
+                    "query": "walk namespace A",
+                    "zim_file_path": mini,
+                    "cursor": cursors["walk"],
+                },
+            )
+
+        walk_error, walk_text, walk_body = replies["walk"]
+        browse_error, _, browse_body = replies["browse"]
+        assert browse_error is True and browse_body["operation"] == "cursor_decode"
+        assert walk_error is True, walk_text
+        assert walk_body["operation"] == "cursor_decode", walk_body
+        assert "Drop the `cursor`" in walk_body["message"], walk_body
+        # Positive pair: the walk cursor still resumes its own archive.
+        assert resumed[0] is not True, resumed[1]
+        assert "A/" in resumed[1], resumed[1]

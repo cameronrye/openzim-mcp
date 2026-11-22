@@ -31,6 +31,7 @@ from .cursor_decode import decode_offset_cursor
 from .disambiguation import _DisambiguationMixin
 from .exceptions import (
     OpenZimMcpArchivePathError,
+    OpenZimMcpCursorMismatchError,
     OpenZimMcpValidationError,
     RegexTimeoutError,
 )
@@ -2031,7 +2032,7 @@ class SimpleToolsHandler(
         exc: "OpenZimMcpValidationError",
         op_label: str,
         limit_capable: bool = False,
-    ) -> str:
+    ) -> ToolErrorPayload:
         """Render a structured "invalid request" response for a backend
         ``OpenZimMcpValidationError``.
 
@@ -2072,6 +2073,15 @@ class SimpleToolsHandler(
         exception type, so the argument the message names is the only
         signal available; it selects the BULLET ORDER only, never routing,
         and every arm still lists the other two recoveries below.
+
+        A rejected argument is a failure, so the prose rides in a
+        ``tool_error`` envelope's ``message`` — the conversion D-Q1 / D51 /
+        D58 made for their branches. Returned as a string it travelled the
+        success path: ``isError`` stayed false, and on a fenced intent the
+        advice was wrapped as untrusted archive content. A cursor fault is
+        reported as ``cursor_decode``, the code ``zim_query`` uses for every
+        cursor fault — browse's handler-edge archive check already answered
+        with it. The exception TYPE decides that, not the message.
         """
         err = self._strip_backend_recovery(sanitize_context_for_error(str(exc)))
         if "cursor" in str(exc).lower():
@@ -2091,14 +2101,21 @@ class SimpleToolsHandler(
                 "option — this operation takes no `limit`, so the constraint "
                 "named above is on some other argument\n"
             )
-        return (
-            f"**Invalid Request**\n\n"
-            f"`{op_label} {entry_path}` was rejected: {err}\n\n"
-            "**Try one of these to recover:**\n"
-            + first_bullet
-            + "- Drop the offending option entirely to use the default\n"
-            + f"- `{op_label} {entry_path}` with no extra options — the "
-            "constraint named above is on an argument, not on the archive\n"
+        return tool_error(
+            operation=(
+                "cursor_decode"
+                if isinstance(exc, OpenZimMcpCursorMismatchError)
+                else "invalid_request"
+            ),
+            message=(
+                f"**Invalid Request**\n\n"
+                f"`{op_label} {entry_path}` was rejected: {err}\n\n"
+                "**Try one of these to recover:**\n"
+                + first_bullet
+                + "- Drop the offending option entirely to use the default\n"
+                + f"- `{op_label} {entry_path}` with no extra options — the "
+                "constraint named above is on an argument, not on the archive\n"
+            ),
         )
 
     @staticmethod
@@ -2227,7 +2244,7 @@ class SimpleToolsHandler(
         zim_file_path: str,
         params: Dict[str, Any],
         options: Dict[str, Any],
-    ) -> str:
+    ) -> Union[str, ToolErrorPayload]:
         """O6 (beta): the ``show structure`` operation returns a FLAT list
         of headings (with per-heading summaries in non-compact mode), while
         the sibling ``table of contents`` operation
@@ -2284,7 +2301,7 @@ class SimpleToolsHandler(
         zim_file_path: str,
         params: Dict[str, Any],
         options: Dict[str, Any],
-    ) -> str:
+    ) -> Union[str, ToolErrorPayload]:
         """O6 (beta): returns the article's heading set as a NESTED tree
         with ``children`` links per node, distinct from the FLAT
         :meth:`_handle_structure` listing. Use ``show structure`` for a
@@ -2329,7 +2346,7 @@ class SimpleToolsHandler(
         zim_file_path: str,
         params: Dict[str, Any],
         options: Dict[str, Any],
-    ) -> str:
+    ) -> Union[str, ToolErrorPayload]:
         entry_path = params.get("entry_path")
         if not entry_path:
             return (
@@ -2793,7 +2810,7 @@ class SimpleToolsHandler(
         zim_file_path: str,
         params: Dict[str, Any],
         options: Dict[str, Any],
-    ) -> str:
+    ) -> Union[str, ToolErrorPayload]:
         entry_path = params.get("entry_path")
         if not entry_path:
             return (
@@ -3013,7 +3030,7 @@ class SimpleToolsHandler(
         zim_file_path: str,
         params: Dict[str, Any],
         options: Dict[str, Any],
-    ) -> str:
+    ) -> Union[str, ToolErrorPayload]:
         entry_path = params.get("entry_path")
         if not entry_path:
             # If no specific path, strip common request words and use the
@@ -4600,7 +4617,7 @@ class SimpleToolsHandler(
         zim_file_path: str,
         params: Dict[str, Any],
         options: Dict[str, Any],
-    ) -> str:
+    ) -> Union[str, ToolErrorPayload]:
         """Answer "what links HERE" from the link-graph sidecar.
 
         v3.3.1 field report: simple mode had no inbound concept at all. Every
@@ -4675,7 +4692,7 @@ class SimpleToolsHandler(
         zim_file_path: str,
         params: Dict[str, Any],
         options: Dict[str, Any],
-    ) -> str:
+    ) -> Union[str, ToolErrorPayload]:
         entry_path = params.get("entry_path")
         if not entry_path:
             # An empty entry_path used to be passed straight to the
