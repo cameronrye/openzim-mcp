@@ -705,7 +705,7 @@ class _ContentMixin:
             Entry content text with metadata including actual path used
 
         Raises:
-            OpenZimMcpFileNotFoundError: If ZIM file not found
+            OpenZimMcpArchivePathError: If the ZIM file is missing or not an archive
             OpenZimMcpArchiveError: If entry retrieval fails or entry cannot
                 be found via direct access or search
         """
@@ -911,7 +911,7 @@ class _ContentMixin:
             ``content_offset``/``total_chars``, plus ``_meta``.
 
         Raises:
-            OpenZimMcpFileNotFoundError: If ZIM file not found
+            OpenZimMcpArchivePathError: If the ZIM file is missing or not an archive
             OpenZimMcpArchiveError: If entry retrieval fails
         """
         if max_content_length is None:
@@ -1897,7 +1897,7 @@ class _ContentMixin:
             Dict containing binary content metadata and optionally the data
 
         Raises:
-            OpenZimMcpFileNotFoundError: If ZIM file not found
+            OpenZimMcpArchivePathError: If the ZIM file is missing or not an archive
             OpenZimMcpArchiveError: If entry retrieval fails
         """
         from openzim_mcp.constants import DEFAULT_MAX_BINARY_SIZE
@@ -2075,7 +2075,7 @@ class _ContentMixin:
             JSON string containing binary content metadata and optionally the data
 
         Raises:
-            OpenZimMcpFileNotFoundError: If ZIM file not found
+            OpenZimMcpArchivePathError: If the ZIM file is missing or not an archive
             OpenZimMcpArchiveError: If entry retrieval fails
         """
         return _json(
@@ -2168,7 +2168,7 @@ class _ContentMixin:
         can hand it straight to the SDK's structured-content path.
 
         Raises:
-            OpenZimMcpFileNotFoundError: If ZIM file not found
+            OpenZimMcpArchivePathError: If the ZIM file is missing or not an archive
             OpenZimMcpArchiveError: If summary extraction fails
         """
         # Clamp to a sane upper bound; the tool layer enforces the
@@ -2240,7 +2240,7 @@ class _ContentMixin:
             JSON string containing the article summary
 
         Raises:
-            OpenZimMcpFileNotFoundError: If ZIM file not found
+            OpenZimMcpArchivePathError: If the ZIM file is missing or not an archive
             OpenZimMcpArchiveError: If summary extraction fails
         """
         return _json(

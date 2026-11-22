@@ -981,7 +981,7 @@ class ZimOperations(
         tools can hand it straight to the SDK's structured-content path.
 
         Raises:
-            OpenZimMcpFileNotFoundError: If ZIM file not found
+            OpenZimMcpArchivePathError: If the ZIM file is missing or not an archive
             OpenZimMcpArchiveError: If metadata retrieval fails
         """
         # Validate and resolve file path
@@ -1046,7 +1046,7 @@ class ZimOperations(
             JSON string containing ZIM metadata
 
         Raises:
-            OpenZimMcpFileNotFoundError: If ZIM file not found
+            OpenZimMcpArchivePathError: If the ZIM file is missing or not an archive
             OpenZimMcpArchiveError: If metadata retrieval fails
         """
         return _json(self.get_zim_metadata_data(zim_file_path))
@@ -1063,7 +1063,7 @@ class ZimOperations(
         argument.
 
         Raises:
-            OpenZimMcpFileNotFoundError: If ZIM file not found
+            OpenZimMcpArchivePathError: If the ZIM file is missing or not an archive
             OpenZimMcpArchiveError: If validation fails
         """
         validated_path = self._validate_zim_path(zim_file_path)
@@ -1463,7 +1463,7 @@ class ZimOperations(
             Main page content or information about main page
 
         Raises:
-            OpenZimMcpFileNotFoundError: If ZIM file not found
+            OpenZimMcpArchivePathError: If the ZIM file is missing or not an archive
             OpenZimMcpArchiveError: If main page retrieval fails
         """
         validated_path, cache_key, cached_result = self._main_page_cache_lookup(
@@ -1558,7 +1558,7 @@ class ZimOperations(
         ``None`` the branch keeps its ``DEFAULT_MAIN_PAGE_TRUNCATION`` cap.
 
         Raises:
-            OpenZimMcpFileNotFoundError: If ZIM file not found
+            OpenZimMcpArchivePathError: If the ZIM file is missing or not an archive
             OpenZimMcpArchiveError: If main page retrieval fails
         """
         validated_path, cache_key, cached_result = self._main_page_cache_lookup(

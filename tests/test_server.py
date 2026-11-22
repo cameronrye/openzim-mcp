@@ -8,7 +8,7 @@ import pytest
 from openzim_mcp.config import OpenZimMcpConfig
 from openzim_mcp.exceptions import (
     OpenZimMcpArchiveError,
-    OpenZimMcpFileNotFoundError,
+    OpenZimMcpArchivePathError,
     OpenZimMcpSecurityError,
     OpenZimMcpValidationError,
 )
@@ -910,22 +910,22 @@ class TestOpenZimMcpServerErrorFormatting:
         """Create a test server instance."""
         return OpenZimMcpServer(test_config)
 
-    def test_format_error_message_file_not_found(self, server: OpenZimMcpServer):
-        """Test error formatting for OpenZimMcpFileNotFoundError."""
-        error = OpenZimMcpFileNotFoundError("File not found: test.zim")
+    def test_format_error_message_missing_archive(self, server: OpenZimMcpServer):
+        """A missing archive formats with the archive-path guidance."""
+        error = OpenZimMcpArchivePathError("File does not exist: test.zim")
 
         result = server._create_enhanced_error_message(
             operation="search", error=error, context="test.zim"
         )
 
-        assert "**File Not Found Error**" in result
+        assert "**Archive Not Available**" in result
         assert "**Operation**: search" in result
         assert "**Context**: test.zim" in result
         assert (
-            'Use `zim_query("list available ZIM files")` to see available files'
+            'Use `zim_query("list available ZIM files")` to see the real paths'
             in result
         )
-        assert "**Technical Details**: File not found: test.zim" in result
+        assert "File does not exist: test.zim" in result
 
     def test_format_error_message_archive_error(self, server: OpenZimMcpServer):
         """Test error formatting for OpenZimMcpArchiveError."""

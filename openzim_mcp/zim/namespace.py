@@ -315,7 +315,7 @@ class _NamespaceMixin:
         plus the universal ``_meta`` envelope.
 
         Raises:
-            OpenZimMcpFileNotFoundError: If ZIM file not found
+            OpenZimMcpArchivePathError: If the ZIM file is missing or not an archive
             OpenZimMcpArchiveError: If namespace listing fails
         """
         # Validate and resolve file path
@@ -920,7 +920,7 @@ class _NamespaceMixin:
             OpenZimMcpValidationError: If parameter validation fails (limit,
                 offset, or namespace), or if a cursor was issued for a
                 different archive.
-            OpenZimMcpFileNotFoundError: If ZIM file not found
+            OpenZimMcpArchivePathError: If the ZIM file is missing or not an archive
             OpenZimMcpArchiveError: If browsing fails
         """
         from openzim_mcp.pagination import (
@@ -1182,7 +1182,7 @@ class _NamespaceMixin:
         Raises:
             OpenZimMcpValidationError: If parameter validation fails (limit,
                 offset, or namespace).
-            OpenZimMcpFileNotFoundError: If ZIM file not found
+            OpenZimMcpArchivePathError: If the ZIM file is missing or not an archive
             OpenZimMcpArchiveError: If browsing fails
         """
         return _json(

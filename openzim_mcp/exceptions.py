@@ -78,10 +78,6 @@ class OpenZimMcpArchiveNameError(OpenZimMcpArchivePathError):
     """
 
 
-class OpenZimMcpFileNotFoundError(OpenZimMcpError):
-    """Raised when a ZIM file is not found."""
-
-
 class OpenZimMcpArchiveError(OpenZimMcpError):
     """Raised when ZIM archive operations fail."""
 
