@@ -470,7 +470,7 @@ docker compose up -d
 # Liveness
 curl -sf http://127.0.0.1:8000/healthz && echo " healthz ok"
 
-# Readiness (will fail if /srv/zim is empty or unreadable)
+# Readiness (fails if /srv/zim is unreadable; an empty directory still reports ready)
 curl -sf http://127.0.0.1:8000/readyz && echo " readyz ok"
 
 # Authed RPC call: list available tools (stateless 2026-07-28 framing —
