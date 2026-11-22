@@ -68,7 +68,9 @@ def test_build_force_overwrites_atomically(tmp_path: Path) -> None:
     out = sidecar_path_for(tmp_path / "x.zim")
     Path(out).write_text("existing")
     build_from_link_stream(out, archive_uuid="u1", link_stream=iter([]), force=True)
-    assert not Path(out + ".tmp").exists()
+    # The temp name is unique per build, so look for any leftover at all.
+    assert sorted(p.name for p in tmp_path.iterdir()) == [Path(out).name]
+    assert Path(out).read_bytes().startswith(b"SQLite format 3")
 
 
 class _FakeEntry:

@@ -645,3 +645,107 @@ class TestASymlinkedArchiveGetsTheSidecarTheServerReads:
         inbound = ops.get_inbound_links_data(str(link), "A/Эспэранта.html")
         assert inbound["total"] > 0
         assert ops.get_archive_validation_data(str(link))["has_link_graph"] is True
+
+
+class TestConcurrentLinkGraphBuildsKeepTheirOwnFiles:
+    """Every build of one sidecar wrote the same ``<sidecar>.tmp``.
+
+    A second build removed the first's half-written file and wrote its own
+    under that name, so the first published the second's partial file as
+    its result and the second's rename then raised FileNotFoundError. A
+    build that failed also left its ``.tmp`` behind.
+    """
+
+    def test_each_build_publishes_its_own_file(self, tmp_path: Path) -> None:
+        import threading
+
+        from openzim_mcp.linkgraph.builder import build_from_link_stream
+        from openzim_mcp.linkgraph.reader import LinkGraphReader, read_sidecar_meta
+
+        archive = str(tmp_path / "x.zim")
+        out = f"{archive}.linkgraph.sqlite"
+        a_mid, b_mid, a_done, a_checked = (threading.Event() for _ in range(4))
+        results: Dict[str, Any] = {}
+
+        def stream_a() -> Any:
+            yield ("A/src", [("A/t1", "one")])
+            a_mid.set()
+            b_mid.wait(5)  # B has started its own file meanwhile
+            yield ("A/src2", [("A/t2", "two")])
+
+        def stream_b() -> Any:
+            yield ("B/src", [("B/t1", "uno")])
+            b_mid.set()
+            a_done.wait(5)
+            a_checked.wait(5)  # hold B half-written while A's file is read
+            yield ("B/src2", [("B/t2", "dos")])
+
+        def run(name: str, stream: Any) -> None:
+            try:
+                results[name] = build_from_link_stream(
+                    out, archive_uuid=f"uuid-{name}", link_stream=stream, force=True
+                )
+            except Exception as e:  # recorded, asserted below
+                results[name] = e
+            finally:
+                if name == "A":
+                    a_done.set()
+
+        build_a = threading.Thread(target=run, args=("A", stream_a()))
+        build_a.start()
+        a_mid.wait(5)
+        build_b = threading.Thread(target=run, args=("B", stream_b()))
+        build_b.start()
+        build_a.join(10)
+        published_by_a = read_sidecar_meta(archive)
+        reader = LinkGraphReader.open_for(archive, live_archive_uuid="uuid-A")
+        a_checked.set()
+        build_b.join(10)
+
+        assert not isinstance(results["A"], Exception), results["A"]
+        assert published_by_a is not None
+        assert published_by_a["archive_uuid"] == "uuid-A"
+        assert reader is not None
+        reader.close()
+        assert not isinstance(results["B"], Exception), results["B"]
+        assert read_sidecar_meta(archive)["archive_uuid"] == "uuid-B"
+        assert sorted(p.name for p in tmp_path.iterdir()) == [Path(out).name]
+
+    def test_a_failed_build_leaves_nothing_behind(self, tmp_path: Path) -> None:
+        from openzim_mcp.linkgraph.builder import build_from_link_stream
+        from openzim_mcp.linkgraph.reader import read_sidecar_meta
+
+        archive = str(tmp_path / "x.zim")
+        out = f"{archive}.linkgraph.sqlite"
+        build_from_link_stream(
+            out, archive_uuid="good", link_stream=iter([("A/s", [("A/t", "t")])])
+        )
+
+        def failing() -> Any:
+            yield ("A/s", [("A/t", "t")])
+            raise RuntimeError("entry read failed")
+
+        with pytest.raises(RuntimeError):
+            build_from_link_stream(
+                out, archive_uuid="bad", link_stream=failing(), force=True
+            )
+
+        assert sorted(p.name for p in tmp_path.iterdir()) == [Path(out).name]
+        assert read_sidecar_meta(archive)["archive_uuid"] == "good"
+
+    def test_the_sidecar_keeps_the_permissions_sqlite_gives_it(
+        self, tmp_path: Path
+    ) -> None:
+        """Not ``mkstemp``'s 0600: the Docker image reads it as ``appuser``."""
+        from openzim_mcp.linkgraph.builder import build_from_link_stream
+
+        out = tmp_path / "x.zim.linkgraph.sqlite"
+        umask = os.umask(0o022)
+        try:
+            build_from_link_stream(
+                str(out), archive_uuid="u", link_stream=iter([("A/s", [])])
+            )
+        finally:
+            os.umask(umask)
+
+        assert out.stat().st_mode & 0o777 == 0o644
