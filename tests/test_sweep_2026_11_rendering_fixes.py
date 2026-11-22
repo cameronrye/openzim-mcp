@@ -6,6 +6,7 @@ names the inputs that exposed it.
 
 from __future__ import annotations
 
+import unicodedata
 from pathlib import Path
 from typing import Any, Dict, Iterable, Tuple
 
@@ -176,3 +177,65 @@ class TestCursorQueryContinuityReadsEveryScript:
 
         assert isinstance(out, dict) and out.get("operation") == "cursor_decode", out
         assert "shares no terms" in out["message"], out
+
+
+class TestSectionTitleMatchIgnoresUnicodeForm:
+    """A composed section title missed the same heading stored decomposed.
+
+    IEP stores "d. Al-Ghazālī and Descartes" in NFD while a caller types
+    NFC. The two render identically and compared unequal, so both section
+    surfaces answered "not found" — simple mode's with a "Did you mean"
+    naming a heading that looked exactly like the request.
+    """
+
+    _COMPOSED = unicodedata.normalize("NFC", "d. Al-Ghazālī and Descartes")
+
+    @pytest.fixture
+    def archive(self, tmp_path: Path) -> Path:
+        heading = unicodedata.normalize("NFD", self._COMPOSED)
+        assert heading != self._COMPOSED
+        html = (
+            "<html><body><h1>Al-Ghazali</h1><p>Lead paragraph.</p>"
+            "<h2>c. Resolution of Skepticism</h2>"
+            "<p>A light from God resolves the doubt.</p>"
+            f"<h2>{heading}</h2>"
+            "<p>Both philosophers doubted the senses.</p></body></html>"
+        )
+        return _build_zim(tmp_path / "nfd.zim", [("A/Al-Ghazali", "Al-Ghazali", html)])
+
+    @pytest.mark.asyncio
+    async def test_zim_get_section_resolves_the_composed_title(
+        self, archive: Path
+    ) -> None:
+        server = _server(archive.parent, cache=False)
+
+        out = await _call(
+            server,
+            "zim_get_section",
+            zim_file_path=str(archive),
+            entry_path="A/Al-Ghazali",
+            section_id=self._COMPOSED,
+        )
+
+        assert not out.get("error"), out
+        assert "Both philosophers doubted the senses." in out["content_markdown"], out
+        assert "A light from God" not in out["content_markdown"], out
+
+    @pytest.mark.asyncio
+    async def test_simple_section_query_resolves_the_composed_title(
+        self, archive: Path
+    ) -> None:
+        server = _server(archive.parent, "simple", cache=False)
+
+        out = str(
+            await _call(
+                server,
+                "zim_query",
+                query=f"section {self._COMPOSED} of A/Al-Ghazali",
+                zim_file_path=str(archive),
+            )
+        )
+
+        assert "Both philosophers doubted the senses." in out, out
+        assert "not found" not in out, out
+        assert "A light from God" not in out, out

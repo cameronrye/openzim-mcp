@@ -13,6 +13,7 @@ import json
 import logging
 import re
 import threading
+import unicodedata
 from collections import Counter
 from contextlib import ExitStack
 from dataclasses import dataclass, field
@@ -2372,14 +2373,19 @@ class SimpleToolsHandler(
             if 0 <= idx < len(headings):
                 target = headings[idx]
         if target is None:
-            wanted = section_name.lower()
+            # NFC on both sides: an archive may store a heading decomposed
+            # (IEP's "Al-Ghazālī") that the caller types composed.
+            def fold(text: str) -> str:
+                return unicodedata.normalize("NFC", text.strip()).lower()
+
+            wanted = fold(section_name)
             for h in headings:
-                if h.get("text", "").strip().lower() == wanted:
+                if fold(h.get("text", "")) == wanted:
                     target = h
                     break
             if target is None and not section_name.isdecimal():
                 for h in headings:
-                    if wanted in h.get("text", "").strip().lower():
+                    if wanted in fold(h.get("text", "")):
                         target = h
                         break
         return target

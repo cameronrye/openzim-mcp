@@ -11,6 +11,7 @@ without changes.
 """
 
 import logging
+import unicodedata
 from contextlib import suppress
 from pathlib import Path
 from typing import (
@@ -315,8 +316,12 @@ def _non_article_graph_message(content_type: str) -> "Optional[str]":
 
 
 def _normalize_section_title(text: str) -> str:
-    """Fold a heading title / ``section_id`` for lenient comparison."""
-    return " ".join(text.split()).casefold()
+    """Fold a heading title / ``section_id`` for lenient comparison.
+
+    NFC first: IEP stores "Al-Ghazālī" decomposed while a caller types it
+    composed, and the two render identically but compare unequal.
+    """
+    return " ".join(unicodedata.normalize("NFC", text).split()).casefold()
 
 
 def _match_section_by_title(sections: List[Any], section_id: str) -> "Optional[int]":
