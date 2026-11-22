@@ -812,14 +812,15 @@ class TestSimpleToolsOptionsPassthrough:
         from openzim_mcp.simple_tools import SimpleToolsHandler
 
         zim_ops = MagicMock()
-        zim_ops.find_entry_by_title.return_value = '{"results": []}'
+        zim_ops.find_entry_by_title_data.return_value = {"results": []}
         zim_ops.list_zim_files_data.return_value = [{"path": "/x.zim"}]
         handler = SimpleToolsHandler(zim_ops)
 
         handler.handle_zim_query(
             "find article titled Photosynthesis", options={"limit": 30}
         )
-        _args, kwargs = zim_ops.find_entry_by_title.call_args
+        # The first lookup is the title itself; promotion probes follow it.
+        _args, kwargs = zim_ops.find_entry_by_title_data.call_args_list[0]
         assert kwargs.get("limit") == 30
 
     def test_related_forwards_options_limit(self):
@@ -1132,7 +1133,7 @@ class TestExplicitZimPathHonored:
             '{"path": "/auto/secondary.zim", "name": "secondary.zim"}]'
         )
         mock.walk_namespace.return_value = "{}"
-        mock.find_entry_by_title.return_value = "{}"
+        mock.find_entry_by_title_data.return_value = {"results": []}
         mock.get_related_articles.return_value = "{}"
         return mock
 
@@ -1145,7 +1146,7 @@ class TestExplicitZimPathHonored:
         "intent_query,backend_attr",
         [
             ("walk namespace M", "walk_namespace"),
-            ("find article titled Photosynthesis", "find_entry_by_title"),
+            ("find article titled Photosynthesis", "find_entry_by_title_data"),
             ("articles related to Climate_Change", "get_related_articles"),
         ],
     )
@@ -1960,7 +1961,9 @@ class TestCompactMarkdownRenderingForJsonIntents:
         out = h.handle_zim_query(
             "find article titled Photosynthesis", options={"compact": True}
         )
-        mock.find_entry_by_title_data.assert_called_once()
+        # The first lookup is the title itself; promotion probes follow it.
+        first = mock.find_entry_by_title_data.call_args_list[0]
+        assert first.args[1].lower() == "photosynthesis"
         mock.find_entry_by_title.assert_not_called()
         assert "Title lookup" in out
         assert "**Photosynthesis**" in out
@@ -2088,25 +2091,37 @@ class TestCompactMarkdownRenderingForJsonIntents:
         ``find_entry_by_title_data`` is therefore expected to be called
         once for the related handler regardless of compact mode. The
         rest of the legacy contract is unchanged.
+
+        ``find article titled X`` still answers in JSON, but it is the page
+        ``zim_search(mode='title')`` serves — promoted and artefact-demoted —
+        rather than the raw lookup, so it serialises that page itself.
         """
+        import json
         from unittest.mock import MagicMock
+
+        title_mock = MagicMock()
+        title_mock.list_zim_files_data.return_value = [{"path": "/x.zim"}]
+        title_mock.find_entry_by_title_data.return_value = {"results": []}
+        out = SimpleToolsHandler(title_mock).handle_zim_query(
+            "find article titled X", options={"compact": False}
+        )
+        payload, _end = json.JSONDecoder().raw_decode(out)
+        assert payload == {"results": []}
+        title_mock.find_entry_by_title.assert_not_called()
 
         mock = MagicMock()
         mock.list_zim_files_data.return_value = [{"path": "/x.zim"}]
-        mock.find_entry_by_title.return_value = '{"results": []}'
         mock.find_entry_by_title_data.return_value = {"results": []}
         mock.get_related_articles.return_value = '{"results": []}'
         mock.walk_namespace.return_value = '{"entries": []}'
         mock.list_namespaces.return_value = '{"namespaces": {}}'
         h = SimpleToolsHandler(mock)
         for q in [
-            "find article titled X",
             "articles related to X",
             "walk namespace C",
             "list namespaces",
         ]:
             h.handle_zim_query(q, options={"compact": False})
-        mock.find_entry_by_title.assert_called_once()
         mock.get_related_articles.assert_called_once()
         mock.walk_namespace.assert_called_once()
         mock.list_namespaces.assert_called_once()
@@ -2667,7 +2682,7 @@ class TestLowConfidenceNoteAppendedConsistently:
         )
         mock.search_all.return_value = '{"results": []}'
         mock.walk_namespace.return_value = '{"entries": []}'
-        mock.find_entry_by_title.return_value = '{"matches": []}'
+        mock.find_entry_by_title_data.return_value = {"results": []}
         mock.get_related_articles.return_value = '{"related": []}'
         return mock
 

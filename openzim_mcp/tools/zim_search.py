@@ -697,22 +697,92 @@ async def _lookup_title_page(
     raw = await ops.find_entry_by_title_data(
         zim_file_path, query, cross_file=cross_file, limit=limit
     )
-    if not server.zim_operations.config.query_rewrite.enabled:
-        return raw, query
-    results = raw.get("results") if isinstance(raw, dict) else None
-    if results and _is_exact_title_row(results[0]):
-        return raw, query
-
-    from ..intent_parser import IntentParser
-
-    rewritten = IntentParser._apply_misspelling_map(query, title_probe=None)
-    rewritten = IntentParser._detect_stopword_phrase(rewritten, title_probe=None)
-    if rewritten == query:
+    rewritten = _title_rewrite(server.zim_operations.config, raw, query)
+    if rewritten is None:
         return raw, query
     rewritten_page = await ops.find_entry_by_title_data(
         zim_file_path, rewritten, cross_file=cross_file, limit=limit
     )
     return rewritten_page, rewritten
+
+
+def _title_rewrite(config: Any, raw: Any, query: str) -> Optional[str]:
+    """The string to look a title up under instead of ``query``, or None.
+
+    ``raw`` is the page ``query`` itself returned. See ``_lookup_title_page``.
+    """
+    if not config.query_rewrite.enabled:
+        return None
+    results = raw.get("results") if isinstance(raw, dict) else None
+    if results and _is_exact_title_row(results[0]):
+        return None
+
+    from ..intent_parser import IntentParser
+
+    rewritten = IntentParser._apply_misspelling_map(query, title_probe=None)
+    rewritten = IntentParser._detect_stopword_phrase(rewritten, title_probe=None)
+    return None if rewritten == query else rewritten
+
+
+def resolve_title_page(
+    zim_operations: Any,
+    zim_file_path: str,
+    query: str,
+    *,
+    limit: int,
+    raw: Any = None,
+) -> Any:
+    """Single-archive title mode for a caller already off the event loop.
+
+    v3.3.1 field report: simple mode's ``find article titled X`` called the
+    title data layer and rendered it, skipping every step this module applies
+    after the lookup, so on MedlinePlus ``hepatitis b`` put the
+    ``languages/`` translation hub second in simple mode and fifth here, and
+    ``swollen glands`` came back in the opposite order. The two surfaces now
+    run the same lookup, rewrite gate, promotion and demote.
+
+    ``raw`` is the page ``query`` already returned at this ``limit``, for a
+    caller that had to look before deciding to render.
+    """
+    if raw is None:
+        raw = zim_operations.find_entry_by_title_data(
+            zim_file_path, query, cross_file=False, limit=limit
+        )
+    title = query
+    rewritten = _title_rewrite(zim_operations.config, raw, query)
+    if rewritten is not None:
+        raw = zim_operations.find_entry_by_title_data(
+            zim_file_path, rewritten, cross_file=False, limit=limit
+        )
+        title = rewritten
+    return _finish_title_page(zim_operations, zim_file_path, raw, title, limit)
+
+
+def _finish_title_page(
+    zim_operations: Any, zim_file_path: str, raw: Any, title: str, limit: int
+) -> Any:
+    """Everything single-archive title mode does after the lookup.
+
+    Promotion runs up to dozens of blocking libzim probes (archive open +
+    SuggestionSearcher + redirect walks per tail/window probe), so an async
+    caller must offload this.
+    """
+    from ..topic_preprocessing import promote_topic_via_title_index
+
+    promoted = promote_topic_via_title_index(
+        zim_operations=zim_operations, zim_file_path=zim_file_path, topic=title
+    )
+    merged = _merge_promotion_into_title_results(raw, promoted, limit)
+    # v3.3.1 field report (fid 71), at the RESPONSE EDGE and nowhere earlier.
+    # Scraper output — translation hubs, image-caption stubs, subtitle
+    # sidecars — outranks a real article on 30 of 40 measured title pages
+    # (``title 'hepatitis b'`` puts ``languages/hepatitisb.html`` above a real
+    # ency article). Demoting it inside ``find_entry_by_title_data`` instead
+    # would reorder the list the promotion probes above read as
+    # score-descending, which blanks the canonical probe and hoists a weaker
+    # fallback to rank 1 at a fabricated 1.0. Promotion has run by here, so
+    # reordering this response is safe — but only as a copy, see below.
+    return _demote_artefacts_in_response(merged, query=title)
 
 
 async def _handle_title_mode(
@@ -788,30 +858,17 @@ async def _handle_title_mode(
     raw, preprocessed = await _lookup_title_page(
         ops, server, resolved_path, query, cross_file=False, limit=effective_limit
     )
-
-    from ..topic_preprocessing import promote_topic_via_title_index
-
-    # Promotion runs up to dozens of blocking libzim probes (archive open +
-    # SuggestionSearcher + redirect walks per tail/window probe, and empty
-    # probes are deliberately uncached). Offload like every other data-layer
-    # touch so the probe train doesn't hold the event loop.
-    promoted = await asyncio.to_thread(
-        promote_topic_via_title_index,
-        zim_operations=server.zim_operations,
-        zim_file_path=resolved_path,
-        topic=preprocessed,
+    # Promotion runs up to dozens of blocking libzim probes (empty probes are
+    # deliberately uncached). Offload like every other data-layer touch so
+    # the probe train doesn't hold the event loop.
+    return await asyncio.to_thread(
+        _finish_title_page,
+        server.zim_operations,
+        resolved_path,
+        raw,
+        preprocessed,
+        effective_limit,
     )
-    merged = _merge_promotion_into_title_results(raw, promoted, effective_limit)
-    # v3.3.1 field report (fid 71), at the RESPONSE EDGE and nowhere earlier.
-    # Scraper output — translation hubs, image-caption stubs, subtitle
-    # sidecars — outranks a real article on 30 of 40 measured title pages
-    # (``title 'hepatitis b'`` puts ``languages/hepatitisb.html`` above a real
-    # ency article). Demoting it inside ``find_entry_by_title_data`` instead
-    # would reorder the list the promotion probes above read as
-    # score-descending, which blanks the canonical probe and hoists a weaker
-    # fallback to rank 1 at a fabricated 1.0. Promotion has run by here, so
-    # reordering this response is safe — but only as a copy, see below.
-    return _demote_artefacts_in_response(merged, query=preprocessed)
 
 
 def _demote_artefacts_in_response(payload: Any, *, query: str) -> Any:

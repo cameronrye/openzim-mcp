@@ -4534,7 +4534,14 @@ class SimpleToolsHandler(
         # for slash-shaped titles and redirect only when it returns nothing;
         # otherwise render the real hits. The ≥3-char suffix floor avoids
         # false-positiving genuinely short slash titles (``a/b``).
-        limit = options.get("limit", 10)
+        #
+        # Clamped like the links and related intents: the title data layer
+        # caps ``limit`` at 50 while ``zim_query`` documents 1..1000, so 51+
+        # raised through to a generic "Error Processing Query" with a
+        # traceback logged at ERROR.
+        limit, limit_note = self._clamp_intent_limit(
+            options.get("limit", 10), cap=50, default=10
+        )
         compact = options.get("compact", False)
         looks_like_namespace_path = (
             len(title) >= 4
@@ -4543,11 +4550,14 @@ class SimpleToolsHandler(
             and title[1] == "/"
             and len(title[2:].strip()) >= 3
         )
+        typed_page = None
         if looks_like_namespace_path:
-            data = self.zim_operations.find_entry_by_title_data(
+            typed_page = self.zim_operations.find_entry_by_title_data(
                 zim_file_path, title, cross_file=False, limit=limit
             )
-            results = data.get("results") if isinstance(data, dict) else None
+            results = (
+                typed_page.get("results") if isinstance(typed_page, dict) else None
+            )
             if not results:
                 # Confirmed: a slash-shaped title with no title-index hit is a
                 # misrouted namespace path. libzim namespace lookups are
@@ -4564,21 +4574,25 @@ class SimpleToolsHandler(
                     f"- `find article titled {title[2:].strip()}` — "
                     "title-only lookup (drops the namespace prefix)\n"
                 )
-            # Real title that happens to contain '/': render its hits.
-            if compact:
-                return compact_renderers.render_find_by_title(data, title)
-            return self.zim_operations.find_entry_by_title(
-                zim_file_path, title, cross_file=False, limit=limit
-            )
+            # Real title that happens to contain '/': render its hits below.
+            # The verdict above reads the raw lookup on purpose: promotion
+            # can resolve a tail of ``M/Title`` to some unrelated ``Title``.
 
-        if compact:
-            data = self.zim_operations.find_entry_by_title_data(
-                zim_file_path, title, cross_file=False, limit=limit
-            )
-            return compact_renderers.render_find_by_title(data, title)
-        return self.zim_operations.find_entry_by_title(
-            zim_file_path, title, cross_file=False, limit=limit
+        # The page ``zim_search(mode='title')`` serves for the same string:
+        # rendering the raw lookup skipped its promotion and crawl-artefact
+        # demote, so the two surfaces disagreed on the order.
+        from .tools.zim_search import resolve_title_page
+        from .zim._ops_base import _json
+
+        data = resolve_title_page(
+            self.zim_operations, zim_file_path, title, limit=limit, raw=typed_page
         )
+        if compact:
+            return compact_renderers.render_find_by_title(data, title) + limit_note
+        # Non-compact returns a JSON string; appending the prose note would
+        # make it unparseable, so the clamp is surfaced only on the markdown
+        # (compact) rendering, as on the related intent.
+        return _json(data)
 
     def _handle_inbound_links(
         self,

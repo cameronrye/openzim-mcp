@@ -202,7 +202,9 @@ class TestD44ForeignCursorRejectedUniformly:
             zim_file_path="/zims/test.zim",
             options={"compact": True},
         )
-        assert mock.find_entry_by_title_data.call_args.kwargs["limit"] == 10
+        # The first lookup is the title itself; promotion probes follow it.
+        first = mock.find_entry_by_title_data.call_args_list[0]
+        assert first.kwargs["limit"] == 10
         mock.find_entry_by_title_data.reset_mock()
         handler.handle_zim_query(
             "find article titled Measles",
