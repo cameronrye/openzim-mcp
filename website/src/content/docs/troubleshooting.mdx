@@ -96,18 +96,17 @@ Both are auth-exempt, so they work with no token and regardless of tool mode.
 
 ### Python version problems
 
-**Error**: `Python 3.12+ required`
+**Error**: `ERROR: No matching distribution found for openzim-mcp`, after a line listing every release as `Requires-Python >=3.12`
 
 **Symptoms**:
 
-- Server fails to start
-- Import errors during installation
+- `pip install openzim-mcp` finds no release it may install (`from versions: none`)
 
 **Solutions**:
 
-1. **Check Python version**: `python --version`
-2. **Install Python 3.12+**: Visit [python.org](https://python.org)
-3. **Use correct Python**: `python3.12 -m openzim_mcp`
+1. **Check Python version**: `python3 --version`
+2. **Let uv pick the interpreter**: `uv tool install openzim-mcp` fetches a Python 3.12+ when none is installed
+3. **Use a 3.12+ Python for pip**: `python3.12 -m venv ~/.venvs/openzim-mcp`, then install with that virtualenv's `pip`
 
 ### Package installation failures
 

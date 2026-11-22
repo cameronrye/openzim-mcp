@@ -72,7 +72,7 @@ Simple mode is the default. It exposes a single natural-language tool, `zim_quer
 # Start the server with your ZIM files directory
 openzim-mcp ~/zim-files
 
-# You should see two log lines like:
+# About a dozen log lines follow on stderr, including these two:
 # 2026-05-27 15:30:00,000 - openzim_mcp.main - INFO - OpenZIM MCP server started in SIMPLE mode (1 intelligent tool)
 # 2026-05-27 15:30:00,001 - openzim_mcp.main - INFO - Allowed directories: /home/user/zim-files
 ```
@@ -96,7 +96,7 @@ uv run python -m openzim_mcp ~/zim-files
 1. **Find your configuration file**:
    - **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
    - **macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
-   - **Linux**: `~/.config/claude/claude_desktop_config.json`
+   - **Linux**: `~/.config/Claude/claude_desktop_config.json`
 
 2. **Add OpenZIM MCP configuration**:
 
