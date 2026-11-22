@@ -60,7 +60,7 @@ dependencies = [
     # http_app.py imports ``check_accept_headers`` /
     # ``MCP_SESSION_ID_HEADER`` / ``DEFAULT_MAX_REQUEST_BODY_SIZE``, and
     # mcp_envelope.py calls ``fn_metadata.convert_result``. CI resolves the
-    # lockfile, but fresh installs (pip/uvx, Smithery, Docker) take the newest
+    # lockfile, but fresh installs (pip/uvx, Docker) take the newest
     # wheel the range admits, so an unaudited minor would break those with the
     # suite green.
     #

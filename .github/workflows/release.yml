@@ -179,7 +179,7 @@ jobs:
           name: dist
           path: dist/
 
-      # The .mcpb bundle (Smithery listing + Claude Desktop one-click extension)
+      # The .mcpb bundle (the Claude Desktop one-click extension)
       # is built into a SEPARATE directory/artifact, never dist/. The
       # publish-pypi job uploads everything in the `dist` artifact to PyPI, and a
       # .mcpb is not a valid distribution — keeping it out of `dist` avoids a
