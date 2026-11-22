@@ -9,6 +9,7 @@ or the simple-mode handler end to end, in the mode the defect lives in.
 from __future__ import annotations
 
 import json
+import shutil
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, AsyncIterator, Dict, Optional
@@ -20,6 +21,9 @@ from openzim_mcp.server import OpenZimMcpServer
 from tests.test_mcp_session import _connected_client, _text
 
 _MINI = "wikipedia_en_climate_change_mini_2024-06.zim"
+# 40 bytes: carries the extension, fails to open ("too small to contain a
+# header").
+_BAD = "invalid.smaller_than_header.zim"
 
 
 @pytest.fixture
@@ -456,3 +460,49 @@ class TestSearchAllRefusesOffset:
         assert first[0] is not True and second[0] is not True
         assert "A/Carbon_tax" in first[1]
         assert "A/Carbon_tax" not in second[1], second[1][:600]
+
+
+class TestSynthesizeMetaWithAFailedArchive:
+    """A failed archive changed what ``_meta`` measured, and leaked its path.
+
+    ``_meta.chars`` is the answer's length on every synthesize response —
+    until ``archives_failed`` was added and the payload re-measured, when it
+    became the JSON envelope's (5,267 → 8,265 for the same answer). The
+    failure's ``error`` also echoed the archive's absolute path, which every
+    other diagnostic redacts to the filename.
+    """
+
+    @staticmethod
+    def _corpus(root: Path, withns: Path, *, broken: bool) -> Path:
+        corpus = root / ("broken" if broken else "healthy")
+        corpus.mkdir()
+        shutil.copy(withns / _MINI, corpus / _MINI)
+        if broken:
+            shutil.copy(withns / _BAD, corpus / _BAD)
+        return corpus
+
+    @pytest.mark.asyncio
+    async def test_meta_measures_the_answer_and_the_path_is_redacted(
+        self, tmp_path: Path, withns: Path
+    ) -> None:
+        if not (withns / _BAD).exists():
+            pytest.skip(f"{_BAD} not in the corpus")
+        args = {"query": "tell me about greenhouse effect", "synthesize": True}
+        results = {}
+        for broken in (False, True):
+            corpus = self._corpus(tmp_path, withns, broken=broken)
+            async with _session(corpus, "simple") as session:
+                results[broken] = await _call(session, "zim_query", args)
+
+        healthy, failed = results[False][2], results[True][2]
+        assert results[True][0] is not True, results[True][1][:300]
+        assert "archives_failed" not in healthy
+        (failure,) = failed["archives_failed"]
+        # The same answer reports the same size, failure or not.
+        assert failed["answer_markdown"] == healthy["answer_markdown"]
+        assert failed["_meta"]["chars"] == len(failed["answer_markdown"])
+        assert failed["_meta"] == healthy["_meta"]
+        # Redacted to the filename, with the diagnosis kept.
+        assert str(tmp_path) not in failure["error"], failure
+        assert f"...{_BAD}" in failure["error"], failure
+        assert "too small" in failure["error"], failure

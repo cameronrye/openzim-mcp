@@ -4984,7 +4984,15 @@ class SimpleToolsHandler(
                     logger.warning(
                         "Could not open archive %s for synthesize: %s", vp, e
                     )
-                    failed.append({"archive": Path(str(vp)).stem, "error": str(e)})
+                    # The open error embeds the absolute archive path; the
+                    # client gets it redacted to the filename, as every other
+                    # diagnostic does. The log line above keeps the real one.
+                    failed.append(
+                        {
+                            "archive": Path(str(vp)).stem,
+                            "error": sanitize_context_for_error(str(e)),
+                        }
+                    )
                     continue
 
             if not archives:
@@ -5024,8 +5032,13 @@ class SimpleToolsHandler(
                 # Present only when something failed: a key that is always
                 # there is one a reader stops looking at, and its absence
                 # is the "every archive was searched" signal.
+                #
+                # No ``remeasure``: synthesize's ``_meta`` measures the
+                # answer, not the envelope (see ``synthesize_query``), and
+                # this key leaves the answer untouched. Re-measuring switched
+                # ``chars`` to the whole JSON payload on exactly the responses
+                # that carry a failure — 5,267 became 8,265 for one answer.
                 response["archives_failed"] = failed
-                remeasure(cast(Dict[str, Any], response))
             return response
 
     def _synthesize_reject_meta_or_chained(
