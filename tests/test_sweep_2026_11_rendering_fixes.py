@@ -6,6 +6,9 @@ names the inputs that exposed it.
 
 from __future__ import annotations
 
+import ast
+import json
+import re
 import unicodedata
 from pathlib import Path
 from typing import Any, Dict, Iterable, Optional, Tuple
@@ -551,3 +554,224 @@ class TestMainPageStripsCompactLinks:
         assert main["_meta"]["truncated"] is True, main
         assert main["_meta"]["total_chars"] == by_path["_meta"]["total_chars"]
         assert _body(main["content"]) == _body(by_path["content"])
+
+
+_TRUNCATION_RE = re.compile(
+    r"\n\n\.\.\. \[Content truncated, (?P<note>.*)\] \.\.\.$", re.S
+)
+
+
+def _split_page(content: str) -> Tuple[str, str]:
+    """``(body, footer note)`` of one served page; the note is ``""`` if whole."""
+    match = _TRUNCATION_RE.search(content)
+    if match is None:
+        return content, ""
+    return content[: match.start()], match.group("note")
+
+
+def _footer_arguments(note: str) -> Dict[str, Any]:
+    """Every backticked ``name=value`` the footer tells the caller to pass."""
+    return {
+        name: ast.literal_eval(value)
+        for name, value in re.findall(r"`(\w+)=([^`]+)`", note)
+    }
+
+
+def _footer_request(note: str) -> Optional[str]:
+    """The ``zim_query`` request a simple-mode footer quotes, if any."""
+    match = re.search(r"ask for `([^`]+)`", note)
+    return match.group(1) if match else None
+
+
+def _simple_body(text: str) -> str:
+    """The article body of a simple-mode ``get article`` / ``main page`` reply."""
+    assert "## Content\n\n" in text, text[:500]
+    return text.split("## Content\n\n", 1)[1].rsplit("\n<!-- intent=", 1)[0]
+
+
+def _simple_json(text: str) -> Any:
+    """The JSON document a simple-mode batch reply carries."""
+    return json.JSONDecoder().raw_decode(text[text.index("{") :])[0]
+
+
+class TestContinuationFootersAreFollowable:
+    """Every truncation footer must name a call that resumes where its page ended.
+
+    The batch footer read "re-fetch this path with a single-entry
+    `entry_path` call and `content_offset=800`" in either mode. In advanced
+    mode it left out ``compact``, so following it with zim_get's default
+    ``compact=False`` resumed in a different rendering (about 300 chars off
+    on a compact Kyoto batch). In simple mode it named an ``entry_path``
+    argument zim_query rejects as ``unknown_argument``. The main page told
+    advanced callers to "switch to `get article`", which is simple-mode
+    vocabulary, and gave no offset at all.
+
+    Each test below does exactly what a footer says and nothing more, then
+    checks that the two pages join into the start of the whole body.
+    """
+
+    _BATCH = ["A/Kyoto_Protocol", "A/Climate_change"]
+
+    @pytest.fixture
+    def portal(self, tmp_path: Path) -> Path:
+        # Long enough that even the simple surface's 5,000-char main-page
+        # cap truncates it once the links are stripped.
+        links = " ".join(
+            f'<a href="Topic_{i}" title="Topic {i}">Topic {i}</a>' for i in range(700)
+        )
+        return _build_zim(
+            tmp_path / "portal.zim",
+            [
+                (
+                    "A/Portal",
+                    "Portal",
+                    "<html><body><h1>Portal</h1>"
+                    f"<p>Welcome to the portal. Start with {links}.</p>"
+                    "</body></html>",
+                )
+            ],
+        )
+
+    @staticmethod
+    def _whole_body(archive: Path, entry_path: str, compact: bool) -> str:
+        server = _server(archive.parent, cache=False)
+        return str(
+            server.zim_operations.get_zim_entry_data(
+                str(archive), entry_path, 10**7, 0, compact=compact
+            )["content"]
+        )
+
+    @staticmethod
+    async def _first_page(server: OpenZimMcpServer, tool: str, **arguments: Any) -> Any:
+        """The truncated page, fetched twice: the footer is cached with it."""
+        page = await _call(server, tool, **arguments)
+        assert await _call(server, tool, **arguments) == page
+        return page
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("compact", [True, False])
+    async def test_advanced_batch_footer(
+        self, climate_zim: Path, compact: bool
+    ) -> None:
+        server = _server(climate_zim.parent)
+        batch = await self._first_page(
+            server,
+            "zim_get",
+            zim_file_path=str(climate_zim),
+            entry_paths=self._BATCH,
+            compact=compact,
+            max_content_length=800,
+        )
+        item = batch["results"][0]
+        first, note = _split_page(item["content"])
+        assert "single-entry `entry_path` call" in note, note
+
+        second = await _call(
+            server,
+            "zim_get",
+            zim_file_path=str(climate_zim),
+            entry_path=item["entry_path"],
+            max_content_length=800,
+            **_footer_arguments(note),
+        )
+
+        rest, _ = _split_page(second["content"])
+        assert rest, second
+        whole = self._whole_body(climate_zim, item["entry_path"], compact)
+        assert whole.startswith(first + rest), (note, rest[:120])
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("compact", [True, False])
+    async def test_simple_batch_footer(self, climate_zim: Path, compact: bool) -> None:
+        server = _server(climate_zim.parent, "simple")
+        batch = _simple_json(
+            str(
+                await self._first_page(
+                    server,
+                    "zim_query",
+                    query="get articles " + ", ".join(self._BATCH),
+                    zim_file_path=str(climate_zim),
+                    compact=compact,
+                    max_content_length=800,
+                )
+            )
+        )
+        item = batch["results"][0]
+        first, note = _split_page(item["content"])
+        request = _footer_request(note)
+        assert request == f"get article {item['entry_path']}", note
+
+        second = await _call(
+            server,
+            "zim_query",
+            query=request,
+            zim_file_path=str(climate_zim),
+            max_content_length=800,
+            **_footer_arguments(note),
+        )
+
+        assert not isinstance(second, dict), second
+        rest, _ = _split_page(_simple_body(str(second)))
+        assert rest, second
+        whole = self._whole_body(climate_zim, item["entry_path"], compact)
+        assert whole.startswith(first + rest), (note, rest[:120])
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("compact", [True, False])
+    async def test_advanced_main_page_footer(self, portal: Path, compact: bool) -> None:
+        server = _server(portal.parent)
+        page = await self._first_page(
+            server,
+            "zim_get",
+            zim_file_path=str(portal),
+            main_page=True,
+            compact=compact,
+            max_content_length=300,
+        )
+        first, note = _split_page(page["content"])
+        arguments = _footer_arguments(note)
+        assert arguments.get("entry_path") == page["path"], note
+
+        second = await _call(
+            server,
+            "zim_get",
+            zim_file_path=str(portal),
+            max_content_length=300,
+            **arguments,
+        )
+
+        rest, _ = _split_page(second["content"])
+        assert rest, second
+        whole = self._whole_body(portal, page["path"], compact)
+        assert whole.startswith(first + rest), (note, rest[:120])
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("compact", [True, False])
+    async def test_simple_main_page_footer(self, portal: Path, compact: bool) -> None:
+        server = _server(portal.parent, "simple")
+        page = str(
+            await self._first_page(
+                server,
+                "zim_query",
+                query="main page",
+                zim_file_path=str(portal),
+                compact=compact,
+            )
+        )
+        first, note = _split_page(_simple_body(page))
+        request = _footer_request(note)
+        assert request == "get article A/Portal", note
+
+        second = await _call(
+            server,
+            "zim_query",
+            query=request,
+            zim_file_path=str(portal),
+            **_footer_arguments(note),
+        )
+
+        assert not isinstance(second, dict), second
+        rest, _ = _split_page(_simple_body(str(second)))
+        assert rest, second
+        whole = self._whole_body(portal, "A/Portal", compact)
+        assert whole.startswith(first + rest), (note, rest[:120])

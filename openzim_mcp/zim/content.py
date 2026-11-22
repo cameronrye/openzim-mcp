@@ -1340,6 +1340,8 @@ class _ContentMixin:
             current_offset=content_offset,
             original_total=total_length,
             batch_item=batch_item,
+            compact=compact,
+            entry_path=actual_path,
         )
         # Compare against the cap, NOT the rendered lengths: ``truncate_content``
         # appends a ~150-char truncation note, so ``len(truncated) < len(content)``

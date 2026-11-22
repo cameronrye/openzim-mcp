@@ -317,8 +317,10 @@ def test_main_page_honors_max_content_length(
     assert len(body) <= 200
     assert capped["_meta"]["truncated"] is True
     assert capped["_meta"]["total_chars"] > 200
-    # The footer must not advertise content_offset: the branch never reads it.
-    assert "content_offset=" not in footer
+    # The footer must not page the main-page call itself, which never reads
+    # content_offset; the offset it names belongs to a fetch of this path.
+    assert "Pass `content_offset=" not in footer
+    assert f"`get article {capped['path']}` with `content_offset=" in footer
 
     # The cap is part of the response identity — an uncapped call right after
     # must not be served the capped rendering from cache.
@@ -397,8 +399,11 @@ def test_batch_footer_points_at_single_entry_paging(
     assert "Pass `content_offset=" not in content, content
     # The working recovery: a single-entry call on this path, with the
     # offset where this slice ended (299 here — the boundary space is
-    # deferred to the next page, so the hint is not simply the cap).
-    assert "single-entry `entry_path` call" in content
+    # deferred to the next page, so the hint is not simply the cap). The
+    # shared ``content_processor`` fixture renders simple-mode wording, so
+    # the call is a quoted ``get article`` request; the advanced wording is
+    # driven end to end in ``test_sweep_2026_11_rendering_fixes``.
+    assert f"`get article {path}`" in content
     assert "`content_offset=299`" in content
 
 

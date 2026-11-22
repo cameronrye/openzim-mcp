@@ -1732,10 +1732,10 @@ class ZimOperations(
                 )
                 # Truncate content for main page display. ``paginatable
                 # = False`` because ``_handle_main_page`` doesn't
-                # thread ``content_offset`` — point the caller at
-                # ``get article`` for the rest (A11 third pass).
+                # thread ``content_offset`` — the hint routes the rest
+                # through a fetch of this path (A11 third pass).
                 truncated_content = self.content_processor.truncate_content(
-                    content, cap, paginatable=False
+                    content, cap, paginatable=False, compact=compact, entry_path=path
                 )
                 # Key on the cap, not the rendered lengths: ``truncate_content``
                 # appends a ~150-char note, so a length comparison reports

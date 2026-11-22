@@ -2227,6 +2227,8 @@ class ContentProcessor:
         paginatable: bool = True,
         original_total: Optional[int] = None,
         batch_item: bool = False,
+        compact: bool = False,
+        entry_path: Optional[str] = None,
     ) -> str:
         """
         Truncate content to maximum length with informative message.
@@ -2246,9 +2248,9 @@ class ContentProcessor:
             current_offset: Where this slice starts in the source
                 content. Lets the truncation hint compute the correct
                 next-page offset for paginated reads.
-            paginatable: When False, omit the ``content_offset=N``
-                hint and emit a tighter "use get article ... for the
-                rest" hint instead. Main-page rendering passes False:
+            paginatable: When False, the hint routes the rest through
+                a path fetch of ``entry_path`` instead of the bare
+                ``content_offset=N``. Main-page rendering passes False:
                 ``_handle_main_page`` doesn't expose
                 ``content_offset`` (the operation always re-resolves
                 the main entry from scratch), so suggesting it would
@@ -2263,11 +2265,17 @@ class ContentProcessor:
                 post-slice length, so paginated reads under-reported
                 the article's length by ``current_offset`` chars.
             batch_item: When True, the continuation hint points at a
-                single-entry ``entry_path`` call. Batch mode rejects
+                single-entry fetch of ``entry_path``. Batch mode rejects
                 ``content_offset`` (``zim_get`` returns
                 ``invalid_path_combination``), so the default ``Pass
                 content_offset=N`` tail was advice the emitting mode
                 could not act on.
+            compact: Whether this page was rendered compact. A rerouted
+                hint (batch / main page) names it whenever the call it
+                routes to defaults the other way, so the next page comes
+                from the same rendering.
+            entry_path: The entry a rerouted hint names. Simple mode can
+                only reach it through a quoted ``get article`` request.
 
         Returns:
             Truncated content with metadata
@@ -2316,13 +2324,28 @@ class ContentProcessor:
         # this slice STARTED in the original article.
         next_offset = current_offset + consumed
 
+        # The batch and main-page hints reroute the caller to a path fetch,
+        # which only continues this page if it renders the same way, so the
+        # hint names ``compact`` whenever this page differs from the routed
+        # call's default. It also speaks the caller's surface: simple mode
+        # registers zim_query alone, which takes a request rather than an
+        # ``entry_path``.
+        advanced = self._tool_mode == "advanced"
+        routed_compact_default = not advanced  # zim_get False, zim_query True
+        resume = f"`content_offset={next_offset}`"
+        if compact != routed_compact_default:
+            resume += f" and `compact={compact}`"
+        target = entry_path or "<path>"
         if batch_item:
             # Batch entries are first-page only and the batch branch rejects
             # ``content_offset``; the working recovery is a single-entry call.
+            route = (
+                f"re-fetch this path as a single-entry `entry_path` call with {resume}"
+                if advanced
+                else f"ask for `get article {target}` with {resume}"
+            )
             tail = (
-                " Batch entries return their first page only; for the rest, "
-                "re-fetch this path with a single-entry `entry_path` call and "
-                f"`content_offset={next_offset}`."
+                f" Batch entries return their first page only; for the rest, {route}."
             )
         elif paginatable:
             # NO thousands separator here: unlike the human-readable counts
@@ -2333,12 +2356,13 @@ class ContentProcessor:
         else:
             # Main-page rendering: ``_handle_main_page`` re-resolves
             # from ``archive.main_entry`` on every call and never
-            # threads a content_offset. Point the caller at the
-            # ``get article`` route, which DOES support paging.
-            tail = (
-                " For the rest, switch to `get article` on the main-"
-                "page path with `content_offset`."
+            # threads a content_offset, so the rest is a path fetch.
+            route = (
+                f'fetch `entry_path="{target}"` with {resume}'
+                if advanced
+                else f"ask for `get article {target}` with {resume}"
             )
+            tail = f" For the rest, {route}."
 
         # Body of the slice description switches shape based on
         # whether we're paginating mid-article: at offset 0 the
