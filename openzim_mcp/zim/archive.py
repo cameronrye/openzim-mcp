@@ -770,13 +770,20 @@ class ZimOperations(
         A path-set fingerprint (rather than a directory ``mtime``) is used
         deliberately: it is robust to coarse-resolution filesystem
         timestamps and detects nested-subdirectory changes, at the cost of
-        one ``readdir`` per call. An in-place same-name replacement
-        (identical path, new bytes) is intentionally not reflected here —
-        that archive's *content* caches invalidate via their own
-        ``archive_stat_token`` and the listing's stale size/mtime is bounded
-        by the cache TTL.
+        one ``readdir`` per call.
+
+        Each path carries its ``archive_stat_token`` too, one ``stat`` per
+        file. A download that completes in place keeps its path, and a
+        path-only key went on listing it as truncated and unreadable, which
+        put ``zim_health``'s listing at odds with its own warnings. The
+        token also brings the render epoch, so a release that changes what
+        a row says is not answered from a persisted listing.
         """
-        paths = sorted(str(p) for _dir, files in grouped for p in files)
+        from openzim_mcp.bundle import archive_stat_token
+
+        paths = sorted(
+            f"{p}\0{archive_stat_token(p)}" for _dir, files in grouped for p in files
+        )
         blob = "\n".join(paths).encode("utf-8", "surrogatepass")
         # Not a security digest — just a stable fingerprint of the directory
         # contents for cache invalidation; usedforsecurity=False documents

@@ -502,3 +502,69 @@ class TestInlineMediaGetsNoInventedPath:
         assert rows["formula"]["url"] == self._PIXEL
         assert "path" not in rows["formula"], rows["formula"]
         assert "path" not in rows["unarchived"], rows["unarchived"]
+
+
+class TestListingFollowsAFileChangedInPlace:
+    """The archive listing was keyed on the set of paths alone.
+
+    A download that completes in place keeps its path, so ``zim_health``
+    went on listing it as a truncated, unreadable file while its own
+    warnings (computed fresh) said nothing was wrong. The key also lacked
+    the render epoch, so a persisted listing outlived a release that
+    changed what a row says.
+    """
+
+    @pytest.mark.asyncio
+    async def test_zim_health_agrees_with_itself_once_a_download_completes(
+        self, tmp_path: Path, real_content_zim_files: Dict[str, Optional[Path]]
+    ) -> None:
+        from openzim_mcp.server import OpenZimMcpServer
+
+        source = real_content_zim_files.get("wikibooks")
+        if source is None:
+            pytest.skip("wikibooks fixture not available")
+        data = source.read_bytes()
+        live = tmp_path / "wikibooks.zim"
+        live.write_bytes(data[: len(data) // 2])
+        server = OpenZimMcpServer(
+            OpenZimMcpConfig(
+                allowed_directories=[str(tmp_path)],
+                tool_mode="advanced",
+                cache=CacheConfig(enabled=True),
+            )
+        )
+        health = server.mcp._tool_manager._tools["zim_health"].fn
+
+        partial = await health()
+        with live.open("ab") as handle:
+            handle.write(data[len(data) // 2 :])
+        complete = await health()
+
+        assert [f["readable"] for f in partial["loaded_archives"]] == [False]
+        assert any("Truncated" in w for w in partial["health"]["warnings"])
+        assert [f["readable"] for f in complete["loaded_archives"]] == [True]
+        assert "warning" not in complete["loaded_archives"][0]
+        assert complete["loaded_archives"][0]["size_bytes"] == len(data)
+        assert not complete["health"].get("warnings")
+
+    def test_a_render_epoch_bump_rescans_the_listing(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        (tmp_path / "alpha.zim").write_text("alpha")
+        ops = _ops(tmp_path)
+        scans: list[int] = []
+        real_scan = ops._scan_zim_files
+
+        def counting(grouped: Any) -> Any:
+            scans.append(1)
+            return real_scan(grouped)
+
+        monkeypatch.setattr(ops, "_scan_zim_files", counting)
+
+        ops.list_zim_files_data()
+        ops.list_zim_files_data()
+        assert len(scans) == 1, "an unchanged directory must stay cached"
+
+        monkeypatch.setattr("openzim_mcp.bundle._RENDER_EPOCH", "r-next")
+        ops.list_zim_files_data()
+        assert len(scans) == 2
