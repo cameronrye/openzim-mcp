@@ -4,9 +4,7 @@ With NO argument: returns health checks (cache stats, directory probes,
 recommendations), configuration (allowed directories, cache config,
 server PID), and loaded_archives (every *.zim found; `readable: false`
 marks files that fail the ZIM signature check).
-Collapses the legacy `get_server_health` + `get_server_configuration` +
-`list_zim_files` triple into one answer to "what is this server, what
-does it have, and is it OK".
+One answer to "what is this server, what does it have, and is it OK".
 
 With a `zim_file_path`: validates/diagnoses that one archive — runs
 `Archive.check()` (integrity), reports checksum, index, and identity.
@@ -19,4 +17,4 @@ PARAMETERS:
 
 RESPONSE:
   No arg → ServerHealthResponse `{health, configuration, loaded_archives, _meta}`.
-  With path → ArchiveValidationResponse `{is_valid (check() result), has_checksum, checksum, has_fulltext_index, has_title_index, uuid, is_multipart, path, name, _meta}`.
+  With path → ArchiveValidationResponse `{is_valid (check() result), has_checksum, checksum, has_fulltext_index, has_title_index, uuid, is_multipart, has_link_graph, path, name, _meta}`.

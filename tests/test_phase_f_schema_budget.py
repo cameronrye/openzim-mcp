@@ -94,16 +94,18 @@ TOTAL_CAP = 25 * 1024
 # capability is an absent one, and ``summary``/``toc``/``get_section``/
 # ``inbound_links`` all routed while appearing in no row. The allocations
 # themselves are unchanged — the bytes came out of the reserve, not out of
-# a neighbour's prose.
+# a neighbour's prose. Five figures then moved, 275B lower in total, when the
+# descriptions dropped a wire-schema oneOf that does not exist and the v1 tool
+# names; those bytes went back to the reserve.
 ALLOCATION = {
     "zim_query": 5_550,  # 6,514B
-    "zim_search": 3_620,  # 3,994B
-    "zim_get": 3_650,  # 3,980B
-    "zim_get_section": 1_840,  # 2,001B
+    "zim_search": 3_620,  # 3,991B
+    "zim_get": 3_650,  # 3,849B
+    "zim_get_section": 1_840,  # 2,013B
     "zim_browse": 2_080,  # 2,228B
-    "zim_metadata": 1_310,  # 1,444B
+    "zim_metadata": 1_310,  # 1,378B
     "zim_links": 2_700,  # 3,048B
-    "zim_health": 1_300,  # 1,425B
+    "zim_health": 1_300,  # 1,338B
 }
 
 

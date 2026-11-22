@@ -26,5 +26,6 @@ RESPONSE:
   nested subsections.
 
 ERRORS:
-  Unknown section_id → ToolErrorPayload with `available_section_ids`
-  (not a `hint`) and `closest_match`. Missing entry → `entry_not_found`.
+  Unknown section_id → `section_not_found` with `available_sections`
+  (id + title); `closest_match` only if close. Missing entry →
+  `entry_not_found`.

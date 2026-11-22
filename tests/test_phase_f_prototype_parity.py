@@ -271,9 +271,9 @@ _NESTED_ONEOF_INPUT_SCHEMA = {
 def _write_snapshot(tmp_path, search_schema, get_schema):
     """Write a two-tool snapshot in the committed file's shape.
 
-    Both descriptions mention the word "oneOf" the way the real zim_get
-    description does ("even if a small model flattens the wire-schema
-    oneOf …"). A substring check over the serialized snapshot passes on that
+    Both descriptions mention the word "oneOf" the way the committed
+    snapshot's zim_get description does ("even if a small model flattens
+    the wire-schema oneOf …"). A substring check over the serialized snapshot passes on that
     prose alone, so the fixture makes the flat case actively hostile to one.
     """
     payload = {

@@ -10,12 +10,12 @@ mutually-exclusive branches:
 - Single entry, binary: pass `entry_path` + `binary=True`. Returns
     raw bytes (image, video, PDF, etc.). `view` is locked to "full"
     in this branch.
-- Batch: pass `entry_paths` (list of strings). Returns each entry's
+- Batch: pass `entry_paths` (up to 50 strings). Returns each entry's
     clean body, first page only; non-full `view` / `content_offset`
     return `invalid_path_combination`.
 - Main page: pass `main_page=True` (no entry_path). Returns the
-    archive's main page. `view`, `entry_path`, `entry_paths`,
-    `binary` are all forbidden in this branch.
+    archive's main page. `view` is locked to "full"; `entry_path`,
+    `entry_paths`, `binary` are forbidden.
 
 ALIASES: callers may say "get article", "fetch", "show me <article>",
 "summary of <article>", "structure of <article>", "main page". Route
@@ -37,8 +37,8 @@ PARAMETERS:
   main_page            Default False. Set True for the archive's
                        main page (zero-path fetch).
   max_content_length   Char cap for view="full" (default 100,000); with
-                       `binary=True` caps fetched bytes (default 10MB,
-                       oversize returns metadata + `truncated: true`).
+                       `binary=True` caps fetched bytes (default 10MB, max
+                       25MB; oversize returns metadata + `truncated: true`).
   content_offset       Char offset into the body for view="full"
                        (default 0). Used with the truncation footer's
                        `pass content_offset=N` hint. Single-entry only.
@@ -57,6 +57,3 @@ RESPONSE:
 ERRORS:
   Invalid branch combinations return structured
   `invalid_path_combination`; `message` names the conflict.
-  Defense-in-depth: even if a small model flattens the wire-schema
-  oneOf and sends an impossible payload, the handler rejects it
-  cleanly.

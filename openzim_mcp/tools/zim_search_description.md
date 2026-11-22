@@ -15,7 +15,7 @@ MODES (pass one as `mode`):
     matching the query (case ladder + suggestion expansion +
     Levenshtein-1). Use when the caller knows the article name and
     wants to confirm it exists or find near matches ("find article
-    titled Detroit"). Single-archive applies Z3/Z4/OPP-1 promotion;
+    titled Detroit"). Single-archive hoists the canonical match;
     cross-archive (`cross_file=True`) returns raw matches
     (promotion is per-archive).
 - "suggest" — Prefix autocomplete via libzim SuggestionSearcher.
