@@ -19,8 +19,9 @@ called ``.dxt``). This script assembles a *self-describing* bundle:
 
 The bundle is a uvx *launcher* (``command: uvx``, ``args: openzim-mcp@<v> ...``)
 rather than a vendored environment: ``uvx`` resolves the platform-correct native
-``libzim`` wheel from PyPI at run time, keeping one cross-platform bundle far
-under the registry's 25 MB cap. The trade-off is that the host needs ``uv``.
+``libzim`` wheel from PyPI at run time, so one small bundle serves every
+platform instead of one per OS and architecture. The trade-off is that the host
+needs ``uv``.
 
 Usage:
     uv run python scripts/build_mcpb.py [--output DIR]
