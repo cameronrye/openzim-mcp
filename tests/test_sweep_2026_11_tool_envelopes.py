@@ -681,3 +681,77 @@ class TestTableDominatedSectionAdviceResolves:
         assert "not found" not in follow_up, follow_up
         assert "Richard Strauss | 1864" in follow_up, follow_up
         assert "[Table 8" not in follow_up, follow_up
+
+
+_URL_HINT_RE = re.compile(r"never URLs: [^(]*\(e\.g\. '([^']+)'")
+
+
+class TestWikiUrlHintResolves:
+    """The URL-shaped-path hint corrected a Wikipedia URL to another miss.
+
+    For ``https://en.wikipedia.org/wiki/Carbon_tax`` it suggested
+    ``en.wikipedia.org/wiki/Carbon_tax`` — keeping the host is right for a
+    zimit crawl, but mwoffliner archives (every Wikimedia project) file the
+    article under its title — and that second miss carried no hint at all,
+    because the scheme it keys on was gone. On the mini fixture the article
+    is ``A/Carbon_tax``.
+    """
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "https://en.wikipedia.org/wiki/Carbon_tax",
+            "https://en.m.wikipedia.org/wiki/Carbon_tax#History",
+            "http://en.wikipedia.org/wiki/Carbon%5Ftax?oldid=1",
+        ],
+    )
+    async def test_following_the_hint_reaches_the_article(
+        self, withns: Path, url: str
+    ) -> None:
+        mini = str(withns / _MINI)
+        async with _session(withns, "advanced") as session:
+            is_error, text, body = await _call(
+                session, "zim_get", {"zim_file_path": mini, "entry_path": url}
+            )
+            match = _URL_HINT_RE.search(body["message"])
+            assert match, body["message"]
+            ok_error, ok_text, followed = await _call(
+                session,
+                "zim_get",
+                {
+                    "zim_file_path": mini,
+                    "entry_path": match.group(1),
+                    "max_content_length": 200,
+                },
+            )
+
+        assert is_error is True, text[:300]
+        assert ok_error is not True, ok_text[:300]
+        assert followed["path"] == "A/Carbon_tax", followed
+        assert match.group(1) == "Carbon_tax", body["message"]
+        # The host-kept spelling a zimit crawl of a wiki would use is still
+        # offered, second.
+        assert "'en." in body["message"] and "if that misses" in body["message"]
+
+    @pytest.mark.asyncio
+    async def test_a_crawled_site_url_still_keeps_its_host(self, withns: Path) -> None:
+        """Positive pair: zimit archives file entries under the host."""
+        mini = str(withns / _MINI)
+        async with _session(withns, "advanced") as session:
+            _, _, body = await _call(
+                session,
+                "zim_get",
+                {"zim_file_path": mini, "entry_path": "https://iep.utm.edu/stoicism/"},
+            )
+
+        match = _URL_HINT_RE.search(body["message"])
+        assert match and match.group(1) == "iep.utm.edu/stoicism/", body["message"]
+
+    def test_a_wiki_url_without_a_title_offers_no_empty_path(self) -> None:
+        from openzim_mcp.error_messages import url_shaped_path_hint
+
+        hint = url_shaped_path_hint("https://en.wikipedia.org/wiki/")
+
+        assert "(e.g. ''" not in hint, hint
+        assert "(e.g. 'en.wikipedia.org/wiki/')" in hint, hint
