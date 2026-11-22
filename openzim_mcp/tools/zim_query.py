@@ -185,6 +185,39 @@ def register(server: "OpenZimMcpServer") -> None:
                             "use `synthesize=False` to page a search."
                         ),
                     )
+                # The size arguments went the same way: `compact_budget="tiny"`
+                # (documented as a hard 2,000-char cap) came back as the same
+                # 7.8 KB payload as the call without it. Neither has a
+                # counterpart to map onto. The payload is a structured dict
+                # (answer plus citation and considered-article lists) whose
+                # only size knob is the pipeline's soft answer budget, so a
+                # hard response cap would mean cutting citations away from
+                # the passages they cite; and `max_content_length` caps one
+                # article's body, which a fused multi-passage answer does
+                # not have.
+                unsized = [
+                    name
+                    for name, value in (
+                        ("compact_budget", compact_budget),
+                        ("max_content_length", max_content_length),
+                    )
+                    if value is not None
+                ]
+                if unsized:
+                    named = " and ".join(f"`{n}`" for n in unsized)
+                    many = len(unsized) > 1
+                    return tool_error(
+                        operation="invalid_combination",
+                        message=(
+                            f"{named} cannot be used with `synthesize=True`: "
+                            "the synthesize pipeline sizes its structured "
+                            "briefing by its own passage budget, which "
+                            f"{'these arguments do' if many else 'this argument does'}"
+                            f" not cap. Drop {'them' if many else 'it'} and "
+                            "lower `limit` to cite fewer passages, or use "
+                            "`synthesize=False` for a size-capped answer."
+                        ),
+                    )
 
             # Simple-mode defaults: 3 results × 4 000-char bodies fit
             # comfortably in an 8B Q4 model's agentic prompt window.

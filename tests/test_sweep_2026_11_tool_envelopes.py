@@ -250,3 +250,57 @@ class TestEmptySynthesizeQuery:
         assert is_error is not True, text
         assert body["answer_markdown"], body
         assert body["citations"], body
+
+
+class TestSynthesizeRefusesSizeArguments:
+    """``synthesize=True`` accepted ``compact_budget`` / ``max_content_length``
+    and ignored them.
+
+    ``compact_budget="tiny"`` is documented as a hard 2,000-char cap; with
+    ``synthesize=True`` it came back as a 7,816-char payload, byte-identical
+    to the call without it. The pipeline has no knob either argument maps
+    onto, so it is refused the way ``offset`` and ``cursor`` already are.
+    """
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "extra, named",
+        [
+            ({"compact_budget": "tiny"}, ["compact_budget"]),
+            ({"compact_budget": 500}, ["compact_budget"]),
+            ({"max_content_length": 200}, ["max_content_length"]),
+            (
+                {"compact_budget": "tiny", "max_content_length": 200},
+                ["compact_budget", "max_content_length"],
+            ),
+        ],
+    )
+    async def test_size_arguments_are_refused(
+        self, withns: Path, extra: Dict[str, Any], named: list
+    ) -> None:
+        base = {
+            "query": "tell me about carbon tax",
+            "zim_file_path": str(withns / _MINI),
+        }
+        async with _session(withns, "simple") as session:
+            is_error, text, body = await _call(
+                session, "zim_query", {**base, "synthesize": True, **extra}
+            )
+            # Positive pairs: synthesize alone still answers, and the same
+            # arguments are honoured on the path that has a budget to apply.
+            synth_error, synth_text, _ = await _call(
+                session, "zim_query", {**base, "synthesize": True}
+            )
+            plain_error, plain_text, _ = await _call(
+                session, "zim_query", {**base, **extra}
+            )
+
+        assert is_error is True, text[:300]
+        assert body["operation"] == "invalid_combination", body
+        for name in named:
+            assert f"`{name}`" in body["message"], body
+        assert "synthesize=True" in body["message"], body
+        assert synth_error is not True, synth_text[:300]
+        assert plain_error is not True, plain_text[:300]
+        if "compact_budget" in extra and extra["compact_budget"] == "tiny":
+            assert len(plain_text) < 2_500, len(plain_text)
