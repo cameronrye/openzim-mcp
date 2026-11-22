@@ -607,3 +607,48 @@ class TestAuthFailuresCannotWriteToTheTerminal:
         # Paired positive: the line still says who failed, where, and why.
         assert "missing_or_wrong_scheme" in lines[0]
         assert "10.0.0.9" in lines[0] and "AUTH-OK" in lines[0], lines
+
+
+class TestHealthPathsTolerateATrailingSlash:
+    """``/healthz/`` answered 401 on a server with a token.
+
+    Auth runs ahead of routing and matched the exempt paths exactly, so the
+    probe URL a person types with a trailing slash — which the router would
+    redirect to ``/healthz`` — was refused as unauthenticated instead, and
+    the Host/Origin gate refused it the same way. One trailing slash is
+    tolerated now; nothing else is opened.
+    """
+
+    @staticmethod
+    def _client(tmp_path: Path, base_url: str = "http://127.0.0.1:8791") -> Any:
+        _server, app = _http_app(tmp_path, auth_token="s3cret")
+        return TestClient(app, base_url=base_url, follow_redirects=False)
+
+    @pytest.mark.parametrize("path", ["/healthz/", "/readyz/"])
+    def test_one_trailing_slash_reaches_the_probe_without_a_token(
+        self, tmp_path: Path, path: str
+    ) -> None:
+        with self._client(tmp_path) as client:
+            redirected = client.get(path)
+            assert redirected.status_code == 307, redirected.text
+            assert redirected.headers["location"].endswith(path.rstrip("/"))
+            assert client.get(redirected.headers["location"]).status_code == 200
+
+    @pytest.mark.parametrize(
+        "path", ["/healthz//", "/healthz/x", "/healthzx", "//healthz", "/", "/mcp/"]
+    )
+    def test_every_other_path_still_needs_the_token(
+        self, tmp_path: Path, path: str
+    ) -> None:
+        with self._client(tmp_path) as client:
+            assert client.get(path).status_code == 401, path
+
+    def test_the_host_gate_lets_it_through_too(self, tmp_path: Path) -> None:
+        """A probe addressed by pod IP is not refused for its Host either."""
+        with self._client(tmp_path, base_url="http://10.1.2.3:8000") as client:
+            assert client.get("/healthz/").status_code == 307
+            # Paired negative: past the token, the gate still refuses that Host.
+            refused = client.get(
+                "/healthz//", headers={"Authorization": "Bearer s3cret"}
+            )
+            assert refused.status_code == 421, refused.text

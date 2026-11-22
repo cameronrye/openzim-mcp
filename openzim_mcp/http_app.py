@@ -62,6 +62,20 @@ MCP_PATH = "/mcp"
 # Health endpoints exempt from auth.
 AUTH_EXEMPT_PATHS = {HEALTHZ_PATH, READYZ_PATH}
 
+
+def _is_auth_exempt(path: str) -> bool:
+    """Whether ``path`` is a health endpoint, with or without one trailing slash.
+
+    Auth and the Host/Origin gate run ahead of routing, so an exact match
+    refused ``/healthz/`` — which the router redirects to ``/healthz`` — as
+    unauthenticated on a server with a token. Exactly one slash is dropped,
+    so ``/healthz//`` and ``/healthz/x`` stay as protected as any other path.
+    """
+    if path.endswith("/"):
+        path = path[:-1]
+    return path in AUTH_EXEMPT_PATHS
+
+
 # Request headers a browser client may send to the MCP endpoint. A module
 # constant rather than an inline literal so the policy is inspectable — see
 # ``test_header_bearing_tool_params_are_cors_allowed``, which holds the one
@@ -368,7 +382,7 @@ class BearerTokenAuthMiddleware(BaseHTTPMiddleware):
         """Validate the Bearer token; pass through on success, 401 otherwise."""
         from .request_context import set_client_id
 
-        if request.url.path in AUTH_EXEMPT_PATHS:
+        if _is_auth_exempt(request.url.path):
             # Health endpoints are public; OPTIONS preflight against them is
             # also fine (no secret to leak via the preflight response).
             return await call_next(request)
@@ -587,7 +601,7 @@ class TransportSecurityGateMiddleware(BaseHTTPMiddleware):
         call_next: Callable[[Request], Awaitable[Response]],
     ) -> Response:
         """Reject what the SDK would reject, before it builds anything for it."""
-        if request.url.path in AUTH_EXEMPT_PATHS:
+        if _is_auth_exempt(request.url.path):
             return await call_next(request)
         error = await self._validator.validate_request(
             request, is_post=request.method == "POST"
