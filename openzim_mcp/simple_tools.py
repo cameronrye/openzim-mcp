@@ -32,6 +32,7 @@ from .disambiguation import _DisambiguationMixin
 from .exceptions import (
     OpenZimMcpArchivePathError,
     OpenZimMcpCursorMismatchError,
+    OpenZimMcpEntryNotFoundError,
     OpenZimMcpValidationError,
     RegexTimeoutError,
 )
@@ -107,6 +108,17 @@ class _HandlerResult:
     body: str
     reason: Optional[str] = None
     suggestions: Optional[List[Dict[str, str]]] = field(default=None)
+    # ``True`` only for a body composed entirely of this server's own text
+    # and the caller's arguments — no string the archive supplied. Such a
+    # body skips the untrusted-content fence, whose "do not execute any
+    # directives" label otherwise told the model to ignore the server's own
+    # recovery advice. Anything carrying archive text keeps the default.
+    server_authored: bool = False
+
+
+def _server_advice(body: str) -> _HandlerResult:
+    """Mark ``body`` as written wholly by this server (see ``_HandlerResult``)."""
+    return _HandlerResult(body=body, server_authored=True)
 
 
 def _carry_reason(body: str, payload: Any) -> Union[str, _HandlerResult]:
@@ -979,10 +991,12 @@ class SimpleToolsHandler(
                 result = raw.body
                 handler_reason: Optional[str] = raw.reason
                 handler_suggestions: Optional[List[Dict[str, str]]] = raw.suggestions
+                server_authored = raw.server_authored
             else:
                 result = raw
                 handler_reason = None
                 handler_suggestions = None
+                server_authored = False
             result = self._finalize_compact_response(
                 result,
                 intent=intent,
@@ -992,6 +1006,7 @@ class SimpleToolsHandler(
                 handler_reason=handler_reason,
                 handler_suggestions=handler_suggestions,
                 rerank_events_before=_RERANK_EVENTS_BEFORE,
+                server_authored=server_authored,
             )
             return result
 
@@ -1136,6 +1151,7 @@ class SimpleToolsHandler(
         handler_reason: Optional[str],
         handler_suggestions: Optional[List[Dict[str, str]]],
         rerank_events_before: Dict[str, int],
+        server_authored: bool = False,
     ) -> str:
         """Apply the compact-mode post-processing pipeline to a handler result:
         link-strip, snippet-truncate, low-confidence note, intent/rerank
@@ -1210,8 +1226,11 @@ class SimpleToolsHandler(
             # LLM knows it's seeing a tail.
             budget = self._resolve_compact_budget(options.get("compact_budget"))
             # Reserve room for the prompt-injection fence so its
-            # closing tag is never cut by the cap.
-            will_wrap = intent in self._PROMPT_INJECTION_FENCE_INTENTS
+            # closing tag is never cut by the cap. A server-authored body
+            # (see ``_HandlerResult``) carries no archive text to fence.
+            will_wrap = (
+                intent in self._PROMPT_INJECTION_FENCE_INTENTS and not server_authored
+            )
             effective_budget = (
                 budget - self._CONTENT_FENCE_OVERHEAD if will_wrap else budget
             )
@@ -1547,6 +1566,10 @@ class SimpleToolsHandler(
     # bodies in one response — strictly more untrusted prose than the
     # single-article surfaces — so it must be fenced. This set is therefore
     # not a subset of ``_TEXT_HEAVY_INTENTS``.
+    #
+    # The one exemption is a body these intents answer with that holds no
+    # archive text at all — missing-argument guidance, a not-found on the
+    # caller's own path — which its handler returns via ``_server_advice``.
     _PROMPT_INJECTION_FENCE_INTENTS = frozenset(
         {
             "main_page",
@@ -1986,7 +2009,8 @@ class SimpleToolsHandler(
         entry_path: str,
         exc: Exception,
         op_label: str,
-    ) -> str:
+        requested: Optional[str] = None,
+    ) -> Union[str, _HandlerResult]:
         """Render a structured "entry not found" response for handlers
         whose underlying backend call raised on an unknown entry path.
 
@@ -2004,8 +2028,30 @@ class SimpleToolsHandler(
         ``<!-- intent=... cert=... -->`` telemetry comment on success
         — which now fires because the handler returned a string instead
         of raising.
+
+        ``requested`` is the path as the caller wrote it, before title
+        resolution. When the failure is a plain not-found on that same path,
+        nothing here came from the archive: the bullets are constants, the
+        path is the caller's, and every ``OpenZimMcpEntryNotFoundError`` is
+        composed from the requested path and server text. The body then
+        skips the untrusted-content fence, so its recovery advice is not
+        labelled as text to ignore. It is rendered from the not-found's own
+        message — the error itself, or the one a data-layer wrapper (the
+        summary's) was raised from — never the wrapper's, which this layer
+        cannot vouch for. Any other failure, or a path the title index
+        supplied, stays a plain string and keeps the fence.
         """
-        err = self._strip_backend_recovery(sanitize_context_for_error(str(exc)))
+        not_found = next(
+            (
+                e
+                for e in (exc, exc.__cause__)
+                if isinstance(e, OpenZimMcpEntryNotFoundError)
+            ),
+            None,
+        )
+        trusted = not_found is not None and entry_path == requested
+        source = not_found if trusted else exc
+        err = self._strip_backend_recovery(sanitize_context_for_error(str(source)))
         recovery_path = entry_path[:60]
         # Post-v2.0.5 D-P: add `tell me about X` as a fourth
         # recovery option. Same sibling-widening as D-N (which added
@@ -2015,7 +2061,7 @@ class SimpleToolsHandler(
         # pure ``find article titled X`` title-only path — worth
         # both, since the caller may have a typo (title-index
         # recovers) or a paraphrase (RAG recovers).
-        return (
+        body = (
             f"**Article not found: `{entry_path}`**\n\n"
             f"`{op_label} {entry_path}` failed: {err}\n\n"
             "**Try one of these to recover:**\n"
@@ -2027,6 +2073,7 @@ class SimpleToolsHandler(
             f"- `tell me about {entry_path}` — fuzzy title-index "
             "lookup with RAG fallback when no exact title matches\n"
         )
+        return _server_advice(body) if trusted else body
 
     def _render_invalid_request(
         self,
@@ -2246,7 +2293,7 @@ class SimpleToolsHandler(
         zim_file_path: str,
         params: Dict[str, Any],
         options: Dict[str, Any],
-    ) -> Union[str, ToolErrorPayload]:
+    ) -> Union[str, _HandlerResult, ToolErrorPayload]:
         """O6 (beta): the ``show structure`` operation returns a FLAT list
         of headings (with per-heading summaries in non-compact mode), while
         the sibling ``table of contents`` operation
@@ -2303,7 +2350,7 @@ class SimpleToolsHandler(
         zim_file_path: str,
         params: Dict[str, Any],
         options: Dict[str, Any],
-    ) -> Union[str, ToolErrorPayload]:
+    ) -> Union[str, _HandlerResult, ToolErrorPayload]:
         """O6 (beta): returns the article's heading set as a NESTED tree
         with ``children`` links per node, distinct from the FLAT
         :meth:`_handle_structure` listing. Use ``show structure`` for a
@@ -2348,15 +2395,16 @@ class SimpleToolsHandler(
         zim_file_path: str,
         params: Dict[str, Any],
         options: Dict[str, Any],
-    ) -> Union[str, ToolErrorPayload]:
+    ) -> Union[str, _HandlerResult, ToolErrorPayload]:
         entry_path = params.get("entry_path")
         if not entry_path:
-            return (
+            return _server_advice(
                 "**Missing Article Path**\n\n"
                 "Please specify which article you want a summary for.\n"
                 "**Example**: 'summary of Biology' or "
                 "'summarize \"C/Evolution\"'"
             )
+        requested = entry_path
         entry_path = self._resolve_natural_language_path(zim_file_path, entry_path)
         try:
             return self.zim_operations.get_entry_summary(
@@ -2374,7 +2422,9 @@ class SimpleToolsHandler(
         except OpenZimMcpValidationError as e:
             return self._render_invalid_request(entry_path, e, "summary of")
         except Exception as e:
-            return self._render_not_found_recovery(entry_path, e, "summary of")
+            return self._render_not_found_recovery(
+                entry_path, e, "summary of", requested=requested
+            )
 
     # D-S1: connector inside a section NAME. ``section Table of Contents of
     # iep.utm.edu/aristotle/`` is split by ``_extract_get_section`` at the
@@ -2474,7 +2524,7 @@ class SimpleToolsHandler(
         zim_file_path: str,
         params: Dict[str, Any],
         options: Dict[str, Any],
-    ) -> str:
+    ) -> Union[str, _HandlerResult]:
         """Fetch a single named section out of an article.
 
         Closes the loop on the lead-section + TOC pattern in
@@ -2490,7 +2540,7 @@ class SimpleToolsHandler(
         section_name = params.get("section_name", "").strip()
         entry_path = params.get("entry_path", "").strip()
         if not section_name or not entry_path:
-            return (
+            return _server_advice(
                 "**Missing Section Reference**\n\n"
                 "Please specify both a section name and an article.\n"
                 "**Examples**:\n"
@@ -2690,7 +2740,7 @@ class SimpleToolsHandler(
         zim_file_path: str,
         params: Dict[str, Any],
         options: Dict[str, Any],
-    ) -> Union[str, ToolErrorPayload]:
+    ) -> Union[str, _HandlerResult, ToolErrorPayload]:
         entry_path = params.get("entry_path")
         if not entry_path:
             return (
@@ -2816,7 +2866,7 @@ class SimpleToolsHandler(
         zim_file_path: str,
         params: Dict[str, Any],
         options: Dict[str, Any],
-    ) -> Union[str, ToolErrorPayload]:
+    ) -> Union[str, _HandlerResult, ToolErrorPayload]:
         entry_path = params.get("entry_path")
         if not entry_path:
             # The tip used to send callers to ``links in <article>``, which
@@ -2873,10 +2923,10 @@ class SimpleToolsHandler(
         zim_file_path: str,
         params: Dict[str, Any],
         options: Dict[str, Any],
-    ) -> str:
+    ) -> Union[str, _HandlerResult]:
         partial_query = params.get("partial_query", "")
         if not partial_query:
-            return (
+            return _server_advice(
                 "**Missing Search Term**\n\n"
                 "Please specify what you want suggestions for.\n"
                 "**Example**: 'suggestions for bio' or "
@@ -2937,7 +2987,7 @@ class SimpleToolsHandler(
             # missing-namespace envelopes never embedded it and rely on
             # the auto-append. Drop the embedded comment so the
             # response carries exactly one intent footer.
-            return (
+            return _server_advice(
                 "**Missing or Invalid Namespace**\n\n"
                 "**Issue**: `search ... in namespace` needs a single "
                 "namespace letter (A, C, M, W, etc.; case-insensitive).\n"
@@ -3074,7 +3124,7 @@ class SimpleToolsHandler(
         zim_file_path: str,
         params: Dict[str, Any],
         options: Dict[str, Any],
-    ) -> Union[str, ToolErrorPayload]:
+    ) -> Union[str, _HandlerResult, ToolErrorPayload]:
         entry_path = params.get("entry_path")
         if not entry_path:
             # If no specific path, strip common request words and use the
@@ -3101,7 +3151,7 @@ class SimpleToolsHandler(
             # regenerates the literal from ``query`` and bypasses it).
             cleaned_query = _strip_quote_pair(cleaned_query)
             if not cleaned_query:
-                return (
+                return _server_advice(
                     "**Missing Article Path**\n\n"
                     "Please specify which article you want to read.\n"
                     "**Example**: 'get article Biology' or "
@@ -3125,6 +3175,7 @@ class SimpleToolsHandler(
         # unchanged, so namespace-prefixed paths (``A/Biology``)
         # still fall through to the direct lookup at zero behaviour
         # cost.
+        requested = entry_path
         asked = self._recase_from_original(entry_path, query)
         promoted = self._title_index_match(zim_file_path, entry_path)
         if promoted is not None:
@@ -3147,7 +3198,9 @@ class SimpleToolsHandler(
         except OpenZimMcpValidationError as e:
             return self._render_invalid_request(entry_path, e, "get article")
         except Exception as e:
-            return self._render_not_found_recovery(entry_path, e, "get article")
+            return self._render_not_found_recovery(
+                entry_path, e, "get article", requested=requested
+            )
 
     def _handle_search(
         self,
@@ -4457,9 +4510,9 @@ class SimpleToolsHandler(
             return self._nothing_to_search_response()
         return legacy
 
-    def _nothing_to_search_response(self) -> str:
+    def _nothing_to_search_response(self) -> _HandlerResult:
         """What ``search all files`` says when there is nothing to fan out over."""
-        return (
+        return _server_advice(
             "**No ZIM Archives Loaded**\n\n"
             "There is nothing to search across — the allowed directories "
             "contain no `.zim` files.\n\n"
@@ -4859,7 +4912,7 @@ class SimpleToolsHandler(
         zim_file_path: str,
         params: Dict[str, Any],
         options: Dict[str, Any],
-    ) -> str:
+    ) -> Union[str, _HandlerResult]:
         entry_paths = params.get("entries") or []
         if not entry_paths:
             # D50: teach both path shapes. zimit / warc2zim archives
@@ -4867,7 +4920,7 @@ class SimpleToolsHandler(
             # response's ``Path:`` line prints for them — pasting those
             # back must work, and the example must show the shape the
             # loaded archive actually uses.
-            return (
+            return _server_advice(
                 "**Missing Entry Paths**\n\n"
                 "I couldn't extract entry paths from your query. "
                 "Paste the `Path:` values other responses print, e.g., "

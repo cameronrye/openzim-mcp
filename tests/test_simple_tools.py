@@ -3798,10 +3798,12 @@ class TestSectionLevelFollowup:
         mock = MagicMock()
         mock.list_zim_files_data.return_value = [{"path": "/x.zim"}]
         h = SimpleToolsHandler(mock)
-        # Missing both — direct call into the handler.
+        # Missing both — direct call into the handler. The guidance is the
+        # server's own text, so it comes back marked to skip the fence.
         out = h._handle_get_section("section", "/x.zim", {}, {})
-        assert "Missing Section Reference" in out
-        assert "Examples" in out
+        assert out.server_authored is True
+        assert "Missing Section Reference" in out.body
+        assert "Examples" in out.body
 
 
 class TestCompactBudgetProfiles:
