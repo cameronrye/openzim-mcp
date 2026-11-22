@@ -13,7 +13,12 @@ from typing import Any, Dict, Iterable, Tuple
 import pytest
 from libzim.writer import Creator
 
-from openzim_mcp.config import CacheConfig, OpenZimMcpConfig
+from openzim_mcp.config import (
+    CacheConfig,
+    ContentConfig,
+    OpenZimMcpConfig,
+    SynthesizeConfig,
+)
 from openzim_mcp.server import OpenZimMcpServer
 from tests.conftest_v2_fixtures import _HtmlItem
 
@@ -305,3 +310,64 @@ class TestRewindowedSnippetKeepsItsLeadIn:
             assert result["answer_markdown"].startswith("..."), result
             cited = {c["entry_path"]: c["section_id"] for c in result["citations"]}
             assert cited == {"A/Aspirin": "dosage"}, result["citations"]
+
+
+class TestSynthesizeBudgetCutLeavesNoOpenBold:
+    """The answer budget's cut could land inside a ``**bold**`` run.
+
+    ``_enforce_budget`` sliced the last passage at the remaining budget and
+    snapped to a space, which inside a bold run left its opening ``**``
+    unclosed ("**Big Rapi"), so the rest of a rendered answer read as bold.
+    """
+
+    @pytest.fixture
+    def archive(self, tmp_path: Path) -> Path:
+        lead = " ".join(f"plain{i}" for i in range(30))
+        bold = " ".join(f"bold{i}" for i in range(60))
+        tail = " ".join(f"tail{i}" for i in range(40))
+        return _build_zim(
+            tmp_path / "rapids.zim",
+            [
+                (
+                    "A/Big_Rapids",
+                    "Big Rapids",
+                    "<html><body><h1>Big Rapids</h1>"
+                    f"<p>Big Rapids is a city in Michigan. {lead} <b>{bold}</b> "
+                    f"{tail}</p></body></html>",
+                ),
+                (
+                    "A/Other",
+                    "Other",
+                    "<html><body><h1>Other</h1><p>Nothing here.</p></body></html>",
+                ),
+            ],
+        )
+
+    @pytest.mark.asyncio
+    async def test_the_cut_backs_off_to_before_the_bold_run(
+        self, archive: Path
+    ) -> None:
+        server = OpenZimMcpServer(
+            OpenZimMcpConfig(
+                allowed_directories=[str(archive.parent)],
+                tool_mode="advanced",
+                cache=CacheConfig(enabled=False),
+                content=ContentConfig(snippet_length=3000),
+                synthesize=SynthesizeConfig(output_char_budget=500),
+            )
+        )
+
+        result = await _call(
+            server,
+            "zim_query",
+            query="big rapids city michigan",
+            zim_file_path=str(archive),
+            synthesize=True,
+            limit=1,
+        )
+
+        passage = result["answer_markdown"].split("\n[cite: ")[0]
+        assert passage.count("**") % 2 == 0, passage
+        # The budget still bit, just before the run rather than inside it.
+        assert passage.endswith("plain29"), passage
+        assert passage.replace("**", "").startswith("Big Rapids is a city"), passage

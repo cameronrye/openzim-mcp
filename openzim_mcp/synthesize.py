@@ -28,6 +28,7 @@ if TYPE_CHECKING:
     from openzim_mcp.content_processor import ContentProcessor
 
 from openzim_mcp import bundle as _bundle_mod
+from openzim_mcp.content_processor import _strip_dangling_bold
 from openzim_mcp.text_utils import tokenize_for_relevance
 from openzim_mcp.title_promotion import (
     _TAIL_TOKEN_RE,
@@ -882,6 +883,11 @@ def _enforce_budget(
             snap = max(truncated.rfind(" "), truncated.rfind("\n"))
             if snap > budget // 2:
                 truncated = truncated[:snap]
+            # A cut inside a ``**bold**`` run left its opener unclosed
+            # ("**Big Rapi") and the rest of the rendered answer read as
+            # bold. Back off to before the run, as ``create_snippet`` does at
+            # its own cut sites.
+            truncated = _strip_dangling_bold(truncated)
             new_p = dict(p)
             new_p["text_markdown"] = truncated
             capped.append(cast("SynthesizePassage", new_p))
