@@ -594,6 +594,9 @@ class EntryBundle(TypedDict):
     sections: list[SectionMeta]
     links: LinkBuckets
     infobox: Optional[InfoboxData]
+    # Where the article starts in ``rendered_markdown``: past the infobox
+    # rows a compact render prepends (0 when there are none).
+    lead_offset: NotRequired[int]
 
 
 # ---------------------------------------------------------------------------

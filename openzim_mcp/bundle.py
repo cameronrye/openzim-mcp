@@ -107,6 +107,8 @@ _BUNDLE_KEY_PREFIX = "bundle:v2h"
 # bundle hoisted the second infobox above the lead. Every compact render
 # also reports the infobox fields its ``infobox_kv_limit`` cut, and a heading
 # whose text slugs to nothing ("* * *") is now a section with its own id.
+# The bundle records ``lead_offset`` so the summary starts at the article's
+# lead, not at those infobox rows.
 _RENDER_EPOCH = "r5"
 
 
@@ -732,13 +734,16 @@ def extract_entry_bundle(
         # infobox and hoist it above the lead: mini's Kyoto Protocol summary
         # opened with the Doha Amendment's rows.
         infobox_rows: list[Dict[str, str]] = []
+        lead: list[int] = []
         rendered = content_processor._render_soup_to_text(
-            content_root, compact=True, infobox_sink=infobox_rows
+            content_root, compact=True, infobox_sink=infobox_rows, lead_sink=lead
         )
         infobox = _infobox_data(infobox_rows)
+        lead_offset = lead[0] if lead else 0
     else:
         infobox = _extract_infobox(content_root, content_processor)
         rendered = content_processor._render_soup_to_text(content_root, compact=False)
+        lead_offset = 0
     sections = _compute_section_offsets(rendered, headings)
 
     bundle: EntryBundle = cast(
@@ -753,6 +758,7 @@ def extract_entry_bundle(
             "sections": sections,
             "links": link_buckets,
             "infobox": infobox,
+            "lead_offset": lead_offset,
         },
     )
     return bundle

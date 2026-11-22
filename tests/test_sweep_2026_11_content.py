@@ -246,21 +246,58 @@ class TestSummaryLeadsWithTheArticlesOwnInfobox:
     """
 
     @pytest.mark.asyncio
-    async def test_kyoto_summary_opens_with_the_full_views_infobox(
+    async def test_kyoto_full_view_opens_with_its_own_infobox(
         self, climate_zim: Path
     ) -> None:
         zim_get = _tool(_server(climate_zim.parent), "zim_get")
         base = {"zim_file_path": str(climate_zim), "entry_path": "A/Kyoto_Protocol"}
 
-        summary = (await zim_get(**base, view="summary"))["summary"]
         full = (await zim_get(**base, compact=True))["content"]
         infobox_block = full.split("\n\n", 1)[0]
 
         assert infobox_block.startswith(
             "**Signed:** 11 December 1997\n**Location:** Kyoto, Japan"
         ), infobox_block
-        assert summary.startswith(infobox_block), summary[:400]
+        assert "**Location:** Doha, Qatar" not in infobox_block
+
+    @pytest.mark.asyncio
+    async def test_kyoto_summary_is_the_lead_not_an_infobox(
+        self, climate_zim: Path
+    ) -> None:
+        zim_get = _tool(_server(climate_zim.parent), "zim_get")
+        base = {"zim_file_path": str(climate_zim), "entry_path": "A/Kyoto_Protocol"}
+
+        summary = (await zim_get(**base, view="summary"))["summary"]
+
+        assert summary.startswith("#  Kyoto Protocol"), summary[:300]
+        assert "was an international treaty" in summary[:400], summary[:400]
+        assert "**Signed:**" not in summary
         assert "**Location:** Doha, Qatar" not in summary
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "entry_path, title, lead_words",
+        [
+            ("A/Al_Gore", "Al Gore", "Albert Arnold Gore Jr."),
+            ("A/Hydrogen", "Hydrogen", "is a chemical element"),
+        ],
+    )
+    async def test_an_infobox_never_crowds_the_lead_out_of_the_summary(
+        self, climate_zim: Path, entry_path: str, title: str, lead_words: str
+    ) -> None:
+        """Lifting the article's own infobox put its rows at offset 0, and the
+        summary read from 0: Al Gore's 200 words became his office labels and
+        Hydrogen's held no prose at all. The summary starts at the lead."""
+        zim_get = _tool(_server(climate_zim.parent), "zim_get")
+        summary = (
+            await zim_get(
+                zim_file_path=str(climate_zim), entry_path=entry_path, view="summary"
+            )
+        )["summary"]
+
+        assert summary.startswith(f"#  {title}"), summary[:300]
+        assert lead_words in summary[:400], summary[:400]
+        assert "Preceded by" not in summary and "**Symbol:**" not in summary
 
     @pytest.mark.asyncio
     async def test_a_second_infobox_stays_in_its_own_section(
@@ -274,8 +311,9 @@ class TestSummaryLeadsWithTheArticlesOwnInfobox:
         full = (await _tool(server, "zim_get")(**base, compact=True))["content"]
         career = await _tool(server, "zim_get_section")(**base, section_id="career")
 
-        assert summary.startswith("**Born:** 1 May 1970\n**Position:** Pitcher")
-        assert "**Team:**" not in summary
+        assert full.startswith("**Born:** 1 May 1970\n**Position:** Pitcher")
+        assert "retired baseball player" in summary, summary
+        assert "**Born:**" not in summary and "**Team:**" not in summary
         assert "Yankees" in career["content_markdown"], career
         # The section is the full view's own slice, table and all.
         assert career["content_markdown"].strip() in full
@@ -294,7 +332,8 @@ class TestSummaryLeadsWithTheArticlesOwnInfobox:
         cold = await zim_get(**args)
         warm = await zim_get(**args)
 
-        assert cold["summary"].startswith("**Signed:** 11 December 1997")
+        assert cold["summary"].startswith("#  Kyoto Protocol"), cold["summary"][:200]
+        assert "**Signed:**" not in cold["summary"]
         assert warm["summary"] == cold["summary"]
 
     def test_the_bundle_field_holds_the_rows_it_rendered(self, tmp_path: Path) -> None:
@@ -317,6 +356,8 @@ class TestSummaryLeadsWithTheArticlesOwnInfobox:
             ]
         }
         assert bundle["rendered_markdown"].startswith("**Born:** 1 May 1970")
+        lead = bundle["rendered_markdown"][bundle["lead_offset"] :]
+        assert not lead.startswith("**Born:**") and lead[:1] not in ("", "\n"), lead
 
     @pytest.mark.asyncio
     async def test_an_infobox_that_fails_to_parse_does_not_fail_the_views(

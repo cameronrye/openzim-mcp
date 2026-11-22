@@ -1994,6 +1994,7 @@ class ContentProcessor:
         *,
         compact: bool,
         infobox_sink: Optional[List[Dict[str, str]]] = None,
+        lead_sink: Optional[List[int]] = None,
     ) -> str:
         """Render a BeautifulSoup tree to clean plain text.
 
@@ -2010,6 +2011,11 @@ class ContentProcessor:
         render's own ``extract_infobox`` found the NEXT infobox and hoisted it
         to the top. Lifting here, after the strip, is also what keeps
         TemplateStyles CSS out of the row values.
+
+        ``lead_sink`` receives the offset where the article itself starts in
+        the returned text: past the lifted infobox rows and their marker, or
+        0 when nothing was lifted. ``view="summary"`` reads from there, so a
+        200-word summary is the lead, not the infobox's labels.
         """
         for selector in UNWANTED_HTML_SELECTORS:
             for element in soup.select(selector):
@@ -2048,7 +2054,15 @@ class ContentProcessor:
         # other's parser state.
         text = self._create_html_converter().handle(str(soup))
         text = re.sub(r"\n{3,}", "\n\n", text)
-        return (infobox_md + text).strip()
+        rendered = (infobox_md + text).strip()
+        if lead_sink is not None:
+            # ``infobox_md`` opens with ``**`` and so survives the strip
+            # intact: the body starts at its end, past any blank lines.
+            lead = len(infobox_md) if infobox_md else 0
+            while lead < len(rendered) and rendered[lead].isspace():
+                lead += 1
+            lead_sink.append(lead)
+        return rendered
 
     def html_to_plain_text(self, html_content: str, *, compact: bool = False) -> str:
         """Convert HTML to clean plain text.

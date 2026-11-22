@@ -308,6 +308,7 @@ def _select_summary_section_md(
     sections: List[Any],
     rendered_md: str,
     summary_style: Optional[str],
+    lead_offset: int = 0,
 ) -> str:
     """Return the markdown slice for the summary, per ``summary_style``.
 
@@ -316,6 +317,11 @@ def _select_summary_section_md(
     leading vote-score line. Any other style (including ``None``), or no
     matching heading, returns the first-section slice (the prior behavior),
     which guarantees a never-worse-than-baseline result.
+
+    That slice starts at ``lead_offset``, past the infobox rows a compact
+    render puts first. Reading from 0 made the infobox the summary: once the
+    bundle lifted the article's own infobox, Al Gore's 200 words were his
+    office labels, and five starter-archive summaries held no prose at all.
     """
     tokens = _STYLE_HEADING_TOKENS.get(summary_style or "")
     if tokens is not None:
@@ -327,9 +333,13 @@ def _select_summary_section_md(
                 if summary_style == "q_and_a":
                     slice_md = _strip_leading_score(slice_md)
                 return slice_md
+    lead = max(0, int(lead_offset))
     if sections:
-        return rendered_md[: int(sections[0]["char_end"])]
-    return rendered_md
+        end = int(sections[0]["char_end"])
+        # A first section that ends before the lead is not one this offset
+        # describes; keep the prior slice rather than guess.
+        return rendered_md[lead:end] if end > lead else rendered_md[:end]
+    return rendered_md[lead:]
 
 
 # D12 (v2.0.0a9): detect the path-traversal shapes that don't make sense
@@ -2296,7 +2306,10 @@ class _ContentMixin:
                 )
                 md = bundle["rendered_markdown"]
                 summary_md = _select_summary_section_md(
-                    bundle["sections"], md, summary_style
+                    bundle["sections"],
+                    md,
+                    summary_style,
+                    lead_offset=bundle.get("lead_offset", 0),
                 )
 
                 words = summary_md.split()
