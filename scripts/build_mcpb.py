@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build the OpenZIM MCP MCPB (``.mcpb``) bundle for Smithery / Claude Desktop.
+"""Build the OpenZIM MCP MCPB (``.mcpb``) bundle for the Claude Desktop extension.
 
 A ``.mcpb`` is a zip with ``manifest.json`` at its root (the format formerly
 called ``.dxt``). This script assembles a *self-describing* bundle:
@@ -10,8 +10,8 @@ called ``.dxt``). This script assembles a *self-describing* bundle:
   2. Captures the **live** tool schemas — it spawns the server in ``advanced``
      mode over stdio, calls ``tools/list``, and writes each tool's
      ``name``/``description``/``inputSchema``/``outputSchema`` into the
-     manifest's ``tools`` array. These are the schemas Smithery and Glama score
-     listings on.
+     manifest's ``tools`` array, so the bundle carries the full schemas the
+     server serves.
   3. Packs a **plain zip** — deliberately NOT ``mcpb pack``. The MCPB manifest
      schema only allows ``{name, description}`` per tool, so ``mcpb pack``/
      ``mcpb validate`` strip the ``inputSchema``/``outputSchema`` keys. A
@@ -65,7 +65,7 @@ def capture_tools(timeout_s: int = HANDSHAKE_TIMEOUT_S) -> list[dict]:
 
     Returns each tool verbatim from the MCP SDK (``name``, ``description``,
     ``inputSchema``, and ``outputSchema`` when present) so the manifest carries
-    the exact JSON Schemas Smithery scores.
+    the exact JSON Schemas the server serves.
     """
     if sys.platform == "win32":
         # The handshake below waits on the server's stdout via select(), which
@@ -269,9 +269,6 @@ def main() -> int:
     print(f"build_mcpb: wrote {output} ({size_kb:.1f} KB)")
     print(f"build_mcpb: sha256 {digest}")
     print(f"build_mcpb: wrote {checksum}")
-    print(
-        f"build_mcpb: publish with -> smithery mcp publish {output} -n rye/openzim-mcp"
-    )
     return 0
 
 

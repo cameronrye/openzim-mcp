@@ -2,14 +2,17 @@
 
 How `openzim-mcp` gets discovered and installed beyond PyPI. The package is
 already on PyPI (`uv tool install openzim-mcp`) and shipped as a multi-arch
-Docker image; this is the maintainer playbook for the **MCP registries**.
+Docker image; this is the maintainer playbook for the **MCP Registry** listing
+and the **Claude Desktop extension**.
 
-Two listings, two artifacts, one source of truth (the PyPI release):
+Two channels, two artifacts, one source of truth (the PyPI release):
 
 | Channel | Artifact | Model |
 | --- | --- | --- |
 | **Official MCP Registry** (`registry.modelcontextprotocol.io`) | [`server.json`](../server.json) | Points clients at the PyPI package, run via `uvx`. Aggregators (PulseMCP, mcp.so, …) ingest from here — highest-leverage. |
-| **Smithery** (`smithery.ai/servers/rye/openzim-mcp`) | `.mcpb` bundle | A local stdio server distributed as an MCPB bundle clients download and run locally. |
+| **Claude Desktop extension** (GitHub release asset) | `.mcpb` bundle | A local stdio server packaged as an MCPB bundle users download and double-click. |
+
+Smithery (`rye/openzim-mcp`) also carried the `.mcpb` until it retired; see §2.
 
 Both expose the **advanced 8-tool surface** (`OPENZIM_MCP_TOOL_MODE=advanced`),
 as does the Docker image — registry directories launch it with no
@@ -22,20 +25,21 @@ keeps both artifacts in lockstep with the package version and tool surface.
 ## Why these specific choices
 
 - **Local bundle, not hosted.** openzim-mcp needs each user's own local `.zim`
-  files. A Smithery-hosted (or any shared-URL) instance runs on stateless cloud
-  and can't reach a user's disk, so the only workable Smithery model is a
-  **local stdio** server — an MCPB (`.mcpb`) bundle.
+  files. A hosted (shared-URL) instance runs on stateless cloud and can't reach
+  a user's disk, so the server ships as a **local stdio** server — an MCPB
+  (`.mcpb`) bundle.
 - **uvx launcher, not a vendored env.** The native `libzim` dependency makes a
   self-contained bundle platform-locked and would blow the registry's 25 MB cap.
   The bundle instead launches `uvx openzim-mcp@<version>`, so `uvx` resolves the
   platform-correct `libzim` wheel from PyPI at run time. Trade-off: the host
-  needs [`uv`](https://docs.astral.sh/uv/). (Smithery's bundle publisher rejects
-  `server.type: "uv"`, so the manifest uses `server.type: "python"` with
-  `command: "uvx"`.)
+  needs [`uv`](https://docs.astral.sh/uv/). (Smithery's bundle publisher, which
+  the bundle was first built for, rejected `server.type: "uv"`, so the manifest
+  uses `server.type: "python"` with `command: "uvx"`.)
 - **Plain zip, not `mcpb pack`.** A `.mcpb` is just a zip with `manifest.json`
   at its root. The MCPB manifest schema only allows `{name, description}` per
   tool, so `mcpb pack`/`mcpb validate` strip the `inputSchema`/`outputSchema`
-  keys — exactly the schemas Smithery and Glama score listings on.
+  keys — the full schemas, which Smithery scored listings on while it took
+  bundles.
   [`scripts/build_mcpb.py`](../scripts/build_mcpb.py) injects the live tool
   schemas and plain-zips to preserve them.
 
@@ -70,8 +74,7 @@ builds this automatically and attaches `openzim-mcp-<version>.mcpb` (plus a
 populated. The bundle is built into a separate directory — never `dist/` — so it
 is excluded from the PyPI upload and attached to the GitHub release only.
 
-To build it by hand (e.g. to publish/refresh the Smithery listing between
-releases):
+To build it by hand (e.g. to try a manifest change before a release):
 
 ```bash
 uv run python scripts/build_mcpb.py        # -> dist/openzim-mcp-<version>.mcpb (+ .sha256)
@@ -88,22 +91,16 @@ cross-platform.
 
 ---
 
-## 2. Smithery — publish / update the listing
+## 2. Smithery — retired
 
-One-time auth (already done on this machine): `npx @smithery/cli auth login`,
-and the `rye` namespace must exist (`npx @smithery/cli namespace list`).
-
-```bash
-npx @smithery/cli mcp publish dist/openzim-mcp-<version>.mcpb -n rye/openzim-mcp
-# Do NOT pass --config-schema for a bundle (URL-only; hard-errors). The config
-# schema is derived from manifest.json's user_config.allowed_directories.
-# If publish pauses for OAuth:
-npx @smithery/cli mcp publish --resume -n rye/openzim-mcp
-```
-
-Verify: `curl https://registry.smithery.ai/servers/rye/openzim-mcp` — the
-`connections[0]` should show `runtime: python`, the `configSchema`, and the
-listing page enumerates the 8 tools.
+Smithery listed the `.mcpb` as `rye/openzim-mcp` until it shut down on
+2026-10-31 ([smithery.ai/future](https://smithery.ai/future)). Its accounts, CLI
+and publishing went with it, and smithery.ai now lists only a curated set of
+servers with direct MCP URLs. A local stdio server has no such URL, so the
+listing page has returned 404 since early November 2026, as did all 45 other
+local servers' pages sampled on 2026-11-21. There is nothing to publish there,
+and the README and website no longer link to it, because the website's link
+check fails on a 404.
 
 ---
 
@@ -162,12 +159,10 @@ server's tool definitions).
 
 All of this is done and in steady state: the manifest, `server.json`, build
 script, README marker, guard test, release-please auto-bump, and `.mcpb`
-release-asset wiring have shipped, Smithery is published as `rye/openzim-mcp`,
-and the first registry publish went out with v2.5.1. Ongoing maintenance:
+release-asset wiring have shipped, and the first registry publish went out
+with v2.5.1. Ongoing maintenance:
 
-1. Re-publish the Smithery `.mcpb` (§1–§2) when the tool surface or manifest
-   metadata changes — it does **not** depend on a release.
-2. Nothing for the official registry: the release workflow keeps the manifests
+1. Nothing for the official registry: the release workflow keeps the manifests
    version-locked, publishes `server.json` via OIDC (§3), and attaches the
    `.mcpb` (with its `.sha256`) to each GitHub release for you. Check the
    `publish-registry` job if the registry search API lags a release.

@@ -1,10 +1,10 @@
-"""Distribution guards for the Smithery / MCP-Registry artifacts.
+"""Distribution guards for the MCPB bundle and MCP Registry artifacts.
 
 These tests keep the published distribution artifacts honest and in lockstep
 with the package:
 
   - ``packaging/mcpb/manifest.json`` — the MCPB (``.mcpb``) bundle manifest
-    published to Smithery and shipped as the Claude Desktop one-click extension.
+    shipped as the Claude Desktop one-click extension.
   - ``server.json`` — the official MCP Registry manifest (PyPI package).
   - ``scripts/build_mcpb.py`` — the bundle build pipeline.
   - the ``mcp-name:`` ownership marker in ``README.md`` (the PyPI description).
@@ -297,7 +297,7 @@ def test_build_script_plain_zips_and_captures_live_schemas() -> None:
 
 def test_build_pipeline_preserves_rich_tool_schemas(build_mcpb, tmp_path) -> None:
     """The packed bundle keeps inputSchema/outputSchema — the keys ``mcpb pack``
-    would strip and the exact schemas Smithery scores. Proven by packing a tool
+    would strip and the exact schemas the server serves. Proven by packing a tool
     that carries both and reading them back out of the zip."""
     import zipfile
 

@@ -30,7 +30,7 @@
 
 ---
 
-> ✨ **Highlights.** A lean **8-tool advanced surface** (`zim_query`, `zim_search`, `zim_get`, `zim_get_section`, `zim_browse`, `zim_metadata`, `zim_links`, `zim_health`) with a schema small enough for small-model dispatch — or one-tool **Simple mode** for natural-language queries. **Archive-type presets** auto-tune retrieval per source (Wikipedia, Stack Exchange, …), **inbound link discovery** answers "what links here," and **native libzim introspection** validates and inspects any archive. Available on [Smithery](https://smithery.ai/servers/rye/openzim-mcp) and the [official MCP Registry](https://registry.modelcontextprotocol.io). [Release notes →](CHANGELOG.md) [Docs →](https://cameronrye.github.io/openzim-mcp/docs/)
+> ✨ **Highlights.** A lean **8-tool advanced surface** (`zim_query`, `zim_search`, `zim_get`, `zim_get_section`, `zim_browse`, `zim_metadata`, `zim_links`, `zim_health`) with a schema small enough for small-model dispatch — or one-tool **Simple mode** for natural-language queries. **Archive-type presets** auto-tune retrieval per source (Wikipedia, Stack Exchange, …), **inbound link discovery** answers "what links here," and **native libzim introspection** validates and inspects any archive. Available on the [official MCP Registry](https://registry.modelcontextprotocol.io). [Release notes →](CHANGELOG.md) [Docs →](https://cameronrye.github.io/openzim-mcp/docs/)
 
 **OpenZIM MCP** is a modern, secure, high-performance [Model Context Protocol](https://modelcontextprotocol.io/) server that gives AI models structured, offline access to [ZIM format](https://en.wikipedia.org/wiki/ZIM_(file_format)) knowledge archives — Wikipedia, Wiktionary, Stack Exchange, and the rest of the [Kiwix Library](https://browse.library.kiwix.org/).
 
@@ -72,13 +72,9 @@ curl -fsSL -o ~/zim-files/wikipedia_en_climate_change_mini_2024-06.zim \
 
 `~/zim-files` is the directory every example below points the server at — the server expands `~` itself, so it works from a shell and from a client config file alike. For full archives — Wikipedia, Wiktionary, Stack Exchange and the rest, ranging from a few hundred MB to tens of GB — browse [browse.library.kiwix.org](https://browse.library.kiwix.org/) and save the `.zim` into the same directory. More detail, including checksums and a Windows PowerShell equivalent: [Quick start](https://cameronrye.github.io/openzim-mcp/docs/quick-start/).
 
-### Smithery & one-click install
+### Registry & one-click install
 
-OpenZIM MCP is listed on the [Smithery registry](https://smithery.ai/servers/rye/openzim-mcp) and the [official MCP Registry](https://registry.modelcontextprotocol.io) (as `io.github.cameronrye/openzim-mcp`). Add it to your MCP client with the Smithery CLI:
-
-```bash
-npx @smithery/cli mcp add rye/openzim-mcp --client claude
-```
+OpenZIM MCP is listed on the [official MCP Registry](https://registry.modelcontextprotocol.io) as `io.github.cameronrye/openzim-mcp`, so any client that reads the registry can install it by name.
 
 For a one-click **Claude Desktop extension**, download the `openzim-mcp-<version>.mcpb` asset (and its `.sha256`) from the [latest release](https://github.com/cameronrye/openzim-mcp/releases/latest) and double-click it. The bundle launches the version-pinned `uvx openzim-mcp@<version>` (so the host needs [uv](https://docs.astral.sh/uv/)) and prompts for your ZIM directory. Maintainer runbook: [docs/distribution.md](docs/distribution.md).
 
