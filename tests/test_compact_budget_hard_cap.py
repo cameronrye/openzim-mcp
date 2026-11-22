@@ -90,9 +90,16 @@ def test_the_whole_response_fits_its_budget(
     query: Callable[..., str], archives: Path
 ) -> None:
     over = []
-    capped = 0
-    for budget, cap in _CAPS.items():
-        for archive, request_args in _REQUESTS:
+    binding = 0
+    for archive, request_args in _REQUESTS:
+        uncut = len(
+            query(
+                zim_file_path=str(archives / archive),
+                compact_budget=64_000,
+                **request_args,
+            )
+        )
+        for budget, cap in _CAPS.items():
             out = query(
                 zim_file_path=str(archives / archive),
                 compact_budget=budget,
@@ -102,12 +109,12 @@ def test_the_whole_response_fits_its_budget(
             assert "\n> ~" in out, out[-300:]
             if len(out) > cap:
                 over.append((budget, request_args, len(out)))
-            if "Response truncated" in out:
-                capped += 1
+            if uncut > cap:
+                binding += 1
     assert over == []
-    # Positive control: most of these requests overflow their budget, so the
-    # cap and the footer after it really were exercised.
-    assert capped >= 25, capped
+    # Positive control: most of these requests overflow their budget uncut,
+    # so whatever brought them inside it really was exercised.
+    assert binding >= 25, binding
 
 
 def test_a_search_page_with_no_room_for_a_row_claims_none(

@@ -103,6 +103,12 @@ class _HandlerResult:
     ``handle_zim_query`` detects the type at runtime and unpacks the fields
     before the footer step — existing handlers that return strings are
     completely unaffected.
+
+    ``refit`` re-renders ``body`` with its paginated content at least N
+    chars shorter, or returns ``None`` when it cannot. A compact response
+    over its budget is re-rendered through it before the size cap gets to
+    cut it, so a page's own continuation hint survives (see
+    ``_finalize_compact_response``).
     """
 
     body: str
@@ -114,6 +120,7 @@ class _HandlerResult:
     # directives" label otherwise told the model to ignore the server's own
     # recovery advice. Anything carrying archive text keeps the default.
     server_authored: bool = False
+    refit: Optional[Callable[[int], Optional[str]]] = None
 
 
 def _server_advice(body: str) -> _HandlerResult:
@@ -987,11 +994,13 @@ class SimpleToolsHandler(
                 return raw
             # Unpack structured handler results; plain string handlers are
             # unaffected — they return a ``str`` as before.
+            refit: Optional[Callable[[int], Optional[str]]] = None
             if isinstance(raw, _HandlerResult):
                 result = raw.body
                 handler_reason: Optional[str] = raw.reason
                 handler_suggestions: Optional[List[Dict[str, str]]] = raw.suggestions
                 server_authored = raw.server_authored
+                refit = raw.refit
             else:
                 result = raw
                 handler_reason = None
@@ -1007,6 +1016,7 @@ class SimpleToolsHandler(
                 handler_suggestions=handler_suggestions,
                 rerank_events_before=_RERANK_EVENTS_BEFORE,
                 server_authored=server_authored,
+                refit=refit,
             )
             return result
 
@@ -1152,33 +1162,20 @@ class SimpleToolsHandler(
         handler_suggestions: Optional[List[Dict[str, str]]],
         rerank_events_before: Dict[str, int],
         server_authored: bool = False,
+        refit: Optional[Callable[[int], Optional[str]]] = None,
     ) -> str:
         """Apply the compact-mode post-processing pipeline to a handler result:
         link-strip, snippet-truncate, low-confidence note, intent/rerank
         telemetry markers, size-cap, and footer. (Extracted verbatim from
         handle_zim_query; behavior unchanged.)
+
+        ``refit`` is the handler's ``_HandlerResult.refit``: an over-budget
+        page is re-rendered through it before the size cap gets to cut it.
         """
-        if options.get("compact", False) and intent in self._TEXT_HEAVY_INTENTS:
-            # Strip markdown link-soup ([text](href "tooltip") -> text)
-            # from article-body and search-snippet responses. Wikipedia
-            # markdown is ~50% link syntax in the head of a typical
-            # article, ~86% in main-page nav lists. Stripping ~halves
-            # the context cost for the same prose payload, without
-            # losing any content that a small LLM was going to use
-            # anyway (small LLMs don't follow inline links from inside
-            # tool responses; they issue follow-up tool calls). The
-            # JSON-returning intents (structure / links / find_by_title
-            # / related / etc.) handle their own compact rendering and
-            # are deliberately not in _TEXT_HEAVY_INTENTS.
-            result = self._strip_markdown_links(result)
-        if options.get("compact", False) and intent in self._SEARCH_RENDER_INTENTS:
-            # Search snippets default to 3000 chars per result. For
-            # 5 results that's 15k chars of preview alone — a small
-            # LLM only needs ~250 chars to rank relevance. Truncate
-            # each snippet AFTER the link-soup strip so the cap
-            # applies to the post-stripped char count.
-            result = self._truncate_search_snippets(result)
-        result = result + low_confidence_note
+        result = (
+            self._shape_compact_body(result, intent=intent, options=options)
+            + low_confidence_note
+        )
         # A11 Opp6: intent telemetry footer. Invisible to humans
         # (HTML comment, not rendered) but visible in the raw token
         # stream so a calling LLM can branch on the parsed intent
@@ -1238,6 +1235,34 @@ class SimpleToolsHandler(
             # cap so the marker-carrying response stays within the same
             # budget envelope.
             effective_budget -= len(telemetry_markers)
+            # A page that can re-render itself smaller does so before the cap
+            # gets to cut it: the data layer re-cuts the page, so its own
+            # ``content_offset`` hint names the first character not served.
+            # Cutting the rendered page severed that hint instead, and the
+            # next page by the page size skipped everything the cut removed.
+            if refit is not None:
+                for _ in range(self._FOOTER_FIT_ROUNDS):
+                    whole, _uncut = self._assemble_compact_response(
+                        result,
+                        None,
+                        intent=intent,
+                        will_wrap=will_wrap,
+                        telemetry_markers=telemetry_markers,
+                        handler_reason=handler_reason,
+                        handler_suggestions=handler_suggestions,
+                    )
+                    over = len(whole) - budget
+                    if over <= 0:
+                        break
+                    smaller = refit(over)
+                    if smaller is None:
+                        break
+                    result = (
+                        self._shape_compact_body(
+                            smaller, intent=intent, options=options
+                        )
+                        + low_confidence_note
+                    )
             # The ``>`` footer measures the finished response, so its length
             # is only known once the body is capped: assemble, and when the
             # footer pushed the total past ``budget``, take the overshoot off
@@ -1263,6 +1288,32 @@ class SimpleToolsHandler(
             result = assembled
         return result
 
+    def _shape_compact_body(
+        self, result: str, *, intent: str, options: Dict[str, Any]
+    ) -> str:
+        """The per-intent compact trims a handler's body gets before the cap."""
+        if options.get("compact", False) and intent in self._TEXT_HEAVY_INTENTS:
+            # Strip markdown link-soup ([text](href "tooltip") -> text)
+            # from article-body and search-snippet responses. Wikipedia
+            # markdown is ~50% link syntax in the head of a typical
+            # article, ~86% in main-page nav lists. Stripping ~halves
+            # the context cost for the same prose payload, without
+            # losing any content that a small LLM was going to use
+            # anyway (small LLMs don't follow inline links from inside
+            # tool responses; they issue follow-up tool calls). The
+            # JSON-returning intents (structure / links / find_by_title
+            # / related / etc.) handle their own compact rendering and
+            # are deliberately not in _TEXT_HEAVY_INTENTS.
+            result = self._strip_markdown_links(result)
+        if options.get("compact", False) and intent in self._SEARCH_RENDER_INTENTS:
+            # Search snippets default to 3000 chars per result. For
+            # 5 results that's 15k chars of preview alone — a small
+            # LLM only needs ~250 chars to rank relevance. Truncate
+            # each snippet AFTER the link-soup strip so the cap
+            # applies to the post-stripped char count.
+            result = self._truncate_search_snippets(result)
+        return result
+
     # Rounds of re-capping it takes the ``>`` footer to settle: its numbers
     # move a few characters as the body shrinks, and its truncated form is
     # longer than the plain one, so the first overshoot under-counts.
@@ -1271,7 +1322,7 @@ class SimpleToolsHandler(
     def _assemble_compact_response(
         self,
         result: str,
-        cap_at: int,
+        cap_at: Optional[int],
         *,
         intent: str,
         will_wrap: bool,
@@ -1283,6 +1334,7 @@ class SimpleToolsHandler(
 
         Returns ``(response, was_truncated)``: the capped body with the
         telemetry markers, the content fence and the ``>`` footer applied.
+        ``cap_at=None`` skips the cap, to measure the response uncut.
         """
         # Capture pre-cap size to report truncation in footer
         pre_cap_chars = len(result)
@@ -1290,7 +1342,7 @@ class SimpleToolsHandler(
         # structurally-valid output (e.g. ``structure`` keeps the whole
         # heading skeleton as valid JSON). The generic byte-cap would
         # sever that mid-JSON and drop trailing sections, so skip it.
-        if intent in self._SELF_CAPPED_INTENTS:
+        if cap_at is None or intent in self._SELF_CAPPED_INTENTS:
             was_truncated = False
         else:
             result = self._cap_response_size(result, cap_at, intent=intent)
@@ -3224,15 +3276,22 @@ class SimpleToolsHandler(
         promoted = self._title_index_match(zim_file_path, entry_path)
         if promoted is not None:
             entry_path = str(promoted["path"])
-        try:
-            body = self.zim_operations.get_zim_entry(
+        compact = options.get("compact", False)
+        # The substitution note rides inside ``fetch`` so a page the size cap
+        # re-fits (see ``_article_page_refit``) keeps it too.
+        note = self._substitution_note(asked, promoted)
+
+        def fetch(max_content_length: Optional[int]) -> str:
+            return note + self.zim_operations.get_zim_entry(
                 zim_file_path,
                 entry_path,
-                options.get("max_content_length"),
+                max_content_length,
                 options.get("content_offset", 0),
-                compact=options.get("compact", False),
+                compact=compact,
             )
-            return self._substitution_note(asked, promoted) + body
+
+        try:
+            page = fetch(options.get("max_content_length"))
         except OpenZimMcpArchivePathError:
             # Archive-level failure (missing file, not a ZIM, unresolvable):
             # nothing about the *arguments* is wrong. Let it reach
@@ -3245,6 +3304,49 @@ class SimpleToolsHandler(
             return self._render_not_found_recovery(
                 entry_path, e, "get article", requested=requested
             )
+        if not compact:
+            return page
+        return _HandlerResult(page, refit=self._article_page_refit(page, fetch))
+
+    # How ``get_zim_entry`` lays out an article page: a header ending in
+    # ``## Content``, the body, and — when the body was cut to the page size —
+    # the note naming the ``content_offset`` of the first character not served.
+    _ARTICLE_BODY_START = "\n## Content\n\n"
+    _ARTICLE_PAGE_NOTE_RE = re.compile(
+        r"\n\n\.\.\. \[Content truncated, [^\n]*\] \.\.\.\Z"
+    )
+
+    def _article_page_refit(
+        self, page: str, fetch: Callable[[Optional[int]], str]
+    ) -> Callable[[int], Optional[str]]:
+        """``_HandlerResult.refit`` for an article page.
+
+        Re-fetches the page with its body ``over`` chars shorter, so the data
+        layer cuts it and computes its continuation note itself — the cap
+        that ran instead cut that note off along with the body it served.
+        """
+        current = [page]
+
+        def refit(over: int) -> Optional[str]:
+            text = current[0]
+            start = text.find(self._ARTICLE_BODY_START)
+            if start == -1:
+                return None
+            start += len(self._ARTICLE_BODY_START)
+            note = self._ARTICLE_PAGE_NOTE_RE.search(text, start)
+            body_chars = (note.start() if note else len(text)) - start - over
+            # Nothing smaller left to render: the size cap takes over. A
+            # zero-char page would hand back its own offset as the next one.
+            if body_chars < 1:
+                return None
+            try:
+                current[0] = fetch(body_chars)
+            except Exception as e:  # the cap still applies to the first page
+                logger.debug("get article: re-fit fetch failed: %s", e)
+                return None
+            return current[0]
+
+        return refit
 
     def _handle_search(
         self,
