@@ -40,8 +40,21 @@ _ARTICLES = [
     ("A/Test", "Test", "A test is an assessment of knowledge or skill."),
     ("A/Help", "Help", "Help is the fifth studio album by the Beatles."),
     # Lung conditions. Full-text search wants every query term, so the two
-    # that a two-entity query should land on mention "asthma and" too.
-    ("A/Asthma", "Asthma", "Asthma is a long-term disease of the airways."),
+    # that a two-entity query should land on mention "asthma and" too, and
+    # the aspect-list leads carry their query's words the way real
+    # MedlinePlus pages do.
+    (
+        "A/Asthma",
+        "Asthma",
+        "Asthma is a long-term disease of the airways; the causes, symptoms"
+        " and treatments of asthma vary.",
+    ),
+    (
+        "A/Diabetes",
+        "Diabetes",
+        "Diabetes is a disease of high blood sugar; signs, symptoms and"
+        " treatment of diabetes differ by type.",
+    ),
     ("A/COPD", "COPD", "In COPD, as in asthma and bronchitis, the airways narrow."),
     (
         "A/Emphysema",
@@ -207,3 +220,71 @@ class TestShortAcronymHalvesCountOnLiveQueries:
         assert "intent=multi_entity_chain_rejected" in out, out[:400]
         for half in ("TCP/IP", "HTTP", "HTTPS"):
             assert f"`tell me about {half}`" in out, out[:600]
+
+
+# ---------------------------------------------------------------------------
+# 2. An attribute list of one topic rejected as several entities
+# ---------------------------------------------------------------------------
+
+
+class TestAspectListOfOneTopicIsNotAChain:
+    """``the causes, symptoms and treatments of asthma`` split on its
+    connectors into three substantive halves and got "Multi-Entity Chain
+    Detected", with follow-ups ``tell me about the causes`` and ``tell me
+    about symptoms``. The ``of asthma`` in the last part applies to every
+    part: it is one topic's aspects, not three topics."""
+
+    @pytest.mark.parametrize(
+        ("query", "lead"),
+        [
+            (
+                "what are the causes, symptoms and treatments of asthma",
+                "long-term disease of the airways",
+            ),
+            (
+                "tell me about signs, symptoms and treatment of diabetes",
+                "disease of high blood sugar",
+            ),
+        ],
+    )
+    def test_an_aspect_list_reaches_the_topic(
+        self, handler: SimpleToolsHandler, sweep_zim: Path, query: str, lead: str
+    ) -> None:
+        out = _ask(handler, sweep_zim, query)
+        assert "Multi-Entity Chain Detected" not in out, out[:400]
+        assert "intent=tell_me_about" in out, out[-300:]
+        assert lead in out, out[:600]
+
+    @pytest.mark.parametrize(
+        ("query", "entities"),
+        [
+            # Same shape, but the earlier parts are names, not aspects.
+            (
+                "tell me about Plato, Aristotle and the philosophy of mind",
+                ("Plato", "Aristotle", "the philosophy of mind"),
+            ),
+            # Bare common nouns with no shared ``of X`` to apply to.
+            (
+                "tell me about asthma, emphysema and bronchitis",
+                ("asthma", "emphysema", "bronchitis"),
+            ),
+        ],
+    )
+    def test_a_real_entity_list_is_still_rejected(
+        self,
+        handler: SimpleToolsHandler,
+        sweep_zim: Path,
+        query: str,
+        entities: tuple,
+    ) -> None:
+        out = _ask(handler, sweep_zim, query)
+        assert "intent=multi_entity_chain_rejected" in out, out[:400]
+        for entity in entities:
+            assert f"`tell me about {entity}`" in out, out[:600]
+
+    def test_a_two_entity_query_keeps_its_dropped_half_note(
+        self, handler: SimpleToolsHandler, sweep_zim: Path
+    ) -> None:
+        out = _ask(handler, sweep_zim, "tell me about asthma and emphysema")
+        assert "causes shortness of breath" in out, out[:400]
+        assert "query separately with `tell me about asthma`" in out, out[-400:]
