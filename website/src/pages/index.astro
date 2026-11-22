@@ -342,9 +342,9 @@ tests/test_phase_f_gate_decision_consistency.py</code></pre>
           <li class="v2__card">
             <span class="v2__card-dot" aria-hidden="true"></span>
             <h3>New in 3.x</h3>
-            <p>3.0 adopted the MCP 2026-07-28 revision: change notifications arrive on one <code>subscriptions/listen</code> stream. 3.4 added <code>OPENZIM_MCP_STATELESS_HTTP</code>, which serves handshake-era clients without sessions, so HTTP replicas need no affinity. 3.5.0+ lets operators replace the <a href={`${base}/docs/configuration/#server-instructions`}>server instructions</a> to tell the model what their archives hold.</p>
+            <p>3.0 adopted the MCP 2026-07-28 revision: change notifications arrive on one <code>subscriptions/listen</code> stream. 3.4 added <code>OPENZIM_MCP_STATELESS_HTTP</code>, which serves handshake-era clients without sessions, so HTTP replicas need no affinity. 3.5 lets operators replace the <a href={`${base}/docs/configuration/#server-instructions`}>server instructions</a> to tell the model what their archives hold.</p>
             <pre><code>OPENZIM_MCP_STATELESS_HTTP=true
-# 3.5.0+
+# 3.5+
 OPENZIM_MCP_INSTRUCTIONS_PATH=/etc/openzim-mcp/instructions.md</code></pre>
           </li>
         </ul>

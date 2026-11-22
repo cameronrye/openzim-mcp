@@ -207,7 +207,7 @@ export OPENZIM_MCP_SERVER_NAME=openzim-mcp     # default openzim-mcp; reported i
 
 ## Server instructions
 
-**Requires 3.5.0 or later.** Earlier releases ignore `OPENZIM_MCP_INSTRUCTIONS` and `OPENZIM_MCP_INSTRUCTIONS_PATH` without an error.
+**Requires 3.5 or later.** Earlier releases ignore `OPENZIM_MCP_INSTRUCTIONS` and `OPENZIM_MCP_INSTRUCTIONS_PATH` without an error.
 
 When a client connects, the server sends it a short block of `instructions`: in the `initialize` result for handshake-era clients, and in `server/discover` for 2026-07-28 clients. Most hosts put the text in the model's context. The built-in text says what the server is and, in advanced mode, which of the eight tools to reach for; in simple mode it says how to ask `zim_query`.
 
@@ -419,8 +419,8 @@ A nested field's environment variable joins its levels with `__`, so `cache.max_
 | `cors_origins` | `OPENZIM_MCP_CORS_ORIGINS` | `[]` | JSON list; `*` rejected |
 | `host` | `OPENZIM_MCP_HOST` | `127.0.0.1` | non-loopback requires auth (http) or refuses (sse) |
 | `insecure_disable_auth` | `OPENZIM_MCP_INSECURE_DISABLE_AUTH` | `false` | escape hatch: allows token-less non-loopback HTTP with a WARNING (closed networks only) |
-| `instructions` | `OPENZIM_MCP_INSTRUCTIONS` | unset | (3.5.0+) replaces the server instructions; `{{default}}` keeps the built-in text — [rules](/openzim-mcp/docs/configuration/#server-instructions). Not with `instructions_path` |
-| `instructions_path` | `OPENZIM_MCP_INSTRUCTIONS_PATH` | unset | (3.5.0+) UTF-8 file holding the instructions, read once at startup; a set but unusable file stops startup |
+| `instructions` | `OPENZIM_MCP_INSTRUCTIONS` | unset | (3.5+) replaces the server instructions; `{{default}}` keeps the built-in text — [rules](/openzim-mcp/docs/configuration/#server-instructions). Not with `instructions_path` |
+| `instructions_path` | `OPENZIM_MCP_INSTRUCTIONS_PATH` | unset | (3.5+) UTF-8 file holding the instructions, read once at startup; a set but unusable file stops startup |
 | `logging.format` | `OPENZIM_MCP_LOGGING__FORMAT` | `%(asctime)s - %(name)s - %(levelname)s - %(message)s` | `logging` format string |
 | `meta.footer_enabled` | `OPENZIM_MCP_META__FOOTER_ENABLED` | `true` | Append the one-line `_meta` footer to simple-mode responses. Turning it off does not remove `_meta` itself — see [the `_meta` envelope](/openzim-mcp/docs/api-reference/#the-_meta-envelope) |
 | `meta.tokenizer_encoding` | `OPENZIM_MCP_META__TOKENIZER_ENCODING` | `cl100k_base` | **Declared but not wired.** `meta.py` hard-codes `cl100k_base`; setting this has no effect today |

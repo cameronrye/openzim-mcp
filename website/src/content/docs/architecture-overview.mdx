@@ -115,7 +115,7 @@ openzim_mcp/
 ├── simple_tools.py          # zim_query NL handler (Simple mode)
 ├── intent_parser.py         # NL intent → underlying-tool routing
 ├── config.py                # OpenZimMcpConfig (pydantic-settings)
-├── instructions.py          # server instructions: built-in text per tool mode, operator override (3.5.0+)
+├── instructions.py          # server instructions: built-in text per tool mode, operator override (3.5+)
 ├── defaults.py              # Frozen-dataclass defaults referenced by config.py
 ├── cache.py                 # LRU+TTL cache (with optional disk persistence)
 ├── rate_limiter.py          # Token-bucket limiter, per-client + per-operation
@@ -279,8 +279,8 @@ class OpenZimMcpConfig(BaseSettings):
     resource_cache_ttl_seconds: int = 3600
     subscriptions_enabled: bool = True
     presets_override_path: Optional[Path] = None
-    instructions: Optional[str] = None          # 3.5.0+
-    instructions_path: Optional[Path] = None    # 3.5.0+
+    instructions: Optional[str] = None          # 3.5+
+    instructions_path: Optional[Path] = None    # 3.5+
 
     # Component sub-configs
     cache: CacheConfig
