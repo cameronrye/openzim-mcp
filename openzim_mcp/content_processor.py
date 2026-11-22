@@ -3,7 +3,7 @@
 import logging
 import re
 import unicodedata
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union, cast
+from typing import Any, Callable, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
 import html2text
@@ -265,11 +265,6 @@ def _split_query_terms_typed(query: str) -> List[Tuple[str, bool]]:
     return [
         (m.group(1), bool(m.group(2))) for m in _QUERY_TERM_RE.finditer(_fold(query))
     ]
-
-
-def _split_query_terms(query: str) -> list:
-    """Split a query string into individual terms; drop punctuation."""
-    return [t for t, _ in _split_query_terms_typed(query)]
 
 
 def _word_in(folded_paragraph: str, term: str, *, prefix: bool = False) -> bool:
@@ -758,7 +753,7 @@ def _highlight_terms(text: str, query: str, *, max_hits: int) -> str:
     """Wrap the first `max_hits` occurrences of any query term in **bold**.
 
     Case- and diacritic-insensitive, preserving the original casing and
-    accents of the matched substring. ``_split_query_terms`` folds the query
+    accents of the matched substring. ``_split_query_terms_typed`` folds the query
     (NFKD + strip combining + lower), so the pattern must be applied to an
     equally-folded haystack: matching folded terms against the raw text meant
     ``query="café"`` never highlighted anything, and ``query="cafe"`` never
@@ -921,23 +916,6 @@ def resolve_heading_id(heading: Tag) -> Tuple[str, str]:
     if slug:
         return slug, "slug"
     return "", "none"
-
-
-def _collect_meta_tag_metadata(soup: BeautifulSoup) -> Dict[str, str]:
-    """Pull ``name|property|http-equiv`` → ``content`` pairs from <meta> tags.
-
-    Called before unwanted-element pruning so meta tags inside <head> aren't
-    accidentally removed.
-    """
-    metadata: Dict[str, str] = {}
-    for meta in soup.find_all("meta"):
-        if not isinstance(meta, Tag):
-            continue
-        name = meta.get("name") or meta.get("property") or meta.get("http-equiv")
-        content = meta.get("content")
-        if name and content:
-            metadata[str(name)] = str(content)
-    return metadata
 
 
 # Main-content landmarks, in priority order. ZIMIT / warc2zim entries embed
@@ -1447,24 +1425,6 @@ def _build_headings(
     return headings
 
 
-def _append_section_content(
-    current_section: Dict[str, Union[str, int]], element: Tag
-) -> None:
-    """Append paragraph/div text into the current section's preview + word count."""
-    text = element.get_text().strip()
-    if not text:
-        return
-    preview = cast(str, current_section["content_preview"])
-    if len(preview) < 300:
-        if preview:
-            preview += " "
-        preview += text[: 300 - len(preview)]
-        current_section["content_preview"] = preview
-    current_section["word_count"] = cast(int, current_section["word_count"]) + len(
-        text.split()
-    )
-
-
 # (tag, attribute, classification) tuples for media-link extraction.
 _MEDIA_SELECTORS = (
     ("img", "src", "image"),
@@ -1541,42 +1501,6 @@ def _append_media_link(
             "title": str(title_attr) if title_attr else "",
         }
     )
-
-
-def _build_sections(soup: BeautifulSoup) -> List[Dict[str, Union[str, int]]]:
-    """Walk the document in order, grouping <p>/<div> content under headings."""
-    sections: List[Dict[str, Union[str, int]]] = []
-    current_section: Optional[Dict[str, Union[str, int]]] = None
-
-    for page_element in soup.find_all(["h1", "h2", "h3", "h4", "h5", "h6", "p", "div"]):
-        if not (isinstance(page_element, Tag) and page_element.name):
-            continue
-        element = cast(Tag, page_element)
-        if element.name.startswith("h"):
-            if current_section:
-                sections.append(current_section)
-            current_section = {
-                "title": element.get_text().strip(),
-                "level": int(element.name[1]),
-                "content_preview": "",
-                "word_count": 0,
-            }
-        elif current_section and element.name in ("p", "div"):
-            # H3: only collect "leaf" blocks — a <p>/<div> with no nested
-            # heading / <p> / <div> descendant. ``element.get_text()`` includes
-            # ALL descendant text, so collecting both a wrapper and its nested
-            # blocks counted the same prose 2-3x (word_count 21 instead of 7 on
-            # ``<div><div><p>…</p></div></div>``). Worse, a container <div>
-            # holding the whole article body appears BEFORE its nested headings
-            # in document order, so its get_text() dumped every later section's
-            # text into the section preceding it. Collecting only leaf blocks
-            # fixes both — wrapper text is gathered via its block children.
-            if element.find(["h1", "h2", "h3", "h4", "h5", "h6", "p", "div"]) is None:
-                _append_section_content(current_section, element)
-
-    if current_section:
-        sections.append(current_section)
-    return sections
 
 
 def paged_slice_length(content: str, max_length: int, current_offset: int = 0) -> int:
@@ -2547,64 +2471,6 @@ class ContentProcessor:
         except Exception as e:
             logger.warning(f"Error processing content with MIME type {mime_type}: {e}")
             return f"(Error processing content: {e})"
-
-    def extract_html_structure(self, html_content: str) -> Dict[str, Any]:
-        """
-        Extract structure from HTML content including headings and sections.
-
-        Args:
-            html_content: HTML content to analyze
-
-        Returns:
-            Dictionary containing structure information
-        """
-        try:
-            soup = BeautifulSoup(html_content, HTML_PARSER)
-            return self._extract_structure_from_soup(soup)
-        except Exception as e:
-            logger.warning(f"Error extracting HTML structure: {e}")
-            return {
-                "headings": [],
-                "sections": [],
-                "metadata": {},
-                "word_count": 0,
-                "error": str(e),
-            }
-
-    def _extract_structure_from_soup(self, soup: BeautifulSoup) -> Dict[str, Any]:
-        """Extract structure from a BeautifulSoup object.
-
-        Args:
-            soup: BeautifulSoup object (will be modified)
-
-        Returns:
-            Dictionary containing structure information
-        """
-        structure: Dict[str, Any] = {
-            "headings": [],
-            "sections": [],
-            "metadata": {},
-            "word_count": 0,
-        }
-
-        try:
-            structure["metadata"] = _collect_meta_tag_metadata(soup)
-
-            # Strip unwanted elements before walking headings/sections so the
-            # text-content + word counts ignore navigation, footers, etc.
-            for selector in UNWANTED_HTML_SELECTORS:
-                for element in soup.select(selector):
-                    element.decompose()
-
-            structure["headings"] = _build_headings(soup)
-            structure["sections"] = _build_sections(soup)
-            structure["word_count"] = len(soup.get_text().split())
-
-        except Exception as e:
-            logger.warning(f"Error extracting HTML structure: {e}")
-            structure["error"] = str(e)
-
-        return structure
 
     def extract_html_links(self, html_content: str) -> Dict[str, Any]:
         """

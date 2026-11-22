@@ -23,7 +23,7 @@ P22 — ``_join_cell_text`` was rewritten (628fb32) from an iterative
       failing the whole article render and propagating out of
       ``_extract_infobox`` into summary/toc/structure/section.
 
-P34 — query highlighting never fired for accented terms. ``_split_query_terms``
+P34 — query highlighting never fired for accented terms. ``_split_query_terms_typed``
       folds (NFKD + strip combining + lower) but the pattern was applied to the
       RAW text, so ``query="café"`` highlighted nothing and ``query="cafe"``
       never matched ``Café``.

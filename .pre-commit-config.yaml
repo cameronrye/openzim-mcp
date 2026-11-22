@@ -31,7 +31,7 @@ repos:
         exclude: |
           (?x)^tests/(
             dispatch_eval/(?!test_).*\.py
-            |(conftest_v2_fixtures|_promote_fixtures|zim_stubs)\.py
+            |(conftest_v2_fixtures|_http_helpers|_promote_fixtures|zim_stubs)\.py
             |live/_stdio_helpers\.py
           )$
 

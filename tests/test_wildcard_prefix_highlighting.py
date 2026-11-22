@@ -20,7 +20,6 @@ import re
 from openzim_mcp.content_processor import (
     ContentProcessor,
     _highlight_terms,
-    _split_query_terms,
     _split_query_terms_typed,
 )
 from openzim_mcp.zim.search import _snippet_query
@@ -68,9 +67,6 @@ class TestPrefixTermTokenizing:
     def test_bare_star_yields_nothing(self) -> None:
         assert _split_query_terms_typed("*") == []
         assert _split_query_terms_typed("**") == []
-
-    def test_untyped_splitter_still_returns_bare_terms(self) -> None:
-        assert _split_query_terms("Climat* change") == ["climat", "change"]
 
 
 class TestPrefixTermHighlighting:

@@ -12,6 +12,7 @@ from starlette.testclient import TestClient
 
 from openzim_mcp.config import OpenZimMcpConfig
 from openzim_mcp.exceptions import OpenZimMcpConfigurationError
+from tests._http_helpers import build_health_app
 
 # ---------------------------------------------------------------------------
 # H4 — empty OPENZIM_MCP_AUTH_TOKEN must not silently disable authentication
@@ -205,7 +206,7 @@ def test_readyz_times_out_to_503_when_probe_hangs(http_mock_server, monkeypatch)
 
     monkeypatch.setattr(http_app.os.path, "isdir", hanging_isdir)
 
-    app = http_app.build_starlette_app(http_mock_server)
+    app = build_health_app(http_mock_server)
     client = TestClient(app)
     resp = client.get("/readyz")
     assert resp.status_code == 503

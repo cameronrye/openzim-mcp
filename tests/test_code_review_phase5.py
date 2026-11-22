@@ -1,38 +1,12 @@
 """Regression tests for code-review 2026-06-10 Phase 5 (content_processor).
 
-H3 (_build_sections double-counts nested blocks), M2 (extract_infobox deletes
-zero-row content), M3 (snippet truncation splits markdown links).
+M2 (extract_infobox deletes zero-row content), M3 (snippet truncation splits
+markdown links).
 """
 
 from bs4 import BeautifulSoup
 
-from openzim_mcp.content_processor import ContentProcessor, _build_sections
-
-
-# H3 — nested <div>/<p> must not double/triple-count prose
-def test_h3_nested_divs_counted_once():
-    soup = BeautifulSoup(
-        "<h2>History</h2><div><div><p>Berlin was founded in the 13th century.</p>"
-        "</div></div>",
-        "html.parser",
-    )
-    sections = _build_sections(soup)
-    assert sections[0]["word_count"] == 7
-    assert sections[0]["content_preview"] == "Berlin was founded in the 13th century."
-
-
-def test_h3_wrapper_div_does_not_misattribute_to_prior_section():
-    soup = BeautifulSoup(
-        "<h2>Intro</h2><p>intro text</p>"
-        '<div class="body"><h2>History</h2><p>hist</p></div>',
-        "html.parser",
-    )
-    sections = _build_sections(soup)
-    by_title = {s["title"]: s for s in sections}
-    # The wrapper div's text must NOT be dumped into the preceding Intro section.
-    assert by_title["Intro"]["content_preview"] == "intro text"
-    assert by_title["Intro"]["word_count"] == 2
-    assert by_title["History"]["content_preview"] == "hist"
+from openzim_mcp.content_processor import ContentProcessor
 
 
 # M2 — a matched infobox node with zero KV rows must not be deleted

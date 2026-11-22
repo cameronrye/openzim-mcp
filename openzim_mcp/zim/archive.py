@@ -1355,15 +1355,6 @@ class ZimOperations(
         content = bytes(item.content).decode("utf-8", errors="replace").strip()
         return content or None
 
-    def _read_new_scheme_metadata_value(
-        self, archive: Archive, meta_key: str
-    ) -> Optional[str]:
-        """Capped display form of :meth:`_read_new_scheme_metadata_raw`."""
-        content = self._read_new_scheme_metadata_raw(archive, meta_key)
-        if content is None:
-            return None
-        return self._cap_metadata_preview(content)
-
     def _read_old_scheme_metadata_raw(
         self, archive: Archive, meta_key: str
     ) -> Optional[str]:
@@ -1400,16 +1391,6 @@ class ZimOperations(
         item = entry.get_item()
         content = bytes(item.content).decode("utf-8", errors="replace").strip()
         return content or None
-
-    def _read_old_scheme_metadata_value(
-        self, archive: Archive, meta_key: str
-    ) -> Optional[str]:
-        """Distilled + capped display form of
-        :meth:`_read_old_scheme_metadata_raw`."""
-        content = self._read_old_scheme_metadata_raw(archive, meta_key)
-        if content is None:
-            return None
-        return self._format_metadata_html_value(content)
 
     def _format_metadata_html_value(self, content: str) -> str:
         """Distil an old-scheme metadata value's HTML wrapper + cap it.

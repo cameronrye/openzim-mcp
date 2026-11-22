@@ -38,10 +38,6 @@ class TestSpecialTokenLiteralsAreOrdinaryText:
     def test_raw_tokens_est_counts_literal_as_text(self, literal: str) -> None:
         assert meta._raw_tokens_est(f"a {literal} b") == 8
 
-    @pytest.mark.parametrize("literal", SPECIAL_LITERALS)
-    def test_tokens_est_returns_int_for_literal(self, literal: str) -> None:
-        assert meta.tokens_est(f"a {literal} b") == 8
-
     def test_attach_meta_on_article_body_with_literal(self) -> None:
         payload: Dict[str, Any] = {
             "path": "C/GPT-2",
@@ -67,7 +63,6 @@ class TestSpecialTokenLiteralsAreOrdinaryText:
         broken.encode.side_effect = RuntimeError("boom")
         with patch.object(meta, "_get_encoder", return_value=broken):
             assert meta._raw_tokens_est("some text") is None
-            assert meta.tokens_est("some text") == 0
             assert "tokens_est" not in meta.build_meta(rendered="some text")
 
 

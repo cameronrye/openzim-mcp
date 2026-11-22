@@ -2,28 +2,28 @@
 
 import pytest
 
-from openzim_mcp.meta import attach_meta, build_meta, format_footer, tokens_est
+from openzim_mcp.meta import _raw_tokens_est, attach_meta, build_meta, format_footer
 
 
 def test_tokens_est_basic():
     # tiktoken cl100k_base encodes "hello world" as 2 tokens
-    assert tokens_est("hello world") == pytest.approx(2, abs=1)
+    assert _raw_tokens_est("hello world") == pytest.approx(2, abs=1)
 
 
 def test_tokens_est_empty():
-    assert tokens_est("") == 0
+    assert _raw_tokens_est("") == 0
 
 
 def test_tokens_est_unicode():
     # Multi-byte characters tokenize predictably with cl100k_base
-    n = tokens_est("こんにちは世界")
+    n = _raw_tokens_est("こんにちは世界")
     assert n > 0
     assert n < 50
 
 
 def test_tokens_est_long_string_scales_linearly():
-    short = tokens_est("Hello, this is a sample sentence. " * 10)
-    long = tokens_est("Hello, this is a sample sentence. " * 100)
+    short = _raw_tokens_est("Hello, this is a sample sentence. " * 10)
+    long = _raw_tokens_est("Hello, this is a sample sentence. " * 100)
     # Linear scaling within ±5%
     assert long == pytest.approx(short * 10, rel=0.05)
 
@@ -103,7 +103,7 @@ def test_build_meta_omits_empty_suggestions():
 def test_build_meta_pads_token_count_for_envelope():
     rendered = "X" * 1000
     meta = build_meta(rendered=rendered)
-    raw_tokens = tokens_est(rendered)
+    raw_tokens = _raw_tokens_est(rendered)
     assert meta["tokens_est"] >= raw_tokens
 
 

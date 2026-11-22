@@ -17,9 +17,9 @@ synthetic main-page row (``_NamespaceMixin._materialise_new_scheme_main_entry``)
 One best-effort variant stays intentionally separate because its failure
 mode differs — it SKIPS-AND-OMITS rather than returning a last-good entry:
 
-* ``_ArchiveMixin._read_old_scheme_metadata_value`` — on a cycle or an
-  over-long chain it returns ``None`` so the caller OMITS that metadata key
-  entirely, rather than rendering a stale redirect stub.
+* ``ZimOperations._read_old_scheme_metadata_raw`` (``zim/archive.py``) — on
+  a cycle or an over-long chain it returns ``None`` so the caller OMITS that
+  metadata key entirely, rather than rendering a stale redirect stub.
 """
 
 from typing import Any
