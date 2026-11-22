@@ -16,9 +16,11 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
+from contextlib import contextmanager
 from itertools import groupby
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, Optional, cast
+from typing import TYPE_CHECKING, Any, Dict, Iterator, List, Optional, cast
 
 from openzim_mcp.tool_schemas import (
     EntryBundle,
@@ -140,6 +142,44 @@ def archive_stat_token(validated_path: Any) -> str:
         return f"0:0:{_RENDER_EPOCH}"
 
 
+# A key built while an archive is open has to describe the revision that
+# HANDLE reads, and a fresh ``stat()`` describes whatever file sits at the path
+# now: a refresh landing between the open and the key filed the old revision's
+# output under the new revision's token, where every later call hit it until
+# the TTL ran out (and across restarts with persistence on). ``zim_archive``
+# takes the token BEFORE it opens and holds it here, per thread and path, for
+# as long as the handle is open. Per thread, because a sync call runs on one
+# thread start to finish while other threads may hold other revisions.
+_held_tokens = threading.local()
+
+
+@contextmanager
+def holding_stat_token(validated_path: Any, token: str) -> Iterator[None]:
+    """Hold ``token`` as the revision this thread's handle on the path reads."""
+    held: Dict[str, List[str]] = _held_tokens.__dict__.setdefault("by_path", {})
+    stack = held.setdefault(str(validated_path), [])
+    stack.append(token)
+    try:
+        yield
+    finally:
+        stack.remove(token)
+
+
+def open_archive_token(validated_path: Any) -> str:
+    """``archive_stat_token`` for the revision this thread has open, if any.
+
+    When one call has the same path open twice, the OUTERMOST handle wins: it
+    opened first, so it reads the oldest revision, and a key can then only
+    under-describe a value (a wasted entry), never over-describe it (a stale
+    one). With no handle open, this is a fresh ``archive_stat_token``.
+    """
+    held: Dict[str, List[str]] = getattr(_held_tokens, "by_path", {})
+    stack = held.get(str(validated_path))
+    if stack:
+        return stack[0]
+    return archive_stat_token(validated_path)
+
+
 def _bundle_cache_key(validated_path: "Path", entry_path: str, compact: bool) -> str:
     """Cache key that invalidates when the underlying ZIM is replaced.
 
@@ -156,11 +196,14 @@ def _bundle_cache_key(validated_path: "Path", entry_path: str, compact: bool) ->
     Falls back gracefully when stat() fails (path no longer exists, race
     with replacement): the key drops to the prior shape so the cache
     still works, just without the invalidation guarantee.
+
+    The bundle is built from a handle that is already open, so the token is
+    the one that handle was opened under (``open_archive_token``).
     """
     mode = "compact" if compact else "raw"
     return (
         f"{_BUNDLE_KEY_PREFIX}:{validated_path}:"
-        f"{archive_stat_token(validated_path)}:{entry_path}:{mode}"
+        f"{open_archive_token(validated_path)}:{entry_path}:{mode}"
     )
 
 

@@ -1268,9 +1268,12 @@ class _NamespaceMixin:
         listing_key: Optional[str] = None
         cached_listing: Optional[Tuple[List[str], bool]] = None
         if archive_path is not None:
-            from openzim_mcp.bundle import archive_stat_token
+            from openzim_mcp.bundle import open_archive_token
 
-            stat_token = archive_stat_token(Path(archive_path))
+            # The token ``archive`` was opened under, not a fresh stat: a
+            # refresh landing mid-call would key this revision's listing as
+            # the next one's.
+            stat_token = open_archive_token(archive_path)
             listing_key = f"ns_entries:{archive_path}:{stat_token}:{namespace}"
             cached_listing = self.cache.get(listing_key)
 

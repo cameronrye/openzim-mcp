@@ -453,11 +453,13 @@ def snippet_render_key(validated_path: Optional[str], entry_path: str) -> Option
     if not validated_path or not entry_path:
         return None
     try:
-        from openzim_mcp.bundle import archive_stat_token
+        # Both callers run with the entry's archive open, so this is the
+        # token that handle was opened under rather than a fresh stat.
+        from openzim_mcp.bundle import open_archive_token
 
         return (
             f"snippet_render:v1:{validated_path}:"
-            f"{archive_stat_token(Path(validated_path))}:"
+            f"{open_archive_token(validated_path)}:"
             f"{entry_path}"
         )
     except Exception:

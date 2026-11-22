@@ -582,6 +582,11 @@ def zim_archive(
     # see their patch take effect here. Late-binding via attribute lookup
     # also avoids any import cycle when the mixins import this module.
     import openzim_mcp.zim_operations as _zim_ops_shim
+    from openzim_mcp.bundle import archive_stat_token, holding_stat_token
+
+    # Taken BEFORE the open, so a refresh landing after it can only make the
+    # token older than the handle, never newer (see ``open_archive_token``).
+    stat_token = archive_stat_token(file_path)
 
     def open_archive() -> Archive:
         archive = _zim_ops_shim.Archive(str(file_path))
@@ -621,7 +626,8 @@ def zim_archive(
 
     logger.debug(f"Opened ZIM archive: {file_path}")
     try:
-        yield archive
+        with holding_stat_token(file_path, stat_token):
+            yield archive
     finally:
         logger.debug(f"Releasing ZIM archive: {file_path}")
 
@@ -1233,11 +1239,11 @@ class ZimOperations(
         cache_key: Optional[str] = None
         if validated_path is not None:
             try:
-                from openzim_mcp.bundle import archive_stat_token
+                from openzim_mcp.bundle import open_archive_token
 
                 cache_key = (
                     f"preset_entries:v1:{validated_path}:"
-                    f"{archive_stat_token(Path(validated_path))}"
+                    f"{open_archive_token(validated_path)}"
                 )
                 cached = self.cache.get(cache_key)
                 if isinstance(cached, dict):
