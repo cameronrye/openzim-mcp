@@ -2126,7 +2126,19 @@ class IntentParser:
     # match path can dump entire article bodies for unrelated common-word
     # collisions (Aaliyah's "Try Again" for the literal user string
     # ``"try again"`` is the canonical motivating example).
-    _COMMON_FILLER_TOKENS = frozenset(
+    #
+    # The vocabulary is held in two sets. ``tell me about stress`` and
+    # ``what is being`` were refused as filler because the extracted-topic
+    # gate tested the topic against all of it, and ``stress`` / ``being``
+    # are in it. ``_ALWAYS_FILLER_TOKENS`` (below) carries no topic in any
+    # position: function words, pronouns, auxiliaries, conversational
+    # responses. ``_BARE_QUERY_FILLER_TOKENS`` is content-bearing nouns that
+    # read as meta-talk only when they ARE the whole message (``test``,
+    # ``stress test``, ``demo this``), each naming a real subject once the
+    # caller frames it as one. The raw-query gates use the union,
+    # ``_COMMON_FILLER_TOKENS``; a topic extracted from an explicit frame is
+    # refused only when every token is always-filler.
+    _ALWAYS_FILLER_TOKENS = frozenset(
         {
             # Affirmation / negation / acknowledgement
             "yes",
@@ -2244,7 +2256,6 @@ class IntentParser:
             "am",
             "be",
             "been",
-            "being",
             "can",
             "could",
             "would",
@@ -2254,24 +2265,11 @@ class IntentParser:
             "must",
             "will",
             "shall",
-            # Meta-tool vocabulary (matches the LLM-passthrough patterns
-            # observed in the v1.2.0 beta-test transcripts)
-            "test",
-            "tests",
+            # Meta-tool verbs (the v1.2.0 beta-test passthroughs). The
+            # nouns of the same vocabulary are bare-query-only, below.
             "tested",
-            "testing",
-            "tester",
-            "demo",
-            "demos",
             "explore",
             "exploring",
-            "beta",
-            "alpha",
-            "regression",
-            "stress",
-            "smoke",
-            "tool",
-            "tools",
             # Vague nouns / quantifiers
             "thing",
             "things",
@@ -2279,22 +2277,59 @@ class IntentParser:
             "anything",
             "everything",
             "something",
-            "nothing",
             "any",
             "each",
             "every",
             "some",
             "none",
             "both",
-            # Generic responses
+            # Generic responses. ``right`` / ``wrong`` stay here although
+            # they are nouns too (``right and wrong``): framed, they are
+            # the conversational ``what is wrong?`` / ``what is right?``,
+            # and the climate-change mini archive answers the first with
+            # the "Not Evil Just Wrong" film article — the D-T2 shape.
             "right",
             "wrong",
             "true",
             "false",
-            # User asked for help on the tool, not for a "Help" article
+            # User asked for help on the tool, not for a "Help" article —
+            # framed or not ("what is help" asks the tool, too)
             "help",
         }
     )
+
+    # Filler only as the whole bare query. Each is a noun that names a
+    # real subject (Stress, Being, Nothing, Regression, Smoke, Tool, a
+    # medical test) — but the v1.2.0 transcripts show small models
+    # forwarding ``test``, ``stress test``, ``beta test``, ``test this
+    # tool`` and ``demo this`` verbatim, so a query made only of these
+    # (plus always-filler) is still meta-talk. ``being`` is the one
+    # auxiliary here, as the noun of ontology (``what is being``).
+    # Excluded on purpose: the verbs above, the pronouns and determiners
+    # (``who are you`` must keep refusing), ``right`` / ``wrong`` (see
+    # above), and ``page`` / ``results``, whose framed uses (``tell me
+    # about the results``) still point back at the tool's own output.
+    _BARE_QUERY_FILLER_TOKENS = frozenset(
+        {
+            "test",
+            "tests",
+            "testing",
+            "tester",
+            "demo",
+            "demos",
+            "beta",
+            "alpha",
+            "regression",
+            "stress",
+            "smoke",
+            "tool",
+            "tools",
+            "being",
+            "nothing",
+        }
+    )
+
+    _COMMON_FILLER_TOKENS = _ALWAYS_FILLER_TOKENS | _BARE_QUERY_FILLER_TOKENS
 
     @classmethod
     def _looks_like_bare_topic(cls, query: str) -> bool:

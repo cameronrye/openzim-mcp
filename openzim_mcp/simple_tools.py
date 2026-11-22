@@ -1460,7 +1460,12 @@ class SimpleToolsHandler(
 
           * capped at 4 tokens — anything longer is a real phrase;
           * every alphanumeric token must be in
-            ``IntentParser._COMMON_FILLER_TOKENS``;
+            ``IntentParser._ALWAYS_FILLER_TOKENS``. Not the full
+            ``_COMMON_FILLER_TOKENS``: its bare-query-only nouns are
+            meta-talk as a whole message (``stress test``) but a topic
+            once the caller frames them as one — ``tell me about stress``
+            and ``what is being`` were refused with the playbook while
+            the archive held both articles;
           * a capitalized occurrence of any of those tokens in what the
             caller actually TYPED is a proper-noun signal (``tell me
             about It``, the film) and defers to the parser. Rule 1
@@ -1471,7 +1476,7 @@ class SimpleToolsHandler(
         if not tokens or len(tokens) > 4:
             return False
         lowered = {t.lower() for t in tokens}
-        if not all(t in IntentParser._COMMON_FILLER_TOKENS for t in lowered):
+        if not all(t in IntentParser._ALWAYS_FILLER_TOKENS for t in lowered):
             return False
         for raw in re.findall(r"[A-Za-z0-9]+", original_query or ""):
             if raw.lower() in lowered and raw[0].isupper():
