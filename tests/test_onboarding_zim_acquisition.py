@@ -545,12 +545,14 @@ def test_zim_health_is_quiet_about_downloads_when_archives_exist(
     """Acquisition advice belongs to the empty case, not to every report."""
     from openzim_mcp.server import OpenZimMcpServer
     from openzim_mcp.server_state import _build_health_report
-    from openzim_mcp.zim.archive import ZIM_MAGIC
+    from openzim_mcp.zim.archive import ZIM_HEADER_SIZE, ZIM_MAGIC
 
     # The health report counts only files carrying the ZIM signature, so a
     # placeholder of arbitrary bytes would read as "no archives here" and
-    # make this test pass for the wrong reason.
-    (tmp_path / "wikipedia.zim").write_bytes(ZIM_MAGIC + b"\x00" * 64)
+    # make this test pass for the wrong reason. The signature is the whole
+    # header: a magic-only stub shorter than it is a truncated download.
+    padding = b"\x00" * (ZIM_HEADER_SIZE - len(ZIM_MAGIC))
+    (tmp_path / "wikipedia.zim").write_bytes(ZIM_MAGIC + padding)
     config = OpenZimMcpConfig(allowed_directories=[str(tmp_path)])
     report = _build_health_report(OpenZimMcpServer(config))
 

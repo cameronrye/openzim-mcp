@@ -232,6 +232,11 @@ def has_zim_signature(path: Path) -> bool:
         return False
     if header[: len(ZIM_MAGIC)] != ZIM_MAGIC:
         return False
+    # Every real archive carries the whole header, so a shorter file is a
+    # download that stopped inside it. ``_declared_zim_size`` has no
+    # ``checksumPos`` to offer one, which is "no claim" below, not "intact".
+    if len(header) < ZIM_HEADER_SIZE:
+        return False
     declared = _declared_zim_size(header)
     if declared is None:
         return True

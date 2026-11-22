@@ -568,3 +568,48 @@ class TestListingFollowsAFileChangedInPlace:
         monkeypatch.setattr("openzim_mcp.bundle._RENDER_EPOCH", "r-next")
         ops.list_zim_files_data()
         assert len(scans) == 2
+
+
+class TestAHeaderStubIsNotListedAsReadable:
+    """A file shorter than the 80-byte header passed the signature probe.
+
+    ``has_zim_signature`` saw the magic, found no ``checksumPos`` to compare
+    (the header is cut off before it) and answered True, so the corpus's own
+    ``invalid.smaller_than_header.zim`` was listed readable with no warning
+    while every open of it failed. ``is_truncated_zim`` already called it a
+    truncated download; it was simply never asked.
+    """
+
+    @pytest.mark.asyncio
+    async def test_zim_health_calls_the_stub_a_truncated_download(
+        self, tmp_path: Path, zim_test_data_dir: Optional[Path]
+    ) -> None:
+        from openzim_mcp.server import OpenZimMcpServer
+        from openzim_mcp.zim.archive import TRUNCATED_ZIM_WARNING
+
+        withns = zim_test_data_dir / "withns" if zim_test_data_dir else None
+        if withns is None or not (withns / "invalid.smaller_than_header.zim").exists():
+            pytest.skip("zim-testing-suite withns fixtures not available")
+        shutil.copy(withns / "invalid.smaller_than_header.zim", tmp_path / "stub.zim")
+        shutil.copy(withns / "small.zim", tmp_path / "small.zim")
+        server = OpenZimMcpServer(
+            OpenZimMcpConfig(
+                allowed_directories=[str(tmp_path)],
+                tool_mode="advanced",
+                cache=CacheConfig(enabled=False),
+            )
+        )
+
+        out = await server.mcp._tool_manager._tools["zim_health"].fn()
+        rows = {row["name"]: row for row in out["loaded_archives"]}
+
+        assert (tmp_path / "stub.zim").stat().st_size < 80
+        assert rows["stub.zim"]["readable"] is False
+        assert rows["stub.zim"]["warning"] == TRUNCATED_ZIM_WARNING
+        assert any(
+            w.startswith("Truncated .zim file") and "stub.zim" in w
+            for w in out["health"]["warnings"]
+        ), out["health"]["warnings"]
+        # The full archive beside it is untouched.
+        assert rows["small.zim"]["readable"] is True
+        assert "warning" not in rows["small.zim"]
