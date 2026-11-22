@@ -577,7 +577,7 @@ zim_health(zim_file_path: Optional[str] = None) -> Any
   "configuration": {
     "configuration": {
       "server_name": "openzim-mcp",
-      "allowed_directories": ["...zim-files"],
+      "allowed_directories": ["<redacted>/zim"],
       "allowed_directories_count": 1,
       "cache_enabled": true,
       "cache_max_size": 100,
@@ -588,12 +588,12 @@ zim_health(zim_file_path: Optional[str] = None) -> Any
     "timestamp": "2026-05-27T15:30:00.000000+00:00"
   },
   "loaded_archives": [
-    { "name": "wikipedia_en_100_2026-02.zim", "path": "...wikipedia_en_100_2026-02.zim", "size": "119.07 MB", "size_bytes": 124857600, "modified": "2026-02-15T10:30:00" }
+    { "name": "wikipedia_en_100_2026-02.zim", "path": "/srv/zim/wikipedia_en_100_2026-02.zim", "directory": "/srv/zim", "size": "119.07 MB", "size_bytes": 124857600, "modified": "2026-02-15T10:30:00", "readable": true }
   ]
 }
 ```
 
-Over the **HTTP/SSE** transports `process_id` / `server_pid` are `"[REDACTED]"` and allowed directories are shown as `...basename` — diagnostic output frequently lands in bug reports. Over the local **stdio** transport these report the real PID and full paths, matching the unredacted `loaded_archives[].path` values that clients pass back to other tools.
+This is the **HTTP/SSE** form: `process_id` / `server_pid` are `"[REDACTED]"` and `configuration.allowed_directories` entries read `<redacted>/<basename>` — diagnostic output frequently lands in bug reports. Over the local **stdio** transport these report the real PID and full paths. `loaded_archives[].path` and `.directory` are absolute on every transport, because clients pass them back to other tools, so an HTTP client still sees where the archives live.
 
 The three blocks are built independently. If the health or configuration builder raises, that block alone is replaced by a `ToolErrorPayload` — `{"error": true, "operation": "get server health" | "get server configuration", "message": ..., "context": ...}`, the only two `operation` values in the codebase that are not snake_case — and the rest of the response, `loaded_archives` included, is still returned. The top-level dict is not an error envelope, so `isError` stays `false`; check `.health` and `.configuration` for an `error` key before reading their fields. A top-level envelope comes back only two ways — a rate-limit rejection (`operation: "rate_limited"`), or an exception escaping the tool body (`operation: "zim_health"`), which for the no-argument call means only the directory scan behind `loaded_archives`, since the other two builders swallow their own exceptions, and for the `zim_file_path` call below means any validation failure.
 
@@ -608,7 +608,7 @@ The three blocks are built independently. If the health or configuration builder
   "has_title_index": true,
   "uuid": "<archive uuid>",
   "is_multipart": false,
-  "path": "...archive.zim",
+  "path": "/srv/zim/archive.zim",
   "name": "archive.zim",
   "has_link_graph": true,
   "link_graph": {
@@ -806,7 +806,7 @@ The error classes in [openzim_mcp/exceptions.py](https://github.com/cameronrye/o
 - `OpenZimMcpArchiveError`
 - `OpenZimMcpRateLimitError`
 
-Absolute filesystem paths in error messages are redacted to `...filename.zim` form on all transports. PIDs and paths in `zim_health` diagnostics are redacted over the HTTP/SSE transports and shown in full over local stdio. Error text is safe to copy into bug reports.
+Absolute filesystem paths in error messages are redacted to `...filename.zim` form on all transports. In `zim_health` diagnostics the PID and `configuration.allowed_directories` are redacted over the HTTP/SSE transports and shown in full over local stdio; archive paths (`loaded_archives[].path`, `zim://files`, "list available ZIM files") are absolute on every transport. Error text is safe to copy into bug reports.
 
 ---
 
