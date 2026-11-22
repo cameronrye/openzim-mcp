@@ -430,13 +430,15 @@ class RateLimiter:
     def get_status(self) -> Dict[str, Any]:
         """Get current rate limiter status.
 
+        Nothing in the server reads this; it is an inspection seam for tests
+        and debugging.
+
         Returns:
             Dictionary with rate limiter status information.
 
-            For backwards compatibility, ``global_tokens_available`` reports
-            the available tokens for the "default" client (if present), and
-            ``operation_buckets`` flattens the per-(client, op) view into
-            ``"<client_id>:<operation>": tokens``.
+            ``global_tokens_available`` reports the available tokens for the
+            "default" client (if present), and ``operation_buckets`` flattens
+            the per-(client, op) view into ``"<client_id>:<operation>": tokens``.
         """
         # Snapshot under the lock — reset() clears these under the same
         # lock, and iterating concurrently raises

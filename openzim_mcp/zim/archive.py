@@ -433,14 +433,11 @@ def configure_libzim_caches(
     """
     global _LIBZIM_DIRENT_CACHE_MAX_COUNT
     if cluster_cache_max_size_bytes is not None:
-        try:
-            libzim.set_cluster_cache_max_size(cluster_cache_max_size_bytes)
-            logger.info(
-                "libzim cluster cache max size set to %d bytes (process-global)",
-                cluster_cache_max_size_bytes,
-            )
-        except Exception as e:  # pragma: no cover — defensive across versions
-            logger.debug("set_cluster_cache_max_size unavailable: %s", e)
+        libzim.set_cluster_cache_max_size(cluster_cache_max_size_bytes)
+        logger.info(
+            "libzim cluster cache max size set to %d bytes (process-global)",
+            cluster_cache_max_size_bytes,
+        )
     # Guard on None so a caller tuning only the cluster cache doesn't clobber
     # a dirent count another caller already set — ``None`` means "leave as-is",
     # not "reset to default" (symmetric with the cluster branch above).
@@ -595,13 +592,9 @@ def zim_archive(
     def open_archive() -> Archive:
         archive = _zim_ops_shim.Archive(str(file_path))
         # Apply the optional per-archive dirent-cache size (count of
-        # dirents). ``None`` leaves libzim's default. Guarded so a binding
-        # that predates the settable property degrades silently.
+        # dirents). ``None`` leaves libzim's default.
         if _LIBZIM_DIRENT_CACHE_MAX_COUNT is not None:
-            try:
-                archive.dirent_cache_max_size = _LIBZIM_DIRENT_CACHE_MAX_COUNT
-            except Exception as e:  # pragma: no cover — defensive across versions
-                logger.debug("dirent_cache_max_size unavailable: %s", e)
+            archive.dirent_cache_max_size = _LIBZIM_DIRENT_CACHE_MAX_COUNT
         return archive
 
     try:

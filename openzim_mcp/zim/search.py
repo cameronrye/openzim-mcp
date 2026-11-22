@@ -1945,9 +1945,8 @@ class _SearchMixin:
         # a13: imports hoisted from function-local to module-level
         # (see top of file) so unit tests can patch
         # ``openzim_mcp.zim.search.find_title_match`` directly. The
-        # ``is_strong_title_match`` reference is retained for
-        # historical callers but the splice gate (post-a13 D5) uses
-        # exact path comparison rather than the strong-match predicate.
+        # splice gate (post-a13 D5) uses exact path comparison rather
+        # than the strong-match predicate.
         try:
             canonical = find_title_match(self, zim_file_path, query)
         except Exception:  # pragma: no cover — defensive
