@@ -51,7 +51,8 @@ site-install:  ## Install the docs site's Node dependencies (website/node_module
 site-dev:  ## Serve the docs site with live reload at http://localhost:4321/openzim-mcp/
 	@test -d website/node_modules || $(MAKE) site-install
 	@echo "The site is served under its base path — http://localhost:4321/openzim-mcp/"
-	@echo "The bare root returns 404. Stop with: cd website && npx astro dev stop"
+	@echo "The bare root returns 404. Stop with Ctrl-C, or, if Astro detached it"
+	@echo "(--background, or an AI-agent environment): cd website && npx astro dev stop"
 	cd website && npm run dev
 
 site-check:  ## Type-check the docs site without building it

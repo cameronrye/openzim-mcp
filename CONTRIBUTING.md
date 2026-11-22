@@ -15,8 +15,15 @@ Thank you for your interest in contributing to OpenZIM MCP! This document provid
 3. **Set up development environment**:
 
    ```bash
-   python scripts/setup_dev_env.py
+   make setup-dev
+   uv run pre-commit install --install-hooks
    ```
+
+   `make setup-dev` runs the setup script through `uv run`, so it uses the
+   project's Python 3.12 even where there is no `python` command or the system
+   Python is older. It installs the dependencies, downloads the test data and
+   runs lint, type-check and the tests; it does not install the git hooks,
+   which is what the second line does.
 
 4. **Create a feature branch**:
 
@@ -46,7 +53,7 @@ cd openzim-mcp
 uv sync
 
 # Install pre-commit hooks (recommended)
-uv run pre-commit install
+uv run pre-commit install --install-hooks
 
 # Download test data
 make download-test-data
@@ -95,6 +102,7 @@ openzim-mcp/
 │   ├── __main__.py             # Module entry point (`python -m openzim_mcp`)
 │   ├── main.py                 # CLI entry point and arg parsing
 │   ├── server.py               # MCP server setup, transport selection
+│   ├── instructions.py         # Server instructions: built-in text per mode, operator override
 │   ├── http_app.py             # Streamable HTTP / SSE transport, auth, CORS, health
 │   ├── config.py               # Pydantic config + env var bindings
 │   ├── defaults.py             # Default values and tunables
@@ -162,7 +170,7 @@ We use several tools to maintain code quality:
 Install pre-commit hooks to automatically check your code:
 
 ```bash
-uv run pre-commit install
+uv run pre-commit install --install-hooks
 ```
 
 This will run checks on every commit. You can also run manually:
@@ -248,7 +256,7 @@ docs(readme): update installation guide
 
 ## Testing
 
-The project maintains 80%+ test coverage using a hybrid of mock data and real ZIM files.
+Aim to keep test coverage at 80% or more. Nothing enforces it (there is no `fail_under` or `--cov-fail-under`), so it is a goal, not a gate. The suite uses a hybrid of mock data and real ZIM files.
 
 ### Test Categories
 
@@ -320,9 +328,10 @@ make check-links EXTERNAL=1  # also probe every external URL
 
 `make site-dev` serves the site **under its base path**: open
 <http://localhost:4321/openzim-mcp/>, not the bare root, which returns 404
-because `base: '/openzim-mcp'` is set for GitHub Pages. Astro's dev server
-detaches, so stop it with `cd website && npx astro dev stop` rather than
-Ctrl-C alone.
+because `base: '/openzim-mcp'` is set for GitHub Pages. In a terminal the dev
+server runs in the foreground, so Ctrl-C stops it. It detaches only when started
+with `--background`, or when Astro detects an AI-agent environment (except on
+Windows); stop a detached server with `cd website && npx astro dev stop`.
 
 Each page under `website/src/content/docs/` needs four frontmatter fields:
 `title`, `summary`, `group` (the allowed values are the `z.enum` in
@@ -336,6 +345,14 @@ Some doc facts are gated by tests rather than review — see
 `tests/test_docs_freshness.py` for the schema footprint, version declarations
 and API-reference signature parity, and `tests/test_mcpb_distribution.py` for
 the release-please-stamped files.
+
+Tool descriptions (`openzim_mcp/tools/*_description.md`) face three gates of
+their own: the byte budget in `tests/test_phase_f_schema_budget.py` (the whole
+advanced surface and each tool's allocation), prototype parity in
+`tests/test_phase_f_prototype_parity.py` (each tool within ±5% of its
+prototype's bytes and 30% edit distance of its description), and the
+allocation pins, where each `ALLOCATION` row's `# <n>B` comment must equal
+that tool's measured bytes, so re-pin it in the same commit as the edit.
 
 ### Test Markers
 
@@ -388,7 +405,7 @@ open htmlcov/index.html
 1. **Run all checks**: `make check`
 2. **Update tests** for new functionality
 3. **Update documentation** if needed
-4. **Add changelog entry** if user-facing change
+4. **Write the PR title as a Conventional Commit** (`fix: …`, `feat: …`): PRs are squash-merged, so the title becomes the commit release-please reads and the line it writes into the changelog. Never edit `CHANGELOG.md` by hand; release-please generates it
 5. **Ensure CI passes** on your branch
 
 ### PR Guidelines
@@ -401,29 +418,10 @@ open htmlcov/index.html
 
 ### PR Template
 
-When creating a PR, include:
-
-```markdown
-## Description
-Brief description of changes
-
-## Type of Change
-- [ ] Bug fix
-- [ ] New feature
-- [ ] Breaking change
-- [ ] Documentation update
-
-## Testing
-- [ ] Tests pass locally
-- [ ] New tests added for new functionality
-- [ ] Integration tests pass
-
-## Checklist
-- [ ] Code follows style guidelines
-- [ ] Self-review completed
-- [ ] Documentation updated
-- [ ] Changelog updated (if needed)
-```
+GitHub fills a new PR's description from
+[`.github/pull_request_template.md`](.github/pull_request_template.md); work
+through that rather than a copy kept here. The squash merge uses the PR title
+as the commit title and the PR description as the commit body.
 
 ## Bug Reports
 
@@ -499,16 +497,20 @@ Include:
 
 ## Issue Labels
 
-We use labels to categorize issues:
+We use these labels to triage issues and PRs (`gh label list` shows the full set):
 
-- **bug**: Something isn't working
-- **enhancement**: New feature or improvement
-- **documentation**: Documentation improvements
+- **bug**: Something isn't working (the bug report form applies it)
+- **enhancement**: New feature or request (the feature request and infrastructure forms apply it)
+- **documentation**: Improvements or additions to documentation
 - **good first issue**: Good for newcomers
-- **help wanted**: Extra attention needed
-- **security**: Security-related issues
-- **performance**: Performance improvements
-- **testing**: Testing improvements
+- **help wanted**: Extra attention is needed
+- **question**: Further information is requested
+- **duplicate**, **invalid**, **wontfix**: Triage outcomes
+
+Bots apply the rest. Dependabot adds `dependencies` to most of its PRs, plus
+`python:uv` or `javascript` for those ecosystems; release-please marks its
+release PRs `autorelease: pending` and then `autorelease: tagged`. `v2` and the
+`v2-phase-*` labels are left over from the v2 effort.
 
 ## Development Focus Areas
 
@@ -614,12 +616,15 @@ git push origin v<X.Y.Z>
 
 `release.yml` and `docker-publish.yml` fire directly on the tag push and run the normal release pipeline.
 
+The tagged commit must already carry `X.Y.Z` in `pyproject.toml`, `.release-please-manifest.json`, `server.json` (both `version` and `packages[0].version`) and `packaging/mcpb/manifest.json`. This path skips `release-please.yml`, whose `validate-release` job is the only check of those files against the tag. `release.yml` builds whatever version `pyproject.toml` declares, and its PyPI step has `skip-existing: true`, so a version already on PyPI is skipped without an error. The first thing to notice a mismatch is the `publish-registry` job, which compares `server.json`'s `packages[0].version` with the tag only after the PyPI step.
+
 ### Troubleshooting
 
 - **No release PR after merging commits**: check commit messages are conventional. Only the `hidden: true` types (`chore`, `ci`, `build`, `test`, `style`) fail to bump a version on their own.
 - **`test_no_unannotated_current_version_claims` fails after a release**: a doc states the new version without an `x-release-please-version` marker, or `_HISTORICAL_VERSIONS` in `tests/test_mcpb_distribution.py` has not been given the *previous* version yet. `release-please.yml`'s `sync-uv-lock` job runs `tests/test_mcpb_distribution.py` against the release-PR branch, so this gate now fires before the tag is pushed — add the previous version to `_HISTORICAL_VERSIONS` while the release PR is still open, not as a follow-up on `main`.
 - **Version sync failure**: `pyproject.toml`, `.release-please-manifest.json`, `server.json` (both version fields), and `packaging/mcpb/manifest.json` must agree on the version (`openzim_mcp/__init__.py` is intentionally excluded — it reads its version via `importlib.metadata`). If they drift (rare; usually a manual edit), align them in a follow-up PR.
 - **PyPI upload failure with "already exists"**: harmless; the workflow uses `skip-existing: true`. A true conflict (same version, different artifact) requires bumping the version.
+- **The tag and the draft release exist, but nothing was published**: `release-please.yml` failed after creating them (a transient error), so its `trigger-release` and `trigger-docker-publish` jobs never dispatched the pipelines. Dispatch both by hand: `gh workflow run release.yml -f tag=vX.Y.Z` and `gh workflow run docker-publish.yml -f tag=vX.Y.Z`. Do this only after a transient failure: if `validate-release` failed, the files at the tag disagree on the version, and dispatching would release them as they are.
 
 ### Source files
 
