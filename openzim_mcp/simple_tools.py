@@ -2862,9 +2862,31 @@ class SimpleToolsHandler(
                 "**Example**: 'suggestions for bio' or "
                 "'autocomplete \"evol\"'"
             )
-        return self.zim_operations.get_search_suggestions(
-            zim_file_path, partial_query, options.get("limit", 10)
+        # The suggestion index caps at 50 while ``zim_query`` documents
+        # 1..1000; unreconciled, 51+ reached the backend's rejection and came
+        # back as the generic "Error Processing Query".
+        limit, limit_note = self._clamp_intent_limit(
+            options.get("limit", 10), cap=50, default=10
         )
+        if not limit_note:
+            return self.zim_operations.get_search_suggestions(
+                zim_file_path, partial_query, limit
+            )
+        # This body is JSON, and the compact cap shrinks a JSON body by
+        # re-parsing it: the note the markdown intents append after their
+        # body would stop it parsing, and the character slice that follows
+        # cuts the note too. Carry it inside the payload — on a copy, because
+        # the data layer caches the dict it returns.
+        payload: Dict[str, Any] = dict(
+            self.zim_operations.get_search_suggestions_data(
+                zim_file_path, partial_query, limit
+            )
+        )
+        payload["note"] = limit_note.strip()
+        meta = payload.get("_meta")
+        if isinstance(meta, dict):
+            payload["_meta"] = dict(meta)
+        return json.dumps(remeasure(payload), indent=2, ensure_ascii=False)
 
     def _handle_filtered_search(
         self,
@@ -4313,12 +4335,17 @@ class SimpleToolsHandler(
     ) -> "Union[str, _HandlerResult]":
         # Honour caller-supplied ``limit`` (mapped to ``limit_per_file`` for
         # symmetry with other tools) and fall back to 5 — matching
-        # ``search_zim_file``'s explicit ``limit_per_file=5`` default.
+        # ``search_zim_file``'s explicit ``limit_per_file=5`` default. The
+        # fan-out caps ``limit_per_file`` at 50 while ``zim_query`` documents
+        # 1..1000, so clamp rather than let 51+ reach the backend's rejection.
+        limit, limit_note = self._clamp_intent_limit(
+            options.get("limit", 5), cap=50, default=5
+        )
         if options.get("compact", False):
             actual_query = params.get("query", query)
             data = self.zim_operations.search_all_data(
                 actual_query,
-                limit_per_file=options.get("limit", 5),
+                limit_per_file=limit,
             )
             # ``search all files for X`` is the one phrase the *ambiguous*
             # arm of the no-archive gate actively advertises, so a user who
@@ -4374,10 +4401,15 @@ class SimpleToolsHandler(
                 isinstance(e, dict) and e.get("error") for e in per_file
             ):
                 reason = "archive_unavailable"
-            return _HandlerResult(body=body, reason=reason, suggestions=suggestions)
+            return _HandlerResult(
+                body=body + limit_note, reason=reason, suggestions=suggestions
+            )
+        # Non-compact returns a JSON string, so — as on the links and related
+        # legacy paths — the clamp is not appended as prose; each file's
+        # ``page_info.limit`` still reports the size actually served.
         legacy = self.zim_operations.search_all(
             params.get("query", query),
-            limit_per_file=options.get("limit", 5),
+            limit_per_file=limit,
         )
         # Same signal, read out of the legacy JSON string variant. This is
         # this server's own envelope (``search_all`` is a ``json.dumps`` of

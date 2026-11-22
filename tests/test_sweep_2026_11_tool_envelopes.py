@@ -304,3 +304,94 @@ class TestSynthesizeRefusesSizeArguments:
         assert plain_error is not True, plain_text[:300]
         if "compact_budget" in extra and extra["compact_budget"] == "tiny":
             assert len(plain_text) < 2_500, len(plain_text)
+
+
+def _embedded_json(text: str) -> Dict[str, Any]:
+    """The JSON object inside a (possibly fenced, footered) response."""
+    return json.loads(text[text.index("{") : text.rfind("}") + 1])
+
+
+_CLAMP_NOTE = "exceeds this operation's maximum of 50"
+
+
+class TestLimitPastTheFiftyCapIsClamped:
+    """``limit`` 51..1000 sank ``suggestions for`` and ``search all files``.
+
+    ``zim_query`` documents 1..1000, both backends stop at 50, and neither
+    handler reconciled the two: the call came back as the generic "Error
+    Processing Query" telling the client to "check server logs", with a
+    traceback logged at ERROR. ``links in`` and ``articles related to``
+    already clamp and say so.
+    """
+
+    @pytest.mark.asyncio
+    async def test_suggestions_clamp_and_say_so_inside_the_json(
+        self, withns: Path
+    ) -> None:
+        base = {"query": "suggestions for clim", "zim_file_path": str(withns / _MINI)}
+        async with _session(withns, "simple") as session:
+            is_error, text, _ = await _call(
+                session, "zim_query", {**base, "limit": 100}
+            )
+            _, wide, _ = await _call(
+                session, "zim_query", {**base, "limit": 100, "compact": False}
+            )
+            ok_error, ok_text, _ = await _call(
+                session, "zim_query", {**base, "limit": 50}
+            )
+
+        assert is_error is not True, text[:300]
+        assert "Error Processing Query" not in text
+        # The body is still JSON — the compact cap shrinks it structurally —
+        # and the clamp is stated inside it rather than after the brace.
+        payload = _embedded_json(text)
+        assert payload["results"], payload
+        assert len(payload["results"]) <= 50
+        assert "`limit=100`" in payload["note"], payload
+        assert _CLAMP_NOTE in payload["note"], payload
+        # The added key is counted in the size the payload reports.
+        uncapped = _embedded_json(wide)
+        body = {k: v for k, v in uncapped.items() if k != "_meta"}
+        assert uncapped["_meta"]["chars"] == len(json.dumps(body, ensure_ascii=False))
+        # Positive pair: an in-range limit carries no note.
+        assert ok_error is not True, ok_text[:300]
+        assert "note" not in _embedded_json(ok_text)
+
+    @pytest.mark.asyncio
+    async def test_suggestions_note_never_reaches_the_cached_page(
+        self, withns: Path
+    ) -> None:
+        """The data layer caches the page under the clamped limit, which an
+        in-range ``limit=50`` call then reads back; the note must ride on a
+        copy, or it leaks into every later answer for that prefix."""
+        base = {"query": "suggestions for clim", "zim_file_path": str(withns / _MINI)}
+        # ``compact=False`` keeps the size cap out of the comparison, so the
+        # in-range page is compared whole, ``_meta`` included.
+        exact = {**base, "limit": 50, "compact": False}
+        async with _session(withns, "simple", cache=True) as session:
+            _, before, _ = await _call(session, "zim_query", exact)
+            _, clamped, _ = await _call(session, "zim_query", {**base, "limit": 100})
+            _, after, _ = await _call(session, "zim_query", exact)
+
+        assert _CLAMP_NOTE in _embedded_json(clamped)["note"]
+        assert "note" not in _embedded_json(after), after[-400:]
+        assert _embedded_json(after) == _embedded_json(before)
+
+    @pytest.mark.asyncio
+    async def test_search_all_clamps_and_says_so(self, withns: Path) -> None:
+        base = {"query": "search all files for carbon tax"}
+        async with _session(withns, "simple") as session:
+            is_error, text, _ = await _call(
+                session, "zim_query", {**base, "limit": 100}
+            )
+            ok_error, ok_text, _ = await _call(
+                session, "zim_query", {**base, "limit": 5}
+            )
+
+        assert is_error is not True, text[:300]
+        assert "Error Processing Query" not in text
+        assert "`A/Carbon_tax`" in text, text[:500]
+        assert f"`limit=100` {_CLAMP_NOTE}" in text, text[-600:]
+        assert ok_error is not True, ok_text[:300]
+        assert "`A/Carbon_tax`" in ok_text
+        assert _CLAMP_NOTE not in ok_text
