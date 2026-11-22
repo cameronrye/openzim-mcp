@@ -71,8 +71,10 @@ body:
       placeholder: |
         - OS: [e.g., Ubuntu 22.04, Windows 11, macOS 14]
         - Python version: [e.g., 3.12.1]
-        - openzim-mcp version: [e.g., 0.2.0]
-        - Installation method: [e.g., uv, pip, git clone]
+        - openzim-mcp version: [output of `openzim-mcp --version`]
+        - Installation method: [e.g., uv, pip, Docker, .mcpb, git clone]
+        - Tool mode and transport: [e.g., simple + stdio, advanced + http]
+        - MCP client: [e.g., Claude Desktop, Cursor, a custom client]
         - ZIM file(s): [e.g., wikipedia_en_100_2025-08.zim]
     validations:
       required: true
@@ -96,11 +98,11 @@ body:
     id: severity
     attributes:
       label: Severity
-      description: How severe is this bug?
+      description: How severe is this bug? A security vulnerability does not belong in a public issue; report it privately through [GitHub Private Vulnerability Reporting](https://github.com/cameronrye/openzim-mcp/security/advisories/new), as SECURITY.md describes.
       options:
         - Low - Minor inconvenience
         - Medium - Affects functionality but has workaround
         - High - Blocks important functionality
-        - Critical - Security issue or data loss
+        - Critical - Data loss (a security vulnerability goes to private reporting instead, see SECURITY.md)
     validations:
       required: true

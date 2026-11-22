@@ -79,7 +79,7 @@
 - [ ] Code is self-documenting with clear variable/function names
 - [ ] Docstrings added/updated for new/changed functions
 - [ ] README.md updated (if user-facing changes)
-- [ ] CHANGELOG.md updated (if notable change)
+- [ ] PR title is a Conventional Commit (it becomes the CHANGELOG entry; CHANGELOG.md is generated)
 - [ ] API documentation updated (if API changes)
 
 ## Backward Compatibility

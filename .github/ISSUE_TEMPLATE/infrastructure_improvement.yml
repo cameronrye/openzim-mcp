@@ -1,7 +1,7 @@
 name: 🏗️ Infrastructure Improvement
 description: Suggest improvements to project infrastructure, CI/CD, or development tools
 title: "[INFRA] "
-labels: ["infrastructure", "enhancement"]
+labels: ["enhancement"]
 assignees:
   - cameronrye
 
