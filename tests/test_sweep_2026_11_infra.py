@@ -454,3 +454,51 @@ class TestCachedValidationFollowsTheSidecar:
         assert out["has_link_graph"] is False
         assert "link_graph" not in out
         assert out["uuid"] != "restored"
+
+
+class TestInlineMediaGetsNoInventedPath:
+    """A ``data:`` image's media row was given ``<source dir>/data:…``.
+
+    ``_resolve_link_to_entry_path`` treated only ``://`` and ``//`` as not
+    relative, so every inline image was joined onto the page's directory:
+    175 rows on IEP ``lesniewski-logic/``, 706 KB of a 1.4 MB response, and
+    not one of those paths fetches anything.
+    """
+
+    _PIXEL = (
+        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAA"
+        "DUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+    )
+
+    def test_a_non_navigable_src_ships_without_a_path(self, tmp_path: Path) -> None:
+        from tests.test_fr_namespace_browse import _AssetItem
+
+        zim = tmp_path / "inline.zim"
+        source = "iep.utm.edu/lesniewski-logic/"
+        with Creator(str(zim)).config_indexing(True, "eng") as creator:
+            creator.add_item(
+                _HtmlItem(
+                    source,
+                    "Lesniewski",
+                    f'<html><body><p><img src="{self._PIXEL}" alt="formula">'
+                    '<img src="about:blank" alt="unarchived">'
+                    '<img src="../media/portrait.png" alt="portrait">'
+                    '<img src="File:Diagram.png" alt="colon">'
+                    "</p></body></html>",
+                )
+            )
+            creator.add_item(
+                _AssetItem("iep.utm.edu/media/portrait.png", "image/png", "png")
+            )
+            creator.set_mainpath(source)
+        ops = _ops(tmp_path)
+
+        media = ops.extract_article_links_data(str(zim), source, kind="media")
+        rows = {row["alt"]: row for row in media["results"]}
+
+        assert rows["portrait"]["path"] == "iep.utm.edu/media/portrait.png"
+        # A colon is not a scheme: mwoffliner names entries ``File:…``.
+        assert rows["colon"]["path"] == f"{source}File:Diagram.png"
+        assert rows["formula"]["url"] == self._PIXEL
+        assert "path" not in rows["formula"], rows["formula"]
+        assert "path" not in rows["unarchived"], rows["unarchived"]

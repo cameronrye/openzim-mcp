@@ -1981,6 +1981,15 @@ class _StructureMixin:
         # filters most, but be defensive in case callers pass raw HTML refs.
         if "://" in url or url.startswith("//"):
             return None
+        # Nothing filters a media row's ``src``, and a ``data:`` URI has no
+        # ``://``: each inline image was joined onto the source directory as
+        # an unfetchable ``path`` (175 of them, 706 KB, on one IEP page). The
+        # explicit list, not any ``word:`` prefix: ``Category:Physics`` is a
+        # relative href to a real entry.
+        from openzim_mcp.content_processor import NON_NAVIGABLE_LINK_SCHEMES
+
+        if url.lower().startswith(NON_NAVIGABLE_LINK_SCHEMES):
+            return None
         # Strip query string and fragment; ZIM entries don't carry them.
         for sep in ("#", "?"):
             if sep in url:
