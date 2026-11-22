@@ -136,3 +136,35 @@ class TestLinksCursorAcceptsLeadingSlash:
         )
         assert error is not None
         assert "A/Dog" in str(error)
+
+
+class TestSubstitutionNoteSurvivesTheSizeCapRefit:
+    """Two fixes meet in ``_handle_get_article``.
+
+    One names a substituted article ("No entry is named ..."); the other
+    re-fetches an over-budget compact page smaller so its own
+    ``content_offset`` hint survives the cap. The note has to ride inside the
+    re-fetch, or the page the cap keeps is the one without it.
+    """
+
+    def test_tiny_budget_keeps_the_note_and_the_hint(self, climate_zim: Path) -> None:
+        import re
+
+        config = OpenZimMcpConfig(
+            allowed_directories=[str(climate_zim.parent)],
+            tool_mode="simple",
+            cache=CacheConfig(enabled=False),
+        )
+        handler = OpenZimMcpServer(config).simple_tools_handler
+
+        out = handler.handle_zim_query(
+            "get article Evolution",
+            str(climate_zim),
+            options={"compact": True, "compact_budget": "tiny"},
+        )
+
+        assert isinstance(out, str)
+        assert len(out) <= 2000, len(out)
+        assert 'No entry is named "Evolution"' in out, out[:400]
+        assert "A/Biodiversity" in out
+        assert re.search(r"content_offset=\d+", out), out[-400:]
