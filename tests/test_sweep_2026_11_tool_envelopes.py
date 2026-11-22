@@ -888,3 +888,79 @@ class TestSummarizePromptRanksByMention:
         counts = [row["mention_count"] for row in body["results"]]
         assert paths and len(set(paths)) == len(paths), paths
         assert counts == sorted(counts, reverse=True) and counts[0] > 1, counts
+
+
+@pytest.fixture
+def nons(zim_test_data_dir: Optional[Path]) -> Path:
+    """The testing-suite directory holding the new-scheme small.zim."""
+    if zim_test_data_dir is None:
+        pytest.skip("ZIM_TEST_DATA_DIR not set")
+    directory = zim_test_data_dir / "nons"
+    if not (directory / "small.zim").exists():
+        pytest.skip("nons/small.zim not in the corpus")
+    return directory
+
+
+class TestEntryResourceServesWellKnownPaths:
+    """``zim://<name>/entry/W%2FmainPage`` answered "Entry not found".
+
+    ``zim_browse`` lists ``W/mainPage`` on a new-scheme archive and
+    ``zim_get`` serves it, but it is not a literal entry — it stands for the
+    archive's main entry — and the resource looked it up verbatim.
+    """
+
+    @pytest.mark.asyncio
+    async def test_main_page_resource_serves_the_main_entry(self, nons: Path) -> None:
+        archive = str(nons / "small.zim")
+        async with _session(nons, "advanced") as session:
+            _, _, listing = await _call(
+                session, "zim_browse", {"zim_file_path": archive, "namespace": "W"}
+            )
+            well_known = await session.read_resource("zim://small/entry/W%2FmainPage")
+            literal = await session.read_resource("zim://small/entry/main.html")
+
+        assert "W/mainPage" in [row["path"] for row in listing["results"]]
+        (content,) = well_known.contents
+        assert content.mime_type == "text/html", content
+        assert content.text, content
+        # Positive pair: the same bytes as the entry it stands for.
+        assert content.text == literal.contents[0].text
+
+    @pytest.mark.asyncio
+    async def test_an_archive_without_a_main_page_is_a_caller_error(
+        self, nons: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The rewrite raises not-found for an archive that declares no main
+        page; it must keep the -32602 a missing entry gets, not the -32603
+        retry-inviting internal error."""
+        from unittest.mock import MagicMock
+
+        from mcp.shared.exceptions import MCPError
+        from mcp_types import INVALID_PARAMS
+
+        from openzim_mcp.tools import resource_tools
+
+        archive = MagicMock()
+        archive.has_new_namespace_scheme = True
+        # libzim's own answers: no main entry, and no literal W/mainPage.
+        type(archive).main_entry = property(
+            lambda _self: (_ for _ in ()).throw(RuntimeError("no main entry"))
+        )
+        archive.get_entry_by_path.side_effect = KeyError("Cannot find entry")
+
+        class _Open:
+            def __enter__(self) -> Any:
+                return archive
+
+            def __exit__(self, *_exc: Any) -> bool:
+                return False
+
+        monkeypatch.setattr(resource_tools, "zim_archive", lambda *_a, **_k: _Open())
+        async with _session(nons, "advanced") as session:
+            with pytest.raises(MCPError) as caught:
+                await session.read_resource("zim://small/entry/W%2FmainPage")
+
+        assert caught.value.code == INVALID_PARAMS, caught.value
+        assert "declares no main page" in caught.value.message, caught.value
+        # Advanced-mode recovery: the resource surface is advanced-only.
+        assert "zim_search()" in caught.value.message, caught.value

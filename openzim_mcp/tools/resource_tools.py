@@ -32,8 +32,13 @@ from mcp_types import INTERNAL_ERROR, INVALID_PARAMS
 from pydantic import ConfigDict, Field
 
 from ..constants import INPUT_LIMIT_ENTRY_PATH
-from ..exceptions import OpenZimMcpArchiveError, OpenZimMcpValidationError
+from ..exceptions import (
+    OpenZimMcpArchiveError,
+    OpenZimMcpEntryNotFoundError,
+    OpenZimMcpValidationError,
+)
 from ..security import sanitize_input
+from ..zim.content import rewrite_well_known_path
 from ..zim.redirects import resolve_redirect_chain
 from ..zim_operations import zim_archive
 from ._common import enforce_rate_limit
@@ -162,6 +167,7 @@ class ZimEntryResource(Resource):
     archive_path: str = Field(description="Resolved path to the ZIM file")
     entry_path: str = Field(description="Decoded entry path inside the archive")
     path_validator: Any = Field(default=None, exclude=True, repr=False)
+    tool_mode: str = Field(default="simple", exclude=True, repr=False)
 
     async def read(self) -> Union[str, bytes]:
         """Read the entry, set ``self.mime_type`` to the libzim native MIME."""
@@ -171,7 +177,14 @@ class ZimEntryResource(Resource):
             validated = self.path_validator.validate_zim_file(validated)
 
             with zim_archive(validated) as archive:
-                entry = archive.get_entry_by_path(self.entry_path)
+                # ``W/mainPage`` is what zim_browse lists for a new-scheme
+                # archive's landing page, and zim_get serves it, but it is
+                # not a literal entry: looked up verbatim, the one surface
+                # that reads raw bytes answered "Entry not found" for it.
+                entry_path = rewrite_well_known_path(
+                    archive, self.entry_path, tool_mode=self.tool_mode
+                )
+                entry = archive.get_entry_by_path(entry_path)
                 # libzim raises RuntimeError if get_item() is called on a
                 # redirect entry, so walk the chain (bounded against cycles)
                 # before reading the body.
@@ -202,6 +215,11 @@ class ZimEntryResource(Resource):
                     f"{Path(self.archive_path).stem!r}."
                 ),
             ) from exc
+        except OpenZimMcpEntryNotFoundError as exc:
+            # The well-known rewrite's miss (an archive that declares no main
+            # page) is the same caller mistake as the KeyError above, so it
+            # keeps that code rather than the archive-error branch's -32603.
+            raise MCPError(code=INVALID_PARAMS, message=str(exc)) from exc
         except OpenZimMcpArchiveError as exc:
             # SDK v2's ``read_resource`` forwards only ``MCPError`` and
             # ``ResourceError`` verbatim; every other exception type is
@@ -331,6 +349,7 @@ class ZimEntryTemplate(ResourceTemplate):
             archive_path=target_path,
             entry_path=decoded_path,
             path_validator=self.server_ref.path_validator,
+            tool_mode=self.server_ref.config.tool_mode,
         )
 
 
