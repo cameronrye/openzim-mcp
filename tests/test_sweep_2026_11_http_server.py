@@ -20,6 +20,7 @@ from openzim_mcp import http_app
 from openzim_mcp.config import OpenZimMcpConfig
 from openzim_mcp.exceptions import OpenZimMcpConfigurationError
 from openzim_mcp.server import OpenZimMcpServer
+from tests._http_helpers import build_health_app
 
 _MODERN = "2026-07-28"
 _MODERN_META = {
@@ -378,7 +379,7 @@ class TestForwardedForMintsNoBucket:
                 return None
 
         monkeypatch.setattr(uvicorn, "Server", _NoServe)
-        app = http_app.build_starlette_app(object())  # type: ignore[arg-type]
+        app = build_health_app(object())  # type: ignore[arg-type]
         http_app._default_uvicorn_runner(app, "127.0.0.1", 8000)
         return built[0]
 
@@ -400,7 +401,7 @@ class TestForwardedForMintsNoBucket:
         import uvicorn
         from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
-        config = uvicorn.Config(http_app.build_starlette_app(object()))  # type: ignore[arg-type]
+        config = uvicorn.Config(build_health_app(object()))  # type: ignore[arg-type]
         config.load()
         assert isinstance(config.loaded_app, ProxyHeadersMiddleware)
 
