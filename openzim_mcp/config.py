@@ -4,13 +4,14 @@ import hashlib
 import json
 import logging
 from pathlib import Path
-from typing import List, Literal, Optional
+from typing import Any, List, Literal, Optional, Self
 
-from pydantic import BaseModel, Field, SecretStr, field_validator
+from pydantic import BaseModel, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from .defaults import CACHE, CONTENT, META, SEARCH, VALID_TOOL_MODES
 from .exceptions import OpenZimMcpConfigurationError
+from .instructions import BOTH_INSTRUCTION_SOURCES_SET, instructions_path_from, is_blank
 from .rate_limiter import RateLimitConfig
 
 __all__ = [
@@ -512,6 +513,25 @@ class OpenZimMcpConfig(BaseSettings):
             "OPENZIM_MCP_PRESETS_OVERRIDE_PATH. Absent => bundled defaults only."
         ),
     )
+    instructions: Optional[str] = Field(
+        default=None,
+        description=(
+            "Server instructions sent to clients in place of the built-in "
+            "text. Loaded from OPENZIM_MCP_INSTRUCTIONS. The token {{default}} "
+            "expands to the built-in text for the running tool_mode. Blank "
+            "counts as unset. Mutually exclusive with instructions_path."
+        ),
+    )
+    instructions_path: Optional[Path] = Field(
+        default=None,
+        description=(
+            "A UTF-8 file holding the server instructions, read once at "
+            "startup under the same rules as instructions. Loaded from "
+            "OPENZIM_MCP_INSTRUCTIONS_PATH. Blank counts as unset; a path that "
+            "is set but missing, unreadable, not UTF-8, empty or over 16 KiB "
+            "stops the server at startup."
+        ),
+    )
 
     model_config = SettingsConfigDict(
         env_prefix="OPENZIM_MCP_",
@@ -611,6 +631,38 @@ class OpenZimMcpConfig(BaseSettings):
             )
         return v
 
+    @field_validator("instructions", mode="before")
+    @classmethod
+    def blank_instructions_are_unset(cls, v: Any) -> Any:
+        """Treat a blank ``OPENZIM_MCP_INSTRUCTIONS`` as unset.
+
+        Templates render an unset variable as ``""``; that has to keep the
+        built-in text, not replace it with nothing. The content itself is
+        validated when the server resolves it (``resolve_instructions``).
+        """
+        return None if is_blank(v) else v
+
+    @field_validator("instructions_path", mode="before")
+    @classmethod
+    def normalize_instructions_path(cls, v: Any) -> Any:
+        """Blank is unset; otherwise strip and expand ``~``, without resolving.
+
+        Not checked for existence here: the server reads the file at startup
+        and reports every way it can be unusable in one place.
+        """
+        return instructions_path_from(v)
+
+    @model_validator(mode="after")
+    def reject_both_instruction_sources(self) -> Self:
+        """Refuse ``OPENZIM_MCP_INSTRUCTIONS`` and ``_PATH`` together.
+
+        Either one silently winning would leave the operator reading the
+        wrong source when the served text surprises them.
+        """
+        if self.instructions is not None and self.instructions_path is not None:
+            raise OpenZimMcpConfigurationError(BOTH_INSTRUCTION_SOURCES_SET)
+        return self
+
     def setup_logging(self) -> None:
         """Configure logging based on settings."""
         logging.basicConfig(
@@ -659,6 +711,14 @@ class OpenZimMcpConfig(BaseSettings):
             "rate_limit_enabled": self.rate_limit.enabled,
             "rate_limit_rps": self.rate_limit.requests_per_second,
             "rate_limit_burst": self.rate_limit.burst_size,
+            # Operator instructions change what every client is told. A
+            # file's *content* is not covered: the config never reads it
+            # (the server does, at startup), so replicas that mount different
+            # files at the same path still hash alike.
+            "instructions": self.instructions,
+            "instructions_path": (
+                None if self.instructions_path is None else str(self.instructions_path)
+            ),
         }
 
         # Convert to JSON string with sorted keys for consistent hashing

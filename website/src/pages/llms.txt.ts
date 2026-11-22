@@ -299,6 +299,7 @@ export OPENZIM_MCP_CACHE__MAX_SIZE=1000        # default 100
 export OPENZIM_MCP_CACHE__TTL_SECONDS=14400    # default 3600
 export OPENZIM_MCP_CONTENT__MAX_CONTENT_LENGTH=200000  # default 100000
 export OPENZIM_MCP_LOGGING__LEVEL=INFO
+export OPENZIM_MCP_INSTRUCTIONS_PATH=/etc/openzim-mcp/instructions.md  # replaces the server instructions; {{default}} in it keeps the built-in text
 \`\`\`
 
 Full reference: ${SITE}/docs/configuration/

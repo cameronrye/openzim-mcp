@@ -421,6 +421,17 @@ class EnvelopeAwareMCPServer(MCPServer):
         self._archive_read_ttl_ms = archive_read_ttl_ms
         self._sole_archive = sole_archive
 
+    def registered_tool_names(self) -> list[str]:
+        """The names of the tools registered so far, in registration order.
+
+        The SDK's one public enumerator is the async ``list_tools``, which
+        cannot run inside ``OpenZimMcpServer.__init__``: the session harness
+        builds servers inside a running event loop. The tool manager's own
+        listing is synchronous, and this class already owns that seam (the
+        ``unknown_tool`` envelope reads it too).
+        """
+        return [tool.name for tool in self._tool_manager.list_tools()]
+
     def _sole_archive_path(self) -> Optional[str]:
         """The lone loaded archive, or ``None`` — never raising.
 
