@@ -20,6 +20,7 @@ import openzim_mcp.zim_operations as _zim_ops_mod
 from openzim_mcp.constants import NAMESPACE_MAX_ENTRIES, NAMESPACE_MAX_SAMPLE_SIZE
 from openzim_mcp.exceptions import (
     OpenZimMcpArchiveError,
+    OpenZimMcpCursorMismatchError,
     OpenZimMcpValidationError,
 )
 from openzim_mcp.meta import attach_meta
@@ -989,7 +990,7 @@ class _NamespaceMixin:
                     tool="browse_namespace",
                 )
             except CursorMismatchError as e:
-                raise OpenZimMcpValidationError(str(e)) from e
+                raise OpenZimMcpCursorMismatchError(str(e)) from e
 
         # Cache key bumped v2c -> v2d: new-scheme C now treats ``offset`` as a
         # content-row offset (skip N real rows) rather than a raw entry-id
@@ -2106,7 +2107,7 @@ class _NamespaceMixin:
                     tool="walk_namespace",
                 )
             except CursorMismatchError as e:
-                raise OpenZimMcpValidationError(str(e)) from e
+                raise OpenZimMcpCursorMismatchError(str(e)) from e
 
         try:
             with _zim_ops_mod.zim_archive(validated) as archive:
