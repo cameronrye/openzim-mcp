@@ -1931,10 +1931,16 @@ class IntentParser:
         2-4 miss the lookup and pass through unchanged; ASCII values
         keep Rule 1's lowercase contract. Mutates ``params`` in place
         and returns it for chaining."""
-        lowered = original_query.lower()
-        # Rare code points lowercase to a different length (``İ`` ->
-        # ``i̇``), which shifts every index past them; skip rather than
-        # slice the original at a misaligned offset.
+        # U+0130 ``İ`` is the one code point whose ``.lower()`` changes
+        # length (``i`` + U+0307), which shifts every index past it. This
+        # used to give up on the whole query instead, so ``get article
+        # A/İzmir`` looked up ``a/i̇zmir``, and one ``İ`` cost every other
+        # param its case too. Fold it to a single ``i`` so the haystack
+        # stays index-aligned with ``original_query``, and search for the
+        # value with its U+0307 dropped — the same recovery
+        # ``SimpleToolsHandler._recase_from_original`` uses.
+        fold = {0x130: "i"}
+        lowered = original_query.translate(fold).lower()
         if not original_query or len(lowered) != len(original_query):
             return params
 
@@ -1959,10 +1965,13 @@ class IntentParser:
                 )
             ):
                 return value
-            idx = lowered.find(value)
+            needle = value.translate(fold).replace("\u0307", "")
+            idx = lowered.find(needle)
             if idx < 0:
                 return value
-            restored = original_query[idx : idx + len(value)]
+            # ``len(needle)``, not ``len(value)``: each dropped U+0307
+            # stands for one ``İ`` in the original.
+            restored = original_query[idx : idx + len(needle)]
             return restored if restored.lower() == value else value
 
         for key, value in params.items():

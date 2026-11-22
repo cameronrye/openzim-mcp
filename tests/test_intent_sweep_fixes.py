@@ -430,3 +430,58 @@ class TestKeywordsInsideTopicsDoNotHijack:
         out = _ask(handler, sweep_zim, query)
         assert f"intent={intent} " in out, out[-300:]
         assert expect in out, out[:600]
+
+
+# ---------------------------------------------------------------------------
+# 5. Turkish dotted İ broke case restoration
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def unindexed_zim(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """No full-text index, so nothing downstream can recover a path the
+    parser lowercased — the shape of the wikibooks_be fixture that
+    ``_restore_nonascii_case`` was written for."""
+    out = tmp_path_factory.mktemp("intent-sweep-unindexed") / "unindexed.zim"
+    istanbul = (
+        "<html><body><h1>İstanbul</h1><p>İstanbul spans two continents.</p>"
+        "<h2 id='tarihce'>Tarihçe</h2>"
+        "<p>Byzantion was founded on the Bosphorus.</p></body></html>"
+    )
+    with Creator(out).config_indexing(False, "eng") as creator:
+        creator.add_item(
+            _HtmlItem(
+                "A/İzmir",
+                "İzmir",
+                _page("İzmir", "İzmir is a metropolitan city on the Aegean coast."),
+            )
+        )
+        creator.add_item(_HtmlItem("A/İstanbul", "İstanbul", istanbul))
+        creator.set_mainpath("A/İzmir")
+    return out
+
+
+class TestDottedCapitalIKeepsTheTypedCase:
+    """``İ`` lowercases to ``i`` + U+0307, so the lowercased query is
+    longer than the typed one and ``_restore_nonascii_case`` gave up on
+    the whole query: ``get article A/İzmir`` looked up ``a/i̇zmir``, which
+    an archive without a search index cannot recover."""
+
+    def test_a_path_with_a_dotted_capital_i_is_fetched(
+        self, unindexed_zim: Path
+    ) -> None:
+        out = _ask(_handler_for(unindexed_zim), unindexed_zim, "get article A/İzmir")
+        assert "Article not found" not in out, out[:400]
+        assert "metropolitan city on the Aegean coast" in out, out[:400]
+
+    def test_every_param_of_the_query_keeps_its_case(self, unindexed_zim: Path) -> None:
+        # Two non-ASCII params, and the one holding the İ is mid-query, so
+        # the restored slice must be measured without the U+0307 or it
+        # takes in the following space.
+        out = _ask(
+            _handler_for(unindexed_zim),
+            unindexed_zim,
+            "get article A/İstanbul section Tarihçe",
+        )
+        assert "Article not found" not in out, out[:400]
+        assert "Byzantion was founded on the Bosphorus" in out, out[:400]
