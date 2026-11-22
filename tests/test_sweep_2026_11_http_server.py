@@ -489,3 +489,67 @@ class TestHealthKeepsTheCacheDirectoryPrivate:
         error = cache.stats()["persistence_error"]
         assert error.count(str(target)) == 1, error
         assert "[Errno" not in error and "Not a directory" in error, error
+
+
+class TestSimpleModeOffersNoSubscriptions:
+    """Simple mode advertised resource subscriptions it has nothing to serve.
+
+    Resources are registered only in advanced mode, so a simple-mode server's
+    ``resources/list`` is empty. Over HTTP it built the subscription bus
+    anyway: ``server/discover`` said ``resources: {listChanged: true,
+    subscribe: true}``, ``subscriptions/listen`` was acknowledged, and a
+    directory watcher polled every five seconds to announce changes to
+    resources no client could list or read.
+    """
+
+    @staticmethod
+    def _capabilities(app: Any) -> Dict[str, Any]:
+        with TestClient(app, base_url="http://127.0.0.1:8791") as client:
+            payload = _post(client, "server/discover")
+        capabilities: Dict[str, Any] = payload["result"]["capabilities"]
+        return capabilities
+
+    def test_listen_is_method_not_found(self, tmp_path: Path) -> None:
+        from tests.test_stateless_http import _drive
+
+        server, app = _http_app(tmp_path)
+        assert server.config.tool_mode == "simple"
+        body, headers = _modern_request(
+            "subscriptions/listen", {"notifications": {"resourcesListChanged": True}}
+        )
+        with TestClient(app, base_url="http://127.0.0.1:8791") as client:
+            exchange = _drive(client, "POST", headers, json.dumps(body).encode())
+        assert not exchange.is_event_stream, "a listen stream was acknowledged"
+        assert json.loads(exchange.body)["error"]["code"] == -32601, exchange.body
+        assert server.subscription_bus is None
+
+    def test_discover_advertises_no_subscription(self, tmp_path: Path) -> None:
+        _server, app = _http_app(tmp_path)
+        resources = self._capabilities(app).get("resources") or {}
+        assert not resources.get("subscribe"), resources
+        assert not resources.get("listChanged"), resources
+
+    def test_no_watcher_polls_for_it(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import openzim_mcp.subscriptions as subscriptions
+
+        built: List[str] = []
+        real = subscriptions.MtimeWatcher
+
+        def counting(*args: Any, **kwargs: Any) -> Any:
+            built.append("watcher")
+            return real(*args, **kwargs)
+
+        monkeypatch.setattr(subscriptions, "MtimeWatcher", counting)
+        _http_app(tmp_path)
+        assert built == []
+        # Paired positive: the counter sees the advanced server's watcher.
+        _http_app(tmp_path, tool_mode="advanced")
+        assert built == ["watcher"]
+
+    def test_advanced_mode_still_offers_them(self, tmp_path: Path) -> None:
+        server, app = _http_app(tmp_path, tool_mode="advanced")
+        assert server.subscription_bus is not None
+        resources = self._capabilities(app)["resources"]
+        assert resources["subscribe"] is True and resources["listChanged"] is True

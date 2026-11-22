@@ -203,6 +203,7 @@ def test_l3_watcher_started_and_stopped_by_lifespan(tmp_path, monkeypatch):
     cfg = OpenZimMcpConfig(
         allowed_directories=[str(tmp_path)],
         transport="http",
+        tool_mode="advanced",
         subscriptions_enabled=True,
     )
     server = OpenZimMcpServer(cfg)

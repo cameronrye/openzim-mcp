@@ -502,6 +502,7 @@ class TestBoundedListenHandler:
         config = OpenZimMcpConfig(
             allowed_directories=[str(tmp_path)],
             transport="http",
+            tool_mode="advanced",
             subscriptions_enabled=True,
         )
         server = OpenZimMcpServer(config)

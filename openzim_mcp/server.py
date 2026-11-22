@@ -355,8 +355,17 @@ class OpenZimMcpServer:
         # The bus is the SDK's own fan-out for `subscriptions/listen`: it owns
         # the listener registry and the per-connection delivery that this
         # project previously hand-rolled against ServerSession internals.
+        #
+        # Advanced mode only, too: resources are registered only there (see
+        # ``register_phase_f_tools``), so a simple-mode bus advertised
+        # ``resources.subscribe``, acknowledged listen streams and ran a
+        # watcher, all for resources no client could list or read.
         self.subscription_bus = None
-        if config.subscriptions_enabled and config.transport == "http":
+        if (
+            config.subscriptions_enabled
+            and config.transport == "http"
+            and config.tool_mode != TOOL_MODE_SIMPLE
+        ):
             from mcp.server.subscriptions import InMemorySubscriptionBus
 
             self.subscription_bus = InMemorySubscriptionBus()

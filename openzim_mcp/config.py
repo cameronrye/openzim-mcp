@@ -500,8 +500,9 @@ class OpenZimMcpConfig(BaseSettings):
             "polling watcher is not started and the `subscriptions/listen` "
             "handler is not registered, so listen requests fail with "
             "method-not-found and the capability is not advertised. Only "
-            "meaningful on the HTTP transport: the watcher runs under the "
-            "HTTP lifespan, so a stdio server withholds the capability "
+            "meaningful on the HTTP transport in advanced mode: the watcher "
+            "runs under the HTTP lifespan and resources are registered only "
+            "in advanced mode, so any other server withholds the capability "
             "regardless of this setting."
         ),
     )
