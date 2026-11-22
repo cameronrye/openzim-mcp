@@ -1403,20 +1403,17 @@ class TestMarkdownLinkSoupStripping:
 
     def test_strip_handles_unclosed_link_gracefully(self):
         """A long unclosed ``[text](URL`` (no closing paren) is the kind
-        of malformed input where the underlying regex
-        ``(?:\\\\.|[^()\\n])*`` shape can backtrack quadratically. The
-        :func:`safe_regex_sub` wrapper bounds wall-clock time, and the
-        helper falls back to returning the original text on timeout.
-        Either way the call must not hang.
+        of malformed input where the old overlapping
+        ``(?:\\\\.|[^()\\n])*`` shape could backtrack quadratically. The
+        disjoint alternation rejects it in linear time, and with no
+        closing paren there is no link to strip, so the text comes back
+        unchanged.
         """
         # Pathological shape: opening bracket + opening paren + 50k chars
-        # of URL-shaped content with no closing paren. The ``\1``
-        # back-reference would also backtrack hard.
+        # of URL-shaped content with no closing paren.
         adversarial = "prose [link](" + "a" * 50_000
-        # Should return either the original (timeout fallback) or a
-        # processed form, but in any case should not loop.
         out = SimpleToolsHandler._strip_markdown_links(adversarial)
-        assert isinstance(out, str)
+        assert out == adversarial
 
     def test_strip_handles_no_brackets_short_circuit(self):
         """Performance: text without ``[`` short-circuits before the

@@ -76,8 +76,8 @@ def _strip_markdown_links_shared(text: str) -> str:
     """Strip ``[text](href)`` / ``![alt](src)`` markdown link soup.
 
     Delegates to the tested ``_CompactFormatMixin._strip_markdown_links``
-    (idempotent, timeout-bounded). Imported lazily to avoid an import-time
-    cycle between the ``zim`` package and ``compact_format``.
+    (idempotent, linear, never skipped under load). Imported lazily to avoid
+    an import-time cycle between the ``zim`` package and ``compact_format``.
     """
     from openzim_mcp.compact_format import _CompactFormatMixin
 

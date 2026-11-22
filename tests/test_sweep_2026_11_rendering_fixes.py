@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import unicodedata
 from pathlib import Path
-from typing import Any, Dict, Iterable, Tuple
+from typing import Any, Dict, Iterable, Optional, Tuple
 
 import pytest
 from libzim.writer import Creator
@@ -371,3 +371,103 @@ class TestSynthesizeBudgetCutLeavesNoOpenBold:
         # The budget still bit, just before the run rather than inside it.
         assert passage.endswith("plain29"), passage
         assert passage.replace("**", "").startswith("Big Rapids is a city"), passage
+
+
+@pytest.fixture
+def climate_zim(real_content_zim_files: Dict[str, Optional[Path]]) -> Path:
+    zim = real_content_zim_files.get("wikipedia_climate")
+    if zim is None:
+        pytest.skip("wikipedia_climate ZIM fixture not available")
+    return zim
+
+
+class TestCompactLinkStripSurvivesASaturatedRegexPool:
+    """A link-strip timeout cached a compact page with its links still in it.
+
+    The strip ran in the shared 8-worker regex pool under a 1 s timeout and,
+    on a timeout, returned the text unstripped while the payload still read
+    as good. That page was then measured, paged and cached under the compact
+    key: with the pool saturated, page 1 of ``A/Climate_change_in_the_Americas``
+    (cap 1500) carried 14 links, ``total_chars`` 2062 and ``more_at_offset``
+    1500, while page 2, once the pool was free, found a 941-char body with
+    nothing past offset 1500.
+    """
+
+    @staticmethod
+    async def _fetch_under_load(
+        monkeypatch: pytest.MonkeyPatch, archive: Path, **arguments: Any
+    ) -> Tuple[Any, Any, Any]:
+        """``(unloaded, under_load, afterwards)`` compact pages of one entry.
+
+        ``under_load`` is fetched while every strip call times out the way
+        ``safe_regex_sub`` does when all regex workers are busy;
+        ``afterwards`` repeats the request on the same caching server once
+        the pool is free, so it is answered from the cache.
+        """
+        from openzim_mcp import compact_format
+        from openzim_mcp.exceptions import RegexTimeoutError
+
+        mixin = compact_format._CompactFormatMixin
+        strip_patterns = (mixin._MARKDOWN_LINK_RE, mixin._MARKDOWN_IMAGE_RE)
+        real = compact_format.safe_regex_sub
+
+        def saturated(pattern: Any, *args: Any, **kwargs: Any) -> str:
+            if pattern in strip_patterns:
+                raise RegexTimeoutError("Regex operation timed out after 1.0 seconds")
+            return real(pattern, *args, **kwargs)
+
+        arguments = {"zim_file_path": str(archive), "compact": True, **arguments}
+        unloaded = await _call(
+            _server(archive.parent, cache=False), "zim_get", **arguments
+        )
+        server = _server(archive.parent)
+        monkeypatch.setattr(compact_format, "safe_regex_sub", saturated)
+        under_load = await _call(server, "zim_get", **arguments)
+        monkeypatch.setattr(compact_format, "safe_regex_sub", real)
+        afterwards = await _call(server, "zim_get", **arguments)
+        return unloaded, under_load, afterwards
+
+    @pytest.mark.asyncio
+    async def test_a_pool_timeout_neither_ships_nor_caches_link_markup(
+        self, climate_zim: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        pages = await self._fetch_under_load(
+            monkeypatch,
+            climate_zim,
+            entry_path="A/Climate_change_in_the_Americas",
+            max_content_length=1500,
+        )
+
+        unloaded = pages[0]
+        assert "Climate change in Canada" in unloaded["content"], unloaded
+        for page in pages:
+            assert "](" not in page["content"], page["content"][:400]
+            assert page == unloaded
+
+    @pytest.mark.asyncio
+    async def test_image_markup_is_stripped_under_load_too(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """html2text drops ``<img>``, so only a text entry carries ``![]()``."""
+
+        class _MarkdownItem(_HtmlItem):
+            def get_mimetype(self) -> str:
+                return "text/markdown"
+
+        archive = tmp_path / "readme.zim"
+        with Creator(archive).config_indexing(True, "eng") as creator:
+            creator.add_item(
+                _MarkdownItem(
+                    "A/Readme",
+                    "Readme",
+                    "See ![the logo](logo.png) and [the docs](docs.html) first.",
+                )
+            )
+            creator.set_mainpath("A/Readme")
+
+        pages = await self._fetch_under_load(
+            monkeypatch, archive, entry_path="A/Readme"
+        )
+
+        for page in pages:
+            assert page["content"] == "See  and the docs first.", page

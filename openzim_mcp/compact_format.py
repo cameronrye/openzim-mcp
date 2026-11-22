@@ -79,8 +79,8 @@ class _CompactFormatMixin:
     # could explore 2^n combinations on inputs like
     # ``[a](\\\\\\\\\\\\\\\\…`` before failing. The disjoint form is
     # semantically identical for well-formed input but unambiguous to
-    # the engine. ``safe_regex_sub`` still wraps the .sub() call as
-    # belt-and-suspenders defense-in-depth.
+    # the engine, which is why ``_strip_markdown_links`` can run it
+    # directly rather than through ``safe_regex_sub``.
     _MARKDOWN_LINK_RE = re.compile(r"\[([^\[\]]*?)\]\((?:[^()\n\\]|\\.)*\)")
     # ``![alt](src)`` image syntax — drop entirely; alt text is rarely
     # informative in Wikipedia exports and the URL is just a media-asset
@@ -662,25 +662,18 @@ class _CompactFormatMixin:
 
         Idempotent on already-stripped text and on non-markdown text.
 
-        Both regexes share the ``(?:\\.|[^()\\n])*`` shape, which can
-        backtrack quadratically against an unclosed ``[text](URL`` —
-        rare in well-formed Wikipedia exports but possible from
-        adversarial or corrupted backend output. The
-        :func:`safe_regex_sub` wrapper bounds wall-clock time; on
-        timeout we log and return the partially-processed text rather
-        than failing the whole query.
+        Both patterns run directly, not through :func:`safe_regex_sub`.
+        Their disjoint alternation keeps them linear (an unclosed
+        ``[text](URL`` scales n -> 2n), so the wrapper's timeout never
+        bounded real work. What it did do was give up after 1 s of
+        QUEUE wait whenever the shared regex pool was busy, and hand back
+        the text unstripped. The entry builder then measured, paged and
+        cached that page under the compact key, so ``total_chars`` and
+        ``more_at_offset`` disagreed with every later page.
         """
         if not text or "[" not in text:
             return text
-        try:
-            # Drop image markdown first so the leading ``!`` doesn't get
-            # left behind by the text-link substitution.
-            text = safe_regex_sub(cls._MARKDOWN_IMAGE_RE, "", text)
-            text = safe_regex_sub(cls._MARKDOWN_LINK_RE, r"\1", text)
-        except RegexTimeoutError:
-            logger.warning(
-                "Markdown link strip timed out (input %d chars); "
-                "returning partially-processed text",
-                len(text),
-            )
-        return text
+        # Drop image markdown first so the leading ``!`` doesn't get left
+        # behind by the text-link substitution.
+        text = cls._MARKDOWN_IMAGE_RE.sub("", text)
+        return cls._MARKDOWN_LINK_RE.sub(r"\1", text)
