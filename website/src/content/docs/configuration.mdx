@@ -396,7 +396,7 @@ At least one directory is required; each is canonicalized (resolves symlinks and
 
 ## Complete reference table
 
-Sorted alphabetically by field name within each grouping.
+A nested field's environment variable joins its levels with `__`, so `cache.max_size` is `OPENZIM_MCP_CACHE__MAX_SIZE`. The specialized groups named below the thread-pool table are not listed here.
 
 | Field | Env var | Default | Notes |
 |-------|---------|---------|-------|
@@ -421,7 +421,7 @@ Sorted alphabetically by field name within each grouping.
 | `insecure_disable_auth` | `OPENZIM_MCP_INSECURE_DISABLE_AUTH` | `false` | escape hatch: allows token-less non-loopback HTTP with a WARNING (closed networks only) |
 | `instructions` | `OPENZIM_MCP_INSTRUCTIONS` | unset | (3.5.0+) replaces the server instructions; `{{default}}` keeps the built-in text — [rules](/openzim-mcp/docs/configuration/#server-instructions). Not with `instructions_path` |
 | `instructions_path` | `OPENZIM_MCP_INSTRUCTIONS_PATH` | unset | (3.5.0+) UTF-8 file holding the instructions, read once at startup; a set but unusable file stops startup |
-| `logging.format` | `OPENZIM_MCP_LOGGING__FORMAT` | structured | format string |
+| `logging.format` | `OPENZIM_MCP_LOGGING__FORMAT` | `%(asctime)s - %(name)s - %(levelname)s - %(message)s` | `logging` format string |
 | `meta.footer_enabled` | `OPENZIM_MCP_META__FOOTER_ENABLED` | `true` | Append the one-line `_meta` footer to simple-mode responses. Turning it off does not remove `_meta` itself — see [the `_meta` envelope](/openzim-mcp/docs/api-reference/#the-_meta-envelope) |
 | `meta.tokenizer_encoding` | `OPENZIM_MCP_META__TOKENIZER_ENCODING` | `cl100k_base` | **Declared but not wired.** `meta.py` hard-codes `cl100k_base`; setting this has no effect today |
 | `logging.level` | `OPENZIM_MCP_LOGGING__LEVEL` | `INFO` | DEBUG/INFO/WARNING/ERROR/CRITICAL |
@@ -504,7 +504,7 @@ Two things to know before you write one:
 - **The pin key is `M/Name`, not the filename.** For
   `wikipedia_en_climate_change_mini_2024-06.zim` the key is `wikipedia_en_climate_change`. A table
   keyed on the filename matches nothing and fails silently — you get the type preset, and no
-  warning. Read the value back with `zim_metadata`, under `metadata_entries.Name`.
+  warning. Read the value back with `zim_metadata`, under `metadata.Name`.
 - **A broken override never stops the server.** An unreadable file, invalid TOML, or an unknown
   key logs a warning and falls back to the bundled defaults. That is deliberate — a typo in an
   operator file must not take the server down — but it does mean a silently ineffective override
@@ -641,7 +641,8 @@ $env:OPENZIM_MCP_CACHE__MAX_SIZE = "200"
 [Service]
 Environment=OPENZIM_MCP_TRANSPORT=http
 Environment=OPENZIM_MCP_HOST=127.0.0.1
-EnvironmentFile=/etc/openzim-mcp/secrets.env   # OPENZIM_MCP_AUTH_TOKEN here
+# Holds OPENZIM_MCP_AUTH_TOKEN
+EnvironmentFile=/etc/openzim-mcp/secrets.env
 ExecStart=/usr/local/bin/openzim-mcp /srv/zim
 ```
 

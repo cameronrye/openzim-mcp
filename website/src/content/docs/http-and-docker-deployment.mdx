@@ -145,7 +145,7 @@ If `host=localhost` and `/etc/hosts` maps `localhost` away from `127.0.0.1`, the
 | `/healthz` | Liveness — process is up, event loop responsive | exempt | `200 {"status":"ok"}` |
 | `/readyz` | Readiness — at least one allowed dir is readable | exempt | `200 {"status":"ready"}` or `503 {"status":"not_ready","reason":"no readable allowed directories"}` |
 
-Both endpoints are CORS-friendly and safe to wire into Kubernetes probes, Docker `HEALTHCHECK`, systemd `WatchdogSec`, or external uptime monitors.
+Both endpoints are CORS-friendly and safe to wire into Kubernetes probes, Docker and Compose healthchecks, or external uptime monitors. systemd's `WatchdogSec=` is not one of them: it waits for `sd_notify` keep-alives, which the server never sends, so systemd would kill a healthy service at every timeout.
 
 ```bash
 curl -fsS http://localhost:8000/healthz
@@ -172,7 +172,7 @@ There is no built-in TLS. Terminate at a reverse proxy.
 
 ### Caddy
 
-```nginx
+```text
 openzim-mcp.example.com {
     reverse_proxy 127.0.0.1:8000
 }
@@ -242,7 +242,8 @@ Environment=OPENZIM_MCP_HOST=127.0.0.1
 Environment=OPENZIM_MCP_PORT=8000
 Environment=OPENZIM_MCP_CACHE__PERSISTENCE_ENABLED=true
 Environment=OPENZIM_MCP_CACHE__PERSISTENCE_PATH=/var/cache/openzim-mcp/cache.json
-EnvironmentFile=/etc/openzim-mcp/secrets.env   # OPENZIM_MCP_AUTH_TOKEN, etc.
+# Holds OPENZIM_MCP_AUTH_TOKEN, etc.
+EnvironmentFile=/etc/openzim-mcp/secrets.env
 ExecStart=/usr/local/bin/openzim-mcp /srv/zim
 Restart=on-failure
 RestartSec=5
@@ -372,7 +373,7 @@ Common failure modes:
 
 - **Container exits immediately on start.** Almost always one of three startup checks: HTTP transport bound to a non-loopback host without `OPENZIM_MCP_AUTH_TOKEN`, or `OPENZIM_MCP_CORS_ORIGINS` / `OPENZIM_MCP_ALLOWED_HOSTS` containing an entry that is exactly `*` (a `:*` port suffix such as `mcp.example.com:*` is fine — only the bare wildcard is rejected). The startup error message identifies which.
 - **Clients get 421 Misdirected Request / `Invalid Host header`.** The proxied `Host` header (e.g. `zim.example.com`) isn't in `OPENZIM_MCP_ALLOWED_HOSTS`. Add it. Loopback (`127.0.0.1`, `localhost`, `[::1]`) is always allowed without configuration; everything else needs an explicit entry.
-- **Clients get 401 Unauthorized.** Token mismatch. Verify with `curl -H "Authorization: Bearer $TOKEN" http://host/mcp/...`. Don't paste the token into chat or tickets.
+- **Clients get 401 Unauthorized.** Token mismatch. Verify with `curl -i -H "Authorization: Bearer $TOKEN" http://host:8000/mcp`: a wrong token gets `401` and `{"error":"unauthorized"}`; any other status means the token was accepted (a bare GET is answered `400`, or `405` with `OPENZIM_MCP_STATELESS_HTTP` set). Don't paste the token into chat or tickets.
 - **Browser clients get 403 / CORS errors.** Either `OPENZIM_MCP_CORS_ORIGINS` is unset (and a browser is calling) or the client's origin isn't in the allow-list. The browser console shows the offending origin; add it.
 - **`/readyz` returns 503.** None of the configured ZIM directories are readable from inside the container. (With multiple allowed directories, one bad mount is fine — readiness flips only when *all* of them fail.) Check the volume mount path (host side and `/data` side) and that the mount isn't empty. Permissions: the in-container user is UID 10001; the host directory needs to be world-readable or owned by UID 10001.
 - **Subscriptions stop firing.** Confirm `OPENZIM_MCP_SUBSCRIPTIONS_ENABLED` isn't set to `false` — a disabled server refuses `subscriptions/listen` with method-not-found, so that misconfiguration is loud. If the listen was acknowledged but nothing arrives, check the acknowledgement's echoed filter: a client that asked for `zim://files` under `resourceSubscriptions` gets an ack and silence, because directory-membership changes are published as `notifications/resources/list_changed` (opt in with `resourcesListChanged`).
@@ -400,7 +401,7 @@ The reference above is the surface area. The recipes below are end-to-end deploy
 
 ### Recipe 1: Docker Compose on a LAN host
 
-This recipe puts OpenZIM MCP on a single host, reachable from the rest of your LAN over plain HTTP plus a bearer token. There's no TLS — the bearer token is the only thing protecting the endpoint, so this recipe is appropriate for trusted networks (a home LAN, a Tailscale tailnet) and **not** for anything reachable from the public internet.
+This recipe puts OpenZIM MCP on a single host over plain HTTP plus a bearer token. As written it publishes the port on loopback only, so start there and check it works; [Opening it to the LAN](#opening-it-to-the-lan) below is a two-line change. There's no TLS — the bearer token is the only thing protecting the endpoint, so this recipe is appropriate for trusted networks (a home LAN, a Tailscale tailnet) and **not** for anything reachable from the public internet.
 
 #### Prerequisites
 
@@ -449,7 +450,7 @@ volumes:
 What's intentional here:
 
 - **Pinned tag** (`:3.4.1`, not `:latest`). Upgrades are deliberate — `docker compose pull` is a thing you do, not a thing that happens to you. {/* x-release-please-version */}
-- **Host port bound to `127.0.0.1`.** The container listens on all interfaces (`OPENZIM_MCP_HOST=0.0.0.0`, set in the environment block), but Docker's port publish restricts external exposure to loopback. The Tailscale variant below lifts this restriction by binding to a specific interface.
+- **Host port bound to `127.0.0.1`.** The container listens on all interfaces (`OPENZIM_MCP_HOST=0.0.0.0`, set in the environment block), but Docker's port publish restricts external exposure to loopback, so only the host itself can connect. [Opening it to the LAN](#opening-it-to-the-lan) and the Tailscale variant lift this restriction by publishing on a specific interface.
 - **Read-only ZIM mount** (`:ro`). The server only reads ZIM files; mounting read-only ensures a server compromise can't damage them.
 - **Token via env, not hard-coded.** Put it in a `.env` file next to the compose file (and add `.env` to `.gitignore`). The image defaults to `stdio`, so `TRANSPORT=http` and `HOST=0.0.0.0` are set explicitly in the environment block to select the HTTP service.
 - **Explicit healthcheck block.** The image ships no `HEALTHCHECK` (it defaults to stdio, where there is no HTTP endpoint to probe), so this block defines one — using the bundled Python rather than `curl`, which isn't installed.
@@ -520,14 +521,31 @@ Add OpenZIM MCP to your client's MCP config. Substitute the host, port, and toke
         "mcp-remote@^0.1.16",
         "http://127.0.0.1:8000/mcp",
         "--header",
-        "Authorization:Bearer YOUR_TOKEN_HERE"
-      ]
+        "Authorization:${AUTH_HEADER}"
+      ],
+      "env": {
+        "AUTH_HEADER": "Bearer YOUR_TOKEN_HERE"
+      }
     }
   }
 }
 ```
 
-The `Authorization:Bearer` form (no space after the colon) matches `mcp-remote`'s documented header syntax. The token lives directly in the config file and is visible in `ps` output on the client machine while `mcp-remote` is running — treat the file as a secret: don't commit `claude_desktop_config.json` to a shared repo and keep its filesystem permissions tight (`chmod 600` on Unix).
+The header value comes from `env` because Claude Desktop on Windows does not escape spaces inside `args` when it launches `npx`, so `Bearer YOUR_TOKEN_HERE` written there arrives split in two. `mcp-remote` expands `${AUTH_HEADER}` itself, and the form with no spaces around the colon is its documented workaround; it works on every platform. The token still lives in the config file — treat the file as a secret: don't commit `claude_desktop_config.json` to a shared repo and keep its filesystem permissions tight (`chmod 600` on Unix).
+
+#### Opening it to the LAN
+
+To reach the server from other machines on your network, publish the port on the host's LAN address and name that address in `OPENZIM_MCP_ALLOWED_HOSTS`:
+
+```yaml
+    ports:
+      - "192.168.1.10:8000:8000"  # the host's LAN address
+    environment:
+      OPENZIM_MCP_AUTH_TOKEN: "${OPENZIM_MCP_AUTH_TOKEN}"
+      OPENZIM_MCP_ALLOWED_HOSTS: '["192.168.1.10"]'
+```
+
+Clients then connect to `http://192.168.1.10:8000/mcp`. The allow-list is what keeps DNS-rebinding protection on: the container binds `0.0.0.0`, and on a bind-all host with an empty list the server turns `Host` validation off and logs a warning saying so. With the list set, it accepts loopback and the listed hosts and answers any other `Host` with 421, so list every name or address your clients use.
 
 #### Tailscale variant
 
@@ -543,7 +561,7 @@ To reach the server from your tailnet instead of the LAN, change two lines in `d
 
 Then make sure the host firewall blocks port 8000 on the public interface (it should already, since you're not publishing on `0.0.0.0`). The bearer token plus tailnet ACLs are your trust boundary; you don't need TLS because the tailnet itself is encrypted.
 
-`OPENZIM_MCP_ALLOWED_HOSTS` is required because Tailscale serve and similar reverse proxies preserve the original `Host` header (the MagicDNS name), which the SDK's default DNS-rebinding allow-list rejects. List the MagicDNS hostname your clients connect to. If you connect by raw Tailscale IP rather than MagicDNS, add `100.x.y.z` to the list instead.
+`OPENZIM_MCP_ALLOWED_HOSTS` turns DNS-rebinding protection back on. The container binds `0.0.0.0`, and on a bind-all host with an empty list the server disables `Host` validation (with a startup warning) rather than answer direct-IP clients with 421. Once the list is set, only loopback and the listed hosts are accepted, so list the MagicDNS hostname your clients connect to, and add `100.x.y.z` as well if any client uses the raw Tailscale IP.
 
 ### Recipe 2: VPS with Caddy and automatic TLS
 
