@@ -98,9 +98,12 @@ def _cache_config_fingerprint(config: CacheConfig) -> str:
 # one ``snippet_length`` was served after a restart under another until its TTL
 # ran out. Named one by one rather than "everything but": a secret such as
 # ``auth_token`` must not reach the snapshot file, not even hashed.
+# ``allowed_directories`` is left out on purpose: every key already carries the
+# archive's absolute path, and peers that share the default snapshot path while
+# serving different directories would otherwise discard each other's warm
+# cache on every restart.
 _CONTENT_SETTINGS = frozenset(
     {
-        "allowed_directories",
         "content",
         "meta",
         "ml",

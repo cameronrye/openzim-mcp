@@ -810,9 +810,11 @@ class TestARestoredSnapshotAnswersToTheCurrentConfig:
         assert restarted.get("a") is None
 
     @staticmethod
-    def _ops_with_snippets(zim_dir: Path, snapshot: Path, snippet: int) -> Any:
+    def _ops_with_snippets(
+        zim_dir: Path, snapshot: Path, snippet: int, *more_dirs: Path
+    ) -> Any:
         config = OpenZimMcpConfig(
-            allowed_directories=[str(zim_dir)],
+            allowed_directories=[str(zim_dir), *map(str, more_dirs)],
             tool_mode="advanced",
             cache=CacheConfig(
                 enabled=True, persistence_enabled=True, persistence_path=str(snapshot)
@@ -856,6 +858,33 @@ class TestARestoredSnapshotAnswersToTheCurrentConfig:
 
         assert len(long_snippet) > 1000
         assert len(short_snippet) < 200, len(short_snippet)
+
+    def test_a_peer_serving_other_directories_keeps_the_snapshot(
+        self, tmp_path: Path
+    ) -> None:
+        """Keys carry the archive's path, so directories need not match.
+
+        Two clients' servers share the default snapshot path whenever their
+        cache settings agree; dropping it over a directory list would wipe
+        each other's warm cache on every restart.
+        """
+        zim_dir, elsewhere = tmp_path / "zims", tmp_path / "elsewhere"
+        zim_dir.mkdir()
+        elsewhere.mkdir()
+        zim = _build_article_zim(
+            zim_dir / "long.zim", heading="Glaciers", body="glacier retreat. " * 50
+        )
+        snapshot = tmp_path / "snap"
+
+        first = self._ops_with_snippets(zim_dir, snapshot, 300)
+        first.search_zim_file_data(str(zim), "glacier", limit=1)
+        first.cache.shutdown()
+
+        peer = self._ops_with_snippets(zim_dir, snapshot, 300, elsewhere)
+        hits = peer.cache.stats()["hits"]
+        peer.search_zim_file_data(str(zim), "glacier", limit=1)
+
+        assert peer.cache.stats()["hits"] > hits
 
 
 class TestAnUnreadableSidecarIsUnavailableNotACrash:
