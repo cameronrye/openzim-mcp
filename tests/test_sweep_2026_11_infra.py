@@ -357,3 +357,100 @@ class TestSameHostLinksReachRelatedAndInbound:
         assert stale["link_graph"]["is_stale"] is True, stale
         with pytest.raises(LinkGraphUnavailable):
             ops.get_inbound_links_data(str(iep_like_zim), "iep.utm.edu/lyceum/")
+
+
+@pytest.fixture
+def wikibooks_copy(
+    tmp_path: Path, real_content_zim_files: Dict[str, Optional[Path]]
+) -> Path:
+    source = real_content_zim_files.get("wikibooks")
+    if source is None:
+        pytest.skip("wikibooks fixture not available")
+    copy = tmp_path / "wb.zim"
+    shutil.copy(source, copy)
+    return copy
+
+
+class TestCachedValidationFollowsTheSidecar:
+    """``zim_health(path)`` cached the sidecar report with the archive verdict.
+
+    The key is the archive's stat token, which a sidecar build or delete
+    does not move: a sidecar built after the first call stayed
+    ``has_link_graph: false`` while inbound answered, and a deleted one
+    stayed ``true`` (``node_count: 66``) while inbound refused.
+    """
+
+    @pytest.fixture
+    def integrity_checks(self, monkeypatch: pytest.MonkeyPatch) -> list[Path]:
+        """Record each ``Archive.check()`` pass, the cost the cache saves."""
+        import openzim_mcp.zim.archive as archive_mod
+
+        calls: list[Path] = []
+        real = archive_mod.check_archive_integrity
+
+        def counting(path: Path) -> bool:
+            calls.append(path)
+            return real(path)
+
+        monkeypatch.setattr(archive_mod, "check_archive_integrity", counting)
+        return calls
+
+    def test_a_sidecar_built_after_the_first_call_is_reported(
+        self, wikibooks_copy: Path, integrity_checks: list[Path]
+    ) -> None:
+        from openzim_mcp.linkgraph.builder import build_link_graph
+
+        ops = _ops(wikibooks_copy.parent)
+        before = ops.get_archive_validation_data(str(wikibooks_copy))
+        build_link_graph(str(wikibooks_copy))
+        after = ops.get_archive_validation_data(str(wikibooks_copy))
+
+        assert before["has_link_graph"] is False
+        assert after["has_link_graph"] is True
+        assert after["link_graph"]["is_stale"] is False
+        assert after["link_graph"]["node_count"] == 66
+        # The integrity verdict is still the cached one.
+        assert len(integrity_checks) == 1
+        assert after["is_valid"] is True
+
+    def test_a_deleted_sidecar_is_no_longer_reported(
+        self, wikibooks_copy: Path, integrity_checks: list[Path]
+    ) -> None:
+        from openzim_mcp.linkgraph.builder import build_link_graph
+
+        build_link_graph(str(wikibooks_copy))
+        ops = _ops(wikibooks_copy.parent)
+        before = ops.get_archive_validation_data(str(wikibooks_copy))
+        os.remove(f"{wikibooks_copy}.linkgraph.sqlite")
+        after = ops.get_archive_validation_data(str(wikibooks_copy))
+
+        assert before["has_link_graph"] is True
+        assert after["has_link_graph"] is False
+        assert "link_graph" not in after
+        assert len(integrity_checks) == 1
+        assert after["uuid"] == before["uuid"]
+
+    def test_a_verdict_cached_by_the_previous_release_is_not_reused(
+        self, wikibooks_copy: Path
+    ) -> None:
+        """3.4.1 cached the sidecar report inside the verdict; with
+        persistence on, a restored entry would carry it past the fix."""
+        from openzim_mcp.bundle import archive_stat_token
+
+        ops = _ops(wikibooks_copy.parent)
+        validated = ops._validate_zim_path(str(wikibooks_copy))
+        ops.cache.set(
+            f"validation_data:{validated}:{archive_stat_token(validated)}",
+            {
+                "uuid": "restored",
+                "is_valid": True,
+                "has_link_graph": True,
+                "link_graph": {"node_count": 66, "is_stale": False},
+            },
+        )
+
+        out = ops.get_archive_validation_data(str(wikibooks_copy))
+
+        assert out["has_link_graph"] is False
+        assert "link_graph" not in out
+        assert out["uuid"] != "restored"

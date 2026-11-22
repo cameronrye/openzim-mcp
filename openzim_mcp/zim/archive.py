@@ -680,6 +680,17 @@ def _link_graph_report(archive_path: Any, live_uuid: str) -> Dict[str, Any]:
     }
 
 
+def _with_link_graph_report(
+    verdict: Dict[str, Any], archive_path: Any
+) -> "ArchiveValidationResponse":
+    """A cached archive ``verdict`` plus the sidecar as it is on disk now.
+
+    A fresh dict: ``verdict`` is the cache's own copy.
+    """
+    data = {**verdict, **_link_graph_report(archive_path, str(verdict["uuid"]))}
+    return cast("ArchiveValidationResponse", attach_meta(data))
+
+
 class ZimOperations(
     _ArchiveAccessMixin, _SearchMixin, _ContentMixin, _StructureMixin, _NamespaceMixin
 ):
@@ -1097,15 +1108,20 @@ class ZimOperations(
         # integrity assertion derived from the file's bytes — serving it
         # stale after the file changed would be exactly backwards for a
         # diagnostic tool. Mirrors the bundle / namespace / content caches.
+        #
+        # v2: only the archive's own verdict is cached. The sidecar report rode
+        # along under a key a sidecar build or delete cannot move, so it was
+        # misreported until the TTL ran out; it is read fresh on every call.
         from openzim_mcp.bundle import archive_stat_token
 
         cache_key = (
-            f"validation_data:{validated_path}:{archive_stat_token(validated_path)}"
+            f"validation_data:v2:{validated_path}:"
+            f"{archive_stat_token(validated_path)}"
         )
         cached_result = self.cache.get(cache_key)
         if cached_result is not None:
             logger.debug(f"Returning cached validation for: {validated_path}")
-            return cast("ArchiveValidationResponse", cached_result)
+            return _with_link_graph_report(cached_result, validated_path)
 
         import openzim_mcp.zim_operations as _zim_ops_shim
 
@@ -1128,12 +1144,10 @@ class ZimOperations(
                     "uuid": str(archive.uuid),
                     "is_multipart": bool(archive.is_multipart),
                 }
-                data.update(_link_graph_report(validated_path, str(archive.uuid)))
 
-            with_meta = attach_meta(data)
-            self.cache.set(cache_key, with_meta)
+            self.cache.set(cache_key, data)
             logger.info(f"Validated archive: {validated_path}")
-            return cast("ArchiveValidationResponse", with_meta)
+            return _with_link_graph_report(data, validated_path)
 
         except Exception as e:
             logger.error(f"Validation failed for {validated_path}: {e}")
