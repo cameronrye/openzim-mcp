@@ -239,3 +239,69 @@ class TestSectionTitleMatchIgnoresUnicodeForm:
         assert "Both philosophers doubted the senses." in out, out
         assert "not found" not in out, out
         assert "A light from God" not in out, out
+
+
+class TestRewindowedSnippetKeepsItsLeadIn:
+    """A snippet slid to its first hit threw away the lead-in it made room for.
+
+    The window opens ``lead`` characters before the hit and then snaps to a
+    word boundary, but with ``rfind``, the space right before the hit, so
+    "...word599 the recommended aspirin dose" came out as "...aspirin dose
+    for adults". The ``...`` that marks the cut also kept synthesize from
+    locating the passage in the article, so its citation lost the section it
+    came from.
+    """
+
+    @pytest.fixture
+    def archive(self, tmp_path: Path) -> Path:
+        filler = " ".join(f"word{i}" for i in range(600))
+        return _build_zim(
+            tmp_path / "dosage.zim",
+            [
+                (
+                    "A/Aspirin",
+                    "Aspirin",
+                    "<html><body><h1>Aspirin</h1>"
+                    "<p>A common medicine kept in many homes.</p>"
+                    f"<h2>Dosage</h2><p>{filler} the recommended aspirin dose "
+                    "for adults is one tablet a day.</p></body></html>",
+                ),
+                (
+                    "A/Other",
+                    "Other",
+                    "<html><body><h1>Other</h1><p>Nothing here.</p></body></html>",
+                ),
+            ],
+        )
+
+    @pytest.mark.asyncio
+    async def test_search_snippet_reads_the_words_before_the_hit(
+        self, archive: Path
+    ) -> None:
+        server = _server(archive.parent)
+        for _ in range(2):  # the second page is served from the cache
+            result = await _call(
+                server, "zim_search", query="aspirin dose", zim_file_path=str(archive)
+            )
+            snippet = next(
+                r["snippet"] for r in result["results"] if r["path"] == "A/Aspirin"
+            )
+            assert snippet.startswith("...word"), snippet
+            assert "the recommended **aspirin** **dose** for adults" in snippet
+
+    @pytest.mark.asyncio
+    async def test_synthesize_cites_the_section_the_passage_came_from(
+        self, archive: Path
+    ) -> None:
+        server = _server(archive.parent)
+        for _ in range(2):
+            result = await _call(
+                server,
+                "zim_query",
+                query="what is the aspirin dose for adults",
+                zim_file_path=str(archive),
+                synthesize=True,
+            )
+            assert result["answer_markdown"].startswith("..."), result
+            cited = {c["entry_path"]: c["section_id"] for c in result["citations"]}
+            assert cited == {"A/Aspirin": "dosage"}, result["citations"]

@@ -95,7 +95,8 @@ _BUNDLE_KEY_PREFIX = "bundle:v2h"
 # asks for ("asthma in spanish"), which keeps its archive position.
 #
 # r4 -> r5: cached search rows no longer take an image-only H1's lead
-# sentence as the page title.
+# sentence as the page title, and a snippet slid to its first hit keeps the
+# words before it.
 _RENDER_EPOCH = "r5"
 
 

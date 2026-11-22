@@ -737,7 +737,9 @@ def _shift_window_to_first_hit(
     lead = min(_KWIC_LEAD_CHARS, max(effective_len // 4, 0))
     cut = max(0, hit - lead)
     if cut:
-        space = text.rfind(" ", cut, hit)
+        # Snap FORWARD to the first word boundary: ``rfind`` took the space
+        # just before the hit and threw away the lead-in kept for context.
+        space = text.find(" ", cut, hit)
         if space != -1:
             cut = space + 1
         # Never open inside a markdown link / emphasis run.
