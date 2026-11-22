@@ -515,6 +515,12 @@ def _default_uvicorn_runner(app: Starlette, host: str, port: int) -> None:
         port=port,
         log_level="info",
         timeout_graceful_shutdown=SHUTDOWN_GRACE_SECONDS,
+        # uvicorn's default rewrites the client address from X-Forwarded-For
+        # whenever the peer is 127.0.0.1 — on a loopback bind, every peer.
+        # Without a token the rate limiter keys a client on that address, so
+        # each caller could name a fresh one per request and never be
+        # limited. Nothing here relies on a forwarded header.
+        proxy_headers=False,
     )
     uvicorn.Server(config).run()
 

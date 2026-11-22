@@ -351,3 +351,55 @@ class TestResourceReadsAreRateLimited:
         refused_body = json.loads(refused["result"]["content"][0]["text"])
         assert refused_body["operation"] == "rate_limited", refused_body
         self._assert_rate_limited(read)
+
+
+class TestForwardedForMintsNoBucket:
+    """``X-Forwarded-For`` handed every caller a fresh rate-limit bucket.
+
+    Without a token the limiter keys a client on ``request.client.host``, and
+    uvicorn's ``proxy_headers`` default rewrites that from ``X-Forwarded-For``
+    whenever the peer is ``127.0.0.1`` — which, on the default loopback bind,
+    is every peer. So any caller could name a new address per request and
+    never be limited. Nothing here reads a forwarded header on purpose.
+    """
+
+    @staticmethod
+    def _served_config(monkeypatch: pytest.MonkeyPatch) -> Any:
+        """The real ``uvicorn.Config`` the default runner builds, unserved."""
+        import uvicorn
+
+        built: List[Any] = []
+
+        class _NoServe:
+            def __init__(self, config: Any) -> None:
+                built.append(config)
+
+            def run(self) -> None:
+                return None
+
+        monkeypatch.setattr(uvicorn, "Server", _NoServe)
+        app = http_app.build_starlette_app(object())  # type: ignore[arg-type]
+        http_app._default_uvicorn_runner(app, "127.0.0.1", 8000)
+        return built[0]
+
+    def test_the_served_app_reads_no_forwarded_headers(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
+
+        config = self._served_config(monkeypatch)
+        config.load()
+
+        assert config.proxy_headers is False
+        assert not isinstance(config.loaded_app, ProxyHeadersMiddleware)
+        # Paired positive: the bind still reaches uvicorn as given.
+        assert (config.host, config.port) == ("127.0.0.1", 8000)
+
+    def test_uvicorns_own_default_would_have_read_them(self) -> None:
+        """The control: the probe above can see the middleware when it is there."""
+        import uvicorn
+        from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
+
+        config = uvicorn.Config(http_app.build_starlette_app(object()))  # type: ignore[arg-type]
+        config.load()
+        assert isinstance(config.loaded_app, ProxyHeadersMiddleware)
