@@ -2142,8 +2142,20 @@ class SimpleToolsHandler(
         elsewhere so the same single-edit typos that route through
         ``tell me about`` also route through these handlers.
         """
+        promoted = self._title_index_match(zim_file_path, entry_path)
+        return str(promoted["path"]) if promoted is not None else entry_path
+
+    def _title_index_match(
+        self, zim_file_path: str, entry_path: str
+    ) -> Optional[Dict[str, Any]]:
+        """The title-index row ``_resolve_natural_language_path`` promotes.
+
+        ``None`` when there is none, so the literal path is looked up. Split
+        out so a handler can also see WHAT the row matched, which is how
+        ``_substitution_note`` tells a respelling from a different article.
+        """
         if not entry_path:
-            return entry_path
+            return None
         try:
             promoted = find_title_match(
                 self.zim_operations,
@@ -2157,10 +2169,52 @@ class SimpleToolsHandler(
                 entry_path,
                 e,
             )
-            return entry_path
+            return None
         if promoted is not None and promoted.get("path"):
-            return str(promoted["path"])
-        return entry_path
+            return promoted
+        return None
+
+    @staticmethod
+    def _substitution_note(asked: str, promoted: Optional[Dict[str, Any]]) -> str:
+        """A one-line note when the promoted entry is not the one ``asked``.
+
+        mini has no Evolution article, and ``get article Evolution`` served
+        Biodiversity — a 0.95 suggestion that walked the associative redirect
+        ``A/Biodiversity_and_evolution`` — under a header that read like a
+        direct hit. Promotion at ``min_score=0.8`` is deliberate (it is what
+        resolves ``list of common misconceptions``), so the result stands;
+        it just has to say so.
+
+        Silent when the row only respelled the request. ``direct`` is the
+        title index's own verdict of an exact match — case-insensitive, and
+        after a scraped title's site suffix is dropped ("Virtue Ethics |
+        Internet Encyclopedia of Philosophy" for ``virtue ethics``, whose
+        path spells nothing of it). Any other row still counts when the
+        request, with ``_`` read as a space, names the served title or path,
+        or the redirect stub it came through (``global warming`` reaching
+        Climate change through ``A/Global_warming``).
+        """
+        if promoted is None or promoted.get("match_type") == "direct":
+            return ""
+
+        def spelling(text: str) -> str:
+            name = re.sub(r"^[A-Za-z-]/", "", text)
+            return " ".join(name.replace("_", " ").split()).casefold()
+
+        wanted = spelling(asked)
+        named = (
+            promoted.get("path"),
+            promoted.get("title"),
+            promoted.get("pre_redirect_path"),
+        )
+        if any(isinstance(n, str) and n and spelling(n) == wanted for n in named):
+            return ""
+        path = str(promoted["path"])
+        title = str(promoted.get("title") or path)
+        return (
+            f'> No entry is named "{asked}"; showing the closest title match, '
+            f'"{title}" ({path}).\n\n'
+        )
 
     def _handle_structure(
         self,
@@ -3005,15 +3059,19 @@ class SimpleToolsHandler(
         # unchanged, so namespace-prefixed paths (``A/Biology``)
         # still fall through to the direct lookup at zero behaviour
         # cost.
-        entry_path = self._resolve_natural_language_path(zim_file_path, entry_path)
+        asked = self._recase_from_original(entry_path, query)
+        promoted = self._title_index_match(zim_file_path, entry_path)
+        if promoted is not None:
+            entry_path = str(promoted["path"])
         try:
-            return self.zim_operations.get_zim_entry(
+            body = self.zim_operations.get_zim_entry(
                 zim_file_path,
                 entry_path,
                 options.get("max_content_length"),
                 options.get("content_offset", 0),
                 compact=options.get("compact", False),
             )
+            return self._substitution_note(asked, promoted) + body
         except OpenZimMcpArchivePathError:
             # Archive-level failure (missing file, not a ZIM, unresolvable):
             # nothing about the *arguments* is wrong. Let it reach

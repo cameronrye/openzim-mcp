@@ -27,11 +27,13 @@ def climate_zim(real_content_zim_files: Dict[str, Optional[Path]]) -> Path:
     return zim
 
 
-def _server(directory: Path, *, cache: bool = False) -> OpenZimMcpServer:
+def _server(
+    directory: Path, *, cache: bool = False, tool_mode: str = "advanced"
+) -> OpenZimMcpServer:
     return OpenZimMcpServer(
         OpenZimMcpConfig(
             allowed_directories=[str(directory)],
-            tool_mode="advanced",
+            tool_mode=tool_mode,
             cache=CacheConfig(enabled=cache, persistence_enabled=False),
             rate_limit=RateLimitConfig(enabled=False),
         )
@@ -187,8 +189,13 @@ class TestPercentEncodedPathsResolveOnEverySurface:
         assert binary["data"] and binary["data"] == raw["data"]
 
 
-def _build_zim(directory: Path, pages: Dict[str, str]) -> Path:
-    """One small archive of ``{path: html}`` pages, titled by the path."""
+def _build_zim(
+    directory: Path,
+    pages: Dict[str, str],
+    titles: Optional[Dict[str, str]] = None,
+) -> Path:
+    """One small archive of ``{path: html}`` pages, titled by the path
+    unless ``titles`` names one."""
     from libzim.writer import Creator
 
     from tests.conftest_v2_fixtures import _HtmlItem
@@ -196,7 +203,8 @@ def _build_zim(directory: Path, pages: Dict[str, str]) -> Path:
     out = directory / "fixture.zim"
     with Creator(out).config_indexing(True, "eng") as creator:
         for path, html in pages.items():
-            creator.add_item(_HtmlItem(path, path.replace("_", " "), html))
+            title = (titles or {}).get(path, path.replace("_", " "))
+            creator.add_item(_HtmlItem(path, title, html))
         creator.set_mainpath(next(iter(pages)))
     return out
 
@@ -497,3 +505,132 @@ class TestPunctuationOnlyHeadingsAreSections:
         ], toc
         assert named["section_title"] == "Section 2"
         assert named["content_markdown"].strip() == "Star text."
+
+
+_BOTH_MODES = pytest.mark.parametrize(
+    "tool_mode, compact",
+    [
+        ("simple", True),
+        ("simple", False),
+        ("advanced", True),
+        ("advanced", False),
+    ],
+)
+
+
+class TestGetArticleSaysWhenItServedADifferentEntry:
+    """``get article Evolution`` served Biodiversity without a word.
+
+    mini has no Evolution article. The get-article handler promotes the title
+    index's top row at score >= 0.8, and for "evolution" that row is a 0.95
+    suggestion that walked the associative redirect
+    ``A/Biodiversity_and_evolution`` to ``A/Biodiversity``; "computer" lands
+    on Green computing. The response read "# Biodiversity / Path:
+    A/Biodiversity", so the caller had no way to tell the entry it asked for
+    was missing.
+    """
+
+    @pytest.mark.asyncio
+    @_BOTH_MODES
+    @pytest.mark.parametrize(
+        "asked, served_title, served_path",
+        [
+            ("Evolution", "Biodiversity", "A/Biodiversity"),
+            ("Computer", "Green computing", "A/Green_computing"),
+        ],
+    )
+    async def test_a_substitution_is_named(
+        self,
+        climate_zim: Path,
+        tool_mode: str,
+        compact: bool,
+        asked: str,
+        served_title: str,
+        served_path: str,
+    ) -> None:
+        zim_query = _tool(_server(climate_zim.parent, tool_mode=tool_mode), "zim_query")
+
+        out = await zim_query(
+            query=f"get article {asked}",
+            zim_file_path=str(climate_zim),
+            compact=compact,
+        )
+
+        note = (
+            f'No entry is named "{asked}"; showing the closest title match, '
+            f'"{served_title}" ({served_path}).'
+        )
+        assert note in out, out[:600]
+        # The substitution itself still stands; it is only no longer silent.
+        assert f"Path: {served_path}" in out
+
+    @pytest.mark.asyncio
+    @_BOTH_MODES
+    @pytest.mark.parametrize(
+        "asked, served_path",
+        [
+            # A case variant of the stored title.
+            ("kyoto protocol", "A/Kyoto_Protocol"),
+            # A real redirect: A/Global_warming is the stub, and it is named.
+            ("Global warming", "A/Climate_change"),
+            # The exact stored path.
+            ("A/Hydrogen", "A/Hydrogen"),
+        ],
+    )
+    async def test_respellings_and_redirects_stay_silent(
+        self,
+        climate_zim: Path,
+        tool_mode: str,
+        compact: bool,
+        asked: str,
+        served_path: str,
+    ) -> None:
+        zim_query = _tool(_server(climate_zim.parent, tool_mode=tool_mode), "zim_query")
+
+        out = await zim_query(
+            query=f"get article {asked}",
+            zim_file_path=str(climate_zim),
+            compact=compact,
+        )
+
+        assert served_path in out, out[:600]
+        assert "No entry is named" not in out
+
+    @pytest.mark.asyncio
+    @_BOTH_MODES
+    async def test_a_scraped_sites_suffixed_title_is_an_exact_match(
+        self, tmp_path: Path, tool_mode: str, compact: bool
+    ) -> None:
+        """A scraped page's stored title carries the site's name and its path
+        is a URL, so neither spells ``virtue ethics``; the title index still
+        calls it a direct hit, and it must stay silent. ``hume`` is only a
+        suggestion for "David Hume", and is named."""
+        suffix = " | Internet Encyclopedia of Philosophy"
+        pages = {
+            "iep.utm.edu/virtue/": "<h1>Virtue Ethics</h1><p>On virtue.</p>",
+            "iep.utm.edu/hume/": "<h1>David Hume</h1><p>On Hume.</p>",
+        }
+        titles = {
+            "iep.utm.edu/virtue/": "Virtue Ethics" + suffix,
+            "iep.utm.edu/hume/": "David Hume" + suffix,
+        }
+        zim = _build_zim(
+            tmp_path,
+            {
+                p: f"<html><body><main>{h}</main></body></html>"
+                for p, h in pages.items()
+            },
+            titles,
+        )
+        zim_query = _tool(_server(tmp_path, tool_mode=tool_mode), "zim_query")
+        base = {"zim_file_path": str(zim), "compact": compact}
+
+        exact = await zim_query(query="get article Virtue Ethics", **base)
+        suggested = await zim_query(query="get article hume", **base)
+
+        assert "Path: iep.utm.edu/virtue/" in exact, exact[:600]
+        assert "No entry is named" not in exact
+        assert (
+            'No entry is named "hume"; showing the closest title match, '
+            f'"David Hume{suffix}" (iep.utm.edu/hume/).'
+        ) in suggested, suggested[:600]
