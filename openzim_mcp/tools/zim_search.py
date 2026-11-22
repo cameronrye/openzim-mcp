@@ -672,6 +672,49 @@ def _annotate_cross_file_paging(payload: Any) -> Any:
     return out
 
 
+async def _lookup_title_page(
+    ops: Any,
+    server: "OpenZimMcpServer",
+    zim_file_path: str,
+    query: str,
+    *,
+    cross_file: bool,
+    limit: int,
+) -> tuple[Any, str]:
+    """Look ``query`` up as typed, and rewrite it only if that found no title.
+
+    Returns ``(page, title)``: the title-lookup page and the string it was
+    looked up under, which the promotion probes and the artefact demote key on.
+
+    The misspelling map and the leading-article strip used to run first and
+    unconditionally, so a title that starts with "A", "An", "The" or "Of" was
+    answered with a different article: ``A Green New Deal`` returned
+    ``A/Green_New_Deal`` while ``A/A_Green_New_Deal`` — the article named
+    that, whose hatnote points the other way — exists. ``query_rewrite.
+    enabled=false`` is the operator's opt-out from every rewrite rule, and
+    title mode ignored it.
+    """
+    raw = await ops.find_entry_by_title_data(
+        zim_file_path, query, cross_file=cross_file, limit=limit
+    )
+    if not server.zim_operations.config.query_rewrite.enabled:
+        return raw, query
+    results = raw.get("results") if isinstance(raw, dict) else None
+    if results and _is_exact_title_row(results[0]):
+        return raw, query
+
+    from ..intent_parser import IntentParser
+
+    rewritten = IntentParser._apply_misspelling_map(query, title_probe=None)
+    rewritten = IntentParser._detect_stopword_phrase(rewritten, title_probe=None)
+    if rewritten == query:
+        return raw, query
+    rewritten_page = await ops.find_entry_by_title_data(
+        zim_file_path, rewritten, cross_file=cross_file, limit=limit
+    )
+    return rewritten_page, rewritten
+
+
 async def _handle_title_mode(
     *,
     ops: Any,
@@ -706,17 +749,9 @@ async def _handle_title_mode(
         )
 
     # Wired path — apply preprocessing.
-    from ..intent_parser import IntentParser
-
-    preprocessed = IntentParser._apply_misspelling_map(query, title_probe=None)
-    preprocessed = IntentParser._detect_stopword_phrase(preprocessed, title_probe=None)
-
     if cross_file:
-        raw = await ops.find_entry_by_title_data(
-            "",
-            preprocessed,
-            cross_file=True,
-            limit=effective_limit,
+        raw, preprocessed = await _lookup_title_page(
+            ops, server, "", query, cross_file=True, limit=effective_limit
         )
         # Same guard as the cross-file fulltext branch: a fan-out that
         # searched nothing is not a miss, and a hint about per-archive
@@ -750,11 +785,8 @@ async def _handle_title_mode(
             ),
         )
 
-    raw = await ops.find_entry_by_title_data(
-        resolved_path,
-        preprocessed,
-        cross_file=False,
-        limit=effective_limit,
+    raw, preprocessed = await _lookup_title_page(
+        ops, server, resolved_path, query, cross_file=False, limit=effective_limit
     )
 
     from ..topic_preprocessing import promote_topic_via_title_index
