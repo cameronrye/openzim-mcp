@@ -44,7 +44,7 @@ from libzim.suggestion import (  # type: ignore[import-untyped]
 )
 
 from openzim_mcp.archive_types import detect_archive_type
-from openzim_mcp.cache import OpenZimMcpCache
+from openzim_mcp.cache import OpenZimMcpCache, content_settings_fingerprint
 from openzim_mcp.config import OpenZimMcpConfig
 from openzim_mcp.constants import DEFAULT_MAIN_PAGE_TRUNCATION
 from openzim_mcp.content_processor import ContentProcessor
@@ -726,6 +726,12 @@ class ZimOperations(
         self.path_validator = path_validator
         self.cache = cache
         self.content_processor = content_processor
+        # A persisted snapshot was rendered under SOME content settings; the
+        # cache only sees its own config, so it learns these from here and
+        # drops a snapshot rendered under others before anything reads it.
+        fingerprint = content_settings_fingerprint(config)
+        if fingerprint is not None:
+            cache.bind_content_settings(fingerprint)
         # Apply optional libzim cache tuning from config. Only touches
         # process/global libzim state when at least one knob is set, so
         # the default configuration leaves libzim's behaviour unchanged.

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import time
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
@@ -749,3 +750,109 @@ class TestConcurrentLinkGraphBuildsKeepTheirOwnFiles:
             os.umask(umask)
 
         assert out.stat().st_mode & 0o777 == 0o644
+
+
+class TestARestoredSnapshotAnswersToTheCurrentConfig:
+    """A persisted snapshot came back exactly as it was saved.
+
+    Each entry kept its saved TTL, so lowering ``ttl_seconds`` from 86400
+    to 60 left restored entries alive for the rest of the day; the
+    snapshot was reused after a ``snippet_length`` change, so the old
+    length was served until the TTL ran out; and entries were saved in
+    insertion order, so the hottest one came back as the LRU victim.
+    """
+
+    @staticmethod
+    def _cache(path: Path, **settings: Any) -> OpenZimMcpCache:
+        config = CacheConfig(
+            enabled=True,
+            persistence_enabled=True,
+            persistence_path=str(path),
+            **{"max_size": 10, "ttl_seconds": 3600, **settings},
+        )
+        return OpenZimMcpCache(config, enable_background_cleanup=False)
+
+    def test_a_lowered_ttl_applies_to_restored_entries(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import openzim_mcp.cache as cache_mod
+
+        snapshot = tmp_path / "snap"
+        first = self._cache(snapshot, ttl_seconds=86400)
+        first.set("restored", {"title": "old"})
+        first.shutdown()
+
+        second = self._cache(snapshot, ttl_seconds=60)
+        second.set("fresh", {"title": "new"})
+        assert second.get("restored") == {"title": "old"}
+
+        real_monotonic = time.monotonic
+        monkeypatch.setattr(cache_mod.time, "monotonic", lambda: real_monotonic() + 600)
+        assert second.get("fresh") is None
+        assert second.get("restored") is None
+
+    def test_the_hottest_entry_survives_a_restart_into_a_smaller_cache(
+        self, tmp_path: Path
+    ) -> None:
+        snapshot = tmp_path / "snap"
+        first = self._cache(snapshot)
+        for key in ("hot", "a", "b", "c"):
+            first.set(key, key)
+        for _ in range(5):
+            first.get("hot")
+        first.set("d", "d")
+        first.shutdown()
+
+        restarted = self._cache(snapshot, max_size=3)
+
+        assert restarted.get("hot") == "hot"
+        assert restarted.get("d") == "d"
+        assert restarted.get("a") is None
+
+    @staticmethod
+    def _ops_with_snippets(zim_dir: Path, snapshot: Path, snippet: int) -> Any:
+        config = OpenZimMcpConfig(
+            allowed_directories=[str(zim_dir)],
+            tool_mode="advanced",
+            cache=CacheConfig(
+                enabled=True, persistence_enabled=True, persistence_path=str(snapshot)
+            ),
+            content=ContentConfig(snippet_length=snippet),
+            logging=LoggingConfig(level="WARNING"),
+        )
+        return ZimOperations(
+            config,
+            PathValidator(config.allowed_directories),
+            OpenZimMcpCache(config.cache, enable_background_cleanup=False),
+            ContentProcessor(snippet_length=snippet),
+        )
+
+    def test_a_snippet_length_change_drops_the_snapshot(self, tmp_path: Path) -> None:
+        zim_dir = tmp_path / "zims"
+        zim_dir.mkdir()
+        zim = _build_article_zim(
+            zim_dir / "long.zim",
+            heading="Glaciers",
+            body="glacier retreat is measured every year. " * 120,
+        )
+        snapshot = tmp_path / "snap"
+
+        def snippet(ops: Any) -> str:
+            page = ops.search_zim_file_data(str(zim), "glacier", limit=1)
+            return str(page["results"][0]["snippet"])
+
+        long_run = self._ops_with_snippets(zim_dir, snapshot, 3000)
+        long_snippet = snippet(long_run)
+        long_run.cache.shutdown()
+
+        same = self._ops_with_snippets(zim_dir, snapshot, 3000)
+        hits = same.cache.stats()["hits"]
+        assert snippet(same) == long_snippet
+        assert same.cache.stats()["hits"] > hits, "same settings: still warm"
+        same.cache.shutdown()
+
+        short_run = self._ops_with_snippets(zim_dir, snapshot, 120)
+        short_snippet = snippet(short_run)
+
+        assert len(long_snippet) > 1000
+        assert len(short_snippet) < 200, len(short_snippet)
