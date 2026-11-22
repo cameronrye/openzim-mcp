@@ -844,3 +844,47 @@ class TestExplorePromptWalksTheContentNamespace:
         assert "step 1" in _prompt_step(outside, 3)
         # Positive pair: the allowed copy of an old-scheme archive is probed.
         assert "namespace=`A`" in _prompt_step(inside, 3)
+
+
+class TestSummarizePromptRanksByMention:
+    """``/summarize`` took "the most-mentioned related entries" from
+    ``direction="outbound"``.
+
+    Outbound links come back occurrence by occurrence, in document order with
+    duplicates kept (58 rows, 54 targets, for ``A/Climate_change``), so
+    nothing in them is ranked by mentions. ``direction="related"`` is exactly
+    that: distinct targets with a ``mention_count``, most-mentioned first.
+    """
+
+    @pytest.mark.asyncio
+    async def test_step_three_returns_distinct_articles_by_mention_count(
+        self, withns: Path
+    ) -> None:
+        mini = str(withns / _MINI)
+        article = "A/Climate_change"
+        async with _session(withns, "advanced") as session:
+            prompt = await session.get_prompt(
+                "summarize", {"zim_file_path": mini, "entry_path": article}
+            )
+            step = _prompt_step(prompt, 3)
+            direction = re.search(r"direction=`([a-z]+)`", step)
+            assert direction, step
+            # Run step 3 exactly as the prompt spells it.
+            is_error, text, body = await _call(
+                session,
+                "zim_links",
+                {
+                    "zim_file_path": mini,
+                    "entry_path": article,
+                    "direction": direction.group(1),
+                    "limit": 10,
+                },
+            )
+
+        assert direction.group(1) == "related", step
+        assert "outbound" not in prompt.messages[0].content.text
+        assert is_error is not True, text[:300]
+        paths = [row["path"] for row in body["results"]]
+        counts = [row["mention_count"] for row in body["results"]]
+        assert paths and len(set(paths)) == len(paths), paths
+        assert counts == sorted(counts, reverse=True) and counts[0] > 1, counts

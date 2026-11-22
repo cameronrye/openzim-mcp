@@ -157,9 +157,9 @@ Three-part article summary. Workflow:
 
 1. `zim_get` with `view="toc"` for the structural overview.
 2. `zim_get` with `view="summary"` for the lead-paragraph summary.
-3. `zim_links` with `direction="outbound"` for the most-mentioned related entries.
+3. `zim_links` with `direction="related"` for the most-mentioned related entries — distinct targets ranked by `mention_count`, where `"outbound"` would list every link occurrence in document order.
 
-Combined into: (a) one-paragraph TL;DR, (b) section list, (c) 5–10 most relevant outbound links.
+Combined into: (a) one-paragraph TL;DR, (b) section list, (c) the 5–10 most-mentioned related articles.
 
 Step 1 call shape:
 
@@ -195,7 +195,7 @@ Step 3 call shape:
   "arguments": {
     "zim_file_path": "<arg>",
     "entry_path": "<arg>",
-    "direction": "outbound"
+    "direction": "related"
   }
 }
 ```

@@ -140,11 +140,15 @@ def _summarize_body(zim_file_path: str, entry_path: str) -> List[Dict[str, Any]]
                 f"in `{safe_zim}` for a structural overview.\n"
                 f"2. Call zim_get with view=`summary` for the same entry "
                 "for the lead-paragraph summary.\n"
-                f"3. Call zim_links with direction=`outbound` for "
+                # ``related``, not ``outbound``: outbound rows are link
+                # occurrences in document order with duplicates kept, so
+                # nothing in them ranks by mentions; ``related`` is the
+                # distinct targets ordered by ``mention_count``.
+                f"3. Call zim_links with direction=`related` for "
                 f"entry_path=`{safe_entry}` for the most-mentioned related "
                 "entries.\n\n"
                 "Combine into: (a) one-paragraph TL;DR, (b) section list, "
-                "(c) 5–10 most relevant outbound links."
+                "(c) the 5–10 most-mentioned related articles."
             ),
         )
     ]
