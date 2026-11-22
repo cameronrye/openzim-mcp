@@ -2621,11 +2621,15 @@ class SimpleToolsHandler(
         section_id = target.get("id") or ""
         include_subsections = not bool(params.get("narrow"))
         try:
+            # ``compact`` picks the bundle: the compact one replaces large
+            # tables with "pass compact=False to expand" placeholders, so
+            # leaving it at the data layer's default made that advice loop.
             section = self.zim_operations.get_section_data(
                 zim_file_path,
                 entry_path,
                 section_id,
                 include_subsections=include_subsections,
+                compact=options.get("compact", True),
             )
         except Exception as e:
             return (

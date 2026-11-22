@@ -9,6 +9,7 @@ or the simple-mode handler end to end, in the mode the defect lives in.
 from __future__ import annotations
 
 import json
+import re
 import shutil
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -572,3 +573,111 @@ class TestBinaryTipNamesARouteToMediaPaths:
         assert '`zim_links(entry_path=<article>, kind="media")`' in tip, tip
         assert links_error is not True, links[:300]
         assert "media" in body["category_totals"], body
+
+
+# The lead of this article is a 69-row table, which compact rendering
+# replaces with a placeholder telling the caller to pass ``compact=False``.
+_TABLE_ARTICLE = "A/List_of_coal-fired_power_stations_in_Vietnam"
+_PLACEHOLDER = "[Table 1: 69 rows x 9 cols - pass compact=False to expand]"
+
+
+class TestGetSectionHonoursCompact:
+    """``get section X of Y`` with ``compact=False`` still returned the
+    compact table placeholder — "pass compact=False to expand" — so the
+    advice looped: the handler never passed ``compact`` to the section
+    fetch, which defaults to the compact bundle.
+    """
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("cache", [False, True])
+    async def test_compact_false_expands_the_table(
+        self, withns: Path, cache: bool
+    ) -> None:
+        base = {
+            "query": f"get section 1 of {_TABLE_ARTICLE}",
+            "zim_file_path": str(withns / _MINI),
+            "max_content_length": 50_000,
+        }
+        async with _session(withns, "simple", cache=cache) as session:
+            # Compact first, so with the cache on the raw call follows a
+            # cached compact bundle (and the compact call after it a raw one).
+            _, compact, _ = await _call(session, "zim_query", base)
+            raw_error, raw, _ = await _call(
+                session, "zim_query", {**base, "compact": False}
+            )
+            _, compact_again, _ = await _call(session, "zim_query", base)
+
+        assert raw_error is not True, raw[:300]
+        assert "List of coal-fired power stations in Vietnam" in raw
+        assert _PLACEHOLDER not in raw, raw[:1500]
+        # The table itself, rendered: its 69 rows, not a placeholder for them.
+        rows = [line for line in raw.splitlines() if line.count(" | ") >= 5]
+        assert len(rows) > 50, raw[:1500]
+        assert "Duyen Hai 1 |" in raw, raw[:1500]
+        # Positive pair: compact mode keeps the placeholder it advertises.
+        assert _PLACEHOLDER in compact, compact[:1500]
+        assert compact_again == compact
+
+
+class TestTableDominatedSectionAdviceResolves:
+    """The subject-section fallback's own advice was a dead end.
+
+    For a section that compact mode reduces to table placeholders it says to
+    re-issue ``get section <ref> of <path>`` with ``compact=False``. The
+    reference was the heading's *id* (``Notable_people``), which
+    ``get section`` matches against heading TEXT — "Section not found" — and
+    even a reference that matched came back compact (see above). Munich's
+    ``Notable people`` (two placeholder-only sub-tables) is the live shape.
+    """
+
+    @staticmethod
+    def _handler() -> Any:
+        from unittest.mock import MagicMock
+
+        from openzim_mcp.simple_tools import SimpleToolsHandler
+
+        placeholders = (
+            "### Born in Munich\n\n"
+            "[Table 8: 1 rows x 2 cols - pass compact=False to expand]\n"
+        )
+        expanded = (
+            "### Born in Munich\n\nName | Born\n---|---\nRichard Strauss | 1864\n"
+        )
+        mock = MagicMock()
+        mock.list_zim_files_data.return_value = [{"path": "/x.zim"}]
+        mock.config.meta.footer_enabled = False
+        mock.search_zim_file_data.return_value = {
+            "results": [{"path": "Munich", "title": "Munich"}],
+            "total": 1,
+        }
+        mock.get_zim_entry.return_value = "stub-body"
+        mock.find_entry_by_title_data.return_value = {
+            "results": [{"path": "Munich", "title": "Munich", "score": 1.0}],
+            "total": 1,
+        }
+        mock.get_article_structure_data.return_value = {
+            "headings": [{"level": 2, "text": "Notable people", "id": "Notable_people"}]
+        }
+        # The section body as each bundle renders it.
+        mock.get_section_data.side_effect = lambda *_a, compact=True, **_k: {
+            "content_markdown": placeholders if compact else expanded
+        }
+        return SimpleToolsHandler(mock)
+
+    def test_following_the_advice_returns_the_expanded_section(self) -> None:
+        handler = self._handler()
+        out = handler.handle_zim_query(
+            "tell me about musicians from München",
+            zim_file_path="/x.zim",
+            options={"compact": True},
+        )
+        advice = re.findall(r"`(get section [^`]+)`", out)
+        assert advice == ["get section Notable people of Munich"], out
+
+        follow_up = handler.handle_zim_query(
+            advice[0], zim_file_path="/x.zim", options={"compact": False}
+        )
+
+        assert "not found" not in follow_up, follow_up
+        assert "Richard Strauss | 1864" in follow_up, follow_up
+        assert "[Table 8" not in follow_up, follow_up
