@@ -462,11 +462,11 @@ class TestD2RerankerCounterOnNoResults:
         """Verify ``_maybe_rerank_compact`` itself bumps the counter
         on an empty payload — this is the contract D2 relies on."""
         from openzim_mcp.ml.reranker import BGEReranker
-        from openzim_mcp.simple_tools import (
+        from openzim_mcp.rerank import (
             _RERANKER_SKIPPED_NO_RESULTS,
             _RERANKER_SKIPPED_NOT_INSTALLED,
-            SimpleToolsHandler,
         )
+        from openzim_mcp.simple_tools import SimpleToolsHandler
 
         class _StubReranker:
             def rerank(self, *, query: str, candidates: list, top_k: int) -> list:
