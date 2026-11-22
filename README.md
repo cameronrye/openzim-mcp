@@ -36,7 +36,7 @@
 
 Built for research assistants, knowledge chatbots, and content-analysis systems that need *intelligent* access to vast knowledge repositories — not just a raw text dump. Smart navigation by namespace (articles, metadata, media), structure-aware retrieval (sections, tables of contents, related articles), full-text search with suggestions and multi-archive search, and link-graph extraction to map content relationships. Cached, paginated operations keep things responsive across massive archives; comprehensive input validation and path-traversal protection keep things safe.
 
-Streamable HTTP transport, per-entry MCP resources with live change notifications, and dual Simple / Advanced modes are all built in.
+Streamable HTTP transport, per-entry MCP resources (advanced mode) with live change notifications (HTTP transport), and dual Simple / Advanced modes are all built in.
 
 ## Install
 
@@ -82,7 +82,7 @@ For a one-click **Claude Desktop extension**, download the `openzim-mcp-<version
 
 ## Quick start
 
-Run the server in Simple mode (default — exposes one natural-language tool, `zim_query`):
+Run the server in Simple mode (the CLI default — exposes one natural-language tool, `zim_query`):
 
 ```bash
 openzim-mcp ~/zim-files
@@ -101,7 +101,7 @@ Wire it into your MCP client. Example for Claude Desktop's `claude_desktop_confi
 }
 ```
 
-Once the client connects, ask your LLM: *"summarize the article on Photosynthesis"* — `zim_query` dispatches to the right underlying tool automatically.
+Once the client connects, ask your LLM a question the starter archive can answer, such as *"what is the greenhouse effect?"* — `zim_query` dispatches to the right underlying tool automatically and returns the `A/Greenhouse_effect` article.
 
 For full control, run in Advanced mode to expose all 8 specialized tools:
 
@@ -122,8 +122,9 @@ For HTTP transport (long-running service with bearer auth, CORS, and health endp
 
 - **8-tool advanced surface** — `zim_query`, `zim_search`, `zim_get`, `zim_get_section`, `zim_browse`, `zim_metadata`, `zim_links`, `zim_health`. Down from 22; advanced-mode schema drops from ~36KB to ~23.8KB, clearing the [MCP Tax](https://www.mmntm.net/articles/mcp-context-tax) pain band. [API reference →](https://cameronrye.github.io/openzim-mcp/docs/api-reference/)
 - **Streamable HTTP transport** — bearer-token auth, CORS, health endpoints, multi-arch Docker image. [HTTP & Docker deployment →](https://cameronrye.github.io/openzim-mcp/docs/http-and-docker-deployment/)
-- **Per-entry MCP resources + subscriptions** — `zim://{name}/entry/{path}` with native MIME types; clients open a `subscriptions/listen` stream and get `resources/list_changed` when a ZIM appears or disappears, `resources/updated` when one is replaced. [Resources, prompts & subscriptions →](https://cameronrye.github.io/openzim-mcp/docs/resources-prompts-subscriptions/)
+- **Per-entry MCP resources + subscriptions** — `zim://{name}/entry/{path}` with native MIME types, registered in advanced mode alongside the prompts. Over the HTTP transport only, clients open a `subscriptions/listen` stream and get `resources/list_changed` when a ZIM appears or disappears, `resources/updated` when one is replaced. [Resources, prompts & subscriptions →](https://cameronrye.github.io/openzim-mcp/docs/resources-prompts-subscriptions/)
 - **Simple-mode `zim_query`** — one natural-language tool that dispatches to the right operation, tuned for small-model deployment targets. [Quick start →](https://cameronrye.github.io/openzim-mcp/docs/quick-start/)
+- **Operator-set server instructions** (3.5+) — replace the instructions every client receives with your own text, set inline with `OPENZIM_MCP_INSTRUCTIONS` or from a file with `OPENZIM_MCP_INSTRUCTIONS_PATH`. A `{{default}}` token in it expands to the built-in tool-routing text, so you can add context about your archives without copying it. [Server instructions →](https://cameronrye.github.io/openzim-mcp/docs/configuration/#server-instructions)
 - **Archive-type presets** — OpenZIM MCP detects the archive type (Wikipedia, Stack Exchange, and more) and auto-tunes retrieval and summarization for it — e.g. Stack Exchange dumps render as clean Q&A instead of vote-score noise. Operators can override the bundled defaults with a TOML file (`OPENZIM_MCP_PRESETS_OVERRIDE_PATH`).
 - **Native libzim introspection** — `zim_health(zim_file_path=...)` validates an archive's integrity (`Archive.check()` + checksum), and `zim_metadata` reports archive identity, full-text / title index capabilities, and an `M/Counter` mimetype breakdown. [API reference →](https://cameronrye.github.io/openzim-mcp/docs/api-reference/)
 - **Inbound link discovery ("what links here")** — `zim_links(direction="inbound")` returns pages that link to an entry, ranked by linker importance. Requires a pre-built sidecar: `openzim-mcp build link-graph <archive>.zim` (writes `<archive>.zim.linkgraph.sqlite` next to the archive). [API reference →](https://cameronrye.github.io/openzim-mcp/docs/api-reference/)
@@ -132,9 +133,11 @@ For HTTP transport (long-running service with bearer auth, CORS, and health endp
 
 OpenZIM MCP ships two modes; pick one per client.
 
-**Simple mode** (default) exposes a single intelligent tool, `zim_query`, that parses natural-language requests and dispatches to the right underlying operation. Built for small-model deployment targets — the wire footprint is minimal and the dispatch happens server-side, not in the LLM context. Start here unless you have a specific reason not to.
+**Simple mode** (the default when you run `openzim-mcp` yourself, from a uv or pip install) exposes a single intelligent tool, `zim_query`, that parses natural-language requests and dispatches to the right underlying operation. Built for small-model deployment targets — the wire footprint is minimal and the dispatch happens server-side, not in the LLM context. Start here unless you have a specific reason not to.
 
 **Advanced mode** exposes all 8 specialized tools (`zim_query`, `zim_search`, `zim_get`, `zim_get_section`, `zim_browse`, `zim_metadata`, `zim_links`, `zim_health`) plus 3 MCP prompts (`/research`, `/summarize`, `/explore`) and per-entry resources. Built for larger models that can reliably dispatch over the full schema, and for clients that want fine-grained control over pagination, namespace browsing, and link-graph extraction.
+
+The Docker image, the Claude Desktop `.mcpb` bundle and the MCP Registry entry start in **Advanced mode** instead: the image and the bundle set `OPENZIM_MCP_TOOL_MODE=advanced`, and the registry entry (`server.json`) gives that variable a default of `advanced`. Run the container with `-e OPENZIM_MCP_TOOL_MODE=simple` for Simple mode.
 
 Rule of thumb: models ≤ 13B parameters benefit from Simple mode; larger models (Claude Sonnet/Opus, GPT-4o-class, Llama 70B+) can dispatch Advanced mode directly. See [LLM integration patterns](https://cameronrye.github.io/openzim-mcp/docs/llm-integration-patterns/) for guidance on choosing.
 
@@ -152,7 +155,7 @@ Full documentation lives at **<https://cameronrye.github.io/openzim-mcp/docs/>**
 ## Project status
 
 **v3.4.1** is the current release (2026-11-19). <!-- x-release-please-version-date -->
-v2.0.0 GA shipped 2026-05-27. Per [SECURITY.md](SECURITY.md), the v1.x maintenance window closed when v2.5.0 shipped (2026-06-18); all active development is on the current major line. **v3.0.0 is a breaking release for HTTP subscription clients**: `resources/subscribe`/`unsubscribe` are no longer served — live updates ride `subscriptions/listen` on the 2026-07-28 protocol revision — and link-graph sidecars built by 2.x must be rebuilt. Tools, resources, and prompts are unchanged, and legacy-handshake clients keep working. Details in [CHANGELOG.md](CHANGELOG.md), and step-by-step instructions in the [upgrade guide](https://cameronrye.github.io/openzim-mcp/docs/upgrading/).
+v2.0.0 GA shipped 2026-05-27. Per [SECURITY.md](SECURITY.md), the v1.x maintenance window closed when v2.5.0 shipped (2026-06-18); all active development is on the current major line. **v3.0.0 is a breaking release for HTTP subscription clients**: `resources/subscribe`/`unsubscribe` are no longer served — live updates ride `subscriptions/listen` on the 2026-07-28 protocol revision — and link-graph sidecars built by 2.x must be rebuilt. Tools, resources, and prompts are unchanged, and legacy-handshake clients keep working. The `sse` transport (`--transport sse`) is deprecated and is removed in 4.0.0 ([#366](https://github.com/cameronrye/openzim-mcp/issues/366)): move the server to `--transport http`, and move the client to streamable HTTP too, because `http` serves `/mcp` and not the SSE endpoints. Details in [CHANGELOG.md](CHANGELOG.md), and step-by-step instructions in the [upgrade guide](https://cameronrye.github.io/openzim-mcp/docs/upgrading/).
 
 ## Contributing
 
