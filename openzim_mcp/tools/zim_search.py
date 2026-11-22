@@ -436,7 +436,12 @@ async def _handle_fulltext_mode(
         resolved_path, query, limit=limit, offset=offset
     )
     payload = await _splice_canonical_title_hit(
-        server, payload, resolved_path=resolved_path, query=query, offset=offset
+        server,
+        payload,
+        ops=ops,
+        resolved_path=resolved_path,
+        query=query,
+        offset=offset,
     )
     return _name_the_archive(_strip_next_cursor(payload), resolved_path)
 
@@ -499,6 +504,7 @@ async def _splice_canonical_title_hit(
     server: "OpenZimMcpServer",
     payload: Any,
     *,
+    ops: Any,
     resolved_path: str,
     query: str,
     offset: int,
@@ -525,27 +531,39 @@ async def _splice_canonical_title_hit(
 
     Gated to the first page: the splice is a promotion, and re-injecting the
     canonical at every ``offset`` would re-serve the same row forever.
+
+    A page never exceeds ``limit``. When the canonical is not among the
+    ranked hits it is an extra row, which made ``query='glacier', limit=1``
+    return two rows. Trimming the last hit instead would lose it — DD4 did
+    that, and the trimmed hit fell between page one and every advertised
+    resume point — so a page the canonical would overflow is rebuilt from
+    ``limit - 1`` ranked hits, whose ``next_offset`` starts at the hit that
+    made room. A one-row page has no such page to build: its resume point
+    would be offset 0, which is this page again, so the splice yields there.
     """
     if offset or not isinstance(payload, dict):
-        return payload
-    results = payload.get("results")
-    if not results:
         return payload
     handler = getattr(server, "simple_tools_handler", None)
     if handler is None:  # pragma: no cover — registered in both tool modes
         return payload
-    top_before = results[0].get("path") if isinstance(results[0], dict) else None
-    try:
-        spliced = await asyncio.to_thread(
-            handler._splice_title_match_into_search,
-            payload,
-            resolved_path,
-            query,
+    spliced = await _spliced_page(handler, payload, resolved_path, query)
+    if spliced is None:
+        return payload
+    page_limit = (payload.get("page_info") or {}).get("limit")
+    if isinstance(page_limit, int) and len(spliced["results"]) > page_limit:
+        if page_limit < 2:
+            return payload
+        payload = await ops.search_zim_file_data(
+            resolved_path, query, limit=page_limit - 1, offset=0
         )
-    except Exception:  # pragma: no cover — defensive; never fail the search
-        return payload
-    if not isinstance(spliced, dict) or spliced.get("results") == results:
-        return payload
+        rebuilt = await _spliced_page(handler, payload, resolved_path, query)
+        if rebuilt is None:
+            return payload
+        # The page answers the caller's ``limit``, not the one it was read at.
+        rebuilt["page_info"] = {**(rebuilt.get("page_info") or {}), "limit": page_limit}
+        spliced = rebuilt
+    results = payload["results"]
+    top_before = results[0].get("path") if isinstance(results[0], dict) else None
     new_results = spliced.get("results") or []
     top_after = (
         new_results[0].get("path")
@@ -557,6 +575,27 @@ async def _splice_canonical_title_hit(
         dict(payload.get("_meta") or {}),
         top_changed=top_after != top_before,
     )
+    return spliced
+
+
+async def _spliced_page(
+    handler: Any, payload: Any, resolved_path: str, query: str
+) -> Optional[dict]:
+    """The splice's rewrite of ``payload``, or None when it changed nothing."""
+    results = payload.get("results") if isinstance(payload, dict) else None
+    if not results:
+        return None
+    try:
+        spliced = await asyncio.to_thread(
+            handler._splice_title_match_into_search,
+            payload,
+            resolved_path,
+            query,
+        )
+    except Exception:  # pragma: no cover — defensive; never fail the search
+        return None
+    if not isinstance(spliced, dict) or spliced.get("results") == results:
+        return None
     return spliced
 
 
