@@ -184,3 +184,48 @@ class TestABlankTokenIsNoTokenEverywhere:
         with caplog.at_level("WARNING", logger="openzim_mcp.http_app"):
             http_app.check_safe_startup(config)
         assert any("INSECURE" in r.getMessage() for r in caplog.records)
+
+
+class TestATokenNoClientCanSendIsRefused:
+    """A token with surrounding whitespace locked every client out.
+
+    ``openssl rand -hex 32 > token`` writes a trailing newline, and a
+    Kubernetes Secret made from that file hands it to the server verbatim.
+    The HTTP parser strips the whitespace around a header value, so the
+    presented ``Bearer <hex>`` can never equal ``<hex>\\n`` and every request
+    got a 401, with nothing at startup to say why. A control character
+    inside the token is the same lockout: a header cannot carry one.
+    """
+
+    @staticmethod
+    def _load(tmp_path: Path, token: str) -> OpenZimMcpConfig:
+        return OpenZimMcpConfig(allowed_directories=[str(tmp_path)], auth_token=token)
+
+    @pytest.mark.parametrize("token", ["s3cret\n", "s3cret\r\n", " s3cret", "s3cret "])
+    def test_surrounding_whitespace_is_refused_at_load(
+        self, tmp_path: Path, token: str
+    ) -> None:
+        with pytest.raises(OpenZimMcpConfigurationError, match="trailing whitespace"):
+            self._load(tmp_path, token)
+
+    @pytest.mark.parametrize("token", ["s3\x00cret", "s3\x1b[0mcret", "s3\ncret"])
+    def test_a_control_character_is_refused_at_load(
+        self, tmp_path: Path, token: str
+    ) -> None:
+        with pytest.raises(OpenZimMcpConfigurationError, match="control character"):
+            self._load(tmp_path, token)
+
+    def test_the_variable_read_from_a_token_file_is_named(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("OPENZIM_MCP_AUTH_TOKEN", "0123abcd\n")
+        with pytest.raises(OpenZimMcpConfigurationError) as excinfo:
+            OpenZimMcpConfig(allowed_directories=[str(tmp_path)])
+        assert "OPENZIM_MCP_AUTH_TOKEN" in str(excinfo.value)
+
+    @pytest.mark.parametrize("token", ["s3cret", "0123abcd" * 8, "a-b_c.d~e+f/g="])
+    def test_a_token_a_client_can_send_still_loads(
+        self, tmp_path: Path, token: str
+    ) -> None:
+        loaded = self._load(tmp_path, token).auth_token
+        assert loaded is not None and loaded.get_secret_value() == token

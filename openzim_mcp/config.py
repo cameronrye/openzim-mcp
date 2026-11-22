@@ -629,6 +629,27 @@ class OpenZimMcpConfig(BaseSettings):
                 "header encoding makes such a token match or fail depending "
                 "on the client's byte encoding — choose an ASCII secret."
             )
+        # A token no request can present locks every client out with a 401
+        # and nothing at startup to say why. The HTTP parser strips the
+        # whitespace around a header value, so ``Bearer <hex>`` never equals
+        # the ``<hex>\n`` that ``openssl rand -hex 32 > token`` writes and a
+        # Kubernetes Secret made from that file passes through verbatim; and
+        # a header cannot carry a control character at all.
+        if v is not None and v.get_secret_value() != v.get_secret_value().strip():
+            raise OpenZimMcpConfigurationError(
+                "OPENZIM_MCP_AUTH_TOKEN has leading or trailing whitespace "
+                "(often the newline at the end of the file it was read from). "
+                "HTTP strips it from the Authorization header, so no request "
+                "could ever present this token — remove the whitespace."
+            )
+        if v is not None and any(
+            ord(ch) < 0x20 or ord(ch) == 0x7F for ch in v.get_secret_value()
+        ):
+            raise OpenZimMcpConfigurationError(
+                "OPENZIM_MCP_AUTH_TOKEN contains a control character. An HTTP "
+                "header cannot carry one, so no request could ever present "
+                "this token — choose a secret of printable ASCII."
+            )
         return v
 
     @field_validator("instructions", mode="before")
