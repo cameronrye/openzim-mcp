@@ -395,3 +395,64 @@ class TestLimitPastTheFiftyCapIsClamped:
         assert ok_error is not True, ok_text[:300]
         assert "`A/Carbon_tax`" in ok_text
         assert _CLAMP_NOTE not in ok_text
+
+
+class TestSearchAllRefusesOffset:
+    """``search all files for X`` answered ``offset=3`` and ``offset=300``
+    with page one, byte for byte.
+
+    The fan-out returns each archive's top hits and has no next page, so the
+    offset was accepted and dropped; advanced ``zim_search(cross_file=True,
+    offset=3)`` already refuses the same request.
+    """
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("offset", [3, 300])
+    async def test_offset_is_refused_with_a_route_that_pages(
+        self, withns: Path, offset: int
+    ) -> None:
+        mini = str(withns / _MINI)
+        async with _session(withns, "simple") as session:
+            is_error, text, body = await _call(
+                session,
+                "zim_query",
+                {
+                    "query": "search all files for carbon tax",
+                    "limit": 3,
+                    "offset": offset,
+                },
+            )
+            ok_error, ok_text, _ = await _call(
+                session,
+                "zim_query",
+                {"query": "search all files for carbon tax", "limit": 3},
+            )
+            # The advice names the per-archive route; it must really page.
+            first = await _call(
+                session,
+                "zim_query",
+                {"query": "search for carbon tax", "zim_file_path": mini, "limit": 3},
+            )
+            second = await _call(
+                session,
+                "zim_query",
+                {
+                    "query": "search for carbon tax",
+                    "zim_file_path": mini,
+                    "limit": 3,
+                    "offset": 3,
+                },
+            )
+
+        assert is_error is True, text[:300]
+        assert body["operation"] == "invalid_combination", body
+        assert f"`offset` (provided: {offset})" in body["message"], body
+        assert "`search for <terms>`" in body["message"], body
+        assert "`zim_file_path`" in body["message"], body
+        # Positive pairs: the fan-out itself still answers, and the route the
+        # message names returns a different page at the same offset.
+        assert ok_error is not True, ok_text[:300]
+        assert "`A/Carbon_tax`" in ok_text
+        assert first[0] is not True and second[0] is not True
+        assert "A/Carbon_tax" in first[1]
+        assert "A/Carbon_tax" not in second[1], second[1][:600]

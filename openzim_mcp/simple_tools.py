@@ -4332,7 +4332,24 @@ class SimpleToolsHandler(
         zim_file_path: str,
         params: Dict[str, Any],
         options: Dict[str, Any],
-    ) -> "Union[str, _HandlerResult]":
+    ) -> "Union[str, _HandlerResult, ToolErrorPayload]":
+        # The fan-out returns each archive's top hits and has no next page,
+        # so an ``offset`` was accepted and dropped — ``offset=300`` answered
+        # with page one. Refuse it the way ``zim_search(cross_file=True)``
+        # does, naming the single-archive search that does page.
+        offset = int(options.get("offset", 0) or 0)
+        if offset:
+            return tool_error(
+                operation="invalid_combination",
+                message=(
+                    "`search all files for` does not paginate: it returns the "
+                    f"top hits from every archive, so `offset` (provided: "
+                    f"{offset}) would return the same page. Drop `offset` and "
+                    "raise `limit` (up to 50 per archive) for more hits, or "
+                    "page one archive with `search for <terms>`, passing its "
+                    "`zim_file_path` and the `offset`."
+                ),
+            )
         # Honour caller-supplied ``limit`` (mapped to ``limit_per_file`` for
         # symmetry with other tools) and fall back to 5 — matching
         # ``search_zim_file``'s explicit ``limit_per_file=5`` default. The
