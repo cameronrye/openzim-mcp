@@ -81,7 +81,14 @@ class LinkGraphReader:
         # read-only (otherwise the URI is malformed and a valid sidecar would
         # silently look absent).
         uri = f"file:{pathname2url(str(Path(path).resolve()))}?mode=ro"
-        conn = sqlite3.connect(uri, uri=True)
+        try:
+            conn = sqlite3.connect(uri, uri=True)
+        except sqlite3.Error:
+            # A sidecar this process may not read (mode 000, or built by an
+            # operator the server does not run as) is as unusable as an
+            # absent one, and must be reported the same way rather than
+            # escape as a raw ``OperationalError``.
+            return None
         try:
             meta = dict(conn.execute("SELECT key, value FROM meta"))
         except sqlite3.DatabaseError:

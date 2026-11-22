@@ -856,3 +856,55 @@ class TestARestoredSnapshotAnswersToTheCurrentConfig:
 
         assert len(long_snippet) > 1000
         assert len(short_snippet) < 200, len(short_snippet)
+
+
+class TestAnUnreadableSidecarIsUnavailableNotACrash:
+    """``LinkGraphReader.open_for`` connected outside its ``try``.
+
+    A sidecar the server may not read (mode 000, or owned by the operator
+    who built it) raised a bare ``sqlite3.OperationalError: unable to open
+    database file`` out of ``zim_links(direction="inbound")`` instead of
+    the ``inbound_sidecar_unavailable`` answer every other unusable sidecar
+    gets.
+    """
+
+    @pytest.mark.asyncio
+    async def test_inbound_reports_the_sidecar_unavailable(
+        self, wikibooks_copy: Path
+    ) -> None:
+        import json
+
+        from openzim_mcp.linkgraph.builder import build_link_graph
+        from openzim_mcp.server import OpenZimMcpServer
+        from tests.test_mcp_session import _connected_client, _text
+
+        if os.name != "posix" or os.getuid() == 0:
+            pytest.skip("chmod 000 cannot deny a read here")
+        build_link_graph(str(wikibooks_copy))
+        sidecar = Path(f"{wikibooks_copy}.linkgraph.sqlite")
+        server = OpenZimMcpServer(
+            OpenZimMcpConfig(
+                allowed_directories=[str(wikibooks_copy.parent)],
+                tool_mode="advanced",
+                cache=CacheConfig(enabled=False),
+            )
+        )
+        call = {
+            "zim_file_path": str(wikibooks_copy),
+            "entry_path": "A/Эспэранта.html",
+            "direction": "inbound",
+        }
+
+        async with _connected_client(server) as session:
+            readable = json.loads(_text(await session.call_tool("zim_links", call)))
+            sidecar.chmod(0)
+            try:
+                denied = await session.call_tool("zim_links", call)
+            finally:
+                sidecar.chmod(0o644)
+
+        assert readable["total"] > 0, readable
+        assert denied.is_error, _text(denied)
+        body = json.loads(_text(denied))
+        assert body["operation"] == "inbound_sidecar_unavailable", body
+        assert "OperationalError" not in _text(denied)
