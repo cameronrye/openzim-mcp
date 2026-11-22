@@ -7,7 +7,9 @@ to chain manually.
 """
 
 import re
-from typing import TYPE_CHECKING, Any, Dict, List
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
+
+from ..zim_operations import zim_archive
 
 if TYPE_CHECKING:
     from ..server import OpenZimMcpServer
@@ -148,13 +150,49 @@ def _summarize_body(zim_file_path: str, entry_path: str) -> List[Dict[str, Any]]
     ]
 
 
-def _explore_body(zim_file_path: str) -> List[Dict[str, Any]]:
-    """Body of the explore prompt."""
+def _content_namespace(server: "OpenZimMcpServer", zim_file_path: str) -> Optional[str]:
+    """The namespace ``zim_file_path`` keeps its articles in, if it can be read.
+
+    New-scheme archives file articles under ``C``; old-scheme ones — the
+    climate mini fixture among them — under ``A``, where a ``C`` walk scans
+    every entry and returns nothing. ``None`` for a path the server cannot
+    open: the prompt then says how to choose rather than guessing.
+    """
+    try:
+        validator = server.path_validator
+        validated = validator.validate_zim_file(validator.validate_path(zim_file_path))
+        with zim_archive(validated) as archive:
+            return "C" if getattr(archive, "has_new_namespace_scheme", False) else "A"
+    except Exception:  # noqa: BLE001 — any failure means "not probed"
+        return None
+
+
+def _explore_body(
+    zim_file_path: str, content_namespace: Optional[str] = None
+) -> List[Dict[str, Any]]:
+    """Body of the explore prompt.
+
+    ``content_namespace`` is the probed article namespace; without one, step 3
+    tells the model to take it from step 1's namespace breakdown.
+    """
     if not zim_file_path or not zim_file_path.strip():
         return _ask_for_args("explore")
     safe_zim = _sanitize_for_prompt(zim_file_path)
     if not safe_zim:
         return _ask_for_args("explore")
+    if content_namespace:
+        walk = (
+            f"3. Call zim_browse with namespace=`{content_namespace}` (where "
+            "this archive keeps its articles) and mode=`walk` (limit=5) for "
+            f"`{safe_zim}` to sample article content.\n"
+        )
+    else:
+        walk = (
+            "3. Call zim_browse with mode=`walk` (limit=5) for "
+            f"`{safe_zim}` in the content namespace step 1 reports — `C` on "
+            "new-scheme archives, `A` (the legacy content namespace) on older "
+            "ones — to sample article content.\n"
+        )
     return [
         _msg(
             "user",
@@ -167,8 +205,7 @@ def _explore_body(zim_file_path: str) -> List[Dict[str, Any]]:
                 "examining separately.\n"
                 f"2. Call zim_get with main_page=True for `{safe_zim}` for "
                 "the entry point.\n"
-                f"3. Call zim_browse with namespace=`C` and mode=`walk` "
-                f"(limit=5) for `{safe_zim}` to sample article content.\n"
+                f"{walk}"
                 "4. Then present a compact briefing — what is this archive, "
                 "what does it cover, and what does typical content look "
                 "like?"
@@ -209,4 +246,6 @@ def register_prompts(server: "OpenZimMcpServer") -> None:
         Args:
             zim_file_path: ZIM file to explore
         """
-        return _explore_body(zim_file_path)
+        # Sync prompt bodies run on a worker thread, so the archive probe
+        # does not stall the event loop.
+        return _explore_body(zim_file_path, _content_namespace(server, zim_file_path))

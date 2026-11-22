@@ -208,7 +208,7 @@ High-level briefing of one ZIM file. Workflow:
 
 1. `zim_metadata` — title, language, creator, flavour, plus the deterministic namespace breakdown (surfaces minority namespaces — M, W, X).
 2. `zim_get` with `main_page=True` — the entry point.
-3. `zim_browse` with `mode="walk"`, `namespace="C"`, `limit=5` — sample article content.
+3. `zim_browse` with `mode="walk"`, `limit=5`, in the namespace that holds the articles — sample article content. The prompt opens the archive to name it: `namespace="C"` on a new-scheme archive, `"A"` on an old-scheme one, where a `C` walk returns nothing. If the archive cannot be opened, the step says to take the namespace from step 1's breakdown.
 
 Step 1 call shape:
 
@@ -233,7 +233,7 @@ Step 2 call shape:
 }
 ```
 
-Step 3 call shape:
+Step 3 call shape, for a new-scheme archive (`"A"` in place of `"C"` on an old-scheme one):
 
 ```json
 {

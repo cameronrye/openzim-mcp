@@ -755,3 +755,92 @@ class TestWikiUrlHintResolves:
 
         assert "(e.g. ''" not in hint, hint
         assert "(e.g. 'en.wikipedia.org/wiki/')" in hint, hint
+
+
+def _prompt_step(prompt: Any, number: int) -> str:
+    """One numbered workflow line of a rendered prompt."""
+    text = prompt.messages[0].content.text
+    return next(line for line in text.splitlines() if line.startswith(f"{number}."))
+
+
+class TestExplorePromptWalksTheContentNamespace:
+    """``/explore`` step 3 walked namespace ``C`` on every archive.
+
+    Old-scheme archives — the climate mini fixture among them — keep their
+    articles in ``A``, so the walk scanned all 20,565 entries and returned
+    nothing, with no word on why.
+    """
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "subdir, name, namespace",
+        [("withns", _MINI, "A"), ("nons", "small.zim", "C")],
+    )
+    async def test_step_three_samples_real_articles(
+        self, zim_test_data_dir: Optional[Path], subdir: str, name: str, namespace: str
+    ) -> None:
+        if zim_test_data_dir is None:
+            pytest.skip("ZIM_TEST_DATA_DIR not set")
+        archive = zim_test_data_dir / subdir / name
+        if not archive.exists():
+            pytest.skip(f"{name} not in the corpus")
+        async with _session(archive.parent, "advanced") as session:
+            prompt = await session.get_prompt(
+                "explore", {"zim_file_path": str(archive)}
+            )
+            step = _prompt_step(prompt, 3)
+            named = re.search(r"namespace=`([A-Z])`", step)
+            assert named, step
+            # Run step 3 exactly as the prompt spells it.
+            is_error, text, walked = await _call(
+                session,
+                "zim_browse",
+                {
+                    "zim_file_path": str(archive),
+                    "namespace": named.group(1),
+                    "mode": "walk",
+                    "limit": 5,
+                },
+            )
+
+        assert named.group(1) == namespace, step
+        assert is_error is not True, text[:300]
+        assert walked["results"], walked
+
+    @pytest.mark.asyncio
+    async def test_an_unreadable_archive_defers_to_the_metadata_step(
+        self, withns: Path
+    ) -> None:
+        """Nothing to probe: say how to choose instead of guessing ``C``."""
+        async with _session(withns, "advanced") as session:
+            prompt = await session.get_prompt(
+                "explore", {"zim_file_path": str(withns / "missing.zim")}
+            )
+
+        step = _prompt_step(prompt, 3)
+        assert "step 1" in step, step
+        assert "`C`" in step and "`A`" in step, step
+        assert "namespace=`C`" not in step, step
+
+    @pytest.mark.asyncio
+    async def test_an_archive_outside_the_allowed_directories_is_not_opened(
+        self, tmp_path: Path, withns: Path
+    ) -> None:
+        """The probe takes a client-supplied path, so it goes through the
+        path validator like every tool: a real archive outside the allowed
+        directories gets the generic wording, not its scheme read out."""
+        allowed = tmp_path / "allowed"
+        allowed.mkdir()
+        shutil.copy(withns / "small.zim", allowed / "small.zim")
+        async with _session(allowed, "advanced") as session:
+            outside = await session.get_prompt(
+                "explore", {"zim_file_path": str(withns / _MINI)}
+            )
+            inside = await session.get_prompt(
+                "explore", {"zim_file_path": str(allowed / "small.zim")}
+            )
+
+        assert "namespace=`A`" not in _prompt_step(outside, 3)
+        assert "step 1" in _prompt_step(outside, 3)
+        # Positive pair: the allowed copy of an old-scheme archive is probed.
+        assert "namespace=`A`" in _prompt_step(inside, 3)

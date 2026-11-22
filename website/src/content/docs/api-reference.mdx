@@ -657,7 +657,7 @@ Workflow: `zim_get(view="toc")` → `zim_get(view="summary")` → `zim_links(dir
 explore(zim_file_path: str)
 ```
 
-Workflow: `zim_metadata` → `zim_get(main_page=True)` → `zim_browse(namespace="C", mode="walk", limit=5)`. Produces a compact briefing.
+Workflow: `zim_metadata` → `zim_get(main_page=True)` → `zim_browse(namespace="C", mode="walk", limit=5)`, or `namespace="A"` on an old-scheme archive (the prompt opens the archive to pick it). Produces a compact briefing.
 
 If a prompt is invoked without required args (or args reduce to empty after sanitization), the response asks the user to supply them.
 

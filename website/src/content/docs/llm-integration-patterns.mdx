@@ -545,7 +545,7 @@ Three pre-built workflow prompts are available in advanced mode (`--mode advance
 
 - `/research <topic>` — `zim_search(cross_file=True)` then `zim_get(view="summary")` on top hits, then ask which thread to pursue.
 - `/summarize <zim_file_path> <entry_path>` — `zim_get(view="toc")` + `zim_get(view="summary")` + `zim_links(direction="outbound")` combined.
-- `/explore <zim_file_path>` — `zim_metadata` then `zim_get(main_page=True)` then `zim_browse(namespace="C", mode="walk", limit=5)` — high-level briefing of one archive.
+- `/explore <zim_file_path>` — `zim_metadata` then `zim_get(main_page=True)` then `zim_browse(namespace="C", mode="walk", limit=5)` (`namespace="A"` on an old-scheme archive) — high-level briefing of one archive.
 
 If your client supports MCP prompts, surface these as slash commands rather than reimplementing the workflows in your own orchestration.
 
