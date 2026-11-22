@@ -761,3 +761,85 @@ class TestAPerOperationEntryCannotSayDisabled:
         limiter.check_rate_limit("search", client_id="c")
         with pytest.raises(OpenZimMcpRateLimitError, match="Per-operation"):
             limiter.check_rate_limit("search", client_id="c")
+
+
+# JSON text spelling the key ``id`` with escapes. Built from ``chr(92)`` (a
+# backslash) so the source never holds a backslash-u sequence an editor could
+# turn into the character it names.
+_BS = chr(92)
+_ESCAPED_ID_KEYS = [
+    f'"{_BS}u0069d"',
+    f'"i{_BS}u0064"',
+    f'"{_BS}u0069{_BS}u0064"',
+]
+
+
+class TestTheStdioNullIdGuardReadsEscapedKeys:
+    """An ``id`` key spelt with JSON escapes slipped past the stdio guard.
+
+    The guard skipped any line without the substring ``"id"`` before parsing
+    it, but ``"\\u0069d"`` decodes to the same key. With a null value the SDK
+    then read the frame as a notification and dropped it, so the client
+    waited forever — while the HTTP guard, which always parses, answered the
+    same bytes with ``-32600``.
+    """
+
+    @staticmethod
+    def _line(key: str, value: str = "null") -> str:
+        return '{"jsonrpc":"2.0",%s:%s,"method":"ping"}' % (key, value)
+
+    @pytest.mark.parametrize("key", _ESCAPED_ID_KEYS)
+    def test_an_escaped_key_is_judged_as_the_key_it_decodes_to(self, key: str) -> None:
+        from openzim_mcp.sdk_compat import (
+            invalid_request_id_rejection_for_line,
+            rejection_for_http_body,
+        )
+
+        line = self._line(key)
+        assert json.loads(line)["id"] is None  # what the SDK will read
+        rejection = invalid_request_id_rejection_for_line(line)
+        assert rejection is not None, line
+        assert rejection.error.code == -32600
+        # The two transports now give the same bytes the same answer.
+        http = rejection_for_http_body(line.encode())
+        assert http is not None and http.error.message == rejection.error.message
+
+    @pytest.mark.parametrize(
+        "line",
+        [
+            '{"jsonrpc":"2.0","method":"notifications/initialized"}',
+            '{"jsonrpc":"2.0","id":7,"method":"ping"}',
+            # A backslash with no id at all: parsed now, and still let through.
+            '{"jsonrpc":"2.0","method":"note","params":{"text":"a %s b"}}' % (_BS * 2),
+            '{"jsonrpc":"2.0",%s:7,"method":"ping"}' % _ESCAPED_ID_KEYS[0],
+        ],
+    )
+    def test_a_usable_or_absent_id_still_passes(self, line: str) -> None:
+        from openzim_mcp.sdk_compat import invalid_request_id_rejection_for_line
+
+        assert invalid_request_id_rejection_for_line(line) is None, line
+
+    def test_stdio_answers_the_frame_instead_of_dropping_it(
+        self, tmp_path: Path
+    ) -> None:
+        from tests.test_fr_transport_state import _INITIALIZE, _one_shot_stdio_frames
+
+        responses = _one_shot_stdio_frames(
+            tmp_path,
+            [
+                _INITIALIZE,
+                '{"jsonrpc":"2.0","method":"notifications/initialized"}',
+                self._line(_ESCAPED_ID_KEYS[0]),
+                '{"jsonrpc":"2.0","id":42,"method":"ping"}',
+            ],
+        )
+        rejections = [
+            r
+            for r in responses
+            if "error" in r and "request id must be" in r["error"]["message"]
+        ]
+        assert len(rejections) == 1, responses
+        assert rejections[0]["id"] is None and rejections[0]["error"]["code"] == -32600
+        # Paired positive: the frame after it is still served normally.
+        served = [r for r in responses if r.get("id") == 42]
+        assert served and "result" in served[0], responses
