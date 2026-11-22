@@ -553,3 +553,57 @@ class TestSimpleModeOffersNoSubscriptions:
         assert server.subscription_bus is not None
         resources = self._capabilities(app)["resources"]
         assert resources["subscribe"] is True and resources["listChanged"] is True
+
+
+class TestAuthFailuresCannotWriteToTheTerminal:
+    """An unauthenticated caller could put terminal escapes into the log.
+
+    The auth-failure line logged the percent-decoded request path and the
+    client address verbatim, so ``GET /mcp%1B%5B2J%1B%5B31mAUTH-OK`` cleared
+    an operator's terminal and printed a red ``AUTH-OK`` — from a request
+    that needed no token to send, on the one log line meant for spotting
+    attacks.
+    """
+
+    @staticmethod
+    def _app() -> Any:
+        from unittest.mock import MagicMock
+
+        from starlette.applications import Starlette
+        from starlette.responses import PlainTextResponse
+        from starlette.routing import Route
+
+        config = MagicMock()
+        config.auth_token = SecretStr("topsecret")
+
+        async def protected(request: Any) -> PlainTextResponse:
+            return PlainTextResponse("ok")
+
+        app = Starlette(routes=[Route("/mcp", protected)])
+        app.add_middleware(http_app.BearerTokenAuthMiddleware, config=config)
+        return app
+
+    @pytest.mark.asyncio
+    async def test_the_failure_line_carries_no_control_characters(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        import httpx
+
+        transport = httpx.ASGITransport(
+            app=self._app(), client=("10.0.0.9\x1b[0m", 5555)
+        )
+        with caplog.at_level("WARNING", logger="openzim_mcp.http_app"):
+            async with httpx.AsyncClient(
+                transport=transport, base_url="http://127.0.0.1"
+            ) as client:
+                response = await client.get("/mcp%1B%5B2J%1B%5B31mAUTH-OK%07")
+        assert response.status_code == 401
+
+        lines = [
+            r.getMessage() for r in caplog.records if "auth failure" in r.getMessage()
+        ]
+        assert len(lines) == 1, lines
+        assert not any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in lines[0]), lines
+        # Paired positive: the line still says who failed, where, and why.
+        assert "missing_or_wrong_scheme" in lines[0]
+        assert "10.0.0.9" in lines[0] and "AUTH-OK" in lines[0], lines

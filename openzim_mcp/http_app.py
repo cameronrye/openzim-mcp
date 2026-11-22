@@ -424,12 +424,16 @@ class BearerTokenAuthMiddleware(BaseHTTPMiddleware):
         return await call_next(request)
 
     def _log_failure(self, request: Request, reason: str) -> None:
+        # Both values are the caller's to choose, and the path arrives
+        # percent-decoded: ``/mcp%1B%5B2J`` is a raw ESC by the time it is
+        # logged, so an unauthenticated request could drive the operator's
+        # terminal from the one line meant for spotting it.
         client_host = request.client.host if request.client else "unknown"
         logger.warning(
             "auth failure: reason=%s client=%s path=%s",
             reason,
-            client_host,
-            request.url.path,
+            sanitize_for_log(client_host),
+            sanitize_for_log(request.url.path),
         )
 
 
