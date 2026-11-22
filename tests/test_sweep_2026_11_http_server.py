@@ -11,10 +11,12 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import pytest
+from pydantic import SecretStr
 from starlette.testclient import TestClient
 
 from openzim_mcp import http_app
 from openzim_mcp.config import OpenZimMcpConfig
+from openzim_mcp.exceptions import OpenZimMcpConfigurationError
 from openzim_mcp.server import OpenZimMcpServer
 
 _MODERN = "2026-07-28"
@@ -134,3 +136,51 @@ class TestBindAllKeepsTheOriginCheck:
     ) -> None:
         """On loopback the SDK checks Origin itself; the two must agree."""
         assert self._status(tmp_path, "127.0.0.1", cors_origins, origin) == expected
+
+
+class TestABlankTokenIsNoTokenEverywhere:
+    """The startup check and the auth middleware disagreed on a blank token.
+
+    Config validation refuses ``OPENZIM_MCP_AUTH_TOKEN=""``, but
+    ``model_copy`` skips validators, and ``instructions.py`` already treats a
+    ``model_copy`` as a real way to build a config. ``check_safe_startup``
+    counted any non-``None`` token as set, while the middleware normalises a
+    blank one to "no auth" — so ``0.0.0.0`` with ``SecretStr("")`` started
+    without the INSECURE warning and then served every caller.
+    """
+
+    @staticmethod
+    def _bind_all(tmp_path: Path, **overrides: Any) -> OpenZimMcpConfig:
+        return OpenZimMcpConfig(
+            allowed_directories=[str(tmp_path)],
+            transport="http",
+            host="0.0.0.0",  # noqa: S104 - exercising the bind-all branch
+            auth_token="s3cret",
+            **overrides,
+        )
+
+    @pytest.mark.parametrize("blank", ["", "   ", "\t"])
+    def test_startup_refuses_a_bind_all_server_whose_token_is_blank(
+        self, tmp_path: Path, blank: str
+    ) -> None:
+        config = self._bind_all(tmp_path).model_copy(
+            update={"auth_token": SecretStr(blank)}
+        )
+        with pytest.raises(OpenZimMcpConfigurationError, match="requires auth"):
+            http_app.check_safe_startup(config)
+
+    def test_the_real_token_it_was_copied_from_still_starts(
+        self, tmp_path: Path
+    ) -> None:
+        http_app.check_safe_startup(self._bind_all(tmp_path))
+
+    def test_with_the_escape_hatch_a_blank_token_gets_the_insecure_warning(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Blank is unset, so the acknowledged no-auth mode says so out loud."""
+        config = self._bind_all(tmp_path, insecure_disable_auth=True).model_copy(
+            update={"auth_token": SecretStr("")}
+        )
+        with caplog.at_level("WARNING", logger="openzim_mcp.http_app"):
+            http_app.check_safe_startup(config)
+        assert any("INSECURE" in r.getMessage() for r in caplog.records)

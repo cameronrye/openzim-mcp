@@ -122,6 +122,22 @@ def _is_loopback_host(host: str) -> bool:
     return False
 
 
+def _configured_token(config: object) -> Optional[str]:
+    """The bearer secret ``config`` sets, or ``None`` when it sets none.
+
+    A blank secret counts as none. Config validation refuses one at load
+    time, but ``model_copy`` skips validators, so both readers — the startup
+    check and the auth middleware — go through this one function. When they
+    disagreed, ``0.0.0.0`` with ``SecretStr("")`` passed the startup check as
+    authenticated and was then served to everyone as unauthenticated.
+    """
+    token = getattr(config, "auth_token", None)
+    if token is None:
+        return None
+    secret = token.get_secret_value()
+    return secret if secret and secret.strip() else None
+
+
 def check_safe_startup(config: object) -> None:
     """Refuse to start if a network transport is exposed unsafely.
 
@@ -171,7 +187,7 @@ def check_safe_startup(config: object) -> None:
                 "OPENZIM_MCP_INSECURE_DISABLE_AUTH does not apply to SSE."
             )
         return
-    has_token = getattr(config, "auth_token", None) is not None
+    has_token = _configured_token(config) is not None
     if not is_localhost and not has_token:
         if getattr(config, "insecure_disable_auth", False):
             logger.warning(
@@ -337,13 +353,12 @@ class BearerTokenAuthMiddleware(BaseHTTPMiddleware):
     def __init__(self, app: ASGIApp, config: object) -> None:
         """Capture the expected token from config (None disables auth)."""
         super().__init__(app)
-        token = getattr(config, "auth_token", None)
-        secret = token.get_secret_value() if token is not None else None
         # Defense in depth: an empty/whitespace secret must NOT authenticate
         # every request via ``hmac.compare_digest('', '')``. Config validation
         # already rejects a blank token at load time (H4); normalise here too
-        # so the ``is None`` fast-path below treats it as "no auth configured".
-        self._expected = secret if secret and secret.strip() else None
+        # so the ``is None`` fast-path below treats it as "no auth configured"
+        # — the same reading ``check_safe_startup`` takes of it.
+        self._expected = _configured_token(config)
 
     async def dispatch(
         self,
