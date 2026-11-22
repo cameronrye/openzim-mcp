@@ -7,6 +7,8 @@ the wire — and names the inputs that exposed it.
 
 from __future__ import annotations
 
+import json
+import shutil
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -229,3 +231,123 @@ class TestATokenNoClientCanSendIsRefused:
     ) -> None:
         loaded = self._load(tmp_path, token).auth_token
         assert loaded is not None and loaded.get_secret_value() == token
+
+
+@pytest.fixture
+def small_zim_dir(tmp_path: Path, zim_test_data_dir: Optional[Path]) -> Path:
+    """A directory holding the test suite's ``withns/small.zim``, alone."""
+    source = zim_test_data_dir / "withns" / "small.zim" if zim_test_data_dir else None
+    if source is None or not source.exists():
+        pytest.skip("withns/small.zim fixture not available")
+    shutil.copyfile(source, tmp_path / "small.zim")
+    return tmp_path
+
+
+def _post(
+    client: TestClient,
+    method: str,
+    params: Optional[Dict[str, Any]] = None,
+    *,
+    name: Optional[str] = None,
+) -> Dict[str, Any]:
+    """One modern request; the JSON-RPC response it was answered with."""
+    body, headers = _modern_request(method, params, name=name)
+    response = client.post("/mcp", json=body, headers=headers)
+    assert response.status_code == 200, response.text
+    payload: Dict[str, Any] = response.json()
+    return payload
+
+
+class TestResourceReadsAreRateLimited:
+    """``resources/read`` never touched the rate limiter.
+
+    Only the tool wrappers called ``enforce_rate_limit``. With a burst of 1
+    the second ``zim_get`` came back ``rate_limited`` and then
+    ``resources/read zim://small/entry/A%2Fmain.html`` served the same entry
+    20 times out of 20: the resource surface was an unmetered side door to
+    every archive read the tools meter.
+    """
+
+    _URIS = [
+        "zim://small/entry/A%2Fmain.html",
+        "zim://small",
+        "zim://files",
+    ]
+
+    @staticmethod
+    def _client(directory: Path) -> TestClient:
+        _server, app = _http_app(
+            directory,
+            tool_mode="advanced",
+            # One token, and none back for the length of the test.
+            rate_limit={"burst_size": 1, "requests_per_second": 0.001},
+        )
+        return TestClient(app, base_url="http://127.0.0.1:8791")
+
+    @staticmethod
+    def _read(client: TestClient, uri: str) -> Dict[str, Any]:
+        return _post(client, "resources/read", {"uri": uri}, name=uri)
+
+    @staticmethod
+    def _assert_rate_limited(payload: Dict[str, Any]) -> None:
+        assert "error" in payload, payload
+        error = payload["error"]
+        assert error["code"] == -32603, error
+        assert error["data"]["operation"] == "rate_limited", error
+        assert "rate limit exceeded" in error["message"].lower(), error
+
+    @pytest.mark.parametrize("uri", _URIS)
+    def test_a_read_past_the_burst_is_refused(
+        self, small_zim_dir: Path, uri: str
+    ) -> None:
+        with self._client(small_zim_dir) as client:
+            first = self._read(client, uri)
+            second = self._read(client, uri)
+        assert first["result"]["contents"], first
+        self._assert_rate_limited(second)
+
+    @pytest.mark.parametrize(
+        "uri, operation",
+        [
+            ("zim://small/entry/A%2Fmain.html", "get_entry"),
+            ("zim://small", "get_metadata"),
+            ("zim://files", "zim_files"),
+        ],
+    )
+    def test_a_per_operation_limit_reaches_the_read_it_names(
+        self, small_zim_dir: Path, uri: str, operation: str
+    ) -> None:
+        """Keyed like the tool counterpart, so an operator's override applies."""
+        _server, app = _http_app(
+            small_zim_dir,
+            tool_mode="advanced",
+            rate_limit={
+                "per_operation_limits": {
+                    operation: {"burst_size": 1, "requests_per_second": 0.001}
+                }
+            },
+        )
+        with TestClient(app, base_url="http://127.0.0.1:8791") as client:
+            first = self._read(client, uri)
+            second = self._read(client, uri)
+        assert first["result"]["contents"], first
+        self._assert_rate_limited(second)
+        assert f"'{operation}'" in second["error"]["message"], second
+
+    def test_the_resource_surface_is_no_side_door_past_a_rate_limited_tool(
+        self, small_zim_dir: Path
+    ) -> None:
+        """The reported sequence: the tool is refused, so the read must be too."""
+        arguments = {
+            "zim_file_path": str(small_zim_dir / "small.zim"),
+            "entry_path": "A/main.html",
+        }
+        call = {"name": "zim_get", "arguments": arguments}
+        with self._client(small_zim_dir) as client:
+            served = _post(client, "tools/call", call, name="zim_get")
+            refused = _post(client, "tools/call", call, name="zim_get")
+            read = self._read(client, "zim://small/entry/A%2Fmain.html")
+        assert served["result"]["isError"] is False, served
+        refused_body = json.loads(refused["result"]["content"][0]["text"])
+        assert refused_body["operation"] == "rate_limited", refused_body
+        self._assert_rate_limited(read)

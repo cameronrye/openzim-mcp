@@ -36,6 +36,7 @@ from ..exceptions import OpenZimMcpArchiveError, OpenZimMcpValidationError
 from ..security import sanitize_input
 from ..zim.redirects import resolve_redirect_chain
 from ..zim_operations import zim_archive
+from ._common import enforce_rate_limit
 
 if TYPE_CHECKING:
     from ..server import OpenZimMcpServer
@@ -81,6 +82,36 @@ def _truncate_text_body(body: str, max_bytes: int) -> str:
     # would split a multi-byte sequence.
     head = encoded[:max_bytes].decode("utf-8", errors="replace")
     return head + notice_template.format(limit=max_bytes, total=total)
+
+
+def _charge_read(server: "OpenZimMcpServer", operation: str) -> None:
+    """Debit the caller's rate-limit bucket for one resource read, or refuse it.
+
+    Only the tool wrappers used to reach the limiter, so once ``zim_get`` was
+    refused as ``rate_limited`` the same entry could still be read through
+    ``resources/read`` as often as the client liked. Each read is charged
+    under the operation its tool counterpart uses (``zim://files``, which has
+    none, under its own name), so a ``per_operation_limits`` entry an
+    operator wrote for the tool covers the resource as well, and it is
+    charged up front, before the archive lookup, as the tools charge a call
+    they go on to reject.
+
+    The refusal is raised as ``MCPError``, the one type the SDK forwards
+    verbatim, with the tool envelope's ``operation`` (``rate_limited``) and
+    ``context`` in ``data`` so a client can tell it from a failed read.
+    ``-32603`` rather than ``-32602``: nothing is wrong with the request, and
+    the same read succeeds once the wait the message names has passed.
+    """
+    refusal = enforce_rate_limit(server, operation)
+    if refusal is not None:
+        raise MCPError(
+            code=INTERNAL_ERROR,
+            message=refusal["message"],
+            data={
+                "operation": refusal["operation"],
+                "context": refusal.get("context"),
+            },
+        )
 
 
 def _resolve_zim_name(server: "OpenZimMcpServer", name: str) -> Optional[str]:
@@ -254,6 +285,8 @@ class ZimEntryTemplate(ResourceTemplate):
         context: Any = None,
     ) -> Resource:
         """Resolve {name} → archive_path and build a ZimEntryResource."""
+        # An entry read, priced and keyed as ``zim_get``'s text read is.
+        _charge_read(self.server_ref, "get_entry")
         name = params["name"]
         # _resolve_zim_name calls list_zim_files_data (sync filesystem I/O —
         # Path.glob + stat). Offload the whole helper to a thread so
@@ -318,6 +351,10 @@ def register_resources(server: "OpenZimMcpServer") -> None:
         mime_type="application/json",
     )
     async def list_zim_files_resource() -> str:
+        # No tool lists archives, so the bucket is keyed on the resource's
+        # own name, as the v2-only tools are keyed on theirs.
+        _charge_read(server, "zim_files")
+
         # ``list_zim_files_data`` does Path.glob + stat across every allowed
         # directory; offload to a worker thread so concurrent HTTP/SSE
         # clients aren't stalled while a directory scan runs.
@@ -343,6 +380,9 @@ def register_resources(server: "OpenZimMcpServer") -> None:
         mime_type="application/json",
     )
     async def zim_file_overview(name: str) -> str:
+        # An archive overview, priced and keyed as ``zim_metadata`` is.
+        _charge_read(server, "get_metadata")
+
         # Three blocking archive opens (metadata + namespaces + main page)
         # add up — under HTTP/SSE we must not run them on the event loop.
         # Offload the whole synchronous body to a worker thread.
