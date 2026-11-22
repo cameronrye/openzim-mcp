@@ -826,7 +826,10 @@ class TestD52BinaryNotFoundRecovery:
         )
         assert "Missing Entry Path" in out
         assert "extract_article_links" not in out
-        assert "links in" in out
+        # ``links in`` never lists media (compact drops the bucket, the full
+        # view is internal-only), so the tip names a route that does.
+        assert "links in" not in out
+        assert "`browse namespace I`" in out
 
 
 # ---------------------------------------------------------------------------

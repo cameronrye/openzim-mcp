@@ -506,3 +506,69 @@ class TestSynthesizeMetaWithAFailedArchive:
         assert str(tmp_path) not in failure["error"], failure
         assert f"...{_BAD}" in failure["error"], failure
         assert "too small" in failure["error"], failure
+
+
+class TestBinaryTipNamesARouteToMediaPaths:
+    """The binary intent's missing-path tip promised a listing that does not
+    exist.
+
+    "`links in <article>` lists the media paths an article embeds" — but the
+    compact ``links in`` view drops the media bucket and the full view lists
+    internal links only, so following the tip never produced a media path.
+    """
+
+    @pytest.mark.asyncio
+    async def test_simple_mode_tip_leads_to_a_fetchable_media_path(
+        self, withns: Path
+    ) -> None:
+        mini = str(withns / _MINI)
+        async with _session(withns, "simple") as session:
+            _, tip, _ = await _call(
+                session, "zim_query", {"query": "get image", "zim_file_path": mini}
+            )
+            # Follow the tip on an archive that files its media under ``I``.
+            _, listing, _ = await _call(
+                session,
+                "zim_query",
+                {
+                    "query": "browse namespace I",
+                    "zim_file_path": mini,
+                    "limit": 3,
+                    "compact": False,
+                },
+            )
+            media_path = _leading_json(listing)["results"][0]["path"]
+            fetch_error, fetched, _ = await _call(
+                session,
+                "zim_query",
+                {
+                    "query": f'get binary content from "{media_path}"',
+                    "zim_file_path": mini,
+                },
+            )
+
+        assert "Missing Entry Path" in tip, tip
+        assert "`links in <article>`" not in tip, tip
+        assert "`browse namespace I`" in tip, tip
+        assert media_path.startswith("I/"), media_path
+        assert fetch_error is not True, fetched[:300]
+        assert '"encoding": "base64"' in fetched, fetched[:300]
+
+    @pytest.mark.asyncio
+    async def test_advanced_mode_tip_names_the_media_bucket(self, withns: Path) -> None:
+        mini = str(withns / _MINI)
+        async with _session(withns, "advanced") as session:
+            _, tip, _ = await _call(
+                session, "zim_query", {"query": "get image", "zim_file_path": mini}
+            )
+            # The call the tip spells out is accepted as written.
+            links_error, links, body = await _call(
+                session,
+                "zim_links",
+                {"zim_file_path": mini, "entry_path": "A/Carbon_tax", "kind": "media"},
+            )
+
+        assert "`links in <article>`" not in tip, tip
+        assert '`zim_links(entry_path=<article>, kind="media")`' in tip, tip
+        assert links_error is not True, links[:300]
+        assert "media" in body["category_totals"], body

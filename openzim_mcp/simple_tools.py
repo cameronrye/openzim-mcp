@@ -2815,6 +2815,23 @@ class SimpleToolsHandler(
     ) -> Union[str, ToolErrorPayload]:
         entry_path = params.get("entry_path")
         if not entry_path:
+            # The tip used to send callers to ``links in <article>``, which
+            # never shows a media path: the compact view drops the media
+            # bucket and the full view lists internal links only. Only the
+            # advanced surface lists an article's media; simple mode can list
+            # an ``I`` namespace, or keep the image links in the full body.
+            if self.zim_operations.config.tool_mode == recovery_advice.ADVANCED:
+                tip = (
+                    '`zim_links(entry_path=<article>, kind="media")` lists the '
+                    "media paths an article embeds."
+                )
+            else:
+                tip = (
+                    "`browse namespace I` lists an archive's media entries when "
+                    "it files them under `I`; otherwise `get article <article>` "
+                    "with `compact=False` keeps the article's image links, "
+                    "relative to its path."
+                )
             return (
                 "**Missing Entry Path**\n\n"
                 "Please specify the path of the binary content.\n"
@@ -2822,8 +2839,7 @@ class SimpleToolsHandler(
                 "- 'get binary content from \"I/image.png\"'\n"
                 "- 'extract pdf \"I/document.pdf\"'\n"
                 "- 'retrieve image I/logo.png'\n\n"
-                "**Tip**: `links in <article>` lists the media paths an "
-                "article embeds."
+                f"**Tip**: {tip}"
             )
         # D52: the sibling entry-taking handlers (structure / summary /
         # links / get article) route a backend miss through
