@@ -1173,6 +1173,23 @@ _PARAM_EXTRACTORS = {
     "metadata": _extract_metadata,
 }
 
+# What may precede a structure / toc / summary / suggestions keyword. Those
+# patterns matched the keyword ANYWHERE (the trailing ``(of|for)?`` is
+# optional), at 0.85-0.95, so a keyword inside a topic outranked ``tell me
+# about``: ``tell me about The Structure of Scientific Revolutions`` fetched
+# the outline of "scientific revolutions", ``what is brief psychotic
+# disorder`` answered Missing Article Path, and ``who wrote A Brief History
+# of Time`` summarised "Time". The keyword must now open the request, after
+# at most a polite or imperative lead-in ("please", "can you", "show me
+# the", "give me a short").
+_KEYWORD_COMMAND_LEAD = (
+    r"^\s*(?:please\s+)?"
+    r"(?:(?:can|could|would|will)\s+you\s+(?:please\s+)?)?"
+    r"(?:(?:show|display|give|get|list|fetch|tell|provide)\s+(?:me\s+|us\s+)?)?"
+    r"(?:(?:the|a|an)\s+)?"
+    r"(?:(?:short|quick|full|complete)\s+)?"
+)
+
 
 class IntentParser:
     """Parse natural language queries to determine user intent."""
@@ -1181,9 +1198,12 @@ class IntentParser:
     # Format: (pattern, intent, base_confidence, specificity_weight)
     # specificity_weight: higher = more specific pattern, used for tie-breaking
     INTENT_PATTERNS = [
-        # File listing - very specific
+        # File listing - very specific. ``files`` only in the plural: the
+        # archive list is never asked for as one ``file``, and the singular
+        # is a modifier (``file format``, ``file size``) — ``what file
+        # format do climate models use`` answered with the ZIM file list.
         (
-            r"\b(list|show|what|available|get)\s+(files?|zim|archives?)\b",
+            r"\b(list|show|what|available|get)\s+(files|zim|archives?)\b",
             "list_files",
             0.95,
             10,
@@ -1207,8 +1227,19 @@ class IntentParser:
             0.9,
             9,
         ),
-        # Main page - very specific
-        (r"\b(main|home|start)\s+page\b", "main_page", 0.95, 10),
+        # Main page - very specific. Not when the page is OF something
+        # other than this archive: ``what is the home page of the IPCC``
+        # asks about the IPCC's website and answered with the archive's
+        # front page. ``main page of this archive`` / ``of the zim file`` /
+        # ``for wiki.zim`` still name the archive and keep routing here.
+        (
+            r"\b(main|home|start)\s+page\b"
+            r"(?!\s+(?:of|for)\b"
+            r"(?!\s+(?:(?:this|the|that)\s+(?:archive|zim|file)|[\w.\-]+\.zim)\b))",
+            "main_page",
+            0.95,
+            10,
+        ),
         # Namespace listing - very specific
         (r"\b(list|show|what)\s+namespaces?\b", "list_namespaces", 0.95, 10),
         # Browse - moderately specific
@@ -1247,18 +1278,37 @@ class IntentParser:
             0.9,
             9,
         ),
-        # Article structure - moderately specific
+        # Article structure - moderately specific. This, toc, summary and
+        # suggestions open with ``_KEYWORD_COMMAND_LEAD``: the keyword has
+        # to start the request, or it is part of a topic. ``what|which
+        # sections`` / ``headings`` may open it too (``what sections are in
+        # the Isaac Newton article``): those two name a document's parts,
+        # where ``what is the structure of DNA`` asks about the molecule.
         (
-            r"\b(structure|outline|sections?|headings?)\s+(of|for)?\b",
+            r"(?:"
+            + _KEYWORD_COMMAND_LEAD
+            + r"(structure|outline|sections?|headings?)\s+(of|for)?\b"
+            + r"|^\s*(?:what|which)\s+(?:sections?|headings?)\b)",
             "structure",
             0.85,
             8,
         ),
         # Table of contents - specific
-        (r"\b(table\s+of\s+contents|toc|contents)\s*(of|for)?\b", "toc", 0.95, 10),
-        # Summary - specific
         (
-            r"\b(summary|summarize|summarise|overview|brief)\s*(of|for)?\b",
+            _KEYWORD_COMMAND_LEAD
+            + r"(table\s+of\s+contents|toc|contents)\s*(of|for)?\b",
+            "toc",
+            0.95,
+            10,
+        ),
+        # Summary - specific. Anchoring is also what retires the bare
+        # ``brief`` from mid-query: it is the adjective of ``A Brief History
+        # of Time`` and ``brief psychotic disorder`` far more often than a
+        # verb. As the request's opening verb (``brief Photosynthesis``) it
+        # still works.
+        (
+            _KEYWORD_COMMAND_LEAD
+            + r"(summary|summarize|summarise|overview|brief)\s*(of|for)?\b",
             "summary",
             0.9,
             9,
@@ -1286,8 +1336,12 @@ class IntentParser:
             # ``complete`` (``complete works of Shakespeare``,
             # ``complete history of X``) is far more common than the verb and
             # hijacked get_article/topic queries into autocomplete.
-            # ``autocomplete`` / ``suggestions`` / ``hints`` remain reliable.
-            r"\b(suggestions?|autocomplete|hints?)\s+(for|of)?" r"(?=\b|['\"‘’“”])",
+            # ``autocomplete`` / ``suggestions`` / ``hints`` remain reliable
+            # — as the opening keyword (``_KEYWORD_COMMAND_LEAD``); ``what
+            # are some suggestions for treating insomnia`` is a topic ask.
+            _KEYWORD_COMMAND_LEAD
+            + r"(suggestions?|autocomplete|hints?)\s+(for|of)?"
+            + r"(?=\b|['\"‘’“”])",
             "suggestions",
             0.85,
             7,

@@ -61,6 +61,37 @@ _ARTICLES = [
         "Emphysema",
         "Emphysema, like asthma and bronchitis, causes shortness of breath.",
     ),
+    # Titles that carry an intent keyword. ``Time`` is the trap the
+    # ``brief`` keyword used to summarise in place of the book.
+    (
+        "A/Brief_psychotic_disorder",
+        "Brief psychotic disorder",
+        "Brief psychotic disorder is a sudden, short-lived psychotic episode.",
+    ),
+    (
+        "A/The_Structure_of_Scientific_Revolutions",
+        "The Structure of Scientific Revolutions",
+        "The Structure of Scientific Revolutions is a 1962 book by Thomas Kuhn.",
+    ),
+    (
+        "A/A_Brief_History_of_Time",
+        "A Brief History of Time",
+        "A Brief History of Time is a cosmology book Stephen Hawking wrote"
+        " for readers who are new to physics.",
+    ),
+    ("A/Time", "Time", "Time is the continued sequence of existence and events."),
+    (
+        "A/Stomach",
+        "Stomach",
+        "The stomach is a muscular organ; the contents of the stomach pass"
+        " on to the small intestine.",
+    ),
+    (
+        "A/Insomnia",
+        "Insomnia",
+        "Insomnia is a common sleep disorder, and some suggestions for"
+        " treating insomnia start with a regular bedtime.",
+    ),
 ]
 
 
@@ -288,3 +319,114 @@ class TestAspectListOfOneTopicIsNotAChain:
         out = _ask(handler, sweep_zim, "tell me about asthma and emphysema")
         assert "causes shortness of breath" in out, out[:400]
         assert "query separately with `tell me about asthma`" in out, out[-400:]
+
+
+# ---------------------------------------------------------------------------
+# 3. Keywords inside topics hijacked the intent
+# ---------------------------------------------------------------------------
+
+
+class TestKeywordsInsideTopicsDoNotHijack:
+    """The structure / toc / summary / suggestions keywords matched
+    anywhere in the query at 0.85-0.95 and outranked ``tell me about``;
+    ``file`` and ``home page`` did the same for the archive list and the
+    archive's front page. Each query below names a topic that merely
+    contains the keyword."""
+
+    @pytest.mark.parametrize(
+        ("query", "hijacked_to", "lead"),
+        [
+            # Was ``summary`` with no entry path: "Missing Article Path".
+            (
+                "what is brief psychotic disorder",
+                "summary",
+                "a sudden, short-lived psychotic episode",
+            ),
+            # Was ``structure`` of "scientific revolutions": not found.
+            (
+                "tell me about The Structure of Scientific Revolutions",
+                "structure",
+                "a 1962 book by Thomas Kuhn",
+            ),
+            # Was ``toc`` of "the stomach".
+            (
+                "what are the contents of the stomach",
+                "toc",
+                "pass on to the small intestine",
+            ),
+            # Was an empty autocomplete for "treating insomnia".
+            (
+                "what are some suggestions for treating insomnia",
+                "suggestions",
+                "start with a regular bedtime",
+            ),
+        ],
+    )
+    def test_a_framed_topic_keeps_its_keyword(
+        self,
+        handler: SimpleToolsHandler,
+        sweep_zim: Path,
+        query: str,
+        hijacked_to: str,
+        lead: str,
+    ) -> None:
+        out = _ask(handler, sweep_zim, query)
+        assert f"intent={hijacked_to} " not in out, out[-300:]
+        assert "intent=tell_me_about" in out, out[-300:]
+        assert lead in out, out[:600]
+
+    def test_brief_inside_a_title_is_not_a_summary_verb(
+        self, handler: SimpleToolsHandler, sweep_zim: Path
+    ) -> None:
+        """``who wrote A Brief History of Time`` summarised "Time"."""
+        out = _ask(handler, sweep_zim, "who wrote A Brief History of Time")
+        assert "intent=summary" not in out, out[-300:]
+        assert "continued sequence of existence" not in out, out[:600]
+        assert "A Brief History of Time" in out, out[:600]
+        assert "intent=search" in out, out[-300:]
+
+    def test_file_format_is_not_the_archive_list(
+        self, climate: SimpleToolsHandler, climate_zim: Path
+    ) -> None:
+        out = _ask(climate, climate_zim, "what file format do climate models use")
+        assert "intent=list_files" not in out, out[-300:]
+        assert climate_zim.name not in out, out[:600]
+        assert "intent=search" in out, out[-300:]
+        assert "what file format do climate models use" in out, out[:300]
+
+    def test_another_sites_home_page_is_not_the_archive_front_page(
+        self, climate: SimpleToolsHandler, climate_zim: Path
+    ) -> None:
+        out = _ask(climate, climate_zim, "what is the home page of the IPCC")
+        assert "intent=main_page" not in out, out[-300:]
+        assert "intent=tell_me_about" in out, out[-300:]
+        # Searched as the topic it is.
+        assert 'matches for "the home page of the ipcc"' in out, out[:600]
+
+    @pytest.mark.parametrize(
+        ("query", "intent", "expect"),
+        [
+            # The commands themselves still route, lead-ins included.
+            ("summary of Stress", "summary", "the body's response"),
+            ("brief Stress", "summary", "the body's response"),
+            ("please give me a short summary of Stress", "summary", "Stress"),
+            ("show structure of Being", "structure", "Being"),
+            ("what sections are in Being", "structure", "Being"),
+            ("table of contents for Being", "toc", "Being"),
+            ("suggestions for stre", "suggestions", "A/Stress"),
+            ("show main page", "main_page", "the body's response"),
+            ("show the main page of this archive", "main_page", "the body's"),
+            ("list files", "list_files", "intent_sweep.zim"),
+        ],
+    )
+    def test_the_keyword_commands_still_route(
+        self,
+        handler: SimpleToolsHandler,
+        sweep_zim: Path,
+        query: str,
+        intent: str,
+        expect: str,
+    ) -> None:
+        out = _ask(handler, sweep_zim, query)
+        assert f"intent={intent} " in out, out[-300:]
+        assert expect in out, out[:600]
