@@ -572,21 +572,6 @@ def criterion_f2(b13: CellSummary, phase_f: CellSummary) -> Dict[str, Any]:
 # --------------------------------------------------------------------------
 
 
-def _pick_advanced_cell(
-    summaries: Dict[Tuple[str, str, str], CellSummary], variant: str, model: str
-) -> Optional[CellSummary]:
-    """Look up the (variant, "advanced", model) cell, if present."""
-    return summaries.get((variant, "advanced", model))
-
-
-def _empty_family_block() -> Dict[str, Any]:
-    return {"pass": True, "delta_pp": 0.0}
-
-
-def _family_blocks_default() -> Dict[str, Dict[str, Any]]:
-    return {fam: _empty_family_block() for fam in FAMILY_MARGINS}
-
-
 def _build_family_verdicts(
     cell_summaries: Dict[Tuple[str, str, str], CellSummary],
     b13_variant: str = "b13",
