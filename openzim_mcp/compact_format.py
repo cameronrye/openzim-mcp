@@ -845,7 +845,11 @@ class _CompactFormatMixin:
         found = cls._listing_tail(text)
         if found is not None:
             body_end, tail_block = found
-        reserve = len(tail_block) + 2 if tail_block else 0
+        # With no room for the tail at all it goes whether rows do or not, so
+        # its reserve is spent on rows rather than on the blind slice below,
+        # which kept the header's claim over every row it cut.
+        tail_fits = bool(tail_block) and keep - len(tail_block) - 2 > 0
+        reserve = len(tail_block) + 2 if tail_fits else 0
 
         head_budget = min(keep - reserve, body_end)
         if head_budget <= 0:
@@ -861,10 +865,12 @@ class _CompactFormatMixin:
             head = cls._drop_partial_search_row(head)
         dropped = cls._count_rows(text[len(head) : body_end], search_rows)
         if not dropped:
+            if not tail_fits:
+                return _Shrunk(head)
             return _Shrunk(head.rstrip("\n") + "\n\n" + tail_block)
         shipped = cls._count_rows(head, search_rows)
         head, tail, resume = cls._resume_markdown_page(
-            head, tail_block, shipped, search_rows=search_rows
+            head, tail_block if tail_fits else "", shipped, search_rows=search_rows
         )
         body = head.rstrip("\n")
         if tail:
@@ -924,27 +930,32 @@ class _CompactFormatMixin:
         walk = cls._WALK_RANGE_RE.search(header)
         scanned = cls._WALK_SCANNED_RE.search(header)
         showing = cls._SHOWING_RANGE_RE.search(header)
-        if walk and shipped:
-            # One row per scanned entry id, so the first cut row's id is the
-            # page's start plus the rows that shipped — and the walk's
-            # ``offset`` IS that scan position.
+        if walk:
             first, last = int(walk.group(2)), int(walk.group(3))
-            resume_at = first - 1 + shipped
+            claim = f"none of entries {first}-{last}"
+            # With no row shipped the first cut row is the page's own start: a
+            # continuation re-pointed there would serve this page forever.
+            if shipped:
+                # One row per scanned entry id, so the first cut row's id is
+                # the page's start plus the rows that shipped — and the
+                # walk's ``offset`` IS that scan position.
+                resume_at = first - 1 + shipped
+                claim = f"entries {first}-{resume_at}"
+                cursor = cls._WALK_CURSOR_RE.search(tail)
+                if cursor is not None:
+                    token = cls._remint_cursor(
+                        cursor.group(1), expect=last, resume_at=resume_at
+                    )
+                    if token is not None:
+                        kept_tail = (
+                            tail[: cursor.start(1)] + token + tail[cursor.end(1) :]
+                        )
+                        resume = _RESUME_CURSOR
+                elif "_End of namespace._" in tail:
+                    resume = resume_at
             header = (
-                header[: walk.start()]
-                + f"{walk.group(1)}entries {first}-{resume_at}"
-                + header[walk.end() :]
+                header[: walk.start()] + walk.group(1) + claim + header[walk.end() :]
             )
-            cursor = cls._WALK_CURSOR_RE.search(tail)
-            if cursor is not None:
-                token = cls._remint_cursor(
-                    cursor.group(1), expect=last, resume_at=resume_at
-                )
-                if token is not None:
-                    kept_tail = tail[: cursor.start(1)] + token + tail[cursor.end(1) :]
-                    resume = _RESUME_CURSOR
-            elif "_End of namespace._" in tail:
-                resume = resume_at
         elif scanned:
             # Rows were filtered mid-scan, so no offset names the first cut
             # row; say how many of the page's rows this is.
@@ -954,13 +965,12 @@ class _CompactFormatMixin:
                 + "(scan positions "
                 + header[scanned.end() :]
             )
-        elif showing and shipped:
-            first = int(showing.group(1))
-            header = (
-                header[: showing.start()]
-                + f"showing {first}-{first - 1 + shipped}"
-                + header[showing.end() :]
-            )
+        elif showing:
+            first, last = int(showing.group(1)), int(showing.group(2))
+            claim = f"showing {first}-{first - 1 + shipped}"
+            if not shipped:
+                claim = f"showing none of {first}-{last}"
+            header = header[: showing.start()] + claim + header[showing.end() :]
         head = header + rows
         if not search_rows:
             head = cls._restate_section_counts(head)

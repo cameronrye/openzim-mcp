@@ -3887,10 +3887,10 @@ class TestCompactBudgetProfiles:
             options={"compact": True, "compact_budget": "tiny"},
         )
         assert "Response truncated" in out
-        # The body is capped at the tiny budget (2000 chars); the footer
-        # ("> ~N tokens") is appended after the cap and adds a small fixed
-        # overhead (~70 chars max).
-        assert len(out) <= 2_100, f"wrapped output exceeded 2100 chars: {len(out)}"
+        # The whole response — the ``> ~N tokens`` footer appended after the
+        # cap included — stays within the tiny budget's 2,000 chars.
+        assert "\n> ~" in out
+        assert len(out) <= 2_000, f"wrapped output exceeded 2000 chars: {len(out)}"
         assert h.get_telemetry().get("response_truncated") == 1
 
     def test_truncated_response_keeps_intent_marker(self):

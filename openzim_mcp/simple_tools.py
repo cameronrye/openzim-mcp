@@ -1238,58 +1238,100 @@ class SimpleToolsHandler(
             # cap so the marker-carrying response stays within the same
             # budget envelope.
             effective_budget -= len(telemetry_markers)
-            # Capture pre-cap size to report truncation in footer
-            pre_cap_chars = len(result)
-            # ``_SELF_CAPPED_INTENTS`` render their own budget-aware,
-            # structurally-valid output (e.g. ``structure`` keeps the whole
-            # heading skeleton as valid JSON). The generic byte-cap would
-            # sever that mid-JSON and drop trailing sections, so skip it.
-            if intent in self._SELF_CAPPED_INTENTS:
-                was_truncated = False
-            else:
-                if len(result) > effective_budget:
-                    self._track("response_truncated")
-                result = self._cap_response_size(
-                    result, effective_budget, intent=intent
+            # The ``>`` footer measures the finished response, so its length
+            # is only known once the body is capped: assemble, and when the
+            # footer pushed the total past ``budget``, take the overshoot off
+            # the cap and assemble again. Nothing reserved it before, so
+            # ``tiny`` shipped 2,036 chars against its documented 2,000.
+            cap_at = effective_budget
+            for _ in range(self._FOOTER_FIT_ROUNDS):
+                assembled, was_truncated = self._assemble_compact_response(
+                    result,
+                    cap_at,
+                    intent=intent,
+                    will_wrap=will_wrap,
+                    telemetry_markers=telemetry_markers,
+                    handler_reason=handler_reason,
+                    handler_suggestions=handler_suggestions,
                 )
-                # Determine if truncation occurred
-                was_truncated = len(result) < pre_cap_chars
-            if telemetry_markers and isinstance(result, str):
-                result = result + telemetry_markers
-            if will_wrap and isinstance(result, str):
-                result = self._wrap_retrieved_content(result)
-
-            # Op5 (v2.0.0a9): simple-mode truncation comes from
-            # ``_cap_response_size`` capping the *rendered output*
-            # — the operation underneath doesn't support content-
-            # byte re-pagination from this layer. Passing
-            # ``content_chars=None`` suppresses the misleading
-            # ``pass offset=N for more`` footer hint (which
-            # interprets ``offset`` as a result-set index for
-            # search/browse, not a byte offset). The
-            # ``_cap_response_size`` body already carries the
-            # actionable recovery advice (``tighter query`` /
-            # ``compact=False``) so the user isn't blind.
-            # ``total_chars`` stays so callers can still see how
-            # much was elided. ``handler_reason`` /
-            # ``handler_suggestions`` (compact-mode zero-result
-            # search) drive the empty-result footer variant.
-            meta = build_meta(
-                rendered=result,
-                truncated=was_truncated,
-                content_chars=None,
-                total_chars=pre_cap_chars if was_truncated else None,
-                reason=handler_reason,
-                suggestions=handler_suggestions,
-            )
-            footer = format_footer(
-                meta,
-                footer_enabled=self.zim_operations.config.meta.footer_enabled,
-                tool_mode=self.zim_operations.config.tool_mode,
-            )
-            if footer:
-                result = result + "\n\n" + footer
+                over = len(assembled) - budget
+                if over <= 0 or intent in self._SELF_CAPPED_INTENTS:
+                    break
+                cap_at = max(cap_at - over, 0)
+            if was_truncated:
+                self._track("response_truncated")
+            result = assembled
         return result
+
+    # Rounds of re-capping it takes the ``>`` footer to settle: its numbers
+    # move a few characters as the body shrinks, and its truncated form is
+    # longer than the plain one, so the first overshoot under-counts.
+    _FOOTER_FIT_ROUNDS = 6
+
+    def _assemble_compact_response(
+        self,
+        result: str,
+        cap_at: int,
+        *,
+        intent: str,
+        will_wrap: bool,
+        telemetry_markers: str,
+        handler_reason: Optional[str],
+        handler_suggestions: Optional[List[Dict[str, str]]],
+    ) -> Tuple[str, bool]:
+        """Cap ``result`` at ``cap_at`` and add what follows the cap.
+
+        Returns ``(response, was_truncated)``: the capped body with the
+        telemetry markers, the content fence and the ``>`` footer applied.
+        """
+        # Capture pre-cap size to report truncation in footer
+        pre_cap_chars = len(result)
+        # ``_SELF_CAPPED_INTENTS`` render their own budget-aware,
+        # structurally-valid output (e.g. ``structure`` keeps the whole
+        # heading skeleton as valid JSON). The generic byte-cap would
+        # sever that mid-JSON and drop trailing sections, so skip it.
+        if intent in self._SELF_CAPPED_INTENTS:
+            was_truncated = False
+        else:
+            result = self._cap_response_size(result, cap_at, intent=intent)
+            # Determine if truncation occurred
+            was_truncated = len(result) < pre_cap_chars
+        if telemetry_markers and isinstance(result, str):
+            result = result + telemetry_markers
+        if will_wrap and isinstance(result, str):
+            result = self._wrap_retrieved_content(result)
+
+        # Op5 (v2.0.0a9): simple-mode truncation comes from
+        # ``_cap_response_size`` capping the *rendered output*
+        # — the operation underneath doesn't support content-
+        # byte re-pagination from this layer. Passing
+        # ``content_chars=None`` suppresses the misleading
+        # ``pass offset=N for more`` footer hint (which
+        # interprets ``offset`` as a result-set index for
+        # search/browse, not a byte offset). The
+        # ``_cap_response_size`` body already carries the
+        # actionable recovery advice (``tighter query`` /
+        # ``compact=False``) so the user isn't blind.
+        # ``total_chars`` stays so callers can still see how
+        # much was elided. ``handler_reason`` /
+        # ``handler_suggestions`` (compact-mode zero-result
+        # search) drive the empty-result footer variant.
+        meta = build_meta(
+            rendered=result,
+            truncated=was_truncated,
+            content_chars=None,
+            total_chars=pre_cap_chars if was_truncated else None,
+            reason=handler_reason,
+            suggestions=handler_suggestions,
+        )
+        footer = format_footer(
+            meta,
+            footer_enabled=self.zim_operations.config.meta.footer_enabled,
+            tool_mode=self.zim_operations.config.tool_mode,
+        )
+        if footer:
+            result = result + "\n\n" + footer
+        return result, was_truncated
 
     def _zim_path_recovery_hint(self) -> Optional[str]:
         """Post-a20 PD2-4: render the recovery hint surfaced by the
@@ -2327,10 +2369,12 @@ class SimpleToolsHandler(
                 # never severs the JSON mid-heading. ``structure`` is in
                 # ``_SELF_CAPPED_INTENTS`` so the generic cap is skipped for
                 # it. Reserve a small margin for the trailing intent/reranker
-                # telemetry comments appended after the body.
+                # telemetry comments and ``>`` footer appended after the
+                # body. No floor: the budget is already clamped to 500, and
+                # ``max(budget - 200, 500)`` spent the whole margin there.
                 budget = self._resolve_compact_budget(options.get("compact_budget"))
                 return compact_renderers.compact_structure_payload(
-                    payload, budget=max(budget - 200, 500)
+                    payload, budget=budget - 200
                 )
             return self.zim_operations.get_article_structure(zim_file_path, entry_path)
         except OpenZimMcpArchivePathError:
