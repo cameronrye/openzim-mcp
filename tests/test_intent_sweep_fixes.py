@@ -39,6 +39,15 @@ _ARTICLES = [
     ("A/Both", "Both", "Both is a single released by a Danish pop duo."),
     ("A/Test", "Test", "A test is an assessment of knowledge or skill."),
     ("A/Help", "Help", "Help is the fifth studio album by the Beatles."),
+    # Lung conditions. Full-text search wants every query term, so the two
+    # that a two-entity query should land on mention "asthma and" too.
+    ("A/Asthma", "Asthma", "Asthma is a long-term disease of the airways."),
+    ("A/COPD", "COPD", "In COPD, as in asthma and bronchitis, the airways narrow."),
+    (
+        "A/Emphysema",
+        "Emphysema",
+        "Emphysema, like asthma and bronchitis, causes shortness of breath.",
+    ),
 ]
 
 
@@ -168,3 +177,33 @@ class TestConversationalFillerIsStillRefused:
         out = _ask(climate, climate_zim, "what is wrong")
         assert "intent=meta_only_guidance" in out, out[:400]
         assert "Not Evil Just Wrong" not in out, out[:400]
+
+
+# ---------------------------------------------------------------------------
+# 4. The short-acronym rule never fired on live queries
+# ---------------------------------------------------------------------------
+
+
+class TestShortAcronymHalvesCountOnLiveQueries:
+    """``_is_substantive_topic`` accepts a short ALL-CAPS half (``COPD``,
+    ``HTTP``), but Rule 1 lowercases the query before the topic is
+    extracted, so on a live call the rule only ever saw ``copd`` and
+    ``http``. Its tests passed because they called the helper directly
+    with uppercase input."""
+
+    def test_the_half_dropped_beside_an_acronym_is_named(
+        self, handler: SimpleToolsHandler, sweep_zim: Path
+    ) -> None:
+        out = _ask(handler, sweep_zim, "tell me about asthma and COPD")
+        assert "the airways narrow" in out, out[:400]
+        assert "Returned the article for `COPD`" in out, out[-400:]
+        assert "query separately with `tell me about asthma`" in out
+
+    def test_a_chain_of_acronyms_is_rejected_in_typed_case(
+        self, handler: SimpleToolsHandler, sweep_zim: Path
+    ) -> None:
+        out = _ask(handler, sweep_zim, "tell me about TCP/IP and HTTP and HTTPS")
+        assert "No search results found" not in out, out[:400]
+        assert "intent=multi_entity_chain_rejected" in out, out[:400]
+        for half in ("TCP/IP", "HTTP", "HTTPS"):
+            assert f"`tell me about {half}`" in out, out[:600]
