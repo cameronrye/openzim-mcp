@@ -91,8 +91,10 @@ _SEARCH_VERB = r"(?:^\s*query|search|find|look)"
 
 # A ZIM namespace-prefixed path: exactly one letter, then ``/`` (``A/Berlin``,
 # ``C/Photosynthesis``, ``I/logo.png``). Used by ``_restore_nonascii_case`` to
-# exempt case-sensitive paths from Tier-1 Rule 1's lowercasing.
-_NAMESPACE_PREFIXED_RE = re.compile(r"^[A-Za-z]/")
+# exempt case-sensitive paths from Tier-1 Rule 1's lowercasing. One leading
+# ``/`` is allowed because ``zim_get`` accepts ``/A/Berlin`` and strips it, so
+# a client copying such a path got the lowercased ``/a/berlin`` and a 404.
+_NAMESPACE_PREFIXED_RE = re.compile(r"^/?[A-Za-z]/")
 
 # D50: the path shape zimit / warc2zim archives store and this tool prints
 # (``Path: medlineplus.gov/measles.html``, ``iep.utm.edu/kantview/``): a
@@ -103,7 +105,7 @@ _NAMESPACE_PREFIXED_RE = re.compile(r"^[A-Za-z]/")
 # Rule 1's lowercasing for the same reason it exempts ``A/...``: libzim's
 # path lookup is case-sensitive.
 _DOMAIN_PATH_BODY = r"[A-Za-z0-9][A-Za-z0-9\-]*(?:\.[A-Za-z0-9\-]+)+/"
-_DOMAIN_PATH_RE = re.compile(rf"^{_DOMAIN_PATH_BODY}")
+_DOMAIN_PATH_RE = re.compile(rf"^/?{_DOMAIN_PATH_BODY}")
 
 
 def _strip_quote_pair(value: str) -> str:
