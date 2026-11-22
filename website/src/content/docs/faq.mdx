@@ -121,27 +121,27 @@ v1.x's 22-tool advanced surface was roughly 36KB of schema — squarely in the p
 
 Use natural language with your MCP client:
 
-- "Search for biology in the ZIM files"
-- "Find articles about evolution"
+- "search for biology"
+- "search for evolution"
 - "Get search suggestions for 'bio'"
 
-The system supports various search strategies and filters.
+Keep requests in the shapes the [Recognized phrasings](/openzim-mcp/docs/api-reference/#recognized-phrasings) table lists. Extra words become part of the query: "Search for biology in the ZIM files" searches for `biology in the ZIM files` and finds nothing.
 
 ### How do I get specific articles?
 
 Request articles directly:
 
-- "Get the Biology article from the ZIM file"
-- "Show me the content of the Evolution page"
+- "get article Biology"
+- "summary of Evolution"
 
-The smart retrieval system automatically handles path encoding differences. See [Smart retrieval](/openzim-mcp/docs/smart-retrieval/) for the fallback ladder.
+The smart retrieval system automatically handles path encoding differences. See [Smart retrieval](/openzim-mcp/docs/smart-retrieval/) for the fallback ladder. A title the archive lacks gets the nearest article it does hold: the climate-change starter archive has neither page, and answers both requests with `A/Biodiversity`.
 
 ### Can I get article structure without full content?
 
 Yes. Use structure requests:
 
-- "Show me the structure of the Evolution article"
-- "What are the main sections in the Biology page?"
+- "show structure of Evolution"
+- "table of contents for Biology"
 
 This gives you headings, sections, and metadata without loading full content. Under the hood it's `zim_get(view="structure")` or `zim_get(view="toc")`.
 

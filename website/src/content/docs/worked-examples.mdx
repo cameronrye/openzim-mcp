@@ -505,11 +505,13 @@ The resolved path is cached for subsequent calls within the same archive, so the
 Every case study above can be expressed as a single `zim_query` call in simple mode — the natural-language intent parser routes to the right advanced operation:
 
 ```python
-zim_query(query="summarize the Protein article")
-zim_query(query="find articles about computers in the wikipedia archive")
+zim_query(query="summarize Protein")
+zim_query(query="search for computer")
 zim_query(query="show me the table of contents for Evolution")
 zim_query(query="what articles are related to Ant?")
 ```
+
+Wording matters more than it looks: "summarize the Protein article" looks up an article titled "the protein article" and returns **Article not found**. The [Recognized phrasings](/openzim-mcp/docs/api-reference/#recognized-phrasings) table lists the shapes the parser understands.
 
 Simple mode is the default (one tool exposed) and is the right choice when your host LLM struggles with large tool catalogues. Switch to advanced mode with `OPENZIM_MCP_TOOL_MODE=advanced` for fine-grained control over the 8-tool surface. See [LLM integration patterns](/openzim-mcp/docs/llm-integration-patterns/) for the trade-off in more depth.
 
