@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any, Dict, List
+from unittest.mock import MagicMock
 
 import pytest
 from libzim.writer import Creator
@@ -142,3 +143,152 @@ class TestTheLastPageIsNotEmpty:
             assert page["done"] is True
             assert len(page["results"]) == 2
         assert warm["results"] == cold["results"]
+
+
+# ---------------------------------------------------------------------------
+# page_info.next_offset rides filtered pages too
+# ---------------------------------------------------------------------------
+#
+# v3.3.1 field report (fid 67) made the resume point a value on plain
+# fulltext pages: ``page_info.next_offset``, present exactly when there is a
+# next page. The filtered branch of the same tool never got it, so a caller
+# paging ``namespace="C"`` had to know that its resume point is ``total``
+# (the consumed filter slots), not ``offset + returned_count``.
+
+
+async def _filtered(tool: Any, zim: Path, offset: int, limit: int) -> Dict[str, Any]:
+    return await tool(
+        query="asthma quiz",
+        zim_file_path=str(zim),
+        namespace="C",
+        limit=limit,
+        offset=offset,
+    )
+
+
+class TestFilteredNextOffset:
+    @pytest.mark.asyncio
+    async def test_an_unfinished_page_names_its_resume_point(
+        self, three_quiz_zim: Path
+    ) -> None:
+        page = await _filtered(_tool(three_quiz_zim), three_quiz_zim, 0, 1)
+
+        assert page["done"] is False
+        # Positive: the resume point is a value, and it is the slot count the
+        # cursor encodes.
+        assert page["page_info"]["next_offset"] == page["total"] == 1
+        # Same field, same meaning, as an unfiltered page of this archive.
+        plain = await _tool(three_quiz_zim)(
+            query="asthma quiz", zim_file_path=str(three_quiz_zim), limit=1
+        )
+        assert "next_offset" in plain["page_info"]
+
+    @pytest.mark.asyncio
+    async def test_following_next_offset_walks_every_page_once(
+        self, three_quiz_zim: Path
+    ) -> None:
+        tool = _tool(three_quiz_zim)
+        offset, seen = 0, []
+        for _ in range(6):
+            page = await _filtered(tool, three_quiz_zim, offset, 1)
+            seen += [r["path"].split("?", 1)[0] for r in page["results"]]
+            if page["done"]:
+                # Negative: a finished page advertises no continuation.
+                assert "next_offset" not in page["page_info"], page["page_info"]
+                break
+            offset = page["page_info"]["next_offset"]
+
+        assert sorted(seen) == [
+            "med.gov/ency/quiz/a.htm",
+            "med.gov/ency/quiz/b.htm",
+            "med.gov/ency/quiz/c.htm",
+        ], seen
+
+    @pytest.mark.asyncio
+    async def test_the_cached_page_carries_it_too(self, three_quiz_zim: Path) -> None:
+        """Cache enabled: the field is part of the cached filtered page."""
+        tool = _tool(three_quiz_zim, cache=True)
+
+        cold = await _filtered(tool, three_quiz_zim, 0, 1)
+        warm = await _filtered(tool, three_quiz_zim, 0, 1)
+
+        for page in (cold, warm):
+            assert page["page_info"]["next_offset"] == 1
+        assert warm["results"] == cold["results"]
+
+
+def _stub_entry(path: str) -> MagicMock:
+    entry = MagicMock()
+    entry.path = path
+    entry.title = path.rsplit("/", 1)[-1]
+    entry.is_redirect = False
+    item = MagicMock()
+    item.mimetype = "text/html"
+    item.content = b"<html><body><p>asthma quiz questions</p></body></html>"
+    entry.get_item.return_value = item
+    return entry
+
+
+class _StubCtx:
+    def __init__(self, value: Any) -> None:
+        self._value = value
+
+    def __enter__(self) -> Any:
+        return self._value
+
+    def __exit__(self, *exc: Any) -> bool:
+        return False
+
+
+class TestNextOffsetCountsFailedCandidates:
+    @pytest.mark.asyncio
+    async def test_an_unreadable_hit_still_moves_the_resume_point(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A hit that fails to materialise consumes a filter slot without
+        being served, so ``offset + returned_count`` lands one slot early and
+        re-serves a row; ``next_offset`` must be the consumed-slot count."""
+        stream = [
+            "med.gov/a.htm",
+            "med.gov/broken.htm",
+            "med.gov/b.htm",
+            "med.gov/c.htm",
+        ]
+        entries = {p: _stub_entry(p) for p in stream if "broken" not in p}
+
+        def _get(path: str) -> MagicMock:
+            if path not in entries:
+                raise KeyError(path)
+            return entries[path]
+
+        archive = MagicMock()
+        archive.has_new_namespace_scheme = True
+        archive.has_fulltext_index = True
+        archive.get_entry_by_path.side_effect = _get
+        search = MagicMock()
+        search.getEstimatedMatches.return_value = len(stream)
+        search.getResults.side_effect = lambda start, n: stream[start : start + n]
+        searcher = MagicMock()
+        searcher.return_value.search.return_value = search
+        monkeypatch.setattr(
+            "openzim_mcp.zim_operations.zim_archive",
+            lambda *a, **kw: _StubCtx(archive),
+        )
+        monkeypatch.setattr("openzim_mcp.zim_operations.Searcher", searcher)
+        zim_file = tmp_path / "stub.zim"
+        zim_file.write_bytes(b"zim")
+        tool = _tool(zim_file)
+
+        offset, served, resume_points = 0, [], []
+        for _ in range(6):
+            page = await _filtered(tool, zim_file, offset, 1)
+            served += [r["path"] for r in page["results"]]
+            if page["done"]:
+                break
+            resume_points.append(page["page_info"]["next_offset"])
+            offset = resume_points[-1]
+
+        # Positive: every readable hit is served, in rank order, once.
+        assert served == ["med.gov/a.htm", "med.gov/b.htm", "med.gov/c.htm"], served
+        # The page holding ``b`` also consumed the unreadable slot before it.
+        assert resume_points == [1, 3], resume_points

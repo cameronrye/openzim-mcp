@@ -2468,6 +2468,12 @@ class _SearchMixin:
         }
         if scan.total_filtered_is_lower_bound:
             page_info["total_is_lower_bound"] = True
+        # v3.3.1 field report (fid 67) made the resume point a value on the
+        # unfiltered page and stopped there. Here it is the consumed-slot
+        # count the cursor encodes, which ``offset + returned_count`` misses
+        # whenever a candidate inside the window failed materialisation.
+        if not done:
+            page_info["next_offset"] = scan.filtered_count
 
         payload: Dict[str, Any] = {
             "query": query,
