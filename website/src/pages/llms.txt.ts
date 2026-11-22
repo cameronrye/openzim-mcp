@@ -226,9 +226,11 @@ which an archive uses without asking it, so prefer search or \`zim_query\` over 
 URLs. Passed as *tool arguments* they are plain UTF-8 — do not URL-encode them. The one exception
 is the entry **resource** template, where \`/\` inside \`{path}\` must be percent-encoded as \`%2F\`.
 
-**Smart retrieval.** When an exact entry lookup misses, \`zim_get\` walks a five-step ladder —
-encoding variants, namespace probes, \`M/<key>\` routing, alternate-spelling exact probes, then
-search — and caches the mapping it finds. No manual retry is needed.
+**Smart retrieval.** On a full-body or batch \`zim_get\`, the entry path goes through a five-step
+ladder, in order: \`M/<key>\` routing to the metadata API (new-scheme archives), the cached path
+mapping, direct access with redirects followed, exact probes of alternate spellings
+(percent-decoded, un-rooted), then search. The resolved path is cached, so no manual retry is
+needed.
 
 ## Available tools
 
