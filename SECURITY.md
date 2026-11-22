@@ -133,8 +133,15 @@ OpenZIM MCP implements several security measures:
 ### ZIM File Processing
 
 - ZIM files are processed using the libzim library
-- Content is sanitized before processing
-- Large files are handled with appropriate limits
+- Archive text is untrusted input to the calling model, and nothing filters it
+  for prompt injection. Simple-mode (`zim_query`) responses wrap it in a
+  provenance fence that labels it as reference data; the fence does not filter
+  what is inside it. See
+  [the retrieved-content trust boundary](https://cameronrye.github.io/openzim-mcp/docs/security-best-practices/#the-retrieved-content-trust-boundary)
+  for where the fence applies and where it does not
+- Response sizes are capped: text bodies by `max_content_length`, and binary
+  fetches at 10 MB by default, with `zim_get` refusing a binary
+  `max_content_length` above 25 MB
 
 ### Path Handling
 
@@ -144,7 +151,8 @@ OpenZIM MCP implements several security measures:
 
 ### Caching
 
-- Cache keys are validated to prevent cache poisoning
+- Cache keys are built server-side from arguments that have already been
+  validated; callers never supply one
 - Cached content has appropriate TTL limits
 - Cache size is limited to prevent memory exhaustion
 
@@ -168,6 +176,11 @@ OpenZIM MCP implements several security measures:
 - Use environment variables for sensitive configuration
 - Avoid logging sensitive information
 - Implement appropriate access controls
+- Server instructions set through `OPENZIM_MCP_INSTRUCTIONS` or
+  `OPENZIM_MCP_INSTRUCTIONS_PATH` (3.5+) are sent unfenced to every client that
+  connects. Keep secrets out of them, and restrict who can edit the file:
+  whoever can change it can steer every connected model. See
+  [Server instructions](https://cameronrye.github.io/openzim-mcp/docs/configuration/#server-instructions)
 
 ### HTTP Transport Authentication
 
