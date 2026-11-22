@@ -883,6 +883,15 @@ class _ContentMixin:
         if content_offset < 0:
             content_offset = 0
 
+        # D12 guard, which every sibling surface runs at its boundary. Without
+        # it ``../Hydrogen`` reached the search fallback, whose matcher drops
+        # the first segment, and was served as ``A/Hydrogen`` while
+        # ``view="toc"`` rejected it. The check reads the un-rooted spelling,
+        # as the siblings' does, but the raw path still goes down the ladder:
+        # its alternate-spelling step un-roots a leading slash itself and
+        # ``requested_path`` then marks that rewrite (D17).
+        reject_path_traversal(normalize_entry_path(entry_path))
+
         validated_path = self._validate_zim_path(zim_file_path)
 
         # Cache key distinct from the legacy string cache so old persisted
