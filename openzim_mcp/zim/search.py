@@ -4820,6 +4820,12 @@ class _SearchMixin:
         snippet render is cached per (path, entry, stat-token) — without it
         the synthesize hot path re-renders the same entries the EntryBundle
         already rendered (the snippet-vs-bundle double render M31 targeted).
+
+        warc2zim query-string twins (``quiz.htm`` / ``quiz.htm?quiz=1``)
+        collapse on ``canonical_result_path`` like every other search
+        surface; ``diabetes quiz`` spent four of ten citations on them. The
+        survivor is whichever twin ranked higher, and the stream is read past
+        ``k`` until ``k`` distinct pages are found or it ends.
         """
         query_obj = _zim_ops_mod.Query().set_query(query)
         searcher = _zim_ops_mod.Searcher(archive)
@@ -4827,8 +4833,21 @@ class _SearchMixin:
         total_results = search.getEstimatedMatches()
         if total_results == 0:
             return []
-        result_count = min(k, total_results)
-        entry_ids: List[str] = list(search.getResults(0, result_count))
+        entry_ids: List[str] = []
+        seen_canonical: set[str] = set()
+        read = 0
+        while len(entry_ids) < k and read < total_results:
+            want = min(k - len(entry_ids), total_results - read)
+            batch = list(search.getResults(read, want))
+            read += len(batch)
+            for entry_id in batch:
+                canonical = canonical_result_path(entry_id)
+                if canonical not in seen_canonical:
+                    seen_canonical.add(canonical)
+                    entry_ids.append(entry_id)
+            if len(batch) < want:
+                # The estimate over-reported; the stream has ended.
+                break
         hits: list[dict] = []
         for rank, entry_id in enumerate(entry_ids, start=1):
             try:
