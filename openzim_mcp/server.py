@@ -199,7 +199,9 @@ def _build_transport_security(
         # varies by reachable IP / container, so any Host allow-list would 421
         # every request. Disable DNS-rebinding Host validation — the auth token
         # (or the explicitly-acknowledged OPENZIM_MCP_INSECURE_DISABLE_AUTH) is
-        # the access gate here — and surface the trade-off loudly.
+        # the access gate here — and surface the trade-off loudly. The SDK
+        # drops its Origin check under the same flag; the HTTP app's
+        # TransportSecurityGateMiddleware keeps that half.
         warning = (
             f"HTTP transport bound to {host} with no OPENZIM_MCP_ALLOWED_HOSTS "
             "set; disabling DNS-rebinding Host validation so direct-IP clients "

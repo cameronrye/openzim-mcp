@@ -38,6 +38,7 @@ from starlette.routing import Route
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from .exceptions import OpenZimMcpConfigurationError, OpenZimMcpTimeoutError
+from .security import sanitize_for_log
 from .timeout_utils import _get_executor, run_with_timeout
 
 if TYPE_CHECKING:
@@ -532,6 +533,17 @@ class TransportSecurityGateMiddleware(BaseHTTPMiddleware):
     for each request before checking it, so the gate spares a stateless
     server the same churn.
 
+    One check is the gate's own rather than the SDK's. The SDK runs its Host
+    and Origin checks under a single flag, and a bind-all server with no
+    ``OPENZIM_MCP_ALLOWED_HOSTS`` turns that flag off, because a direct-IP
+    ``Host`` varies by interface. An ``Origin`` does not, and it is the header
+    that gives a DNS-rebinding page away: with the flag off, a page at
+    ``http://evil.example:8000`` reached every tool of a server run with
+    ``OPENZIM_MCP_INSECURE_DISABLE_AUTH``. So when the flag is off the gate
+    still refuses an ``Origin`` outside the allow-list, by the SDK's own rule
+    and with its 403. A request with no ``Origin`` — what non-browser clients
+    send — passes as it always did.
+
     Health endpoints are exempt for the same reason they are exempt from auth.
     """
 
@@ -541,6 +553,8 @@ class TransportSecurityGateMiddleware(BaseHTTPMiddleware):
         from mcp.server.transport_security import TransportSecurityMiddleware
 
         self._validator = TransportSecurityMiddleware(security)
+        self._check_origin_only = not security.enable_dns_rebinding_protection
+        self._allowed_origins = list(security.allowed_origins)
 
     async def dispatch(
         self,
@@ -555,7 +569,28 @@ class TransportSecurityGateMiddleware(BaseHTTPMiddleware):
         )
         if error is not None:
             return error
+        if self._check_origin_only:
+            origin = request.headers.get("origin")
+            if origin and not _origin_is_allowed(origin, self._allowed_origins):
+                logger.warning("Invalid Origin header: %s", sanitize_for_log(origin))
+                return Response("Invalid Origin header", status_code=403)
         return await call_next(request)
+
+
+def _origin_is_allowed(origin: str, allowed_origins: "list[str]") -> bool:
+    """The SDK's Origin rule: an exact entry, or ``base:*`` for any port of it.
+
+    Mirrors ``TransportSecurityMiddleware._validate_origin`` so a bind-all
+    server judges an ``Origin`` exactly as a loopback one does. The agreement
+    is pinned by a test that sends both the same origins, rather than by
+    calling the SDK's private method.
+    """
+    if origin in allowed_origins:
+        return True
+    return any(
+        allowed.endswith(":*") and origin.startswith(allowed[:-2] + ":")
+        for allowed in allowed_origins
+    )
 
 
 def _is_initialize_request(body: bytes) -> bool:
