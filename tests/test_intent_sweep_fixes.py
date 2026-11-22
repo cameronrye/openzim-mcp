@@ -92,6 +92,9 @@ _ARTICLES = [
         "Insomnia is a common sleep disorder, and some suggestions for"
         " treating insomnia start with a regular bedtime.",
     ),
+    # A title whose first word is ``On``, beside the title without it.
+    ("A/On_Liberty", "On Liberty", "On Liberty is an 1859 essay by John Stuart Mill."),
+    ("A/Liberty", "Liberty", "Liberty is the state of being free within society."),
 ]
 
 
@@ -485,3 +488,40 @@ class TestDottedCapitalIKeepsTheTypedCase:
         )
         assert "Article not found" not in out, out[:400]
         assert "Byzantion was founded on the Bosphorus" in out, out[:400]
+
+
+# ---------------------------------------------------------------------------
+# 6. "summarize the article on X" kept the preposition
+# ---------------------------------------------------------------------------
+
+
+class TestTheArticleOnFrameIsPeeled:
+    """README's own example, ``summarize the article on Photosynthesis``,
+    parsed ``entry_path='on photosynthesis'``; on this archive ``... on
+    Carbon dioxide`` summarised the Post-Kyoto negotiations article. Only
+    ``about`` was peeled after the object noun."""
+
+    @pytest.mark.parametrize(
+        ("query", "intent"),
+        [
+            ("summarize the article on Carbon dioxide", "summary"),
+            ("get the article on Carbon dioxide", "get_article"),
+            ("show the page on Carbon dioxide", "get_article"),
+        ],
+    )
+    def test_the_article_on_x_is_the_article_about_x(
+        self, climate: SimpleToolsHandler, climate_zim: Path, query: str, intent: str
+    ) -> None:
+        out = _ask(climate, climate_zim, query)
+        assert "Post–Kyoto" not in out, out[:400]
+        assert "is a chemical compound" in out, out[:600]
+        assert f"intent={intent} " in out, out[-300:]
+
+    def test_a_title_that_starts_with_on_keeps_it(
+        self, handler: SimpleToolsHandler, sweep_zim: Path
+    ) -> None:
+        """No determiner before the noun: the ``On`` is the title's own,
+        and peeling it would fetch the neighbouring ``Liberty``."""
+        out = _ask(handler, sweep_zim, "get article On Liberty")
+        assert "the state of being free" not in out, out[:400]
+        assert "an 1859 essay by John Stuart Mill" in out, out[:400]

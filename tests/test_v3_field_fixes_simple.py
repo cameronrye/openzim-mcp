@@ -389,7 +389,10 @@ class TestD48GetArticleDeterminerAndAbout:
             ("get the article Immanuel Kant", "immanuel kant"),
             ("show an entry about Photosynthesis", "photosynthesis"),
             ("get article about Photosynthesis", "photosynthesis"),
-            ("fetch the page on Photosynthesis", "on photosynthesis"),
+            # ``on`` is peeled too once a determiner makes the noun a
+            # description ("the page on X"); README's own example is
+            # ``summarize the article on Photosynthesis``.
+            ("fetch the page on Photosynthesis", "photosynthesis"),
             # Title-internal prepositions are still preserved (H6).
             ("get the article Lord of the Rings", "lord of the rings"),
         ],

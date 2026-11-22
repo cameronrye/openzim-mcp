@@ -307,12 +307,21 @@ _TAIL_LEADING_CONTENTS_RE = re.compile(r"^contents\s+", re.IGNORECASE)
 
 # D48: ``get (the) article about X`` anchors on ``article`` and leaves
 # ``about X`` as the tail; ``about`` is a bridge word, not part of the
-# title, so peel it. Only ``about`` — ``on`` / ``for`` / ``of`` open real
-# titles far too often (``On the Origin of Species``) to be safe. And only
+# title, so peel it. ``on`` / ``for`` / ``of`` open real titles far too
+# often (``On the Origin of Species``) to peel the same way. And only
 # after the object noun: past a preposition the user is spelling the title
 # out (``summary of About a Boy``), where ``about`` is the title's own
 # first word.
 _TAIL_LEADING_ABOUT_RE = re.compile(r"^about\s+", re.IGNORECASE)
+
+# ...except ``on`` after a determined noun. ``summarize the article on
+# Photosynthesis`` — README's own example — kept ``on photosynthesis`` as
+# the entry path, and ``... on Carbon dioxide`` summarised the Post-Kyoto
+# negotiations article. With ``the`` / ``a`` / ``this`` before it, the noun
+# describes the article ON X; without one the ``on`` is the title's own
+# (``get article On Fire (book)``).
+_TAIL_LEADING_ON_RE = re.compile(r"^on\s+", re.IGNORECASE)
+_OBJECT_DETERMINERS = frozenset({"the", "a", "an", "this", "that"})
 
 
 def _extract_entry_path_keyworded(query: str, params: Dict[str, Any]) -> None:
@@ -438,6 +447,13 @@ def _extract_entry_path_keyworded(query: str, params: Dict[str, Any]) -> None:
         # and where the index holds both spellings it did so at score 1.0.
         if anchored_on_object:
             cleaned = _TAIL_LEADING_ABOUT_RE.sub("", tail, count=1).strip()
+            before_noun = query[: matches[-1].start()].split()
+            if (
+                cleaned == tail
+                and before_noun
+                and before_noun[-1].lower() in _OBJECT_DETERMINERS
+            ):
+                cleaned = _TAIL_LEADING_ON_RE.sub("", tail, count=1).strip()
             if cleaned and cleaned != tail:
                 tail = cleaned
         # Post-v2.0.0 D-E: peel a surrounding quote pair so an
