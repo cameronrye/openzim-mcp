@@ -706,3 +706,58 @@ class TestTheRefillRateMustBeFinite:
         limiter.check_rate_limit("get_entry", client_id="c")
         with pytest.raises(OpenZimMcpRateLimitError):
             limiter.check_rate_limit("get_entry", client_id="c")
+
+
+class TestAPerOperationEntryCannotSayDisabled:
+    """A per-operation ``enabled: false`` loaded and was then ignored.
+
+    Every entry is a whole ``RateLimitConfig``, so it accepts ``enabled``,
+    but the limiter consults only the global flag: ``{"search": {"enabled":
+    false, ...}}`` kept enforcing that entry's bucket. The documented
+    overrides are ``requests_per_second`` and ``burst_size``, and "disabled"
+    could mean either dropping the operation's own bucket or exempting it
+    from limiting altogether, so the setting is refused rather than guessed.
+    """
+
+    def test_enabled_false_in_an_entry_is_refused(self) -> None:
+        from pydantic import ValidationError
+
+        from openzim_mcp.rate_limiter import RateLimitConfig
+
+        with pytest.raises(ValidationError, match="enabled=false") as excinfo:
+            RateLimitConfig(
+                per_operation_limits={"search": {"enabled": False, "burst_size": 2}}
+            )
+        assert "'search'" in str(excinfo.value)
+
+    def test_the_environment_variable_is_refused(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from pydantic import ValidationError
+
+        monkeypatch.setenv(
+            "OPENZIM_MCP_RATE_LIMIT__PER_OPERATION_LIMITS",
+            '{"search": {"enabled": false, "requests_per_second": 4, "burst_size": 8}}',
+        )
+        with pytest.raises(ValidationError, match="enabled=false"):
+            OpenZimMcpConfig(allowed_directories=[str(tmp_path)])
+
+    @pytest.mark.parametrize("extra", [{}, {"enabled": True}])
+    def test_a_bucket_override_still_loads_and_limits(
+        self, extra: Dict[str, Any]
+    ) -> None:
+        """Paired positive: what an entry is for still works, and so does a
+        redundant ``enabled: true``, which is what every entry does anyway."""
+        from openzim_mcp.exceptions import OpenZimMcpRateLimitError
+        from openzim_mcp.rate_limiter import RateLimitConfig, RateLimiter
+
+        limiter = RateLimiter(
+            RateLimitConfig(
+                per_operation_limits={
+                    "search": {"requests_per_second": 0.001, "burst_size": 2, **extra}
+                }
+            )
+        )
+        limiter.check_rate_limit("search", client_id="c")
+        with pytest.raises(OpenZimMcpRateLimitError, match="Per-operation"):
+            limiter.check_rate_limit("search", client_id="c")
