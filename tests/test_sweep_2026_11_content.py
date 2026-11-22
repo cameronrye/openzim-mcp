@@ -429,3 +429,71 @@ class TestCompactInfoboxSaysWhatTheCapLeftOut:
         assert "12385-13-6" not in compact
         assert "12385-13-6" in raw
         assert "Henry Cavendish (1766)" in raw
+
+
+_STORY_HTML = """<html><body>
+<h1>Story</h1><p>Intro text.</p>
+<h2>Part One</h2><p>Part one text.</p>
+<h2>* * *</h2><p>Interlude text.</p>
+<h2>★</h2><p>Star text.</p>
+<h2>Part Two</h2><p>Part two text.</p>
+</body></html>"""
+
+
+class TestPunctuationOnlyHeadingsAreSections:
+    """A heading whose text slugs to nothing got an empty id and was skipped.
+
+    ``resolve_heading_id`` returns ``""`` for "* * *" or "★" on anchor-free
+    HTML, and the bundle drops a heading with no id. So the TOC never listed
+    them, and ``zim_get_section("part-one")`` ran on through both and served
+    their prose as its own.
+    """
+
+    @pytest.mark.asyncio
+    async def test_they_are_listed_and_bound_the_section_before_them(
+        self, tmp_path: Path
+    ) -> None:
+        zim = _build_zim(tmp_path, {"Story": _STORY_HTML})
+        server = _server(tmp_path)
+        base = {"zim_file_path": str(zim), "entry_path": "Story"}
+
+        toc = await _tool(server, "zim_get")(**base, view="toc")
+        structure = await _tool(server, "zim_get")(**base, view="structure")
+        get_section = _tool(server, "zim_get_section")
+        part_one = await get_section(**base, section_id="part-one")
+        interlude = await get_section(**base, section_id="section-2")
+
+        children = toc["toc"][0]["children"]
+        assert [(h["text"], h["section_id"]) for h in children] == [
+            ("Part One", "part-one"),
+            ("* * *", "section-2"),
+            ("★", "section-3"),
+            ("Part Two", "part-two"),
+        ], children
+        assert all(h["id"] for h in structure["headings"]), structure["headings"]
+        assert part_one["content_markdown"].strip() == "Part one text."
+        assert "Interlude text." in interlude["content_markdown"]
+        assert "Star text." not in interlude["content_markdown"]
+
+    @pytest.mark.asyncio
+    async def test_an_existing_heading_keeps_its_id(self, tmp_path: Path) -> None:
+        """The positional id avoids every id the page already declares, so a
+        heading that had one before keeps it — "Section 2" is still
+        ``section-2``, and the punctuation heading at position 2 steps
+        aside rather than taking the handle a caller may hold."""
+        html = _STORY_HTML.replace("<h2>★</h2>", "<h2>Section 2</h2>")
+        zim = _build_zim(tmp_path, {"Story": html})
+        server = _server(tmp_path)
+        base = {"zim_file_path": str(zim), "entry_path": "Story"}
+
+        toc = await _tool(server, "zim_get")(**base, view="toc")
+        named = await _tool(server, "zim_get_section")(**base, section_id="section-2")
+
+        assert [h["section_id"] for h in toc["toc"][0]["children"]] == [
+            "part-one",
+            "section-2_2",
+            "section-2",
+            "part-two",
+        ], toc
+        assert named["section_title"] == "Section 2"
+        assert named["content_markdown"].strip() == "Star text."

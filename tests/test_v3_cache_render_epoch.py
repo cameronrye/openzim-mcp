@@ -183,9 +183,10 @@ class TestPreFixKeysAreNotReused:
 # sentence, an "On this page" in-page nav menu, a heading anchor declared
 # twice, and two infoboxes — the compact bundle hoisted the second one above
 # the lead until r5, and the first is one field over ``infobox_kv_limit``'s
-# default of 30, whose cut the compact render now reports. Deliberately small
-# — the fingerprint below is a change detector, and a large fixture would make
-# it fire on changes it does not care about.
+# default of 30, whose cut the compact render now reports — and a heading
+# whose text slugs to nothing, which r5 makes a section of its own.
+# Deliberately small — the fingerprint below is a change detector, and a large
+# fixture would make it fire on changes it does not care about.
 _FIXTURE_INFOBOX_ROWS = "".join(
     f"<tr><th>Field {i}</th><td>Value {i}</td></tr>" for i in range(31)
 )
@@ -200,6 +201,8 @@ _RENDER_FIXTURE_HTML = f"""
 <li><a href="#refs">References</a></li>
 </ul></nav>
 <p>Real prose about the topic.</p>
+<h2>* * *</h2>
+<p>An interlude.</p>
 <h2><a name="SH4b"></a>Author Information</h2>
 <p>First author block.</p>
 <h2><a name="SH4b"></a>Author Information</h2>
@@ -216,7 +219,7 @@ _RENDER_FIXTURE_HTML = f"""
 # pinning the digest alone let ``r3`` go back to ``r2`` with every suite green.
 _PINNED_RENDER_FINGERPRINT = (
     "r5",
-    "589fe56dea031abd8a424389c7ff460800e5a86f606feb64eefa89aba594078b",
+    "27f19291db0e70bd3f00d397b6a2fb56ce75a47e10aec983d60500c8b0de69bc",
 )
 
 

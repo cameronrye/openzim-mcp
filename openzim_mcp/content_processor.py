@@ -1427,6 +1427,23 @@ def _build_headings(
             if line_text and line_text != text:
                 entry["line_text"] = line_text
         headings.append(entry)
+    # A heading whose text slugs to nothing ("* * *", "★") has no id, and the
+    # bundle drops a heading without one: the TOC never listed it and the
+    # section before it ran on through its body. Give it a positional id
+    # instead. It is chosen once every other id is known and avoids all of
+    # them, so a heading that already had an id keeps it — reported as
+    # ``slug`` because, like one, it is generated rather than read from the
+    # page.
+    taken = {entry["id"] for entry in headings if entry["id"]}
+    for entry in headings:
+        if entry["id"]:
+            continue
+        base = f"section-{entry['position']}"
+        candidate, ordinal = base, 2
+        while candidate in taken:
+            candidate, ordinal = f"{base}_{ordinal}", ordinal + 1
+        taken.add(candidate)
+        entry["id"], entry["id_source"] = candidate, "slug"
     return headings
 
 
