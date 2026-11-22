@@ -708,6 +708,40 @@ class SimpleToolsHandler(
         if zim_file_path:
             zim_file_path = self._normalize_zim_file_path(zim_file_path)
 
+        # Reject empty / whitespace-only queries upfront. The router would
+        # otherwise classify the input as a low-confidence search and fall
+        # through to ``search_zim_file("")``, which the search tool itself
+        # rejects — so the only thing we'd return is a confusing "No search
+        # results found for ''" string. Validate at the front door so the
+        # caller gets an actionable message. The guard sits above the
+        # synthesize branch, which used to run first: it searched the empty
+        # string and returned a 0-hit briefing as a success.
+        if not query or not query.strip():
+            # D-Q1: a rejected argument must be flagged. ``query=null`` /
+            # ``123`` / ``["a"]`` already come back as the structured
+            # ``invalid_argument`` envelope from argument validation, while
+            # ``""`` and ``"   "`` — the shape a template that failed to
+            # interpolate produces — returned prose on the SUCCESS path, so a
+            # client branching on ``isError`` recorded an empty query as a
+            # successful retrieval. Same conversion D51 (cursor mismatch) and
+            # D58 (security denial) already made for their branches: the
+            # prose is unchanged and rides in ``message``, with ``operation``
+            # replacing the inline telemetry marker.
+            return tool_error(
+                operation="query_required",
+                message=(
+                    "**Query Required**\n\n"
+                    "**Issue**: query must be a non-empty "
+                    "natural-language string.\n\n"
+                    "**Examples**:\n"
+                    "- `list available ZIM files`\n"
+                    '- `search for "evolution"`\n'
+                    "- `get article Tiger`\n"
+                    "- `show structure of Biology`"
+                ),
+                extras={"invalid_arguments": ["query"]},
+            )
+
         if options.get("synthesize"):
             try:
                 return self._handle_synthesize_query(
@@ -746,38 +780,6 @@ class SimpleToolsHandler(
             ),
         }
         try:
-            # Reject empty / whitespace-only queries upfront. The router
-            # would otherwise classify the input as a low-confidence search
-            # and fall through to ``search_zim_file("")``, which the search
-            # tool itself rejects — so the only thing we'd return is a
-            # confusing "No search results found for ''" string. Validate
-            # at the front door so the caller gets an actionable message.
-            if not query or not query.strip():
-                # D-Q1: a rejected argument must be flagged. ``query=null``
-                # / ``123`` / ``["a"]`` already come back as the structured
-                # ``invalid_argument`` envelope from argument validation,
-                # while ``""`` and ``"   "`` — the shape a template that
-                # failed to interpolate produces — returned prose on the
-                # SUCCESS path, so a client branching on ``isError``
-                # recorded an empty query as a successful retrieval. Same
-                # conversion D51 (cursor mismatch) and D58 (security
-                # denial) already made for their branches: the prose is
-                # unchanged and rides in ``message``, with ``operation``
-                # replacing the inline telemetry marker.
-                return tool_error(
-                    operation="query_required",
-                    message=(
-                        "**Query Required**\n\n"
-                        "**Issue**: query must be a non-empty "
-                        "natural-language string.\n\n"
-                        "**Examples**:\n"
-                        "- `list available ZIM files`\n"
-                        '- `search for "evolution"`\n'
-                        "- `get article Tiger`\n"
-                        "- `show structure of Biology`"
-                    ),
-                    extras={"invalid_arguments": ["query"]},
-                )
             # Conversational filler / meta-instructions ("do both",
             # "try again", "test this", "ok") have no information content
             # for the intent classifier and would otherwise produce one of:

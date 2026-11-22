@@ -206,3 +206,47 @@ class TestSimpleModeRejectionsAreErrors:
         # Positive pair: the walk cursor still resumes its own archive.
         assert resumed[0] is not True, resumed[1]
         assert "A/" in resumed[1], resumed[1]
+
+
+class TestEmptySynthesizeQuery:
+    """``{"query": "", "synthesize": true}`` came back as a 0-hit success.
+
+    The synthesize branch ran before the empty-query guard, so the empty
+    string was searched and the response was an ``isError=false`` briefing
+    with ``reason="0_hits"`` — while the same query without ``synthesize``
+    was already the ``query_required`` error.
+    """
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("query", ["", "   "])
+    async def test_empty_query_is_query_required_in_both_branches(
+        self, withns: Path, query: str
+    ) -> None:
+        async with _session(withns, "simple") as session:
+            synth = await _call(
+                session, "zim_query", {"query": query, "synthesize": True}
+            )
+            plain = await _call(session, "zim_query", {"query": query})
+
+        for is_error, text, body in (synth, plain):
+            assert is_error is True, text
+            assert body["operation"] == "query_required", body
+            assert body["invalid_arguments"] == ["query"], body
+
+    @pytest.mark.asyncio
+    async def test_a_real_query_still_synthesizes(self, withns: Path) -> None:
+        """Positive pair: the guard must not swallow the synthesize branch."""
+        async with _session(withns, "simple") as session:
+            is_error, text, body = await _call(
+                session,
+                "zim_query",
+                {
+                    "query": "carbon tax",
+                    "synthesize": True,
+                    "zim_file_path": str(withns / _MINI),
+                },
+            )
+
+        assert is_error is not True, text
+        assert body["answer_markdown"], body
+        assert body["citations"], body
