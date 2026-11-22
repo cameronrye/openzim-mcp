@@ -241,7 +241,7 @@ which is the quickest way to see what a surprising answer actually dispatched
 to; a `cert` of `0.50` almost always means no pattern matched and your wording
 was searched literally.
 
-**Returns:** intent-specific output — a markdown list for searches, a rendered article for retrievals, a `SynthesizeResponse` when `synthesize=True`. On the default (non-synthesize) path, the *guidance* failures — no archive specified, empty query, meta-only query, chained query — come back as markdown rather than an error envelope, so they carry `isError: false`. A `zim_file_path` that matches no loaded archive is **not** one of them: it returns a `zim_path_not_found` envelope, and any other exception the catch-all absorbs returns a `zim_query` envelope. Both set `isError: true`. The `synthesize=True` path instead refuses bad paths, meta-only queries, and chained queries with a `ToolErrorPayload`, so those do set `isError: true`.
+**Returns:** intent-specific output — a markdown list for searches, a rendered article for retrievals, a `SynthesizeResponse` when `synthesize=True`. On the default (non-synthesize) path, the *guidance* failures — no archive specified, meta-only query, chained query — come back as markdown rather than an error envelope, so they carry `isError: false`. An empty query is not guidance: it returns a `query_required` envelope on both paths, and an argument the parsed operation cannot take (a `limit` past its cap, say) returns `invalid_request`. A `zim_file_path` that matches no loaded archive is **not** one of them: it returns a `zim_path_not_found` envelope, and any other exception the catch-all absorbs returns a `zim_query` envelope. Both set `isError: true`. The `synthesize=True` path instead refuses bad paths, meta-only queries, and chained queries with a `ToolErrorPayload`, so those do set `isError: true`.
 
 ### `synthesize=True` — cross-archive briefings
 
@@ -259,7 +259,7 @@ evidence bundle to hand your own LLM, not as an answer to display.
 
 The pipeline: per-archive search → RRF fusion across archives → passage extraction → optional cross-encoder rerank (only with the `[reranker]` extra) → section attribution and heading-affinity boost → scraper output sunk below articles, except the translation hub a query ending in a language asks for (see `zim_search` below) → budget enforcement → answer rendering → citation building.
 
-**Arguments this mode reads, and the ones it refuses.** `limit` selects the number of cited passages (`SynthesizeConfig.top_n`), so it is capped at **50** here rather than at the 1,000 the search path allows — a larger value is refused with `invalid_limit` rather than clamped. `offset`, `content_offset` and `cursor` are refused with `invalid_combination`: the pipeline fuses a single ranked set across every archive and has no next page. Pass `synthesize=False` to page a search instead.
+**Arguments this mode reads, and the ones it refuses.** `limit` selects the number of cited passages (`SynthesizeConfig.top_n`), so it is capped at **50** here rather than at the 1,000 the search path allows — a larger value is refused with `invalid_limit` rather than clamped. `offset`, `content_offset` and `cursor` are refused with `invalid_combination`: the pipeline fuses a single ranked set across every archive and has no next page. `compact_budget` and `max_content_length` are refused the same way: the pipeline's only size control is its own answer budget, and a hard cap would cut citations away from the passages they cite. Pass `synthesize=False` to page a search instead.
 
 **Response** (`SynthesizeResponse`):
 
@@ -615,7 +615,7 @@ The three blocks are built independently. If the health or configuration builder
   "link_graph": {
     "built_at": "2026-09-04T16:05:54Z",
     "builder_version": "<openzim-mcp version that built it>",
-    "schema_version": "3",
+    "schema_version": "4",
     "node_count": 15990,
     "edge_count": 422722,
     "is_stale": false

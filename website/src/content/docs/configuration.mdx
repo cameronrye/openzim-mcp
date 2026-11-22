@@ -68,7 +68,7 @@ export OPENZIM_MCP_CORS_ORIGINS='["https://app.example"]'  # JSON list; "*" reje
 - `transport=http` + non-loopback host + no `auth_token` → `OpenZimMcpConfigurationError: HTTP transport bound to {host} requires authentication.`
 - `transport=sse` + non-loopback host → `OpenZimMcpConfigurationError: SSE transport bound to {host} is not allowed.`
 
-Exception: setting `OPENZIM_MCP_INSECURE_DISABLE_AUTH=1` lets `http` bind a non-loopback host without a token — intended for closed networks (Docker bridge, Tailscale-only, isolated LAN). The server logs a WARNING naming the bound host; the SSE refusal has no escape hatch. Behind a Host-preserving reverse proxy, also set `OPENZIM_MCP_ALLOWED_HOSTS` to the public hostname(s). Loopback `Host` values are always accepted, and every entry in `OPENZIM_MCP_ALLOWED_HOSTS` is added on top of them on any bind (a bare entry also gets a `:*` wildcard-port form, so a proxy's `Host: mcp.example.com:443` matches); on a **bind-all** host (`0.0.0.0`, `::`) with an empty allow-list the server turns DNS-rebinding `Host` validation **off** and warns, since any allow-list would 421 every direct-IP client — setting `OPENZIM_MCP_ALLOWED_HOSTS` turns it back on.
+Exception: setting `OPENZIM_MCP_INSECURE_DISABLE_AUTH=1` lets `http` bind a non-loopback host without a token — intended for closed networks (Docker bridge, Tailscale-only, isolated LAN). The server logs a WARNING naming the bound host; the SSE refusal has no escape hatch. Behind a Host-preserving reverse proxy, also set `OPENZIM_MCP_ALLOWED_HOSTS` to the public hostname(s). Loopback `Host` values are always accepted, and every entry in `OPENZIM_MCP_ALLOWED_HOSTS` is added on top of them on any bind (a bare entry also gets a `:*` wildcard-port form, so a proxy's `Host: mcp.example.com:443` matches); on a **bind-all** host (`0.0.0.0`, `::`) with an empty allow-list the server turns DNS-rebinding `Host` validation **off** and warns, since any allow-list would 421 every direct-IP client — setting `OPENZIM_MCP_ALLOWED_HOSTS` turns it back on. The `Origin` check stays on either way: a browser request from an origin outside `OPENZIM_MCP_CORS_ORIGINS` gets 403.
 
 For full HTTP deployment guidance see [HTTP and Docker Deployment](/openzim-mcp/docs/http-and-docker-deployment/).
 
@@ -175,6 +175,9 @@ Per-internal-operation cost defaults are defined in [defaults.RATE_LIMIT_COSTS](
 | `zim_links(direction="inbound")` | `"get_inbound_links"` | 1 |
 | `zim_links(direction="related")` | `"get_related_articles"` | 2 |
 | `zim_health` / `zim_get_section` / `zim_query` | `"zim_health"` / `"zim_get_section"` / `"zim_query"` (bucket keyed on the tool name; the cost falls back to the `default` cost) | 1 |
+| `resources/read` of `zim://{name}/entry/{path}` | `"get_entry"` | 1 |
+| `resources/read` of `zim://{name}` (archive overview) | `"get_metadata"` | 1 |
+| `resources/read` of `zim://files` | `"zim_files"` (keyed on its own name; the cost falls back to the `default` cost) | 1 |
 
 `zim_get(entry_paths=[...])` charges per-entry so a batch does not trivially bypass the per-second limit. The charge is `min(len(entry_paths), 50)` units — `MAX_BATCH_SIZE` is 50 — taken as two debits: one unit up front, before validation, and the remainder after, clamped to the bucket's capacity. An over-size batch is rejected after the first unit, so it costs 1 rather than a full bucket.
 
@@ -186,7 +189,7 @@ Buckets are keyed per client, derived in this order: a hash of the presented bea
 
 **Only one token value is ever accepted** — `OPENZIM_MCP_AUTH_TOKEN` is a single credential, not a list — so on the deployment this page recommends, *every authenticated client shares one bucket*. Per-client isolation is real but it separates tokens, and there is only one. Size the limits for your total expected load, not per consumer. Issuing a token per consumer would need a change to the server.
 
-There is no `X-Forwarded-For` handling in this project. Unauthenticated callers are separated by peer IP, which behind a reverse proxy on another host or container is the proxy's address — again one bucket. (Uvicorn trusts `X-Forwarded-For` only when the immediate peer is `127.0.0.1`; its `FORWARDED_ALLOW_IPS` environment variable is the only lever, and this project exposes no setting for it.)
+There is no `X-Forwarded-For` handling in this project. Unauthenticated callers are separated by peer IP, which behind a reverse proxy on another host or container is the proxy's address — again one bucket. (The server runs uvicorn with proxy headers off, so `X-Forwarded-For` is ignored even from `127.0.0.1`: a client cannot mint itself a fresh bucket by sending one.)
 
 stdio callers, and the deprecated `sse` transport, all get `"default"`. The client table is LRU-bounded at 10,000 entries, which is not configurable; an evicted client returns to a fresh bucket at full burst.
 

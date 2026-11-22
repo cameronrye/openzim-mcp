@@ -1821,9 +1821,9 @@ class _StructureMixin:
                 "Inbound links require a link-graph sidecar for this archive. "
                 f"Run `openzim-mcp build link-graph {validated_str}`. "
                 "If a sidecar file is already present it is stale — built for "
-                "a different archive revision or an older schema, which 3.0.0 "
-                "makes true of every sidecar built before it — and the build "
-                "refuses to overwrite without `--force`. " + fallback
+                "a different archive revision, or by a release with an older "
+                "sidecar schema — and the build refuses to overwrite without "
+                "`--force`. " + fallback
             )
         try:
             page = reader.query_inbound(lookup_path, limit=limit, offset=offset)
