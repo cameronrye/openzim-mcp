@@ -57,6 +57,19 @@ def _default_cache_directory() -> Path:
     return Path(xdg) if xdg else Path.home() / ".cache"
 
 
+def _failure_reason(exc: BaseException) -> str:
+    """Why a persistence step failed, without the path ``str(OSError)`` repeats.
+
+    ``str()`` of an ``OSError`` is ``[Errno 20] Not a directory: '<path>'``,
+    and the messages built from it already name the path, so it appeared
+    twice — and ``zim_health`` serves this text to remote clients, where
+    every copy of a host path is one more thing to redact.
+    """
+    if isinstance(exc, OSError) and exc.strerror:
+        return exc.strerror
+    return str(exc)
+
+
 def _is_package_default_path(configured_path: Any) -> bool:
     """Whether ``configured_path`` is the untouched package default."""
     if not configured_path:
@@ -269,7 +282,8 @@ class OpenZimMcpCache:
                 except OSError as e:
                     self._persistence_error = (
                         f"cache directory {self._persistence_path.parent} could "
-                        f"not be created ({e}); persistence is disabled"
+                        f"not be created ({_failure_reason(e)}); persistence "
+                        "is disabled"
                     )
                     logger.warning("Cache persistence disabled: %s", e)
                     self._persistence_enabled = False
@@ -871,7 +885,9 @@ class OpenZimMcpCache:
             # Recorded as well as logged: the log line lands on stderr at
             # process exit, which is after the last moment anyone could act
             # on it, so ``stats()`` carries it to ``zim_health`` too.
-            self._persistence_error = f"cannot write {self._persistence_path} ({e})"
+            self._persistence_error = (
+                f"cannot write {self._persistence_path} ({_failure_reason(e)})"
+            )
             logger.warning(f"Failed to save cache to disk: {e}")
 
     def _restore_entry(

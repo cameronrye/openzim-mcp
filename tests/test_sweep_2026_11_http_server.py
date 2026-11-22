@@ -403,3 +403,89 @@ class TestForwardedForMintsNoBucket:
         config = uvicorn.Config(http_app.build_starlette_app(object()))  # type: ignore[arg-type]
         config.load()
         assert isinstance(config.loaded_app, ProxyHeadersMiddleware)
+
+
+class TestHealthKeepsTheCacheDirectoryPrivate:
+    """``zim_health`` over HTTP leaked the cache directory in two places.
+
+    The report masks ``persistence_path`` for a network client, but not
+    ``persistence_error`` — nor the warning built from it — and that message
+    named the directory twice: once on its own and again inside the
+    ``OSError`` text. A remote client learned the server account's home
+    layout from a cache it can never use.
+    """
+
+    @staticmethod
+    def _unusable_cache_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+        # A regular file in the way makes ``mkdir`` fail for every uid, the
+        # way a read-only container's home does.
+        blocker = tmp_path / "not-a-dir"
+        blocker.write_bytes(b"x")
+        cache_home = blocker / "secret-user-home" / ".cache"
+        monkeypatch.setenv("XDG_CACHE_HOME", str(cache_home))
+        return cache_home
+
+    @staticmethod
+    def _health(tmp_path: Path, transport: str) -> Dict[str, Any]:
+        import asyncio
+
+        from openzim_mcp.async_operations import AsyncZimOperations
+
+        archives = tmp_path / "zims"
+        archives.mkdir()
+        server = OpenZimMcpServer(
+            OpenZimMcpConfig(
+                allowed_directories=[str(archives)],
+                transport=transport,
+                cache={"persistence_enabled": True},
+            )
+        )
+        ops = AsyncZimOperations(server.zim_operations)
+        payload: Dict[str, Any] = asyncio.run(ops.get_health_data(server))
+        server.cache.shutdown()
+        return payload
+
+    def test_a_network_client_is_not_told_where_the_cache_lives(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._unusable_cache_home(tmp_path, monkeypatch)
+        payload = self._health(tmp_path, "http")
+        health = payload["health"]
+
+        serialized = json.dumps(payload)
+        assert "secret-user-home" not in serialized, health["cache_performance"]
+        assert str(tmp_path / "not-a-dir") not in serialized
+        # Paired positive: the failure is still reported, with its reason.
+        warning = next(
+            w for w in health["warnings"] if "Cache persistence is not working" in w
+        )
+        assert "Not a directory" in warning, warning
+
+    def test_a_local_operator_still_gets_the_directory_once(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """On stdio the path is the operator's to fix, so it stays — once."""
+        cache_home = self._unusable_cache_home(tmp_path, monkeypatch)
+        error = self._health(tmp_path, "stdio")["health"]["cache_performance"][
+            "persistence_error"
+        ]
+        assert error.count(str(cache_home)) == 1, error
+        assert "secret-user-home" in error and "[Errno" not in error, error
+        assert "Not a directory" in error, error
+
+    def test_a_failed_save_names_its_file_once(self, tmp_path: Path) -> None:
+        from openzim_mcp.cache import OpenZimMcpCache
+        from openzim_mcp.config import CacheConfig
+
+        blocker = tmp_path / "not-a-dir"
+        blocker.write_bytes(b"x")
+        target = blocker / "cache" / "snapshot"
+        cache = OpenZimMcpCache(
+            CacheConfig(persistence_enabled=True, persistence_path=str(target))
+        )
+        cache.set("key", {"value": 1})
+        cache.shutdown()  # the save, which cannot create the directory
+
+        error = cache.stats()["persistence_error"]
+        assert error.count(str(target)) == 1, error
+        assert "[Errno" not in error and "Not a directory" in error, error
