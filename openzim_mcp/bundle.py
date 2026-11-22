@@ -112,6 +112,8 @@ _BUNDLE_KEY_PREFIX = "bundle:v2h"
 # A cached title-lookup page (find_title:v2) also reads a fixed window of
 # suggestion rows whatever its limit, so a small page leads with the exact
 # match a wider read would have found rather than a fuzzy row.
+# Title-lookup rows sharing a title (one slideshow's frames) collapse to
+# the first.
 _RENDER_EPOCH = "r5"
 
 

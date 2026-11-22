@@ -4073,16 +4073,23 @@ class _SearchMixin:
         # ``canonical_result_path`` since D27 (``_collect_distinct_hits``);
         # title mode was the last surface still showing both. The sort above
         # means the survivor is whichever twin the index ranked higher.
+        #
+        # A shared title collapses too, as suggest mode's title-index pass
+        # does: MedlinePlus files each slideshow frame under its own path with
+        # one title, so ``stroke`` gave four of ten rows to "Stroke - series".
+        # The first row always survives, so ``find_title_match`` still reads
+        # the same ``results[0]``.
         seen: set[tuple[str, str]] = set()
+        seen_titles: set[tuple[str, str]] = set()
         deduped: List[Dict[str, Any]] = []
         for row in aggregate_results:
-            key = (
-                str(row.get("zim_file", "")),
-                canonical_result_path(str(row.get("path", ""))),
-            )
-            if key in seen:
+            zim_file = str(row.get("zim_file", ""))
+            key = (zim_file, canonical_result_path(str(row.get("path", ""))))
+            title_key = (zim_file, str(row.get("title") or "").strip().lower())
+            if key in seen or (title_key[1] and title_key in seen_titles):
                 continue
             seen.add(key)
+            seen_titles.add(title_key)
             deduped.append(row)
         # v3.3.1 field report (fid 71) is NOT applied here, deliberately.
         # This list is score-descending, and ``title_promotion.find_title_match``
