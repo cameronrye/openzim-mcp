@@ -8,7 +8,6 @@ from typing import Any, Literal, Optional
 from mcp.types import Icon
 
 from . import __version__
-from .async_operations import AsyncZimOperations
 from .cache import OpenZimMcpCache
 from .config import OpenZimMcpConfig
 from .constants import TOOL_MODE_SIMPLE, VALID_TRANSPORT_TYPES
@@ -301,7 +300,6 @@ class OpenZimMcpServer:
         self.zim_operations = ZimOperations(
             config, self.path_validator, self.cache, self.content_processor
         )
-        self.async_zim_operations = AsyncZimOperations(self.zim_operations)
 
         # Phase F: simple_tools_handler backs zim_query in BOTH simple and
         # advanced modes (the simple/advanced split is now a registration-

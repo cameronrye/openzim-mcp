@@ -207,7 +207,7 @@ class TestCombinedResponsesCarryMetaEnvelope:
         from openzim_mcp.server import OpenZimMcpServer
 
         server = OpenZimMcpServer(OpenZimMcpConfig(allowed_directories=[str(tmp_path)]))
-        result = await server.async_zim_operations.get_health_data(server)
+        result = await AsyncZimOperations(server.zim_operations).get_health_data(server)
         assert result["_meta"]["chars"] > 0
         assert result["_meta"]["tokens_est"] > 0
 

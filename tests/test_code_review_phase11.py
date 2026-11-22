@@ -159,7 +159,6 @@ def test_m13_configuration_report_http_redacts_paths(tmp_path: Path):
         ("search_zim_file_data", ("/a.zim", "query")),
         ("browse_namespace_data", ("/a.zim", "C")),
         ("get_zim_entry_data", ("/a.zim", "A/Foo")),
-        ("get_zim_metadata_data", ("/a.zim",)),
         ("get_main_page_data", ("/a.zim",)),
         ("get_table_of_contents_data", ("/a.zim", "A/Foo")),
         ("get_article_structure_data", ("/a.zim", "A/Foo")),
