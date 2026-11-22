@@ -44,6 +44,13 @@ RUN chmod -R a-w /app/.venv /app/openzim_mcp
 # ---- final stage ----
 FROM python:3.13-slim@sha256:d98cc29d3266e535dd9da1099688d9cb3ca4753813571e071763d17725460962
 
+# OCI metadata, in the final stage because labels set in the builder stage do
+# not carry over. A plain LABEL, which every builder accepts, so this stays
+# classic-builder clean. `source` is what links the GHCR package to the repo.
+LABEL org.opencontainers.image.source="https://github.com/cameronrye/openzim-mcp" \
+      org.opencontainers.image.description="Offline MCP access to ZIM knowledge archives: Wikipedia, Wiktionary, Stack Exchange, Kiwix." \
+      org.opencontainers.image.licenses="MIT"
+
 # Create the non-root runtime user. No extra apt packages are needed —
 # the image defaults to stdio transport (see ENTRYPOINT note below), so
 # there is no HTTP server to health-probe and thus no need for curl.
