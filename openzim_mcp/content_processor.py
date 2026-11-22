@@ -1955,7 +1955,13 @@ class ContentProcessor:
             )
             table.replace_with(placeholder)
 
-    def _render_soup_to_text(self, soup: BeautifulSoup, *, compact: bool) -> str:
+    def _render_soup_to_text(
+        self,
+        soup: BeautifulSoup,
+        *,
+        compact: bool,
+        infobox_sink: Optional[List[Dict[str, str]]] = None,
+    ) -> str:
         """Render a BeautifulSoup tree to clean plain text.
 
         Strips ``UNWANTED_HTML_SELECTORS``, optionally extracts infoboxes
@@ -1963,6 +1969,14 @@ class ContentProcessor:
         ``html2text`` and collapses excess blank lines. Mutates the
         provided soup; callers that need to preserve the original tree
         should pass a copy.
+
+        ``infobox_sink`` receives the rows a compact render lifted, for a
+        caller that also keeps them as data (``bundle.extract_entry_bundle``).
+        Reading them back is what keeps that caller to ONE extraction: the
+        bundle used to lift the infobox itself and then render, and the
+        render's own ``extract_infobox`` found the NEXT infobox and hoisted it
+        to the top. Lifting here, after the strip, is also what keeps
+        TemplateStyles CSS out of the row values.
         """
         for selector in UNWANTED_HTML_SELECTORS:
             for element in soup.select(selector):
@@ -1972,7 +1986,18 @@ class ContentProcessor:
 
         infobox_md = ""
         if compact:
-            kv_rows = self.extract_infobox(soup)
+            try:
+                kv_rows = self.extract_infobox(soup)
+            except Exception as exc:
+                # The infobox is supplementary. One that fails to parse used
+                # to fail the whole render, and with it every compact view of
+                # the article. The node is only removed once its rows are
+                # built, so on failure it is still in the soup and renders
+                # as an ordinary table.
+                logger.warning("Infobox extraction failed; rendering without: %s", exc)
+                kv_rows = []
+            if infobox_sink is not None:
+                infobox_sink.extend(kv_rows)
             if kv_rows:
                 infobox_md = (
                     "\n".join(f"**{r['label']}:** {r['value']}" for r in kv_rows)

@@ -185,3 +185,157 @@ class TestPercentEncodedPathsResolveOnEverySurface:
         assert binary["path"] == self._IMAGE_RAW
         assert binary["mime_type"] == "image/webp"
         assert binary["data"] and binary["data"] == raw["data"]
+
+
+def _build_zim(directory: Path, pages: Dict[str, str]) -> Path:
+    """One small archive of ``{path: html}`` pages, titled by the path."""
+    from libzim.writer import Creator
+
+    from tests.conftest_v2_fixtures import _HtmlItem
+
+    out = directory / "fixture.zim"
+    with Creator(out).config_indexing(True, "eng") as creator:
+        for path, html in pages.items():
+            creator.add_item(_HtmlItem(path, path.replace("_", " "), html))
+        creator.set_mainpath(next(iter(pages)))
+    return out
+
+
+# Long enough that the summary's 200-word cap ends inside the lead, so a
+# second infobox further down can only reach the summary by being hoisted.
+_PAT_LEAD = " ".join(["Pat Example is a retired baseball player."] * 40)
+
+_TWO_INFOBOX_HTML = f"""<html><head><title>Pat Example</title></head><body>
+<h1>Pat Example</h1>
+<table class="infobox">
+<tr><th colspan="2">Pat Example</th></tr>
+<tr><th>Born</th><td>1 May 1970</td></tr>
+<tr><th>Position</th><td>Pitcher</td></tr>
+</table>
+<p>{_PAT_LEAD}</p>
+<h2>Career</h2>
+<table class="infobox">
+<tr><th colspan="2">Career statistics</th></tr>
+<tr><th>Team</th><td>Yankees</td></tr>
+<tr><th>Years</th><td>1990-1999</td></tr>
+</table>
+<p>Pat pitched for a decade.</p>
+<h2>Legacy</h2>
+<p>Remembered fondly.</p>
+</body></html>"""
+
+
+class TestSummaryLeadsWithTheArticlesOwnInfobox:
+    """The bundle lifted infobox #1, then its compact render lifted again.
+
+    ``extract_entry_bundle`` extracted the first infobox into
+    ``bundle["infobox"]`` — a field no tool reads — and decomposed it; the
+    compact render then ran ``extract_infobox`` a second time, found the NEXT
+    infobox and prepended it. So mini's Kyoto Protocol summary opened with the
+    Doha Amendment's "Location: Doha, Qatar" while ``view="full",
+    compact=True`` opened with "Location: Kyoto, Japan", and a second infobox
+    left the section it belongs to for the top of the summary.
+    """
+
+    @pytest.mark.asyncio
+    async def test_kyoto_summary_opens_with_the_full_views_infobox(
+        self, climate_zim: Path
+    ) -> None:
+        zim_get = _tool(_server(climate_zim.parent), "zim_get")
+        base = {"zim_file_path": str(climate_zim), "entry_path": "A/Kyoto_Protocol"}
+
+        summary = (await zim_get(**base, view="summary"))["summary"]
+        full = (await zim_get(**base, compact=True))["content"]
+        infobox_block = full.split("\n\n", 1)[0]
+
+        assert infobox_block.startswith(
+            "**Signed:** 11 December 1997\n**Location:** Kyoto, Japan"
+        ), infobox_block
+        assert summary.startswith(infobox_block), summary[:400]
+        assert "**Location:** Doha, Qatar" not in summary
+
+    @pytest.mark.asyncio
+    async def test_a_second_infobox_stays_in_its_own_section(
+        self, tmp_path: Path
+    ) -> None:
+        zim = _build_zim(tmp_path, {"Pat_Example": _TWO_INFOBOX_HTML})
+        server = _server(tmp_path)
+        base = {"zim_file_path": str(zim), "entry_path": "Pat_Example"}
+
+        summary = (await _tool(server, "zim_get")(**base, view="summary"))["summary"]
+        full = (await _tool(server, "zim_get")(**base, compact=True))["content"]
+        career = await _tool(server, "zim_get_section")(**base, section_id="career")
+
+        assert summary.startswith("**Born:** 1 May 1970\n**Position:** Pitcher")
+        assert "**Team:**" not in summary
+        assert "Yankees" in career["content_markdown"], career
+        # The section is the full view's own slice, table and all.
+        assert career["content_markdown"].strip() in full
+
+    @pytest.mark.asyncio
+    async def test_a_cached_summary_is_the_corrected_one(
+        self, climate_zim: Path
+    ) -> None:
+        zim_get = _tool(_server(climate_zim.parent, cache=True), "zim_get")
+        args = {
+            "zim_file_path": str(climate_zim),
+            "entry_path": "A/Kyoto_Protocol",
+            "view": "summary",
+        }
+
+        cold = await zim_get(**args)
+        warm = await zim_get(**args)
+
+        assert cold["summary"].startswith("**Signed:** 11 December 1997")
+        assert warm["summary"] == cold["summary"]
+
+    def test_the_bundle_field_holds_the_rows_it_rendered(self, tmp_path: Path) -> None:
+        """No tool reads ``bundle["infobox"]``, so pin it here: it must be the
+        infobox the render prepended, not empty and not a second lift."""
+        from libzim.reader import Archive
+
+        from openzim_mcp.bundle import extract_entry_bundle
+        from openzim_mcp.content_processor import ContentProcessor
+
+        zim = _build_zim(tmp_path, {"Pat_Example": _TWO_INFOBOX_HTML})
+        bundle = extract_entry_bundle(
+            Archive(str(zim)), "Pat_Example", content_processor=ContentProcessor()
+        )
+
+        assert bundle["infobox"] == {
+            "fields": [
+                {"label": "Born", "value": "1 May 1970"},
+                {"label": "Position", "value": "Pitcher"},
+            ]
+        }
+        assert bundle["rendered_markdown"].startswith("**Born:** 1 May 1970")
+
+    @pytest.mark.asyncio
+    async def test_an_infobox_that_fails_to_parse_does_not_fail_the_views(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The degrade-to-None guard the bundle documents never covered a
+        compact bundle: the render's own extraction raised on the same node.
+        One extraction, guarded where it runs, covers every compact view."""
+        from openzim_mcp import content_processor
+
+        def _explode(_cell: Any) -> str:
+            raise RecursionError("maximum recursion depth exceeded")
+
+        monkeypatch.setattr(content_processor, "_join_cell_text", _explode)
+        zim = _build_zim(tmp_path, {"Pat_Example": _TWO_INFOBOX_HTML})
+        zim_get = _tool(_server(tmp_path), "zim_get")
+        base = {"zim_file_path": str(zim), "entry_path": "Pat_Example"}
+
+        summary = await zim_get(**base, view="summary")
+        toc = await zim_get(**base, view="toc")
+        full = await zim_get(**base, compact=True)
+
+        assert not summary.get("error"), summary
+        assert "retired baseball player" in summary["summary"]
+        assert [h["section_id"] for h in toc["toc"][0]["children"]] == [
+            "career",
+            "legacy",
+        ], toc
+        assert "retired baseball player" in full["content"]
+        assert not full["content"].startswith("(Error"), full["content"][:200]

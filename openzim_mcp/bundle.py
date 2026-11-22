@@ -100,6 +100,9 @@ _BUNDLE_KEY_PREFIX = "bundle:v2h"
 # no longer cached with its link markup, a compact main page is
 # link-stripped like any other entry, and the batch and main-page
 # continuation footers name ``compact`` and speak the caller's tool mode.
+# A compact bundle also opens with its FIRST infobox's rows, as the compact
+# article fetch does, and a later infobox stays in its own section; an r4
+# bundle hoisted the second infobox above the lead.
 _RENDER_EPOCH = "r5"
 
 
@@ -250,28 +253,37 @@ def _resolve_entry_html(
     return title, mime, html, resolved_path
 
 
-def _extract_infobox(
-    soup: Any, content_processor: "ContentProcessor"
-) -> Optional[InfoboxData]:
-    """Extract the first infobox as InfoboxData, or None if absent.
-
-    Degrades to ``None`` on any extraction failure: every other step in
-    ``extract_entry_bundle`` already survives malformed markup, and an
-    infobox is supplementary. Without this, a pathological cell (e.g. one
-    deeply nested enough to blow the recursion limit) propagated out of
-    ``get_or_build_bundle`` and took summary/toc/structure/section with it.
-    """
-    try:
-        rows = content_processor.extract_infobox(soup)
-    except Exception as exc:
-        logger.warning("Infobox extraction failed; continuing without: %s", exc)
-        return None
+def _infobox_data(rows: list[Dict[str, str]]) -> Optional[InfoboxData]:
+    """``extract_infobox`` rows as InfoboxData, or None when there are none."""
     if not rows:
         return None
     fields: list[InfoboxField] = [
         {"label": r["label"], "value": r["value"]} for r in rows
     ]
     return cast("InfoboxData", {"fields": fields})
+
+
+def _extract_infobox(
+    soup: Any, content_processor: "ContentProcessor"
+) -> Optional[InfoboxData]:
+    """Extract the first infobox as InfoboxData, or None if absent.
+
+    The raw (``compact=False``) bundle's lift: that render keeps tables
+    whole and never extracts, so the infobox is lifted out here instead. The
+    compact render extracts for itself (see ``extract_entry_bundle``).
+
+    Degrades to ``None`` on any extraction failure: every other step in
+    ``extract_entry_bundle`` already survives malformed markup, and an
+    infobox is supplementary. Without this, a pathological cell (e.g. one
+    deeply nested enough to blow the recursion limit) propagated out of
+    ``get_or_build_bundle`` and took the section read with it.
+    """
+    try:
+        rows = content_processor.extract_infobox(soup)
+    except Exception as exc:
+        logger.warning("Infobox extraction failed; continuing without: %s", exc)
+        return None
+    return _infobox_data(rows)
 
 
 def _build_link_buckets(links_dict: Dict[str, Any]) -> LinkBuckets:
@@ -656,21 +668,32 @@ def extract_entry_bundle(
     # not leak into headings (TOC), links (related articles), or the rendered
     # markdown (summary). No landmark -> the whole document, unchanged.
     # ``extract_html_links`` is fed the scoped subtree's HTML rather than the
-    # raw entry HTML so nav links are excluded too; capture it BEFORE
-    # ``_extract_infobox`` decomposes the infobox, preserving the prior order
-    # in which links were extracted ahead of infobox removal.
+    # raw entry HTML so nav links are excluded too; capture it BEFORE the
+    # infobox is lifted out below, preserving the prior order in which links
+    # were extracted ahead of infobox removal.
     content_root = select_main_content(soup)
     headings = _build_headings(content_root, include_line_text=True)
     raw_links = content_processor.extract_html_links(str(content_root))
     link_buckets = _build_link_buckets(raw_links)
-    infobox = _extract_infobox(content_root, content_processor)
     # Render in the requested mode. ``compact=True`` (the default, used by
     # summary/TOC/structure/synthesize) carries the same table-stripping
-    # placeholders that direct ``get_zim_entry`` callers see, so a section
-    # slice matches the article-fetch path. ``compact=False`` (the #18
-    # raw-text path) keeps full pipe-delimited tables. The infobox is
-    # already ``decompose()``d above in both modes.
-    rendered = content_processor._render_soup_to_text(content_root, compact=compact)
+    # placeholders and the same leading infobox rows that direct
+    # ``get_zim_entry`` callers see, so a section slice matches the
+    # article-fetch path. ``compact=False`` (the #18 raw-text path) keeps
+    # full pipe-delimited tables; the infobox is lifted out of it unrendered.
+    if compact:
+        # One extraction, the render's own, read back for the bundle field.
+        # Lifting here as well made the render's extraction find the SECOND
+        # infobox and hoist it above the lead: mini's Kyoto Protocol summary
+        # opened with the Doha Amendment's rows.
+        infobox_rows: list[Dict[str, str]] = []
+        rendered = content_processor._render_soup_to_text(
+            content_root, compact=True, infobox_sink=infobox_rows
+        )
+        infobox = _infobox_data(infobox_rows)
+    else:
+        infobox = _extract_infobox(content_root, content_processor)
+        rendered = content_processor._render_soup_to_text(content_root, compact=False)
     sections = _compute_section_offsets(rendered, headings)
 
     bundle: EntryBundle = cast(

@@ -31,22 +31,17 @@ from typing import Any, List, Optional
 from unittest.mock import Mock
 
 import pytest
-from bs4 import BeautifulSoup
 
 from openzim_mcp.bundle import (
     _BUNDLE_KEY_PREFIX,
     _RENDER_EPOCH,
     _bundle_cache_key,
-    _compute_section_offsets,
     archive_stat_token,
+    extract_entry_bundle,
 )
 from openzim_mcp.cache import OpenZimMcpCache
 from openzim_mcp.config import OpenZimMcpConfig
-from openzim_mcp.content_processor import (
-    ContentProcessor,
-    _build_headings,
-    select_main_content,
-)
+from openzim_mcp.content_processor import ContentProcessor
 from openzim_mcp.security import PathValidator
 from openzim_mcp.zim_operations import ZimOperations
 
@@ -185,12 +180,15 @@ class TestPreFixKeysAreNotReused:
 
 
 # A page carrying every construct this release changed: a ``noscript``
-# sentence, an "On this page" in-page nav menu, and a heading anchor declared
-# twice. Deliberately small — the fingerprint below is a change detector, and
-# a large fixture would make it fire on changes it does not care about.
+# sentence, an "On this page" in-page nav menu, a heading anchor declared
+# twice, and two infoboxes — the compact bundle hoisted the second one above
+# the lead until r5. Deliberately small — the fingerprint below is a change
+# detector, and a large fixture would make it fire on changes it does not
+# care about.
 _RENDER_FIXTURE_HTML = """
 <html><body><main>
 <h1>Diabetes</h1>
+<table class="infobox"><tr><th>Specialty</th><td>Endocrinology</td></tr></table>
 <noscript>To use the sharing features on this page, enable JavaScript.</noscript>
 <nav aria-label="On this page"><ul>
 <li><a href="#summary">Summary</a></li>
@@ -202,6 +200,7 @@ _RENDER_FIXTURE_HTML = """
 <p>First author block.</p>
 <h2><a name="SH4b"></a>Author Information</h2>
 <p>Second author block.</p>
+<table class="infobox"><tr><th>Author</th><td>Second</td></tr></table>
 </main></body></html>
 """
 
@@ -213,17 +212,29 @@ _RENDER_FIXTURE_HTML = """
 # pinning the digest alone let ``r3`` go back to ``r2`` with every suite green.
 _PINNED_RENDER_FINGERPRINT = (
     "r5",
-    "d62d668001dd2a7ca972108f82ff6e49d7f2b2d5bebeb40af0890a607ba89c18",
+    "47889536893e522ee0a631d31e20fe21c458c58bd3d7180da11696ec953ef726",
 )
 
 
 def _render_fingerprint(content_processor: ContentProcessor) -> str:
     """Digest the bundle render + section ids + the entry-text render."""
-    soup = BeautifulSoup(_RENDER_FIXTURE_HTML, "html.parser")
-    root = select_main_content(soup)
-    headings = _build_headings(root, include_line_text=True)
-    rendered = content_processor._render_soup_to_text(root, compact=True)
-    sections = _compute_section_offsets(rendered, headings)
+    # The REAL bundle, not a re-assembly of its steps: the copy this used to
+    # hold left out the bundle's own infobox lift, so it digested the same
+    # text whether the bundle lifted the first infobox or hoisted the second.
+    item = Mock(
+        content=_RENDER_FIXTURE_HTML.encode("utf-8"),
+        mimetype="text/html",
+        path="A/Diabetes",
+    )
+    entry = Mock(title="Diabetes", path="A/Diabetes")
+    entry.get_item.return_value = item
+    archive = Mock()
+    archive.get_entry_by_path.return_value = entry
+    bundle = extract_entry_bundle(
+        archive, "A/Diabetes", content_processor=content_processor
+    )
+    rendered = bundle["rendered_markdown"]
+    sections = bundle["sections"]
     # ``scope_main_content=True`` mirrors the entry-content fetch, which is
     # what the ``entry:`` keys hold (see ``_get_entry_content``).
     entry_text = content_processor.process_mime_content(
