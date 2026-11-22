@@ -64,6 +64,17 @@ _FILTERED_MAX_SCAN = 10000
 # same score whatever was requested.
 _SUGGESTION_SCORE_DECAY_WINDOW = 10
 
+# Suggestion rows a title lookup reads before it scores, sorts and trims,
+# whatever ``limit`` is. A row is only known to be an exact title match once
+# it has been read, and the index does not rank exact matches first:
+# MedlinePlus files ``stroke.html`` ninth for ``stroke``, behind four "Stroke -
+# series" slideshow frames. Reading ``limit + 1`` rows made the answer depend
+# on the page size — ``limit=3`` led with a frame, ``limit=10`` with the
+# article — and the promotion probes, which ask for ``limit=3``, hoisted the
+# frame over the article. Pages larger than this still read one row past
+# themselves (R2-4).
+_TITLE_SUGGESTION_WINDOW = 25
+
 # How many ranked rows before a page ``_collect_distinct_hits`` re-reads to
 # seed its canonical set. Within-page dedup alone lets a duplicate pair leak
 # whenever it straddles a page boundary; a lookbehind makes the rule
@@ -4250,13 +4261,20 @@ class _SearchMixin:
                         ).suggest(title)
                         total = suggestion_search.getEstimatedMatches()
                         if total > 0:
-                            # R2-4: pull one row past the page so the
+                            # R2-4: pull at least one row past the page so the
                             # assembler's trim can tell "exactly ``limit``
                             # matched" from "more exist" — pulling exactly
                             # ``limit`` made every full page claim ``done``.
-                            # Rank scores decay against a fixed window, so
-                            # the extra row leaves the page's scores alone.
-                            paths = list(suggestion_search.getResults(0, limit + 1))
+                            # Small pages read the whole fixed window, so an
+                            # exact match ranked past the page is still seen
+                            # and sorted to the top before the trim. Rank
+                            # scores decay against a fixed window, so the
+                            # extra rows leave the page's scores alone.
+                            paths = list(
+                                suggestion_search.getResults(
+                                    0, max(limit + 1, _TITLE_SUGGESTION_WINDOW)
+                                )
+                            )
                             # Score by rank — first result is the best
                             # libzim suggestion match. Legacy behaviour was a
                             # hardcoded 0.8 for every hit, which made the

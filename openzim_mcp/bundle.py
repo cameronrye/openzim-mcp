@@ -109,6 +109,9 @@ _BUNDLE_KEY_PREFIX = "bundle:v2h"
 # whose text slugs to nothing ("* * *") is now a section with its own id.
 # The bundle records ``lead_offset`` so the summary starts at the article's
 # lead, not at those infobox rows.
+# A cached title-lookup page (find_title:v2) also reads a fixed window of
+# suggestion rows whatever its limit, so a small page leads with the exact
+# match a wider read would have found rather than a fuzzy row.
 _RENDER_EPOCH = "r5"
 
 

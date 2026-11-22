@@ -854,6 +854,21 @@ def _refresh_promotion_meta(
     out["_meta"]["promotion_applied"] = True
 
 
+def _is_exact_title_row(row: Any) -> bool:
+    """Whether a title-lookup row is an exact title match (score 1.0).
+
+    ``find_entry_by_title_data`` reserves 1.0 for the fast path and for a
+    title equal to the query; every suggestion-rank and typo row is capped
+    below it.
+    """
+    if not isinstance(row, dict):
+        return False
+    try:
+        return float(row.get("score", 0.0)) >= 1.0
+    except (TypeError, ValueError):
+        return False
+
+
 def _merge_promotion_into_title_results(
     raw: dict, promoted: Optional[dict], limit: int = _TITLE_DEFAULT_LIMIT
 ) -> dict:
@@ -908,6 +923,13 @@ def _merge_promotion_into_title_results(
     top = matches[0]
     top_path = top.get("entry_path") or top.get("path")
     if top_path == promoted_path:
+        return raw
+    # The page already leads with an exact title match for the query it
+    # looked up: that is the answer, and promotion exists for queries whose
+    # full phrase is NOT a title. Hoisting the probe train's pick above it
+    # put a "Stroke - series" slideshow frame over ``stroke.html`` and
+    # restamped the frame 1.0 while it was still ``fuzzy_suggest``.
+    if _is_exact_title_row(top):
         return raw
     hoisted = [
         m for m in matches if (m.get("entry_path") or m.get("path")) != promoted_path
