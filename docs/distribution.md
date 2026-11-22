@@ -76,7 +76,7 @@ To build it by hand (e.g. to try a manifest change before a release):
 
 ```bash
 uv run python scripts/build_mcpb.py        # -> dist/openzim-mcp-<version>.mcpb (+ .sha256)
-uv run python scripts/build_mcpb.py --output dist-mcpb   # what release.yml runs
+uv run python scripts/build_mcpb.py --output dist-mcpb   # release.yml's directory
 ```
 
 A hand build defaults to `dist/`, beside the wheel and sdist; pass `--output`

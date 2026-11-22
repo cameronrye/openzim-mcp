@@ -29,9 +29,9 @@ tool to fall back to, and the tool's own description block *is* the API.
 
 ## What shipped
 
-Eighteen commits, `f19bfcb`..`26453df`, on the branch before it was squashed;
-main carries them as `b722fa9` (PR #429), together with that PR's three
-later commits. The first three closed 75 findings;
+Eighteen commits, `f19bfcb`..`26453df`, on the working branch; main carries
+them, rebased and squashed together with PR #429's three later commits, as
+`b722fa9`. The first three closed 75 findings;
 the remainder closed the audit's residues and the findings the first pass had
 left blocked on file ownership.
 
