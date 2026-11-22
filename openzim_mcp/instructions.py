@@ -79,7 +79,8 @@ main_page=True fetches the archive's front page: that is zim_get, not \
 zim_metadata.
 - zim_get_section — one named section of an article you have already located.
 - zim_browse — list the entries in a namespace. zim_metadata describes the \
-*archive* (Name, Title, Creator, entry counts) and does not list entries.
+*archive* (Name, Title, Creator, entry counts) and does not page through \
+entries.
 - zim_links — outbound links, inbound links, or related articles for one \
 article. It takes an entry_path, not a query; it is not a search tool.
 - zim_health — server state, or validation of a single archive.
@@ -93,11 +94,12 @@ SIMPLE_INSTRUCTIONS = """\
 Offline ZIM archives (Wikipedia, Stack Exchange, Wiktionary, …). Retrieval \
 only — content is read from local archives.
 
-zim_query takes a natural-language question and handles search, entry \
-selection and rendering in one call. Ask it the question directly rather than \
-composing search terms. A rejected argument is flagged isError with a JSON body \
-carrying "error", "operation" and a "message" describing how to correct it; \
-other problems come back as markdown that names what to do next.
+zim_query takes a natural-language request and handles search, entry \
+selection and rendering in one call. Send a question or an operation phrase \
+from its description ("tell me about X", "summary of X"), not bare search \
+terms. A rejected argument is flagged isError with a JSON body carrying \
+"error", "operation" and a "message" describing how to correct it; other \
+problems come back as markdown that names what to do next.
 """
 
 
