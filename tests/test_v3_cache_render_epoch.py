@@ -182,13 +182,17 @@ class TestPreFixKeysAreNotReused:
 # A page carrying every construct this release changed: a ``noscript``
 # sentence, an "On this page" in-page nav menu, a heading anchor declared
 # twice, and two infoboxes — the compact bundle hoisted the second one above
-# the lead until r5. Deliberately small — the fingerprint below is a change
-# detector, and a large fixture would make it fire on changes it does not
-# care about.
-_RENDER_FIXTURE_HTML = """
+# the lead until r5, and the first is one field over ``infobox_kv_limit``'s
+# default of 30, whose cut the compact render now reports. Deliberately small
+# — the fingerprint below is a change detector, and a large fixture would make
+# it fire on changes it does not care about.
+_FIXTURE_INFOBOX_ROWS = "".join(
+    f"<tr><th>Field {i}</th><td>Value {i}</td></tr>" for i in range(31)
+)
+_RENDER_FIXTURE_HTML = f"""
 <html><body><main>
 <h1>Diabetes</h1>
-<table class="infobox"><tr><th>Specialty</th><td>Endocrinology</td></tr></table>
+<table class="infobox">{_FIXTURE_INFOBOX_ROWS}</table>
 <noscript>To use the sharing features on this page, enable JavaScript.</noscript>
 <nav aria-label="On this page"><ul>
 <li><a href="#summary">Summary</a></li>
@@ -212,7 +216,7 @@ _RENDER_FIXTURE_HTML = """
 # pinning the digest alone let ``r3`` go back to ``r2`` with every suite green.
 _PINNED_RENDER_FINGERPRINT = (
     "r5",
-    "47889536893e522ee0a631d31e20fe21c458c58bd3d7180da11696ec953ef726",
+    "589fe56dea031abd8a424389c7ff460800e5a86f606feb64eefa89aba594078b",
 )
 
 

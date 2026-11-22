@@ -102,7 +102,8 @@ _BUNDLE_KEY_PREFIX = "bundle:v2h"
 # continuation footers name ``compact`` and speak the caller's tool mode.
 # A compact bundle also opens with its FIRST infobox's rows, as the compact
 # article fetch does, and a later infobox stays in its own section; an r4
-# bundle hoisted the second infobox above the lead.
+# bundle hoisted the second infobox above the lead. Every compact render
+# also reports the infobox fields its ``infobox_kv_limit`` cut.
 _RENDER_EPOCH = "r5"
 
 

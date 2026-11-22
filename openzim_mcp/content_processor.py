@@ -1682,6 +1682,18 @@ class ContentProcessor:
         ``"Area — City/State"`` restores the disambiguation that the
         original two-column rendering provided visually.
         """
+        return self._lift_infobox(soup, kv_limit=kv_limit)[0]
+
+    def _lift_infobox(
+        self, soup: BeautifulSoup, *, kv_limit: Optional[int] = None
+    ) -> Tuple[List[Dict[str, str]], int]:
+        """``extract_infobox``, plus how many fields ``kv_limit`` left out.
+
+        The compact render needs the count: the whole infobox is decomposed
+        once its rows are taken, so a field past the cap is gone from the
+        response, and Hydrogen's CAS Number, discoverer and namer vanished
+        with ``truncated`` false and nothing in the body to say so.
+        """
         if kv_limit is None:
             kv_limit = self._infobox_kv_limit
         for selector in self.INFOBOX_SELECTORS:
@@ -1689,6 +1701,7 @@ class ContentProcessor:
             if node is None:
                 continue
             rows: List[Dict[str, str]] = []
+            omitted = 0
             current_section: Optional[str] = None
             section_emitted_count = 0
             title_row_consumed = False
@@ -1790,6 +1803,11 @@ class ContentProcessor:
                     value = _join_cell_text(td)
                     if not raw_label or not value:
                         continue
+                    # Count a field past the cap instead of stopping at it,
+                    # so the render can say how many it left out.
+                    if len(rows) >= kv_limit:
+                        omitted += 1
+                        continue
                     # D1 (beta): Wikipedia infoboxes end with trailing
                     # "free-floating" terminal rows (Time zone, Area code,
                     # ISO 3166 code, Website, HDI) that don't belong to
@@ -1886,8 +1904,6 @@ class ContentProcessor:
                     title_row_consumed = True
                     if current_section is not None:
                         section_emitted_count += 1
-                    if len(rows) >= kv_limit:
-                        break
             # M2: only remove the matched node when we actually extracted KV
             # rows. The KV loop only emits rows pairing a <th> with a <td>, so
             # a div-based infobox, a <td class="infobox-label"> layout, or any
@@ -1899,9 +1915,9 @@ class ContentProcessor:
             # renders, and try the next selector.
             if rows:
                 node.decompose()
-                return rows
+                return rows, omitted
             continue
-        return []
+        return [], 0
 
     def replace_oversized_tables(
         self,
@@ -1987,7 +2003,7 @@ class ContentProcessor:
         infobox_md = ""
         if compact:
             try:
-                kv_rows = self.extract_infobox(soup)
+                kv_rows, omitted = self._lift_infobox(soup)
             except Exception as exc:
                 # The infobox is supplementary. One that fails to parse used
                 # to fail the whole render, and with it every compact view of
@@ -1995,14 +2011,20 @@ class ContentProcessor:
                 # built, so on failure it is still in the soup and renders
                 # as an ordinary table.
                 logger.warning("Infobox extraction failed; rendering without: %s", exc)
-                kv_rows = []
+                kv_rows, omitted = [], 0
             if infobox_sink is not None:
                 infobox_sink.extend(kv_rows)
             if kv_rows:
-                infobox_md = (
-                    "\n".join(f"**{r['label']}:** {r['value']}" for r in kv_rows)
-                    + "\n\n"
-                )
+                lines = [f"**{r['label']}:** {r['value']}" for r in kv_rows]
+                if omitted:
+                    # Worded and recovered like the table placeholder below,
+                    # and ASCII-only for the same reason.
+                    noun = "field" if omitted == 1 else "fields"
+                    lines.append(
+                        f"[Infobox: {omitted} more {noun} - "
+                        f"pass compact=False to expand]"
+                    )
+                infobox_md = "\n".join(lines) + "\n\n"
             self.replace_oversized_tables(soup)
 
         # Per-call HTML2Text so concurrent callers don't corrupt each

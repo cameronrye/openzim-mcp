@@ -339,3 +339,93 @@ class TestSummaryLeadsWithTheArticlesOwnInfobox:
         ], toc
         assert "retired baseball player" in full["content"]
         assert not full["content"].startswith("(Error"), full["content"][:200]
+
+
+def _field_box_html(fields: int) -> str:
+    rows = "".join(
+        f"<tr><th>Field{i}</th><td>Value{i}</td></tr>" for i in range(fields)
+    )
+    return (
+        "<html><body><h1>Field Box</h1>"
+        f"<table class='infobox'>{rows}</table>"
+        "<p>Field Box is an article whose infobox runs long.</p></body></html>"
+    )
+
+
+class TestCompactInfoboxSaysWhatTheCapLeftOut:
+    """Compact mode cut an infobox at ``infobox_kv_limit`` (30) silently.
+
+    ``extract_infobox`` stopped at the cap and the whole table was then
+    decomposed, so mini's Hydrogen lost "CAS Number 12385-13-6", "Discovery:
+    Henry Cavendish (1766)" and "Named by … Lavoisier" with ``_meta.truncated``
+    false and nothing in the body — on ``zim_query``'s default ``compact=True``
+    too. The table placeholder already says how to get a cut table back; the
+    infobox now says the same.
+    """
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "fields, marker",
+        [
+            (31, "[Infobox: 1 more field - pass compact=False to expand]"),
+            (40, "[Infobox: 10 more fields - pass compact=False to expand]"),
+        ],
+    )
+    async def test_the_rows_past_the_cap_are_counted(
+        self, tmp_path: Path, fields: int, marker: str
+    ) -> None:
+        zim = _build_zim(tmp_path, {"Field_Box": _field_box_html(fields)})
+        zim_get = _tool(_server(tmp_path), "zim_get")
+        base = {"zim_file_path": str(zim), "entry_path": "Field_Box"}
+
+        compact = (await zim_get(**base, compact=True))["content"]
+        raw = (await zim_get(**base, compact=False))["content"]
+
+        assert "**Field29:** Value29" in compact
+        assert "**Field30:**" not in compact
+        assert f"**Field29:** Value29\n{marker}\n" in compact, compact[:2000]
+        # The advice is true: the uncompacted view carries the fields it names.
+        assert f"Value{fields - 1}" in raw
+
+    @pytest.mark.asyncio
+    async def test_an_infobox_at_the_cap_gets_no_marker(self, tmp_path: Path) -> None:
+        zim = _build_zim(tmp_path, {"Field_Box": _field_box_html(30)})
+        zim_get = _tool(_server(tmp_path), "zim_get")
+
+        compact = (
+            await zim_get(zim_file_path=str(zim), entry_path="Field_Box", compact=True)
+        )["content"]
+
+        assert "**Field29:** Value29" in compact
+        assert "[Infobox:" not in compact
+
+    @pytest.mark.asyncio
+    async def test_zim_query_default_compact_carries_the_marker(
+        self, tmp_path: Path
+    ) -> None:
+        zim = _build_zim(tmp_path, {"Field_Box": _field_box_html(40)})
+        zim_query = _tool(_server(tmp_path), "zim_query")
+
+        out = await zim_query(query="get article Field_Box", zim_file_path=str(zim))
+
+        assert "**Field29:** Value29" in out
+        assert "[Infobox: 10 more fields - pass compact=False to expand]" in out
+
+    @pytest.mark.asyncio
+    async def test_mini_hydrogen_names_its_three_dropped_fields(
+        self, climate_zim: Path
+    ) -> None:
+        zim_get = _tool(_server(climate_zim.parent), "zim_get")
+        base = {
+            "zim_file_path": str(climate_zim),
+            "entry_path": "A/Hydrogen",
+            "max_content_length": 200_000,
+        }
+
+        compact = (await zim_get(**base, compact=True))["content"]
+        raw = (await zim_get(**base, compact=False))["content"]
+
+        assert "[Infobox: 3 more fields - pass compact=False to expand]" in compact
+        assert "12385-13-6" not in compact
+        assert "12385-13-6" in raw
+        assert "Henry Cavendish (1766)" in raw
