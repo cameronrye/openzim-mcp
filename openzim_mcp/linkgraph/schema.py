@@ -23,7 +23,13 @@ import sqlite3
 # now supplies the decoded form. A v2 sidecar therefore answers every
 # non-ASCII lookup with an empty page (36 inbound links silently becoming zero
 # for one article of the shipped test corpus) instead of being reported stale.
-SCHEMA_VERSION = 3
+#
+# v4: the builder now indexes a page's links to its own site written absolutely
+# (``https://www.iep.utm.edu/aris-log/``), which outbound has reported as
+# internal since fid 17. A v3 sidecar lacks every such edge (347 on the IEP,
+# where inbound for ``lyceum/`` and ``aristotle-logic/`` left out Aristotle)
+# and would keep answering without them.
+SCHEMA_VERSION = 4
 
 _DDL = """
 CREATE TABLE meta  (key TEXT PRIMARY KEY, value TEXT) STRICT;

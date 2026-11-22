@@ -1602,7 +1602,10 @@ class _StructureMixin:
             target_counts: Counter[str] = Counter()
             first_text: Dict[str, str] = {}
             for link in links_data.get("results", []):
-                target = self._resolve_link_to_entry_path(
+                # The row's ``path`` is already resolved, and for a same-host
+                # absolute link (fid 17) it is the only resolution there is:
+                # re-resolving ``url`` returns None for anything with ``://``.
+                target = link.get("path") or self._resolve_link_to_entry_path(
                     link.get("url", ""), resolved_source
                 )
                 if not target or target in (entry_path, resolved_source):
@@ -2045,7 +2048,9 @@ class _StructureMixin:
         When ``archive`` is provided, each resolved target is additionally
         canonicalized through ``_canonical_entry`` so the returned path is
         the (non-redirect) entry actually served — this is what the offline
-        builder needs to invert into a stable reverse-edge graph.
+        builder needs to invert into a stable reverse-edge graph. A link to
+        the archive's own host written absolutely is internal too, as it is
+        in that bucket (fid 17), once the archive is shown to serve it.
         When ``archive`` is ``None`` the redirect step is skipped and the
         path-normalized target is returned as-is, which keeps the helper
         unit-testable without a ZIM.
@@ -2108,4 +2113,26 @@ class _StructureMixin:
                 continue
             seen.add(target)
             edges.append((target, anchor))
+        # fid 17's promotion, which outbound applies in
+        # ``_promote_self_absolute_links``: warc2zim keeps a page's links to
+        # its own site absolute, the classifier files them external, and the
+        # index never listed the page as their linker. As there, only a
+        # target the archive serves is promoted, so this needs ``archive``.
+        self_host = _self_host(source_path) if archive is not None else None
+        promotable = links_data["external_links"] if self_host else []
+        for link in promotable:
+            candidate = _self_absolute_target(str(link.get("url", "")), str(self_host))
+            if candidate is None:
+                continue
+            try:
+                entry, target = _canonical_entry(archive, candidate)
+            except Exception as e:  # pragma: no cover - defensive
+                logger.debug(f"self-absolute probe for {candidate} failed: {e}")
+                continue
+            if entry is None or _StructureMixin._is_non_article_target(target):
+                continue
+            if target in seen or target == source_path:
+                continue
+            seen.add(target)
+            edges.append((target, (link.get("text") or "").strip()))
         return edges

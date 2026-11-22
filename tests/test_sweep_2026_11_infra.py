@@ -232,3 +232,128 @@ class TestMidCallRefreshIsNotCachedAsTheNewRevision:
 
         assert rev2_token != rev1_token
         assert open_archive_token(live) == rev2_token
+
+
+@pytest.fixture
+def iep_like_zim(tmp_path: Path) -> Path:
+    """The warc2zim-shaped archive ``test_fr_self_absolute_links`` builds."""
+    from libzim.writer import Hint  # type: ignore[import-untyped]
+
+    import tests.test_fr_self_absolute_links as fid17
+
+    out = tmp_path / "iep_like.zim"
+    with Creator(str(out)).config_indexing(True, "eng") as creator:
+        for path, (title, body) in fid17._PAGES.items():
+            creator.add_item(_HtmlItem(path, title, body))
+        for src, dst in fid17._REDIRECTS.items():
+            creator.add_redirection(src, src, dst, {Hint.FRONT_ARTICLE: 1})
+        creator.set_mainpath(f"{fid17.HOST}/aristotle/")
+    return out
+
+
+class TestSameHostLinksReachRelatedAndInbound:
+    """fid 17 promoted same-host absolute links on the outbound side only.
+
+    ``https://www.iep.utm.edu/aris-log/`` became an internal row with a
+    ``path``, but related re-resolved each row's ``url`` (``None`` for
+    anything with ``://``) and the sidecar builder read only the anchors
+    the classifier calls internal. On the real IEP ``aristotle/`` page
+    related returned 3 of 9 neighbours and inbound for ``lyceum/`` and
+    ``aristotle-logic/`` never listed Aristotle.
+    """
+
+    _SOURCE = "iep.utm.edu/aristotle/"
+
+    def test_related_ranks_the_promoted_rows(self, iep_like_zim: Path) -> None:
+        ops = _ops(iep_like_zim.parent)
+
+        related = ops.get_related_articles_data(str(iep_like_zim), self._SOURCE)
+        paths = [row["path"] for row in related["results"]]
+
+        assert "iep.utm.edu/aristotle-logic/" in paths, paths
+        assert "iep.utm.edu/ibn-rushd-averroes/" in paths, paths
+        assert "iep.utm.edu/plato/" in paths, paths
+        # The relative link that always worked, and nothing invented for the
+        # same-host link the archive cannot serve.
+        assert "iep.utm.edu/lyceum/" in paths, paths
+        assert not any("never-scraped" in p for p in paths), paths
+        assert related["total"] == 4
+
+    def test_inbound_lists_a_same_host_linker(self, iep_like_zim: Path) -> None:
+        from openzim_mcp.linkgraph.builder import build_link_graph
+
+        build_link_graph(str(iep_like_zim))
+        ops = _ops(iep_like_zim.parent)
+
+        def linkers(target: str) -> list[str]:
+            page = ops.get_inbound_links_data(str(iep_like_zim), target)
+            return [row["path"] for row in page["results"]]
+
+        assert linkers("iep.utm.edu/aristotle-logic/") == [self._SOURCE]
+        assert linkers("iep.utm.edu/ibn-rushd-averroes/") == [self._SOURCE]
+        assert linkers("iep.utm.edu/plato/") == [self._SOURCE]
+        assert linkers("iep.utm.edu/lyceum/") == [self._SOURCE]
+        # Never promoted, so never indexed: the archive and the index have
+        # both not heard of it.
+        from openzim_mcp.exceptions import OpenZimMcpArchiveError
+
+        with pytest.raises(OpenZimMcpArchiveError):
+            linkers("iep.utm.edu/never-scraped/")
+
+    def test_a_same_host_link_to_an_asset_stays_out_of_the_index(
+        self, tmp_path: Path
+    ) -> None:
+        """Related drops asset targets, so the promoted edges must too."""
+        from openzim_mcp.linkgraph.builder import build_link_graph
+        from tests.test_fr_namespace_browse import _AssetItem
+
+        zim = tmp_path / "iep_assets.zim"
+        source, lyceum = "iep.utm.edu/plato/", "iep.utm.edu/lyceum/"
+        image = "iep.utm.edu/wp-content/media/plato.jpg"
+        with Creator(str(zim)).config_indexing(True, "eng") as creator:
+            creator.add_item(
+                _HtmlItem(
+                    source,
+                    "Plato",
+                    f'<html><body><p><a href="https://www.{image}">portrait</a>'
+                    f' and <a href="https://www.{lyceum}">the Lyceum</a>'
+                    "</p></body></html>",
+                )
+            )
+            creator.add_item(_HtmlItem(lyceum, "The Lyceum", "<p>Lyceum.</p>"))
+            creator.add_item(_AssetItem(image, "image/jpeg", "not really a jpeg"))
+            creator.set_mainpath(source)
+        build_link_graph(str(zim))
+        ops = _ops(tmp_path)
+
+        def linkers(target: str) -> list[str]:
+            page = ops.get_inbound_links_data(str(zim), target)
+            return [row["path"] for row in page["results"]]
+
+        assert linkers(lyceum) == [source]
+        assert linkers(image) == []
+
+    def test_a_sidecar_built_before_the_fix_is_reported_stale(
+        self, iep_like_zim: Path
+    ) -> None:
+        """A 3.4.1 sidecar lacks these edges, so it must not pass as current."""
+        import sqlite3
+
+        from openzim_mcp.linkgraph.builder import build_link_graph
+        from openzim_mcp.linkgraph.reader import LinkGraphUnavailable
+
+        build_link_graph(str(iep_like_zim))
+        ops = _ops(iep_like_zim.parent)
+        current = ops.get_archive_validation_data(str(iep_like_zim))
+        assert current["link_graph"]["is_stale"] is False, current
+
+        conn = sqlite3.connect(f"{iep_like_zim}.linkgraph.sqlite")
+        with conn:
+            conn.execute("UPDATE meta SET value = '3' WHERE key = 'schema_version'")
+        conn.close()
+        ops = _ops(iep_like_zim.parent)
+
+        stale = ops.get_archive_validation_data(str(iep_like_zim))
+        assert stale["link_graph"]["is_stale"] is True, stale
+        with pytest.raises(LinkGraphUnavailable):
+            ops.get_inbound_links_data(str(iep_like_zim), "iep.utm.edu/lyceum/")
