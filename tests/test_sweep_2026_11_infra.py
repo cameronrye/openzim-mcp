@@ -613,3 +613,35 @@ class TestAHeaderStubIsNotListedAsReadable:
         # The full archive beside it is untouched.
         assert rows["small.zim"]["readable"] is True
         assert "warning" not in rows["small.zim"]
+
+
+class TestASymlinkedArchiveGetsTheSidecarTheServerReads:
+    """The CLI built ``<link>.linkgraph.sqlite``; the server reads ``<target>``.
+
+    The server resolves symlinks before deriving the sidecar path, while
+    ``openzim-mcp build link-graph`` and ``build_link_graph`` used the path
+    as given. A build through a stable ``wikipedia.zim`` symlink succeeded
+    and inbound still answered "build a link-graph sidecar".
+    """
+
+    def test_a_build_through_the_symlink_serves_inbound(
+        self,
+        tmp_path: Path,
+        wikibooks_copy: Path,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        from openzim_mcp.cli.build import build_main
+
+        link = tmp_path / "wikibooks.zim"
+        link.symlink_to(wikibooks_copy.name)
+        beside_target = Path(f"{wikibooks_copy.resolve()}.linkgraph.sqlite")
+
+        assert build_main(["link-graph", str(link), "--quiet"]) == 0
+
+        assert capsys.readouterr().out.startswith(f"built {beside_target}:")
+        assert beside_target.is_file()
+        assert not Path(f"{link}.linkgraph.sqlite").exists()
+        ops = _ops(tmp_path)
+        inbound = ops.get_inbound_links_data(str(link), "A/Эспэранта.html")
+        assert inbound["total"] > 0
+        assert ops.get_archive_validation_data(str(link))["has_link_graph"] is True

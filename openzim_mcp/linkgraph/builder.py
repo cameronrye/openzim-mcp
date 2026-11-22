@@ -291,7 +291,9 @@ def build_link_graph(
     from openzim_mcp.linkgraph.reader import sidecar_path_for
     from openzim_mcp.zim_operations import zim_archive
 
-    out = out_path or sidecar_path_for(archive_path)
+    # Beside the symlink's TARGET: the server resolves symlinks before it
+    # derives the sidecar path, so one written beside the link is never read.
+    out = out_path or sidecar_path_for(os.path.realpath(archive_path))
     with zim_archive(Path(archive_path)) as archive:
         archive_uuid = str(archive.uuid)
         total = int(getattr(archive, "entry_count", 0) or 0)
