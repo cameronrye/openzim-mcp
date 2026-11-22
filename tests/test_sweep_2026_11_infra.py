@@ -93,6 +93,9 @@ def refresh_after_open(
     return arm
 
 
+# Each test swaps the archive while a handle on it is open. Windows refuses to
+# replace a file that an open handle holds, so the refresh can't be staged there.
+@pytest.mark.skipif(os.name == "nt", reason="Windows can't replace an open file")
 class TestMidCallRefreshIsNotCachedAsTheNewRevision:
     """A refresh landing mid-call filed the old revision under the new token.
 
@@ -700,14 +703,16 @@ class TestConcurrentLinkGraphBuildsKeepTheirOwnFiles:
         build_a.join(10)
         published_by_a = read_sidecar_meta(archive)
         reader = LinkGraphReader.open_for(archive, live_archive_uuid="uuid-A")
+        readable_as_a = reader is not None
+        if reader is not None:
+            reader.close()  # before B publishes: Windows can't replace an open file
         a_checked.set()
         build_b.join(10)
 
         assert not isinstance(results["A"], Exception), results["A"]
         assert published_by_a is not None
         assert published_by_a["archive_uuid"] == "uuid-A"
-        assert reader is not None
-        reader.close()
+        assert readable_as_a
         assert not isinstance(results["B"], Exception), results["B"]
         assert read_sidecar_meta(archive)["archive_uuid"] == "uuid-B"
         assert sorted(p.name for p in tmp_path.iterdir()) == [Path(out).name]
@@ -734,6 +739,7 @@ class TestConcurrentLinkGraphBuildsKeepTheirOwnFiles:
         assert sorted(p.name for p in tmp_path.iterdir()) == [Path(out).name]
         assert read_sidecar_meta(archive)["archive_uuid"] == "good"
 
+    @pytest.mark.skipif(os.name != "posix", reason="Windows has no POSIX mode bits")
     def test_the_sidecar_keeps_the_permissions_sqlite_gives_it(
         self, tmp_path: Path
     ) -> None:

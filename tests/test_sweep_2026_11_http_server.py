@@ -426,6 +426,17 @@ class TestHealthKeepsTheCacheDirectoryPrivate:
         return cache_home
 
     @staticmethod
+    def _mkdir_reason(directory: Path) -> str:
+        """The reason this OS gives for the ``mkdir`` the cache attempts.
+
+        POSIX says "Not a directory"; Windows reports the file in the way as
+        "Cannot create a file when that file already exists".
+        """
+        with pytest.raises(OSError) as refused:
+            directory.mkdir(parents=True, exist_ok=True)
+        return str(refused.value.strerror)
+
+    @staticmethod
     def _health(tmp_path: Path, transport: str) -> Dict[str, Any]:
         import asyncio
 
@@ -448,7 +459,7 @@ class TestHealthKeepsTheCacheDirectoryPrivate:
     def test_a_network_client_is_not_told_where_the_cache_lives(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        self._unusable_cache_home(tmp_path, monkeypatch)
+        cache_home = self._unusable_cache_home(tmp_path, monkeypatch)
         payload = self._health(tmp_path, "http")
         health = payload["health"]
 
@@ -459,7 +470,7 @@ class TestHealthKeepsTheCacheDirectoryPrivate:
         warning = next(
             w for w in health["warnings"] if "Cache persistence is not working" in w
         )
-        assert "Not a directory" in warning, warning
+        assert self._mkdir_reason(cache_home) in warning, warning
 
     def test_a_local_operator_still_gets_the_directory_once(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -470,8 +481,9 @@ class TestHealthKeepsTheCacheDirectoryPrivate:
             "persistence_error"
         ]
         assert error.count(str(cache_home)) == 1, error
-        assert "secret-user-home" in error and "[Errno" not in error, error
-        assert "Not a directory" in error, error
+        assert "secret-user-home" in error, error
+        assert "[Errno" not in error and "[WinError" not in error, error
+        assert self._mkdir_reason(cache_home) in error, error
 
     def test_a_failed_save_names_its_file_once(self, tmp_path: Path) -> None:
         from openzim_mcp.cache import OpenZimMcpCache
@@ -488,7 +500,8 @@ class TestHealthKeepsTheCacheDirectoryPrivate:
 
         error = cache.stats()["persistence_error"]
         assert error.count(str(target)) == 1, error
-        assert "[Errno" not in error and "Not a directory" in error, error
+        assert "[Errno" not in error and "[WinError" not in error, error
+        assert self._mkdir_reason(target.parent) in error, error
 
 
 class TestSimpleModeOffersNoSubscriptions:
