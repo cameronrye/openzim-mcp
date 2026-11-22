@@ -114,6 +114,8 @@ _BUNDLE_KEY_PREFIX = "bundle:v2h"
 # match a wider read would have found rather than a fuzzy row.
 # Title-lookup rows sharing a title (one slideshow's frames) collapse to
 # the first.
+# A full filtered page whose remaining candidates are all twins now reports
+# done.
 _RENDER_EPOCH = "r5"
 
 

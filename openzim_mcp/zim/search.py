@@ -2787,13 +2787,89 @@ class _SearchMixin:
         # the cap (clients thought iteration was complete when filtered
         # entries remained past the cap). Both stopping conditions imply
         # the filtered count is a lower bound.
-        page_filled_short_of_scan = len(page) >= limit and scanned < total_results
+        #
+        # A full page stopping short of the tail is not by itself a next
+        # page: when every remaining candidate is a twin of a counted row or
+        # fails the filters, the next page is empty. ``asthma quiz`` in
+        # namespace C at ``limit=5`` said ``done: false`` on page 5 and served
+        # 0 rows on page 6. So look past the page for one row the next page
+        # would emit, by the same rules — R2-4's one-row-past-the-page.
+        page_filled_short_of_scan = False
+        if len(page) >= limit and scanned < total_results:
+            page_filled_short_of_scan, scanned, lookahead_capped = (
+                self._next_filtered_row_exists(
+                    archive,
+                    search,
+                    start=scanned,
+                    total_results=total_results,
+                    namespace=namespace,
+                    content_type=content_type,
+                    has_new_scheme=has_new_scheme,
+                    seen_canonical=seen_canonical,
+                )
+            )
+            scan_cap_hit = scan_cap_hit or lookahead_capped
         return page, _FilteredScanState(
             filtered_count=filtered_count,
             scanned=scanned,
             scan_cap_hit=scan_cap_hit,
             total_filtered_is_lower_bound=page_filled_short_of_scan or scan_cap_hit,
         )
+
+    def _next_filtered_row_exists(
+        self,
+        archive: Archive,
+        search: Any,
+        *,
+        start: int,
+        total_results: int,
+        namespace: Optional[str],
+        content_type: Optional[str],
+        has_new_scheme: bool,
+        seen_canonical: set[str],
+    ) -> Tuple[bool, int, bool]:
+        """Whether the page after a full one would emit a row.
+
+        Returns ``(found, scanned, cap_hit)``. Walks the ranked stream from
+        ``start`` with the scan's own rules — cheap namespace check, the
+        scan-scoped canonical set, then materialisation — and stops at the
+        first row that passes, at the end of the stream, or at the scan cap
+        (where the answer is unknown, so the caller keeps the lower bound).
+        Touches neither ``filtered_count`` nor the page: the resume offset is
+        still the slot after the last row served.
+        """
+        scanned = start
+        while scanned < total_results:
+            if scanned >= _FILTERED_MAX_SCAN:
+                return False, scanned, True
+            batch_end = min(
+                scanned + _FILTERED_BATCH_SIZE, total_results, _FILTERED_MAX_SCAN
+            )
+            batch = list(search.getResults(scanned, batch_end - scanned))
+            if not batch:
+                break
+            for batch_idx, entry_id in enumerate(batch):
+                if namespace and not self._matches_cheap_namespace(
+                    entry_id, namespace, has_new_scheme=has_new_scheme
+                ):
+                    continue
+                canonical = canonical_result_path(entry_id)
+                if canonical in seen_canonical:
+                    continue
+                seen_canonical.add(canonical)
+                if (
+                    self._materialise_filtered_entry(
+                        archive,
+                        entry_id,
+                        namespace,
+                        content_type,
+                        has_new_scheme=has_new_scheme,
+                    )
+                    is not None
+                ):
+                    return True, scanned + batch_idx + 1, False
+            scanned = batch_end
+        return False, scanned, False
 
     def _matches_cheap_namespace(
         self, entry_id: str, namespace: str, has_new_scheme: bool = False
