@@ -1805,14 +1805,16 @@ class _StructureMixin:
             # follows it. Mode-aware for the same reason
             # ``_entry_not_found_error`` above is: naming a tool the client
             # cannot call is worse than naming none, and in simple mode
-            # ``zim_query`` is the only tool there is.
+            # ``zim_query`` is the only tool there is. The simple-mode phrase
+            # must be one the parser routes: ``related articles for <path>``
+            # matched no pattern and ran a literal full-text search for it.
             advanced = self.config.tool_mode == "advanced"
             fallback = (
                 "Meanwhile `zim_links(direction='related')` gives "
                 "outbound-overlap neighbours and `zim_search` finds pages "
                 "that mention it."
                 if advanced
-                else "Meanwhile ask for `related articles for <path>`, or "
+                else "Meanwhile ask for `articles related to <path>`, or "
                 "search for the article's title to find pages that mention it."
             )
             raise LinkGraphUnavailable(

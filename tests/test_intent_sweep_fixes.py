@@ -9,6 +9,7 @@ assertions are on what a caller actually gets back.
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 
 import pytest
@@ -525,3 +526,30 @@ class TestTheArticleOnFrameIsPeeled:
         out = _ask(handler, sweep_zim, "get article On Liberty")
         assert "the state of being free" not in out, out[:400]
         assert "an 1859 essay by John Stuart Mill" in out, out[:400]
+
+
+# ---------------------------------------------------------------------------
+# 7. Recovery advice named a phrase that doesn't parse
+# ---------------------------------------------------------------------------
+
+
+class TestInboundLinksAdviceNamesAWorkingPhrase:
+    """With no link-graph sidecar, ``what links to X`` advises a simple-mode
+    caller to ask for related articles instead. It named ``related articles
+    for <path>``, which matches no pattern and ran a literal full-text
+    search for those words; ``articles related to <path>`` is the phrasing
+    that reaches the ``related`` intent."""
+
+    def test_following_the_advice_reaches_related_articles(
+        self, climate: SimpleToolsHandler, climate_zim: Path
+    ) -> None:
+        out = _ask(climate, climate_zim, "what links to A/Climate_change")
+        assert "intent=inbound_links" in out, out[-300:]
+        advice = re.search(r"Meanwhile ask for `([^`]+)`", out)
+        assert advice, out[:900]
+        followed = _ask(
+            climate, climate_zim, advice.group(1).replace("<path>", "A/Climate_change")
+        )
+        assert "intent=search" not in followed, followed[:400]
+        assert "intent=related" in followed, followed[-300:]
+        assert '"entry_path": "A/Climate_change"' in followed, followed[:400]
