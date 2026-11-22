@@ -198,7 +198,21 @@ def _resolve_entry_html(
 
     Raises whatever the libzim layer raises; callers wrap.
     """
-    entry = archive.get_entry_by_path(entry_path)
+    try:
+        entry = archive.get_entry_by_path(entry_path)
+    except KeyError:
+        # The archive's own hrefs are percent-encoded, and ``view="full"``
+        # serves that spelling through its ladder's exact probes — so the
+        # toc, structure, section and links views must probe them too, or
+        # they answer not-found for a path the same tool just served. A miss
+        # on every spelling re-raises the raw lookup's KeyError, which
+        # callers already turn into not-found.
+        from openzim_mcp.zim.content import entry_by_alternate_spelling
+
+        alternate = entry_by_alternate_spelling(archive, entry_path)
+        if alternate is None:
+            raise
+        entry, entry_path = alternate
     item = entry.get_item()
     title = entry.title or "Untitled"
     mime = item.mimetype or ""

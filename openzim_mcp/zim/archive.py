@@ -62,7 +62,11 @@ from openzim_mcp.recovery_advice import locate_entry
 from openzim_mcp.security import PathValidator
 from openzim_mcp.timeout_utils import run_with_timeout
 from openzim_mcp.zim._ops_base import _ArchiveAccessMixin, _json
-from openzim_mcp.zim.content import _ContentMixin, rewrite_well_known_path
+from openzim_mcp.zim.content import (
+    _ContentMixin,
+    entry_by_alternate_spelling,
+    rewrite_well_known_path,
+)
 from openzim_mcp.zim.namespace import _NamespaceMixin
 from openzim_mcp.zim.redirects import resolve_redirect_chain
 from openzim_mcp.zim.search import _SearchMixin
@@ -1906,6 +1910,14 @@ class ZimOperations(
             entry = archive.get_entry_by_path(entry_path)
         if entry is not None:
             resolved = _follow(entry)
+            return resolved, resolved.path
+        # The plain-body ladder's exact probes, in its order: the other
+        # spellings before search. Without them the summary answered
+        # not-found for the percent-encoded path ``view="full"`` serves, which
+        # the search matcher cannot recover.
+        alternate = entry_by_alternate_spelling(archive, entry_path)
+        if alternate is not None:
+            resolved = _follow(alternate[0])
             return resolved, resolved.path
         actual_path = self._find_entry_by_search(archive, entry_path)
         if actual_path:

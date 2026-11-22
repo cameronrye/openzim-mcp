@@ -13,6 +13,7 @@ import base64
 import json
 import logging
 import re
+from contextlib import suppress
 from pathlib import Path
 from typing import (
     TYPE_CHECKING,
@@ -196,6 +197,29 @@ def _alternate_entry_spellings(entry_path: str) -> List[str]:
         if candidate and candidate != entry_path and candidate not in spellings:
             spellings.append(candidate)
     return spellings
+
+
+def entry_by_alternate_spelling(
+    archive: Archive, entry_path: str
+) -> Optional[Tuple[Any, str]]:
+    """``(entry, spelling)`` for the first alternate spelling that resolves.
+
+    The exact-probe step of the entry-fetch ladder, for the lookups that run
+    their own: a raw miss tries these before any search fallback, because the
+    search matcher cannot recover a percent-encoded path. Only the plain-body
+    ladder had the step, so ``A/K%C3%B6ppen_climate_classification`` — how
+    the archive's own pages link the article — was served by ``view="full"``
+    and answered not-found by the summary, the bundle views and the binary
+    fetch. Returns ``None`` when no alternate resolves; the caller still
+    holds the raw miss.
+    """
+    for alternate in _alternate_entry_spellings(entry_path):
+        # Broad on purpose, like ``_resolve_entry_spelling``: libzim reports
+        # a miss as ``KeyError`` and a corrupt cluster as ``RuntimeError``,
+        # and either way this spelling does not resolve.
+        with suppress(Exception):
+            return archive.get_entry_by_path(alternate), alternate
+    return None
 
 
 # The size the illustration is actually fetched at. ``has_illustration()``
@@ -1942,16 +1966,24 @@ class _ContentMixin:
                 try:
                     entry = archive.get_entry_by_path(entry_path)
                 except Exception:
-                    # Fall back to search-based retrieval
-                    actual_path = self._find_entry_by_search(archive, entry_path)
-                    if actual_path:
-                        entry = archive.get_entry_by_path(actual_path)
-                        entry_path = actual_path
+                    # Then the exact alternate spellings, before search: the
+                    # text view tells the caller to re-fetch an image path
+                    # with binary=True, and a percent-encoded path it served
+                    # that way used to come back not-found here.
+                    alternate = entry_by_alternate_spelling(archive, entry_path)
+                    if alternate is not None:
+                        entry, entry_path = alternate
                     else:
-                        raise OpenZimMcpEntryNotFoundError(
-                            f"Entry not found: '{entry_path}'. "
-                            + locate_or_explore(self.config.tool_mode)
-                        )
+                        # Fall back to search-based retrieval
+                        actual_path = self._find_entry_by_search(archive, entry_path)
+                        if actual_path:
+                            entry = archive.get_entry_by_path(actual_path)
+                            entry_path = actual_path
+                        else:
+                            raise OpenZimMcpEntryNotFoundError(
+                                f"Entry not found: '{entry_path}'. "
+                                + locate_or_explore(self.config.tool_mode)
+                            )
 
                 # Resolve the redirect chain — libzim raises RuntimeError on
                 # get_item() of a redirect entry. Reflect the resolved path

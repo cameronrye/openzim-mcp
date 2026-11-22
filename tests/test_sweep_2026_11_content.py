@@ -98,3 +98,90 @@ class TestZimGetRejectsTraversalLikeItsSiblings:
         assert slashed["path"] == "A/Hydrogen", slashed
         assert slashed["requested_path"] == "/A/Hydrogen"
         assert slashed["content"] == plain["content"]
+
+
+def _without_meta(payload: Dict[str, Any]) -> Dict[str, Any]:
+    return {k: v for k, v in payload.items() if k != "_meta"}
+
+
+class TestPercentEncodedPathsResolveOnEverySurface:
+    """Only ``view="full"`` served the percent-encoded spelling of a path.
+
+    ``A/K%C3%B6ppen_climate_classification`` is how mini's own main page links
+    the article, and ``view="full"`` serves it through the ladder's exact probe
+    on the decoded spelling. Three other lookups skipped that probe — the
+    bundle's (toc, structure, section, outbound links), the summary's and the
+    binary fetch's — and answered Resource Not Found. For an image the text
+    view's own advice, "fetch it with zim_get(…, binary=True)", then failed.
+    """
+
+    _ENCODED = "A/K%C3%B6ppen_climate_classification"
+    _RAW = "A/Köppen_climate_classification"
+    _IMAGE_ENCODED = "I/Koppen-Geiger_Map_v2_World_1991%E2%80%932020.svg.png.webp"
+    _IMAGE_RAW = "I/Koppen-Geiger_Map_v2_World_1991–2020.svg.png.webp"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("view", ["summary", "toc", "structure"])
+    async def test_structure_views_serve_the_encoded_spelling(
+        self, climate_zim: Path, view: str
+    ) -> None:
+        zim_get = _tool(_server(climate_zim.parent), "zim_get")
+        base = {"zim_file_path": str(climate_zim), "view": view}
+
+        encoded = await zim_get(**base, entry_path=self._ENCODED)
+        raw = await zim_get(**base, entry_path=self._RAW)
+
+        assert not encoded.get("error"), encoded
+        assert encoded["path"] == self._RAW
+        assert _without_meta(encoded) == _without_meta(raw)
+
+    @pytest.mark.asyncio
+    async def test_get_section_serves_the_encoded_spelling(
+        self, climate_zim: Path
+    ) -> None:
+        server = _server(climate_zim.parent)
+        toc = await _tool(server, "zim_get")(
+            zim_file_path=str(climate_zim), entry_path=self._RAW, view="toc"
+        )
+        section_id = toc["toc"][0]["section_id"]
+        get_section = _tool(server, "zim_get_section")
+        base = {"zim_file_path": str(climate_zim), "section_id": section_id}
+
+        encoded = await get_section(**base, entry_path=self._ENCODED)
+        raw = await get_section(**base, entry_path=self._RAW)
+
+        assert not encoded.get("error"), encoded
+        assert encoded["entry_path"] == self._RAW
+        assert "Köppen climate classification" in encoded["content_markdown"]
+        assert _without_meta(encoded) == _without_meta(raw)
+
+    @pytest.mark.asyncio
+    async def test_outbound_links_serve_the_encoded_spelling(
+        self, climate_zim: Path
+    ) -> None:
+        zim_links = _tool(_server(climate_zim.parent), "zim_links")
+        base = {"zim_file_path": str(climate_zim), "direction": "outbound"}
+
+        encoded = await zim_links(**base, entry_path=self._ENCODED)
+        raw = await zim_links(**base, entry_path=self._RAW)
+
+        assert not encoded.get("error"), encoded
+        assert encoded["results"], encoded
+        assert encoded["results"] == raw["results"]
+
+    @pytest.mark.asyncio
+    async def test_binary_fetch_the_text_view_recommends_now_works(
+        self, climate_zim: Path
+    ) -> None:
+        zim_get = _tool(_server(climate_zim.parent), "zim_get")
+        base = {"zim_file_path": str(climate_zim)}
+
+        advice = await zim_get(**base, entry_path=self._IMAGE_ENCODED)
+        binary = await zim_get(**base, entry_path=self._IMAGE_ENCODED, binary=True)
+        raw = await zim_get(**base, entry_path=self._IMAGE_RAW, binary=True)
+
+        assert "binary=True" in advice["content"], advice
+        assert not binary.get("error"), binary
+        assert binary["path"] == self._IMAGE_RAW
+        assert binary["mime_type"] == "image/webp"
+        assert binary["data"] and binary["data"] == raw["data"]
