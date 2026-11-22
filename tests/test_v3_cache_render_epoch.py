@@ -212,7 +212,7 @@ _RENDER_FIXTURE_HTML = """
 # digest. The epoch is part of the pin so that reverting a bump fails too —
 # pinning the digest alone let ``r3`` go back to ``r2`` with every suite green.
 _PINNED_RENDER_FINGERPRINT = (
-    "r4",
+    "r5",
     "d62d668001dd2a7ca972108f82ff6e49d7f2b2d5bebeb40af0890a607ba89c18",
 )
 
@@ -277,7 +277,7 @@ _RANKING_FIXTURE_PATHS = (
     "a/category/c/page/2/",
 )
 _PINNED_RANKING_FINGERPRINT = (
-    "r4",
+    "r5",
     "5d5745359f1eaa811b415ce912d61851e74d0fcc475704852100369c371896f4",
 )
 
@@ -328,7 +328,7 @@ _RANKING_CODE_NAMES = (
     "demote_crawl_artefacts",
 )
 _PINNED_RANKING_CODE = (
-    "r4",
+    "r5",
     "4373b37abb6d2593b636d9a3f2980b06454fb63cb42a014100f8094d7772006a",
 )
 
@@ -417,7 +417,7 @@ _TRANSLATION_FULLTEXT_ORDER = [
     "med.gov/ency/imagepages/1.htm",
 ]
 _PINNED_FULLTEXT_ORDER = (
-    "r4",
+    "r5",
     {
         "asthma": {
             "search": _DEMOTED_FULLTEXT_ORDER,

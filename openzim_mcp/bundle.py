@@ -93,7 +93,10 @@ _BUNDLE_KEY_PREFIX = "bundle:v2h"
 # r3 -> r4: fulltext and filtered search pages now sink crawl artefacts before
 # they are cached (fid 71, fulltext half), except the translation hub a query
 # asks for ("asthma in spanish"), which keeps its archive position.
-_RENDER_EPOCH = "r4"
+#
+# r4 -> r5: cached search rows no longer take an image-only H1's lead
+# sentence as the page title.
+_RENDER_EPOCH = "r5"
 
 
 def archive_stat_token(validated_path: Any) -> str:

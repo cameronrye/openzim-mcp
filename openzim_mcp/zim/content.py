@@ -411,7 +411,12 @@ def reject_path_traversal(entry_path: str) -> None:
 # the page's typography overwrite the archive's naming on a coincidence.
 _MIN_COMPLETABLE_TITLE = 3
 
-_LEADING_H1_RE = re.compile(r"^\s*#\s+(.+?)\s*$", re.MULTILINE)
+# Every gap in the heading is newline-free. An image-only ``<h1>`` renders
+# as ``# `` and a blank line, and the ``#\s+`` this replaces stepped over
+# the blank line and read the lead paragraph as the title. The text opens
+# and closes on a non-space, so no two quantifiers compete for one run of
+# spaces.
+_LEADING_H1_RE = re.compile(r"#[^\S\n]+(\S(?:[^\n]*\S)?)")
 
 
 def snippet_render_key(validated_path: Optional[str], entry_path: str) -> Optional[str]:
@@ -452,7 +457,7 @@ def leading_h1(rendered_markdown: str) -> str:
         return ""
     # ``match`` (not ``search``) is what makes this "leading": it anchors at
     # position 0, so a ``# `` further down the document cannot answer, and
-    # ``#\s+`` cannot match ``##`` because the second hash is not
+    # ``#[^\S\n]+`` cannot match ``##`` because the second hash is not
     # whitespace. An explicit startswith guard here would be unreachable.
     match = _LEADING_H1_RE.match(rendered_markdown.lstrip())
     return match.group(1).strip() if match else ""
