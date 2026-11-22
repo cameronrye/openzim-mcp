@@ -1753,15 +1753,17 @@ class SimpleToolsHandler(
     @staticmethod
     def _canonicalize_entry_path(value: str) -> str:
         """Fold an entry path to a comparison key: lowercase, with ``_`` and
-        whitespace treated as equivalent.
+        whitespace treated as equivalent, and a client's leading ``/`` gone.
 
         Simple mode rewrites the caller's phrasing on the way to the backend
         (``links in Berlin`` reaches it as ``berlin``), so an exact ``!=``
         against a cursor's raw ``ep`` would false-reject legitimate resumes.
-        The advanced ``zim_links`` surface can afford a plain ``!=`` because
-        it never rewrites ``entry_path``.
+        The cursor's ``ep`` is minted from the slash-stripped path
+        (``normalize_entry_path``), so the slash has to go here too. The
+        advanced ``zim_links`` surface compares the normalized path exactly,
+        because it never rewrites ``entry_path`` otherwise.
         """
-        return " ".join(value.replace("_", " ").split()).lower()
+        return " ".join(value.lstrip("/").replace("_", " ").split()).lower()
 
     @classmethod
     def _cursor_entry_mismatch(
