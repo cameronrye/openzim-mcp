@@ -8,7 +8,6 @@ from typing import Any, Literal, Optional
 from mcp.types import Icon
 
 from . import __version__
-from .async_operations import AsyncZimOperations
 from .cache import OpenZimMcpCache
 from .config import OpenZimMcpConfig
 from .constants import TOOL_MODE_SIMPLE, VALID_TRANSPORT_TYPES
@@ -199,7 +198,9 @@ def _build_transport_security(
         # varies by reachable IP / container, so any Host allow-list would 421
         # every request. Disable DNS-rebinding Host validation — the auth token
         # (or the explicitly-acknowledged OPENZIM_MCP_INSECURE_DISABLE_AUTH) is
-        # the access gate here — and surface the trade-off loudly.
+        # the access gate here — and surface the trade-off loudly. The SDK
+        # drops its Origin check under the same flag; the HTTP app's
+        # TransportSecurityGateMiddleware keeps that half.
         warning = (
             f"HTTP transport bound to {host} with no OPENZIM_MCP_ALLOWED_HOSTS "
             "set; disabling DNS-rebinding Host validation so direct-IP clients "
@@ -299,7 +300,6 @@ class OpenZimMcpServer:
         self.zim_operations = ZimOperations(
             config, self.path_validator, self.cache, self.content_processor
         )
-        self.async_zim_operations = AsyncZimOperations(self.zim_operations)
 
         # Phase F: simple_tools_handler backs zim_query in BOTH simple and
         # advanced modes (the simple/advanced split is now a registration-
@@ -353,8 +353,17 @@ class OpenZimMcpServer:
         # The bus is the SDK's own fan-out for `subscriptions/listen`: it owns
         # the listener registry and the per-connection delivery that this
         # project previously hand-rolled against ServerSession internals.
+        #
+        # Advanced mode only, too: resources are registered only there (see
+        # ``register_phase_f_tools``), so a simple-mode bus advertised
+        # ``resources.subscribe``, acknowledged listen streams and ran a
+        # watcher, all for resources no client could list or read.
         self.subscription_bus = None
-        if config.subscriptions_enabled and config.transport == "http":
+        if (
+            config.subscriptions_enabled
+            and config.transport == "http"
+            and config.tool_mode != TOOL_MODE_SIMPLE
+        ):
             from mcp.server.subscriptions import InMemorySubscriptionBus
 
             self.subscription_bus = InMemorySubscriptionBus()

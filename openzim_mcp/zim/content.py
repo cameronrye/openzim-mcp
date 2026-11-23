@@ -13,6 +13,7 @@ import base64
 import json
 import logging
 import re
+from contextlib import suppress
 from pathlib import Path
 from typing import (
     TYPE_CHECKING,
@@ -76,8 +77,8 @@ def _strip_markdown_links_shared(text: str) -> str:
     """Strip ``[text](href)`` / ``![alt](src)`` markdown link soup.
 
     Delegates to the tested ``_CompactFormatMixin._strip_markdown_links``
-    (idempotent, timeout-bounded). Imported lazily to avoid an import-time
-    cycle between the ``zim`` package and ``compact_format``.
+    (idempotent, linear, never skipped under load). Imported lazily to avoid
+    an import-time cycle between the ``zim`` package and ``compact_format``.
     """
     from openzim_mcp.compact_format import _CompactFormatMixin
 
@@ -198,6 +199,29 @@ def _alternate_entry_spellings(entry_path: str) -> List[str]:
     return spellings
 
 
+def entry_by_alternate_spelling(
+    archive: Archive, entry_path: str
+) -> Optional[Tuple[Any, str]]:
+    """``(entry, spelling)`` for the first alternate spelling that resolves.
+
+    The exact-probe step of the entry-fetch ladder, for the lookups that run
+    their own: a raw miss tries these before any search fallback, because the
+    search matcher cannot recover a percent-encoded path. Only the plain-body
+    ladder had the step, so ``A/K%C3%B6ppen_climate_classification`` — how
+    the archive's own pages link the article — was served by ``view="full"``
+    and answered not-found by the summary, the bundle views and the binary
+    fetch. Returns ``None`` when no alternate resolves; the caller still
+    holds the raw miss.
+    """
+    for alternate in _alternate_entry_spellings(entry_path):
+        # Broad on purpose, like ``_resolve_entry_spelling``: libzim reports
+        # a miss as ``KeyError`` and a corrupt cluster as ``RuntimeError``,
+        # and either way this spelling does not resolve.
+        with suppress(Exception):
+            return archive.get_entry_by_path(alternate), alternate
+    return None
+
+
 # The size the illustration is actually fetched at. ``has_illustration()``
 # with no argument answers "any size", which is not the same question:
 # an archive can hold a 96px illustration and still fail the 48px fetch,
@@ -284,6 +308,7 @@ def _select_summary_section_md(
     sections: List[Any],
     rendered_md: str,
     summary_style: Optional[str],
+    lead_offset: int = 0,
 ) -> str:
     """Return the markdown slice for the summary, per ``summary_style``.
 
@@ -292,6 +317,11 @@ def _select_summary_section_md(
     leading vote-score line. Any other style (including ``None``), or no
     matching heading, returns the first-section slice (the prior behavior),
     which guarantees a never-worse-than-baseline result.
+
+    That slice starts at ``lead_offset``, past the infobox rows a compact
+    render puts first. Reading from 0 made the infobox the summary: once the
+    bundle lifted the article's own infobox, Al Gore's 200 words were his
+    office labels, and five starter-archive summaries held no prose at all.
     """
     tokens = _STYLE_HEADING_TOKENS.get(summary_style or "")
     if tokens is not None:
@@ -303,9 +333,13 @@ def _select_summary_section_md(
                 if summary_style == "q_and_a":
                     slice_md = _strip_leading_score(slice_md)
                 return slice_md
+    lead = max(0, int(lead_offset))
     if sections:
-        return rendered_md[: int(sections[0]["char_end"])]
-    return rendered_md
+        end = int(sections[0]["char_end"])
+        # A first section that ends before the lead is not one this offset
+        # describes; keep the prior slice rather than guess.
+        return rendered_md[lead:end] if end > lead else rendered_md[:end]
+    return rendered_md[lead:]
 
 
 # D12 (v2.0.0a9): detect the path-traversal shapes that don't make sense
@@ -411,7 +445,12 @@ def reject_path_traversal(entry_path: str) -> None:
 # the page's typography overwrite the archive's naming on a coincidence.
 _MIN_COMPLETABLE_TITLE = 3
 
-_LEADING_H1_RE = re.compile(r"^\s*#\s+(.+?)\s*$", re.MULTILINE)
+# Every gap in the heading is newline-free. An image-only ``<h1>`` renders
+# as ``# `` and a blank line, and the ``#\s+`` this replaces stepped over
+# the blank line and read the lead paragraph as the title. The text opens
+# and closes on a non-space, so no two quantifiers compete for one run of
+# spaces.
+_LEADING_H1_RE = re.compile(r"#[^\S\n]+(\S(?:[^\n]*\S)?)")
 
 
 def snippet_render_key(validated_path: Optional[str], entry_path: str) -> Optional[str]:
@@ -424,11 +463,13 @@ def snippet_render_key(validated_path: Optional[str], entry_path: str) -> Option
     if not validated_path or not entry_path:
         return None
     try:
-        from openzim_mcp.bundle import archive_stat_token
+        # Both callers run with the entry's archive open, so this is the
+        # token that handle was opened under rather than a fresh stat.
+        from openzim_mcp.bundle import open_archive_token
 
         return (
             f"snippet_render:v1:{validated_path}:"
-            f"{archive_stat_token(Path(validated_path))}:"
+            f"{open_archive_token(validated_path)}:"
             f"{entry_path}"
         )
     except Exception:
@@ -452,7 +493,7 @@ def leading_h1(rendered_markdown: str) -> str:
         return ""
     # ``match`` (not ``search``) is what makes this "leading": it anchors at
     # position 0, so a ``# `` further down the document cannot answer, and
-    # ``#\s+`` cannot match ``##`` because the second hash is not
+    # ``#[^\S\n]+`` cannot match ``##`` because the second hash is not
     # whitespace. An explicit startswith guard here would be unreachable.
     match = _LEADING_H1_RE.match(rendered_markdown.lstrip())
     return match.group(1).strip() if match else ""
@@ -664,7 +705,7 @@ class _ContentMixin:
             Entry content text with metadata including actual path used
 
         Raises:
-            OpenZimMcpFileNotFoundError: If ZIM file not found
+            OpenZimMcpArchivePathError: If the ZIM file is missing or not an archive
             OpenZimMcpArchiveError: If entry retrieval fails or entry cannot
                 be found via direct access or search
         """
@@ -870,13 +911,22 @@ class _ContentMixin:
             ``content_offset``/``total_chars``, plus ``_meta``.
 
         Raises:
-            OpenZimMcpFileNotFoundError: If ZIM file not found
+            OpenZimMcpArchivePathError: If the ZIM file is missing or not an archive
             OpenZimMcpArchiveError: If entry retrieval fails
         """
         if max_content_length is None:
             max_content_length = self.config.content.max_content_length
         if content_offset < 0:
             content_offset = 0
+
+        # D12 guard, which every sibling surface runs at its boundary. Without
+        # it ``../Hydrogen`` reached the search fallback, whose matcher drops
+        # the first segment, and was served as ``A/Hydrogen`` while
+        # ``view="toc"`` rejected it. The check reads the un-rooted spelling,
+        # as the siblings' does, but the raw path still goes down the ladder:
+        # its alternate-spelling step un-roots a leading slash itself and
+        # ``requested_path`` then marks that rewrite (D17).
+        reject_path_traversal(normalize_entry_path(entry_path))
 
         validated_path = self._validate_zim_path(zim_file_path)
 
@@ -1335,6 +1385,8 @@ class _ContentMixin:
             current_offset=content_offset,
             original_total=total_length,
             batch_item=batch_item,
+            compact=compact,
+            entry_path=actual_path,
         )
         # Compare against the cap, NOT the rendered lengths: ``truncate_content``
         # appends a ~150-char truncation note, so ``len(truncated) < len(content)``
@@ -1845,7 +1897,7 @@ class _ContentMixin:
             Dict containing binary content metadata and optionally the data
 
         Raises:
-            OpenZimMcpFileNotFoundError: If ZIM file not found
+            OpenZimMcpArchivePathError: If the ZIM file is missing or not an archive
             OpenZimMcpArchiveError: If entry retrieval fails
         """
         from openzim_mcp.constants import DEFAULT_MAX_BINARY_SIZE
@@ -1926,16 +1978,24 @@ class _ContentMixin:
                 try:
                     entry = archive.get_entry_by_path(entry_path)
                 except Exception:
-                    # Fall back to search-based retrieval
-                    actual_path = self._find_entry_by_search(archive, entry_path)
-                    if actual_path:
-                        entry = archive.get_entry_by_path(actual_path)
-                        entry_path = actual_path
+                    # Then the exact alternate spellings, before search: the
+                    # text view tells the caller to re-fetch an image path
+                    # with binary=True, and a percent-encoded path it served
+                    # that way used to come back not-found here.
+                    alternate = entry_by_alternate_spelling(archive, entry_path)
+                    if alternate is not None:
+                        entry, entry_path = alternate
                     else:
-                        raise OpenZimMcpEntryNotFoundError(
-                            f"Entry not found: '{entry_path}'. "
-                            + locate_or_explore(self.config.tool_mode)
-                        )
+                        # Fall back to search-based retrieval
+                        actual_path = self._find_entry_by_search(archive, entry_path)
+                        if actual_path:
+                            entry = archive.get_entry_by_path(actual_path)
+                            entry_path = actual_path
+                        else:
+                            raise OpenZimMcpEntryNotFoundError(
+                                f"Entry not found: '{entry_path}'. "
+                                + locate_or_explore(self.config.tool_mode)
+                            )
 
                 # Resolve the redirect chain — libzim raises RuntimeError on
                 # get_item() of a redirect entry. Reflect the resolved path
@@ -2015,7 +2075,7 @@ class _ContentMixin:
             JSON string containing binary content metadata and optionally the data
 
         Raises:
-            OpenZimMcpFileNotFoundError: If ZIM file not found
+            OpenZimMcpArchivePathError: If the ZIM file is missing or not an archive
             OpenZimMcpArchiveError: If entry retrieval fails
         """
         return _json(
@@ -2108,7 +2168,7 @@ class _ContentMixin:
         can hand it straight to the SDK's structured-content path.
 
         Raises:
-            OpenZimMcpFileNotFoundError: If ZIM file not found
+            OpenZimMcpArchivePathError: If the ZIM file is missing or not an archive
             OpenZimMcpArchiveError: If summary extraction fails
         """
         # Clamp to a sane upper bound; the tool layer enforces the
@@ -2180,7 +2240,7 @@ class _ContentMixin:
             JSON string containing the article summary
 
         Raises:
-            OpenZimMcpFileNotFoundError: If ZIM file not found
+            OpenZimMcpArchivePathError: If the ZIM file is missing or not an archive
             OpenZimMcpArchiveError: If summary extraction fails
         """
         return _json(
@@ -2246,7 +2306,10 @@ class _ContentMixin:
                 )
                 md = bundle["rendered_markdown"]
                 summary_md = _select_summary_section_md(
-                    bundle["sections"], md, summary_style
+                    bundle["sections"],
+                    md,
+                    summary_style,
+                    lead_offset=bundle.get("lead_offset", 0),
                 )
 
                 words = summary_md.split()

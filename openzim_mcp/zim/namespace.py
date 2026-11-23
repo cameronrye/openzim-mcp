@@ -20,6 +20,7 @@ import openzim_mcp.zim_operations as _zim_ops_mod
 from openzim_mcp.constants import NAMESPACE_MAX_ENTRIES, NAMESPACE_MAX_SAMPLE_SIZE
 from openzim_mcp.exceptions import (
     OpenZimMcpArchiveError,
+    OpenZimMcpCursorMismatchError,
     OpenZimMcpValidationError,
 )
 from openzim_mcp.meta import attach_meta
@@ -314,7 +315,7 @@ class _NamespaceMixin:
         plus the universal ``_meta`` envelope.
 
         Raises:
-            OpenZimMcpFileNotFoundError: If ZIM file not found
+            OpenZimMcpArchivePathError: If the ZIM file is missing or not an archive
             OpenZimMcpArchiveError: If namespace listing fails
         """
         # Validate and resolve file path
@@ -919,7 +920,7 @@ class _NamespaceMixin:
             OpenZimMcpValidationError: If parameter validation fails (limit,
                 offset, or namespace), or if a cursor was issued for a
                 different archive.
-            OpenZimMcpFileNotFoundError: If ZIM file not found
+            OpenZimMcpArchivePathError: If the ZIM file is missing or not an archive
             OpenZimMcpArchiveError: If browsing fails
         """
         from openzim_mcp.pagination import (
@@ -989,7 +990,7 @@ class _NamespaceMixin:
                     tool="browse_namespace",
                 )
             except CursorMismatchError as e:
-                raise OpenZimMcpValidationError(str(e)) from e
+                raise OpenZimMcpCursorMismatchError(str(e)) from e
 
         # Cache key bumped v2c -> v2d: new-scheme C now treats ``offset`` as a
         # content-row offset (skip N real rows) rather than a raw entry-id
@@ -1181,7 +1182,7 @@ class _NamespaceMixin:
         Raises:
             OpenZimMcpValidationError: If parameter validation fails (limit,
                 offset, or namespace).
-            OpenZimMcpFileNotFoundError: If ZIM file not found
+            OpenZimMcpArchivePathError: If the ZIM file is missing or not an archive
             OpenZimMcpArchiveError: If browsing fails
         """
         return _json(
@@ -1268,9 +1269,12 @@ class _NamespaceMixin:
         listing_key: Optional[str] = None
         cached_listing: Optional[Tuple[List[str], bool]] = None
         if archive_path is not None:
-            from openzim_mcp.bundle import archive_stat_token
+            from openzim_mcp.bundle import open_archive_token
 
-            stat_token = archive_stat_token(Path(archive_path))
+            # The token ``archive`` was opened under, not a fresh stat: a
+            # refresh landing mid-call would key this revision's listing as
+            # the next one's.
+            stat_token = open_archive_token(archive_path)
             listing_key = f"ns_entries:{archive_path}:{stat_token}:{namespace}"
             cached_listing = self.cache.get(listing_key)
 
@@ -2103,7 +2107,7 @@ class _NamespaceMixin:
                     tool="walk_namespace",
                 )
             except CursorMismatchError as e:
-                raise OpenZimMcpValidationError(str(e)) from e
+                raise OpenZimMcpCursorMismatchError(str(e)) from e
 
         try:
             with _zim_ops_mod.zim_archive(validated) as archive:

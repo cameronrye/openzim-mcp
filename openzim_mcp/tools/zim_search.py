@@ -436,7 +436,12 @@ async def _handle_fulltext_mode(
         resolved_path, query, limit=limit, offset=offset
     )
     payload = await _splice_canonical_title_hit(
-        server, payload, resolved_path=resolved_path, query=query, offset=offset
+        server,
+        payload,
+        ops=ops,
+        resolved_path=resolved_path,
+        query=query,
+        offset=offset,
     )
     return _name_the_archive(_strip_next_cursor(payload), resolved_path)
 
@@ -499,6 +504,7 @@ async def _splice_canonical_title_hit(
     server: "OpenZimMcpServer",
     payload: Any,
     *,
+    ops: Any,
     resolved_path: str,
     query: str,
     offset: int,
@@ -525,27 +531,39 @@ async def _splice_canonical_title_hit(
 
     Gated to the first page: the splice is a promotion, and re-injecting the
     canonical at every ``offset`` would re-serve the same row forever.
+
+    A page never exceeds ``limit``. When the canonical is not among the
+    ranked hits it is an extra row, which made ``query='glacier', limit=1``
+    return two rows. Trimming the last hit instead would lose it — DD4 did
+    that, and the trimmed hit fell between page one and every advertised
+    resume point — so a page the canonical would overflow is rebuilt from
+    ``limit - 1`` ranked hits, whose ``next_offset`` starts at the hit that
+    made room. A one-row page has no such page to build: its resume point
+    would be offset 0, which is this page again, so the splice yields there.
     """
     if offset or not isinstance(payload, dict):
-        return payload
-    results = payload.get("results")
-    if not results:
         return payload
     handler = getattr(server, "simple_tools_handler", None)
     if handler is None:  # pragma: no cover — registered in both tool modes
         return payload
-    top_before = results[0].get("path") if isinstance(results[0], dict) else None
-    try:
-        spliced = await asyncio.to_thread(
-            handler._splice_title_match_into_search,
-            payload,
-            resolved_path,
-            query,
+    spliced = await _spliced_page(handler, payload, resolved_path, query)
+    if spliced is None:
+        return payload
+    page_limit = (payload.get("page_info") or {}).get("limit")
+    if isinstance(page_limit, int) and len(spliced["results"]) > page_limit:
+        if page_limit < 2:
+            return payload
+        payload = await ops.search_zim_file_data(
+            resolved_path, query, limit=page_limit - 1, offset=0
         )
-    except Exception:  # pragma: no cover — defensive; never fail the search
-        return payload
-    if not isinstance(spliced, dict) or spliced.get("results") == results:
-        return payload
+        rebuilt = await _spliced_page(handler, payload, resolved_path, query)
+        if rebuilt is None:
+            return payload
+        # The page answers the caller's ``limit``, not the one it was read at.
+        rebuilt["page_info"] = {**(rebuilt.get("page_info") or {}), "limit": page_limit}
+        spliced = rebuilt
+    results = payload["results"]
+    top_before = results[0].get("path") if isinstance(results[0], dict) else None
     new_results = spliced.get("results") or []
     top_after = (
         new_results[0].get("path")
@@ -557,6 +575,27 @@ async def _splice_canonical_title_hit(
         dict(payload.get("_meta") or {}),
         top_changed=top_after != top_before,
     )
+    return spliced
+
+
+async def _spliced_page(
+    handler: Any, payload: Any, resolved_path: str, query: str
+) -> Optional[dict]:
+    """The splice's rewrite of ``payload``, or None when it changed nothing."""
+    results = payload.get("results") if isinstance(payload, dict) else None
+    if not results:
+        return None
+    try:
+        spliced = await asyncio.to_thread(
+            handler._splice_title_match_into_search,
+            payload,
+            resolved_path,
+            query,
+        )
+    except Exception:  # pragma: no cover — defensive; never fail the search
+        return None
+    if not isinstance(spliced, dict) or spliced.get("results") == results:
+        return None
     return spliced
 
 
@@ -672,6 +711,119 @@ def _annotate_cross_file_paging(payload: Any) -> Any:
     return out
 
 
+async def _lookup_title_page(
+    ops: Any,
+    server: "OpenZimMcpServer",
+    zim_file_path: str,
+    query: str,
+    *,
+    cross_file: bool,
+    limit: int,
+) -> tuple[Any, str]:
+    """Look ``query`` up as typed, and rewrite it only if that found no title.
+
+    Returns ``(page, title)``: the title-lookup page and the string it was
+    looked up under, which the promotion probes and the artefact demote key on.
+
+    The misspelling map and the leading-article strip used to run first and
+    unconditionally, so a title that starts with "A", "An", "The" or "Of" was
+    answered with a different article: ``A Green New Deal`` returned
+    ``A/Green_New_Deal`` while ``A/A_Green_New_Deal`` — the article named
+    that, whose hatnote points the other way — exists. ``query_rewrite.
+    enabled=false`` is the operator's opt-out from every rewrite rule, and
+    title mode ignored it.
+    """
+    raw = await ops.find_entry_by_title_data(
+        zim_file_path, query, cross_file=cross_file, limit=limit
+    )
+    rewritten = _title_rewrite(server.zim_operations.config, raw, query)
+    if rewritten is None:
+        return raw, query
+    rewritten_page = await ops.find_entry_by_title_data(
+        zim_file_path, rewritten, cross_file=cross_file, limit=limit
+    )
+    return rewritten_page, rewritten
+
+
+def _title_rewrite(config: Any, raw: Any, query: str) -> Optional[str]:
+    """The string to look a title up under instead of ``query``, or None.
+
+    ``raw`` is the page ``query`` itself returned. See ``_lookup_title_page``.
+    """
+    if not config.query_rewrite.enabled:
+        return None
+    results = raw.get("results") if isinstance(raw, dict) else None
+    if results and _is_exact_title_row(results[0]):
+        return None
+
+    from ..intent_parser import IntentParser
+
+    rewritten = IntentParser._apply_misspelling_map(query, title_probe=None)
+    rewritten = IntentParser._detect_stopword_phrase(rewritten, title_probe=None)
+    return None if rewritten == query else rewritten
+
+
+def resolve_title_page(
+    zim_operations: Any,
+    zim_file_path: str,
+    query: str,
+    *,
+    limit: int,
+    raw: Any = None,
+) -> Any:
+    """Single-archive title mode for a caller already off the event loop.
+
+    v3.3.1 field report: simple mode's ``find article titled X`` called the
+    title data layer and rendered it, skipping every step this module applies
+    after the lookup, so on MedlinePlus ``hepatitis b`` put the
+    ``languages/`` translation hub second in simple mode and fifth here, and
+    ``swollen glands`` came back in the opposite order. The two surfaces now
+    run the same lookup, rewrite gate, promotion and demote.
+
+    ``raw`` is the page ``query`` already returned at this ``limit``, for a
+    caller that had to look before deciding to render.
+    """
+    if raw is None:
+        raw = zim_operations.find_entry_by_title_data(
+            zim_file_path, query, cross_file=False, limit=limit
+        )
+    title = query
+    rewritten = _title_rewrite(zim_operations.config, raw, query)
+    if rewritten is not None:
+        raw = zim_operations.find_entry_by_title_data(
+            zim_file_path, rewritten, cross_file=False, limit=limit
+        )
+        title = rewritten
+    return _finish_title_page(zim_operations, zim_file_path, raw, title, limit)
+
+
+def _finish_title_page(
+    zim_operations: Any, zim_file_path: str, raw: Any, title: str, limit: int
+) -> Any:
+    """Everything single-archive title mode does after the lookup.
+
+    Promotion runs up to dozens of blocking libzim probes (archive open +
+    SuggestionSearcher + redirect walks per tail/window probe), so an async
+    caller must offload this.
+    """
+    from ..topic_preprocessing import promote_topic_via_title_index
+
+    promoted = promote_topic_via_title_index(
+        zim_operations=zim_operations, zim_file_path=zim_file_path, topic=title
+    )
+    merged = _merge_promotion_into_title_results(raw, promoted, limit)
+    # v3.3.1 field report (fid 71), at the RESPONSE EDGE and nowhere earlier.
+    # Scraper output — translation hubs, image-caption stubs, subtitle
+    # sidecars — outranks a real article on 30 of 40 measured title pages
+    # (``title 'hepatitis b'`` puts ``languages/hepatitisb.html`` above a real
+    # ency article). Demoting it inside ``find_entry_by_title_data`` instead
+    # would reorder the list the promotion probes above read as
+    # score-descending, which blanks the canonical probe and hoists a weaker
+    # fallback to rank 1 at a fabricated 1.0. Promotion has run by here, so
+    # reordering this response is safe — but only as a copy, see below.
+    return _demote_artefacts_in_response(merged, query=title)
+
+
 async def _handle_title_mode(
     *,
     ops: Any,
@@ -706,17 +858,9 @@ async def _handle_title_mode(
         )
 
     # Wired path — apply preprocessing.
-    from ..intent_parser import IntentParser
-
-    preprocessed = IntentParser._apply_misspelling_map(query, title_probe=None)
-    preprocessed = IntentParser._detect_stopword_phrase(preprocessed, title_probe=None)
-
     if cross_file:
-        raw = await ops.find_entry_by_title_data(
-            "",
-            preprocessed,
-            cross_file=True,
-            limit=effective_limit,
+        raw, preprocessed = await _lookup_title_page(
+            ops, server, "", query, cross_file=True, limit=effective_limit
         )
         # Same guard as the cross-file fulltext branch: a fan-out that
         # searched nothing is not a miss, and a hint about per-archive
@@ -750,36 +894,20 @@ async def _handle_title_mode(
             ),
         )
 
-    raw = await ops.find_entry_by_title_data(
+    raw, preprocessed = await _lookup_title_page(
+        ops, server, resolved_path, query, cross_file=False, limit=effective_limit
+    )
+    # Promotion runs up to dozens of blocking libzim probes (empty probes are
+    # deliberately uncached). Offload like every other data-layer touch so
+    # the probe train doesn't hold the event loop.
+    return await asyncio.to_thread(
+        _finish_title_page,
+        server.zim_operations,
         resolved_path,
+        raw,
         preprocessed,
-        cross_file=False,
-        limit=effective_limit,
+        effective_limit,
     )
-
-    from ..topic_preprocessing import promote_topic_via_title_index
-
-    # Promotion runs up to dozens of blocking libzim probes (archive open +
-    # SuggestionSearcher + redirect walks per tail/window probe, and empty
-    # probes are deliberately uncached). Offload like every other data-layer
-    # touch so the probe train doesn't hold the event loop.
-    promoted = await asyncio.to_thread(
-        promote_topic_via_title_index,
-        zim_operations=server.zim_operations,
-        zim_file_path=resolved_path,
-        topic=preprocessed,
-    )
-    merged = _merge_promotion_into_title_results(raw, promoted, effective_limit)
-    # v3.3.1 field report (fid 71), at the RESPONSE EDGE and nowhere earlier.
-    # Scraper output — translation hubs, image-caption stubs, subtitle
-    # sidecars — outranks a real article on 30 of 40 measured title pages
-    # (``title 'hepatitis b'`` puts ``languages/hepatitisb.html`` above a real
-    # ency article). Demoting it inside ``find_entry_by_title_data`` instead
-    # would reorder the list the promotion probes above read as
-    # score-descending, which blanks the canonical probe and hoists a weaker
-    # fallback to rank 1 at a fabricated 1.0. Promotion has run by here, so
-    # reordering this response is safe — but only as a copy, see below.
-    return _demote_artefacts_in_response(merged, query=preprocessed)
 
 
 def _demote_artefacts_in_response(payload: Any, *, query: str) -> Any:
@@ -854,6 +982,21 @@ def _refresh_promotion_meta(
     out["_meta"]["promotion_applied"] = True
 
 
+def _is_exact_title_row(row: Any) -> bool:
+    """Whether a title-lookup row is an exact title match (score 1.0).
+
+    ``find_entry_by_title_data`` reserves 1.0 for the fast path and for a
+    title equal to the query; every suggestion-rank and typo row is capped
+    below it.
+    """
+    if not isinstance(row, dict):
+        return False
+    try:
+        return float(row.get("score", 0.0)) >= 1.0
+    except (TypeError, ValueError):
+        return False
+
+
 def _merge_promotion_into_title_results(
     raw: dict, promoted: Optional[dict], limit: int = _TITLE_DEFAULT_LIMIT
 ) -> dict:
@@ -908,6 +1051,13 @@ def _merge_promotion_into_title_results(
     top = matches[0]
     top_path = top.get("entry_path") or top.get("path")
     if top_path == promoted_path:
+        return raw
+    # The page already leads with an exact title match for the query it
+    # looked up: that is the answer, and promotion exists for queries whose
+    # full phrase is NOT a title. Hoisting the probe train's pick above it
+    # put a "Stroke - series" slideshow frame over ``stroke.html`` and
+    # restamped the frame 1.0 while it was still ``fuzzy_suggest``.
+    if _is_exact_title_row(top):
         return raw
     hoisted = [
         m for m in matches if (m.get("entry_path") or m.get("path")) != promoted_path

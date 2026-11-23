@@ -293,7 +293,12 @@ def invalid_request_id_rejection(frame: Any) -> JSONRPCError | None:
 
 def invalid_request_id_rejection_for_line(line: str) -> JSONRPCError | None:
     """:func:`invalid_request_id_rejection` for one raw stdin line."""
-    if '"id"' not in line:
+    # The substring test only skips the parse; it must never decide the
+    # answer. JSON escapes spell the same key without the substring
+    # (``"\u0069d"`` decodes to ``id``), and such a frame with a null id is
+    # one the SDK drops as a notification, so any line with a backslash is
+    # parsed.
+    if '"id"' not in line and "\\" not in line:
         return None
     try:
         frame = json.loads(line)

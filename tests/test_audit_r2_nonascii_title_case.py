@@ -147,6 +147,42 @@ class TestParseIntentPreservesNamespacePrefixCase:
         assert intent == "structure"
         assert params["entry_path"] == "C/Photosynthesis"
 
+    @pytest.mark.parametrize(
+        "query, intent_name",
+        [
+            ("links in /A/Berlin", "links"),
+            ("table of contents /A/Berlin", "toc"),
+            ("structure of /A/Berlin", "structure"),
+        ],
+    )
+    def test_leading_slash_namespace_path_keeps_typed_case(
+        self, query: str, intent_name: str
+    ) -> None:
+        # ``zim_get`` accepts ``/A/Berlin`` and strips the slash, so a
+        # client that copies a path with one must not have it lowercased
+        # here: ``/a/berlin`` 404s on the case-sensitive lookup.
+        intent, params, _ = IntentParser.parse_intent(query, title_probe=None)
+        assert intent == intent_name
+        assert params["entry_path"] == "/A/Berlin"
+
+    def test_leading_slash_domain_path_keeps_typed_case(self) -> None:
+        intent, params, _ = IntentParser.parse_intent(
+            "links in /iep.utm.edu/Kant/", title_probe=None
+        )
+        assert intent == "links"
+        assert params["entry_path"] == "/iep.utm.edu/Kant/"
+
+    def test_leading_slash_on_slash_bearing_topic_keeps_rule1_lowercase(
+        self,
+    ) -> None:
+        # One optional slash, then the strict single-letter shape: ``/TCP/IP``
+        # is still a topic, not a namespace path.
+        intent, params, _ = IntentParser.parse_intent(
+            "tell me about /TCP/IP", title_probe=None
+        )
+        assert intent == "tell_me_about"
+        assert params["topic"] == "/tcp/ip"
+
     def test_slash_bearing_topic_keeps_rule1_lowercase(self) -> None:
         # ``TCP/IP`` is a natural-language topic that happens to contain a
         # slash — NOT a namespace prefix. Rule 1 still applies.
@@ -205,6 +241,24 @@ class TestZimQueryResolvesNamespacePrefixedPath:
         assert "Article not found" not in result, result[:500]
         assert "A/Climate_change" in result
         assert "climate change" in result.lower()
+
+    @pytest.mark.parametrize(
+        "query",
+        [
+            "links in /A/Climate_change",
+            "table of contents /A/Climate_change",
+            "section Background of /A/Climate_change",
+        ],
+    )
+    def test_leading_slash_namespace_path_resolves(
+        self, handler: SimpleToolsHandler, climate_zim: Path, query: str
+    ) -> None:
+        result = handler.handle_zim_query(query, str(climate_zim))
+        assert isinstance(result, str)
+        assert "/a/climate_change" not in result, result[:500]
+        assert "Article not found" not in result, result[:500]
+        assert "Could not load" not in result, result[:500]
+        assert "Climate change" in result, result[:500]
 
     def test_links_namespace_path_returns_links(
         self, handler: SimpleToolsHandler, climate_zim: Path

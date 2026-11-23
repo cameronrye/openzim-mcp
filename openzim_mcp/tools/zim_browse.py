@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Annotated, Any, Optional
 
 from pydantic import Field
 
+from ..exceptions import OpenZimMcpCursorMismatchError
 from ..responses import tool_error
 from ._common import (
     READ_ONLY_ANNOTATIONS,
@@ -205,6 +206,16 @@ def register(server: "OpenZimMcpServer") -> None:
                 namespace,
                 limit=eff_limit,
                 include_assets=eff_assets,
+            )
+        except OpenZimMcpCursorMismatchError as e:
+            # Both modes check the cursor's archive identity in the data layer
+            # (it needs the validated path); render it under the code the
+            # namespace / include_assets guards above use — and zim_links uses
+            # for the same fault — not the generic validation envelope.
+            return tool_error(
+                operation="cursor_context_mismatch",
+                message=str(e),
+                context="field=ai",
             )
         except Exception as e:  # noqa: BLE001 — broad catch matches b13 envelope
             return tool_error_response(

@@ -9,7 +9,7 @@ they had drifted: five of the names they instructed
 
 This module generalises the prompts guard over the two tool modes. The
 simple half matters most: ``tool_mode='simple'`` is the default
-(``ServerDefaults.TOOL_MODE``) and what the README tells every user to
+(``OpenZimMcpConfig.tool_mode``) and what the README tells every user to
 copy-paste, and it registers ``zim_query`` alone. Naming any *other* tool
 there describes a tool the client cannot see — at the exact moment the
 model is recovering from a failure.
@@ -177,6 +177,7 @@ RENDERED_MODULES = frozenset(
         "openzim_mcp/error_messages.py",
         "openzim_mcp/zim/structure.py",
         "openzim_mcp/recovery_advice.py",
+        "openzim_mcp/simple_tools.py",
     }
 )
 
@@ -473,6 +474,29 @@ def _recovery_advice_strings(tool_mode: str) -> Iterator[Tuple[str, str, str]]:
         yield module, f"recovery_advice.{name}", clause(tool_mode)
 
 
+def _binary_tip_strings(tool_mode: str) -> Iterator[Tuple[str, str, str]]:
+    """``zim_query('get image')`` with no path answers with this tip.
+
+    Its advanced wording names ``zim_links``. Rendering both modes through
+    the real handler is what lets the guard check the simple wording, rather
+    than exempting a literal the package walk spots.
+    """
+    from unittest.mock import MagicMock
+
+    from openzim_mcp.simple_tools import SimpleToolsHandler
+
+    ops = MagicMock()
+    ops.config.tool_mode = tool_mode
+    ops.config.meta.footer_enabled = False
+    ops.list_zim_files_data.return_value = [{"path": "/x.zim"}]
+    handler = SimpleToolsHandler(ops)
+    yield (
+        "openzim_mcp/simple_tools.py",
+        "SimpleToolsHandler._handle_binary(no path)",
+        str(handler.handle_zim_query("get image", zim_file_path="/x.zim")),
+    )
+
+
 def _advice_strings(tool_mode: str) -> Iterator[Tuple[str, str, str]]:
     """Yield ``(module, label, text)`` for every user-facing recovery string."""
     yield from _footer_strings(tool_mode)
@@ -480,6 +504,7 @@ def _advice_strings(tool_mode: str) -> Iterator[Tuple[str, str, str]]:
     yield from _structure_strings(tool_mode)
     yield from _error_template_strings(tool_mode)
     yield from _recovery_advice_strings(tool_mode)
+    yield from _binary_tip_strings(tool_mode)
 
 
 def _tool_references(text: str) -> List[str]:

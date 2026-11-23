@@ -21,6 +21,7 @@ import pytest
 from starlette.testclient import TestClient
 
 from openzim_mcp.config import OpenZimMcpConfig
+from tests._http_helpers import build_health_app
 
 # ---------------------------------------------------------------------------
 # P3 — long whitespace runs must not backtrack quadratically
@@ -143,7 +144,7 @@ def test_readyz_pool_is_dedicated_and_single_flight(readyz_mock_server, monkeypa
 
     monkeypatch.setattr(http_app.os.path, "isdir", blocking_isdir)
 
-    app = http_app.build_starlette_app(readyz_mock_server)
+    app = build_health_app(readyz_mock_server)
     client = TestClient(app)
     try:
         for _ in range(8):
@@ -168,9 +169,7 @@ def test_readyz_single_flight_releases_after_probe_completes(
     """Single-flight must track the concurrent Future, and must not wedge the
     endpoint once a probe finishes normally.
     """
-    import openzim_mcp.http_app as http_app
-
-    app = http_app.build_starlette_app(readyz_mock_server)
+    app = build_health_app(readyz_mock_server)
     client = TestClient(app)
     assert client.get("/readyz").status_code == 200
     assert client.get("/readyz").status_code == 200

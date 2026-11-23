@@ -98,7 +98,6 @@ class MetaConfig(BaseModel):
     """Configuration for the response `_meta` envelope (Phase A item #5)."""
 
     footer_enabled: bool = Field(default=META.FOOTER_ENABLED)
-    tokenizer_encoding: str = Field(default=META.TOKENIZER_ENCODING)
 
 
 class SearchConfig(BaseModel):
@@ -500,8 +499,9 @@ class OpenZimMcpConfig(BaseSettings):
             "polling watcher is not started and the `subscriptions/listen` "
             "handler is not registered, so listen requests fail with "
             "method-not-found and the capability is not advertised. Only "
-            "meaningful on the HTTP transport: the watcher runs under the "
-            "HTTP lifespan, so a stdio server withholds the capability "
+            "meaningful on the HTTP transport in advanced mode: the watcher "
+            "runs under the HTTP lifespan and resources are registered only "
+            "in advanced mode, so any other server withholds the capability "
             "regardless of this setting."
         ),
     )
@@ -628,6 +628,27 @@ class OpenZimMcpConfig(BaseSettings):
                 "OPENZIM_MCP_AUTH_TOKEN contains non-ASCII characters. HTTP "
                 "header encoding makes such a token match or fail depending "
                 "on the client's byte encoding — choose an ASCII secret."
+            )
+        # A token no request can present locks every client out with a 401
+        # and nothing at startup to say why. The HTTP parser strips the
+        # whitespace around a header value, so ``Bearer <hex>`` never equals
+        # the ``<hex>\n`` that ``openssl rand -hex 32 > token`` writes and a
+        # Kubernetes Secret made from that file passes through verbatim; and
+        # a header cannot carry a control character at all.
+        if v is not None and v.get_secret_value() != v.get_secret_value().strip():
+            raise OpenZimMcpConfigurationError(
+                "OPENZIM_MCP_AUTH_TOKEN has leading or trailing whitespace "
+                "(often the newline at the end of the file it was read from). "
+                "HTTP strips it from the Authorization header, so no request "
+                "could ever present this token — remove the whitespace."
+            )
+        if v is not None and any(
+            ord(ch) < 0x20 or ord(ch) == 0x7F for ch in v.get_secret_value()
+        ):
+            raise OpenZimMcpConfigurationError(
+                "OPENZIM_MCP_AUTH_TOKEN contains a control character. An HTTP "
+                "header cannot carry one, so no request could ever present "
+                "this token — choose a secret of printable ASCII."
             )
         return v
 

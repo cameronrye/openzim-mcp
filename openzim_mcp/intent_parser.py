@@ -91,8 +91,10 @@ _SEARCH_VERB = r"(?:^\s*query|search|find|look)"
 
 # A ZIM namespace-prefixed path: exactly one letter, then ``/`` (``A/Berlin``,
 # ``C/Photosynthesis``, ``I/logo.png``). Used by ``_restore_nonascii_case`` to
-# exempt case-sensitive paths from Tier-1 Rule 1's lowercasing.
-_NAMESPACE_PREFIXED_RE = re.compile(r"^[A-Za-z]/")
+# exempt case-sensitive paths from Tier-1 Rule 1's lowercasing. One leading
+# ``/`` is allowed because ``zim_get`` accepts ``/A/Berlin`` and strips it, so
+# a client copying such a path got the lowercased ``/a/berlin`` and a 404.
+_NAMESPACE_PREFIXED_RE = re.compile(r"^/?[A-Za-z]/")
 
 # D50: the path shape zimit / warc2zim archives store and this tool prints
 # (``Path: medlineplus.gov/measles.html``, ``iep.utm.edu/kantview/``): a
@@ -103,7 +105,7 @@ _NAMESPACE_PREFIXED_RE = re.compile(r"^[A-Za-z]/")
 # Rule 1's lowercasing for the same reason it exempts ``A/...``: libzim's
 # path lookup is case-sensitive.
 _DOMAIN_PATH_BODY = r"[A-Za-z0-9][A-Za-z0-9\-]*(?:\.[A-Za-z0-9\-]+)+/"
-_DOMAIN_PATH_RE = re.compile(rf"^{_DOMAIN_PATH_BODY}")
+_DOMAIN_PATH_RE = re.compile(rf"^/?{_DOMAIN_PATH_BODY}")
 
 
 def _strip_quote_pair(value: str) -> str:
@@ -305,12 +307,21 @@ _TAIL_LEADING_CONTENTS_RE = re.compile(r"^contents\s+", re.IGNORECASE)
 
 # D48: ``get (the) article about X`` anchors on ``article`` and leaves
 # ``about X`` as the tail; ``about`` is a bridge word, not part of the
-# title, so peel it. Only ``about`` — ``on`` / ``for`` / ``of`` open real
-# titles far too often (``On the Origin of Species``) to be safe. And only
+# title, so peel it. ``on`` / ``for`` / ``of`` open real titles far too
+# often (``On the Origin of Species``) to peel the same way. And only
 # after the object noun: past a preposition the user is spelling the title
 # out (``summary of About a Boy``), where ``about`` is the title's own
 # first word.
 _TAIL_LEADING_ABOUT_RE = re.compile(r"^about\s+", re.IGNORECASE)
+
+# ...except ``on`` after a determined noun. ``summarize the article on
+# Photosynthesis`` — README's own example — kept ``on photosynthesis`` as
+# the entry path, and ``... on Carbon dioxide`` summarised the Post-Kyoto
+# negotiations article. With ``the`` / ``a`` / ``this`` before it, the noun
+# describes the article ON X; without one the ``on`` is the title's own
+# (``get article On Fire (book)``).
+_TAIL_LEADING_ON_RE = re.compile(r"^on\s+", re.IGNORECASE)
+_OBJECT_DETERMINERS = frozenset({"the", "a", "an", "this", "that"})
 
 
 def _extract_entry_path_keyworded(query: str, params: Dict[str, Any]) -> None:
@@ -436,6 +447,13 @@ def _extract_entry_path_keyworded(query: str, params: Dict[str, Any]) -> None:
         # and where the index holds both spellings it did so at score 1.0.
         if anchored_on_object:
             cleaned = _TAIL_LEADING_ABOUT_RE.sub("", tail, count=1).strip()
+            before_noun = query[: matches[-1].start()].split()
+            if (
+                cleaned == tail
+                and before_noun
+                and before_noun[-1].lower() in _OBJECT_DETERMINERS
+            ):
+                cleaned = _TAIL_LEADING_ON_RE.sub("", tail, count=1).strip()
             if cleaned and cleaned != tail:
                 tail = cleaned
         # Post-v2.0.0 D-E: peel a surrounding quote pair so an
@@ -1171,6 +1189,23 @@ _PARAM_EXTRACTORS = {
     "metadata": _extract_metadata,
 }
 
+# What may precede a structure / toc / summary / suggestions keyword. Those
+# patterns matched the keyword ANYWHERE (the trailing ``(of|for)?`` is
+# optional), at 0.85-0.95, so a keyword inside a topic outranked ``tell me
+# about``: ``tell me about The Structure of Scientific Revolutions`` fetched
+# the outline of "scientific revolutions", ``what is brief psychotic
+# disorder`` answered Missing Article Path, and ``who wrote A Brief History
+# of Time`` summarised "Time". The keyword must now open the request, after
+# at most a polite or imperative lead-in ("please", "can you", "show me
+# the", "give me a short").
+_KEYWORD_COMMAND_LEAD = (
+    r"^\s*(?:please\s+)?"
+    r"(?:(?:can|could|would|will)\s+you\s+(?:please\s+)?)?"
+    r"(?:(?:show|display|give|get|list|fetch|tell|provide)\s+(?:me\s+|us\s+)?)?"
+    r"(?:(?:the|a|an)\s+)?"
+    r"(?:(?:short|quick|full|complete)\s+)?"
+)
+
 
 class IntentParser:
     """Parse natural language queries to determine user intent."""
@@ -1179,9 +1214,12 @@ class IntentParser:
     # Format: (pattern, intent, base_confidence, specificity_weight)
     # specificity_weight: higher = more specific pattern, used for tie-breaking
     INTENT_PATTERNS = [
-        # File listing - very specific
+        # File listing - very specific. ``files`` only in the plural: the
+        # archive list is never asked for as one ``file``, and the singular
+        # is a modifier (``file format``, ``file size``) — ``what file
+        # format do climate models use`` answered with the ZIM file list.
         (
-            r"\b(list|show|what|available|get)\s+(files?|zim|archives?)\b",
+            r"\b(list|show|what|available|get)\s+(files|zim|archives?)\b",
             "list_files",
             0.95,
             10,
@@ -1205,8 +1243,19 @@ class IntentParser:
             0.9,
             9,
         ),
-        # Main page - very specific
-        (r"\b(main|home|start)\s+page\b", "main_page", 0.95, 10),
+        # Main page - very specific. Not when the page is OF something
+        # other than this archive: ``what is the home page of the IPCC``
+        # asks about the IPCC's website and answered with the archive's
+        # front page. ``main page of this archive`` / ``of the zim file`` /
+        # ``for wiki.zim`` still name the archive and keep routing here.
+        (
+            r"\b(main|home|start)\s+page\b"
+            r"(?!\s+(?:of|for)\b"
+            r"(?!\s+(?:(?:this|the|that)\s+(?:archive|zim|file)|[\w.\-]+\.zim)\b))",
+            "main_page",
+            0.95,
+            10,
+        ),
         # Namespace listing - very specific
         (r"\b(list|show|what)\s+namespaces?\b", "list_namespaces", 0.95, 10),
         # Browse - moderately specific
@@ -1245,18 +1294,37 @@ class IntentParser:
             0.9,
             9,
         ),
-        # Article structure - moderately specific
+        # Article structure - moderately specific. This, toc, summary and
+        # suggestions open with ``_KEYWORD_COMMAND_LEAD``: the keyword has
+        # to start the request, or it is part of a topic. ``what|which
+        # sections`` / ``headings`` may open it too (``what sections are in
+        # the Isaac Newton article``): those two name a document's parts,
+        # where ``what is the structure of DNA`` asks about the molecule.
         (
-            r"\b(structure|outline|sections?|headings?)\s+(of|for)?\b",
+            r"(?:"
+            + _KEYWORD_COMMAND_LEAD
+            + r"(structure|outline|sections?|headings?)\s+(of|for)?\b"
+            + r"|^\s*(?:what|which)\s+(?:sections?|headings?)\b)",
             "structure",
             0.85,
             8,
         ),
         # Table of contents - specific
-        (r"\b(table\s+of\s+contents|toc|contents)\s*(of|for)?\b", "toc", 0.95, 10),
-        # Summary - specific
         (
-            r"\b(summary|summarize|summarise|overview|brief)\s*(of|for)?\b",
+            _KEYWORD_COMMAND_LEAD
+            + r"(table\s+of\s+contents|toc|contents)\s*(of|for)?\b",
+            "toc",
+            0.95,
+            10,
+        ),
+        # Summary - specific. Anchoring is also what retires the bare
+        # ``brief`` from mid-query: it is the adjective of ``A Brief History
+        # of Time`` and ``brief psychotic disorder`` far more often than a
+        # verb. As the request's opening verb (``brief Photosynthesis``) it
+        # still works.
+        (
+            _KEYWORD_COMMAND_LEAD
+            + r"(summary|summarize|summarise|overview|brief)\s*(of|for)?\b",
             "summary",
             0.9,
             9,
@@ -1284,8 +1352,12 @@ class IntentParser:
             # ``complete`` (``complete works of Shakespeare``,
             # ``complete history of X``) is far more common than the verb and
             # hijacked get_article/topic queries into autocomplete.
-            # ``autocomplete`` / ``suggestions`` / ``hints`` remain reliable.
-            r"\b(suggestions?|autocomplete|hints?)\s+(for|of)?" r"(?=\b|['\"‘’“”])",
+            # ``autocomplete`` / ``suggestions`` / ``hints`` remain reliable
+            # — as the opening keyword (``_KEYWORD_COMMAND_LEAD``); ``what
+            # are some suggestions for treating insomnia`` is a topic ask.
+            _KEYWORD_COMMAND_LEAD
+            + r"(suggestions?|autocomplete|hints?)\s+(for|of)?"
+            + r"(?=\b|['\"‘’“”])",
             "suggestions",
             0.85,
             7,
@@ -1875,10 +1947,16 @@ class IntentParser:
         2-4 miss the lookup and pass through unchanged; ASCII values
         keep Rule 1's lowercase contract. Mutates ``params`` in place
         and returns it for chaining."""
-        lowered = original_query.lower()
-        # Rare code points lowercase to a different length (``İ`` ->
-        # ``i̇``), which shifts every index past them; skip rather than
-        # slice the original at a misaligned offset.
+        # U+0130 ``İ`` is the one code point whose ``.lower()`` changes
+        # length (``i`` + U+0307), which shifts every index past it. This
+        # used to give up on the whole query instead, so ``get article
+        # A/İzmir`` looked up ``a/i̇zmir``, and one ``İ`` cost every other
+        # param its case too. Fold it to a single ``i`` so the haystack
+        # stays index-aligned with ``original_query``, and search for the
+        # value with its U+0307 dropped — the same recovery
+        # ``SimpleToolsHandler._recase_from_original`` uses.
+        fold = {0x130: "i"}
+        lowered = original_query.translate(fold).lower()
         if not original_query or len(lowered) != len(original_query):
             return params
 
@@ -1903,10 +1981,13 @@ class IntentParser:
                 )
             ):
                 return value
-            idx = lowered.find(value)
+            needle = value.translate(fold).replace("\u0307", "")
+            idx = lowered.find(needle)
             if idx < 0:
                 return value
-            restored = original_query[idx : idx + len(value)]
+            # ``len(needle)``, not ``len(value)``: each dropped U+0307
+            # stands for one ``İ`` in the original.
+            restored = original_query[idx : idx + len(needle)]
             return restored if restored.lower() == value else value
 
         for key, value in params.items():
@@ -2124,7 +2205,19 @@ class IntentParser:
     # match path can dump entire article bodies for unrelated common-word
     # collisions (Aaliyah's "Try Again" for the literal user string
     # ``"try again"`` is the canonical motivating example).
-    _COMMON_FILLER_TOKENS = frozenset(
+    #
+    # The vocabulary is held in two sets. ``tell me about stress`` and
+    # ``what is being`` were refused as filler because the extracted-topic
+    # gate tested the topic against all of it, and ``stress`` / ``being``
+    # are in it. ``_ALWAYS_FILLER_TOKENS`` (below) carries no topic in any
+    # position: function words, pronouns, auxiliaries, conversational
+    # responses. ``_BARE_QUERY_FILLER_TOKENS`` is content-bearing nouns that
+    # read as meta-talk only when they ARE the whole message (``test``,
+    # ``stress test``, ``demo this``), each naming a real subject once the
+    # caller frames it as one. The raw-query gates use the union,
+    # ``_COMMON_FILLER_TOKENS``; a topic extracted from an explicit frame is
+    # refused only when every token is always-filler.
+    _ALWAYS_FILLER_TOKENS = frozenset(
         {
             # Affirmation / negation / acknowledgement
             "yes",
@@ -2242,7 +2335,6 @@ class IntentParser:
             "am",
             "be",
             "been",
-            "being",
             "can",
             "could",
             "would",
@@ -2252,24 +2344,11 @@ class IntentParser:
             "must",
             "will",
             "shall",
-            # Meta-tool vocabulary (matches the LLM-passthrough patterns
-            # observed in the v1.2.0 beta-test transcripts)
-            "test",
-            "tests",
+            # Meta-tool verbs (the v1.2.0 beta-test passthroughs). The
+            # nouns of the same vocabulary are bare-query-only, below.
             "tested",
-            "testing",
-            "tester",
-            "demo",
-            "demos",
             "explore",
             "exploring",
-            "beta",
-            "alpha",
-            "regression",
-            "stress",
-            "smoke",
-            "tool",
-            "tools",
             # Vague nouns / quantifiers
             "thing",
             "things",
@@ -2277,22 +2356,59 @@ class IntentParser:
             "anything",
             "everything",
             "something",
-            "nothing",
             "any",
             "each",
             "every",
             "some",
             "none",
             "both",
-            # Generic responses
+            # Generic responses. ``right`` / ``wrong`` stay here although
+            # they are nouns too (``right and wrong``): framed, they are
+            # the conversational ``what is wrong?`` / ``what is right?``,
+            # and the climate-change mini archive answers the first with
+            # the "Not Evil Just Wrong" film article — the D-T2 shape.
             "right",
             "wrong",
             "true",
             "false",
-            # User asked for help on the tool, not for a "Help" article
+            # User asked for help on the tool, not for a "Help" article —
+            # framed or not ("what is help" asks the tool, too)
             "help",
         }
     )
+
+    # Filler only as the whole bare query. Each is a noun that names a
+    # real subject (Stress, Being, Nothing, Regression, Smoke, Tool, a
+    # medical test) — but the v1.2.0 transcripts show small models
+    # forwarding ``test``, ``stress test``, ``beta test``, ``test this
+    # tool`` and ``demo this`` verbatim, so a query made only of these
+    # (plus always-filler) is still meta-talk. ``being`` is the one
+    # auxiliary here, as the noun of ontology (``what is being``).
+    # Excluded on purpose: the verbs above, the pronouns and determiners
+    # (``who are you`` must keep refusing), ``right`` / ``wrong`` (see
+    # above), and ``page`` / ``results``, whose framed uses (``tell me
+    # about the results``) still point back at the tool's own output.
+    _BARE_QUERY_FILLER_TOKENS = frozenset(
+        {
+            "test",
+            "tests",
+            "testing",
+            "tester",
+            "demo",
+            "demos",
+            "beta",
+            "alpha",
+            "regression",
+            "stress",
+            "smoke",
+            "tool",
+            "tools",
+            "being",
+            "nothing",
+        }
+    )
+
+    _COMMON_FILLER_TOKENS = _ALWAYS_FILLER_TOKENS | _BARE_QUERY_FILLER_TOKENS
 
     @classmethod
     def _looks_like_bare_topic(cls, query: str) -> bool:

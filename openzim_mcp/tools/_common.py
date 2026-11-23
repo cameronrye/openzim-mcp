@@ -10,7 +10,6 @@ from mcp.types import ToolAnnotations
 from ..constants import MAX_SEARCH_RESULT_LIMIT
 from ..exceptions import (
     OpenZimMcpEntryNotFoundError,
-    OpenZimMcpFileNotFoundError,
     OpenZimMcpRateLimitError,
     OpenZimMcpSecurityError,
     OpenZimMcpValidationError,
@@ -56,7 +55,6 @@ READ_ONLY_ANNOTATIONS = ToolAnnotations(read_only_hint=True, open_world_hint=Fal
 _CALLER_FAULT = (
     OpenZimMcpValidationError,
     OpenZimMcpSecurityError,
-    OpenZimMcpFileNotFoundError,
     OpenZimMcpRateLimitError,
     OpenZimMcpEntryNotFoundError,
 )

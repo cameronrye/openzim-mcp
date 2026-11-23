@@ -28,7 +28,6 @@ def test_previously_flagged_reexports_present() -> None:
         "FURNITURE_HEADING_DENYLIST",
         "FURNITURE_HEADING_PREFIXES",
         "RATE_LIMIT",
-        "SERVER",
         "TOOL_MODE_ADVANCED",
         "TOOL_MODE_SIMPLE",
         "UNWANTED_HTML_SELECTORS",

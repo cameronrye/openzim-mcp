@@ -343,17 +343,6 @@ class LinksResponse(TypedDict):
     message: NotRequired[str]
 
 
-class ListZimFilesResponse(TypedDict):
-    results: list[FileSummary]
-    next_cursor: Optional[str]
-    total: Optional[int]
-    done: bool
-    page_info: PageInfo
-    _meta: MetaEnvelope
-    name_filter: Optional[str]
-    directories_count: int
-
-
 class RelatedArticlesResponse(TypedDict):
     results: list[RelatedArticle]
     next_cursor: Optional[str]
@@ -594,6 +583,9 @@ class EntryBundle(TypedDict):
     sections: list[SectionMeta]
     links: LinkBuckets
     infobox: Optional[InfoboxData]
+    # Where the article starts in ``rendered_markdown``: past the infobox
+    # rows a compact render prepends (0 when there are none).
+    lead_offset: NotRequired[int]
 
 
 # ---------------------------------------------------------------------------

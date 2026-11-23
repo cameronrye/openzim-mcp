@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import logging
 import os
+import shutil
 import sqlite3
+import tempfile
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -57,10 +59,44 @@ def build_from_link_stream(
         raise FileExistsError(
             f"{out_path} already exists; pass force=True to overwrite."
         )
-    tmp_path = out_path + ".tmp"
-    if os.path.exists(tmp_path):
-        os.remove(tmp_path)
+    # A private directory beside the sidecar, unique to this build. Every
+    # build used to write one fixed ``<out>.tmp``, so a concurrent build
+    # deleted the first one's half-written file and wrote its own there; the
+    # first then published that as its result and the second's rename
+    # raised. Not ``mkstemp``: its file is 0600, and a sidecar built by the
+    # operator is read by a server running as another user (the image's
+    # ``appuser``); SQLite creating the file keeps the mode it always had.
+    # Same directory, so ``os.replace`` stays atomic.
+    tmp_dir = tempfile.mkdtemp(
+        dir=os.path.dirname(os.path.abspath(out_path)),
+        prefix=f".{os.path.basename(out_path)}.",
+        suffix=".tmp",
+    )
+    try:
+        stats = _write_sidecar(
+            os.path.join(tmp_dir, "sidecar.sqlite"),
+            out_path,
+            archive_uuid=archive_uuid,
+            link_stream=link_stream,
+            now_iso=now_iso,
+            builder_version=builder_version,
+        )
+    finally:
+        # Gone on success (moved out) or failure (half-written) alike.
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+    return stats
 
+
+def _write_sidecar(
+    tmp_path: str,
+    out_path: str,
+    *,
+    archive_uuid: str,
+    link_stream: Iterable[Tuple[str, List[Tuple[str, str]]]],
+    now_iso: Optional[str],
+    builder_version: Optional[str],
+) -> BuildStats:
+    """Build the sidecar at ``tmp_path``, then publish it as ``out_path``."""
     ids: Dict[str, int] = {}
 
     def _intern(path: str) -> int:
@@ -291,7 +327,9 @@ def build_link_graph(
     from openzim_mcp.linkgraph.reader import sidecar_path_for
     from openzim_mcp.zim_operations import zim_archive
 
-    out = out_path or sidecar_path_for(archive_path)
+    # Beside the symlink's TARGET: the server resolves symlinks before it
+    # derives the sidecar path, so one written beside the link is never read.
+    out = out_path or sidecar_path_for(os.path.realpath(archive_path))
     with zim_archive(Path(archive_path)) as archive:
         archive_uuid = str(archive.uuid)
         total = int(getattr(archive, "entry_count", 0) or 0)

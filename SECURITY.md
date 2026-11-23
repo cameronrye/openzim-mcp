@@ -191,7 +191,11 @@ Its authentication is controlled by two environment variables:
   the MCP endpoint. Set this whenever the server binds a non-loopback host. An
   **empty or whitespace-only** value is rejected at startup (an empty token
   would authenticate every request); unset the variable entirely to run
-  localhost-only without auth. Two paths are deliberately not token-gated:
+  localhost-only without auth. So is a value no client could ever present:
+  one with **leading or trailing whitespace** — typically the newline at the
+  end of a token file written by `openssl rand -hex 32 > token` — or with a
+  control character, either of which would otherwise answer every request
+  with a 401. Two paths are deliberately not token-gated:
   the `/healthz` and `/readyz` probes are public (they expose no archive
   data), and a genuine CORS preflight from an allow-listed origin is answered
   by the outer CORS layer before auth runs, because browsers never attach
@@ -209,7 +213,9 @@ Its authentication is controlled by two environment variables:
 When binding `0.0.0.0` (all interfaces) without setting
 `OPENZIM_MCP_ALLOWED_HOSTS`, DNS-rebinding Host validation is automatically
 disabled (because no single client-facing Host can be pinned) and a warning is
-logged; the Bearer token is then the sole access control. Pin
+logged. The Origin check stays on: a browser request whose `Origin` is not in
+`OPENZIM_MCP_CORS_ORIGINS` is refused with 403, which is what stops a
+DNS-rebinding page; beyond that, the Bearer token is the access control. Pin
 `OPENZIM_MCP_ALLOWED_HOSTS` to your reachable hostname(s) to re-enable Host
 validation.
 

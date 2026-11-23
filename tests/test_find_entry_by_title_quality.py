@@ -137,7 +137,12 @@ class TestFindEntryByTitleScoring:
         assert len(scores) >= 2, out
         # Phase B contract keys (non-paginated tool, but contract still applies).
         assert out["next_cursor"] is None
-        assert out["done"] is True
+        # The index estimates thousands of matches for this prefix. Reading
+        # only ``limit + 1`` rows let redirects collapse the read to five
+        # distinct articles and report ``done`` over a full archive; the
+        # fixed suggestion window sees that more lie beyond the page.
+        assert out["done"] is False
+        assert out["page_info"]["total_is_lower_bound"] is True
         assert out["total"] == len(out["results"])
         assert out["page_info"]["offset"] == 0
         assert out["page_info"]["limit"] == 10

@@ -1,8 +1,4 @@
-"""Custom exceptions for OpenZIM MCP server.
-
-Each exception has an error_code for programmatic handling and categorization.
-Error codes follow the pattern: OPENZIM_<CATEGORY>_<SPECIFIC>
-"""
+"""Custom exceptions for OpenZIM MCP server."""
 
 from typing import Optional
 
@@ -11,12 +7,9 @@ class OpenZimMcpError(Exception):
     """Base exception for all OpenZIM MCP-related errors.
 
     Attributes:
-        error_code: Unique error code for programmatic handling
         message: Human-readable error message
         details: Optional additional details about the error
     """
-
-    error_code: str = "OPENZIM_ERROR"
 
     def __init__(self, message: str, details: Optional[str] = None):  # noqa: B042
         """Initialize the exception.
@@ -44,13 +37,9 @@ class OpenZimMcpError(Exception):
 class OpenZimMcpSecurityError(OpenZimMcpError):
     """Raised when security validation fails."""
 
-    error_code: str = "OPENZIM_SECURITY_VIOLATION"
-
 
 class OpenZimMcpValidationError(OpenZimMcpError):
     """Raised when input validation fails."""
-
-    error_code: str = "OPENZIM_VALIDATION_ERROR"
 
 
 class OpenZimMcpCursorMismatchError(OpenZimMcpValidationError):
@@ -76,8 +65,6 @@ class OpenZimMcpArchivePathError(OpenZimMcpValidationError):
     the recovery is to pick a different archive.
     """
 
-    error_code: str = "OPENZIM_ARCHIVE_PATH_ERROR"
-
 
 class OpenZimMcpArchiveNameError(OpenZimMcpArchivePathError):
     """Raised when a relative ``zim_file_path`` matches no loaded archive.
@@ -90,19 +77,9 @@ class OpenZimMcpArchiveNameError(OpenZimMcpArchivePathError):
     a regression for the simple-mode path.
     """
 
-    error_code: str = "OPENZIM_ARCHIVE_NAME_UNRESOLVED"
-
-
-class OpenZimMcpFileNotFoundError(OpenZimMcpError):
-    """Raised when a ZIM file is not found."""
-
-    error_code: str = "OPENZIM_FILE_NOT_FOUND"
-
 
 class OpenZimMcpArchiveError(OpenZimMcpError):
     """Raised when ZIM archive operations fail."""
-
-    error_code: str = "OPENZIM_ARCHIVE_ERROR"
 
 
 class OpenZimMcpEntryNotFoundError(OpenZimMcpArchiveError):
@@ -119,34 +96,22 @@ class OpenZimMcpEntryNotFoundError(OpenZimMcpArchiveError):
     protocol layer by answering a miss with ``INVALID_PARAMS``.
     """
 
-    error_code: str = "OPENZIM_ENTRY_NOT_FOUND"
-
 
 class OpenZimMcpConfigurationError(OpenZimMcpError):
     """Raised when configuration is invalid."""
-
-    error_code: str = "OPENZIM_CONFIG_ERROR"
 
 
 class OpenZimMcpTimeoutError(OpenZimMcpError):
     """Base class for timeout-related errors."""
 
-    error_code: str = "OPENZIM_TIMEOUT"
-
 
 class ArchiveOpenTimeoutError(OpenZimMcpTimeoutError):
     """Raised when opening a ZIM archive times out."""
-
-    error_code: str = "OPENZIM_ARCHIVE_OPEN_TIMEOUT"
 
 
 class RegexTimeoutError(OpenZimMcpTimeoutError):
     """Raised when a regex operation times out."""
 
-    error_code: str = "OPENZIM_REGEX_TIMEOUT"
-
 
 class OpenZimMcpRateLimitError(OpenZimMcpError):
     """Raised when rate limit is exceeded."""
-
-    error_code: str = "OPENZIM_RATE_LIMIT_EXCEEDED"

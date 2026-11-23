@@ -44,7 +44,7 @@ from libzim.suggestion import (  # type: ignore[import-untyped]
 )
 
 from openzim_mcp.archive_types import detect_archive_type
-from openzim_mcp.cache import OpenZimMcpCache
+from openzim_mcp.cache import OpenZimMcpCache, content_settings_fingerprint
 from openzim_mcp.config import OpenZimMcpConfig
 from openzim_mcp.constants import DEFAULT_MAIN_PAGE_TRUNCATION
 from openzim_mcp.content_processor import ContentProcessor
@@ -62,7 +62,11 @@ from openzim_mcp.recovery_advice import locate_entry
 from openzim_mcp.security import PathValidator
 from openzim_mcp.timeout_utils import run_with_timeout
 from openzim_mcp.zim._ops_base import _ArchiveAccessMixin, _json
-from openzim_mcp.zim.content import _ContentMixin, rewrite_well_known_path
+from openzim_mcp.zim.content import (
+    _ContentMixin,
+    entry_by_alternate_spelling,
+    rewrite_well_known_path,
+)
 from openzim_mcp.zim.namespace import _NamespaceMixin
 from openzim_mcp.zim.redirects import resolve_redirect_chain
 from openzim_mcp.zim.search import _SearchMixin
@@ -72,7 +76,6 @@ if TYPE_CHECKING:
     from openzim_mcp.tool_schemas import (
         ArchiveValidationResponse,
         EntryResponse,
-        ListZimFilesResponse,
         ZimMetadataResponse,
     )
 
@@ -227,6 +230,11 @@ def has_zim_signature(path: Path) -> bool:
     except OSError:
         return False
     if header[: len(ZIM_MAGIC)] != ZIM_MAGIC:
+        return False
+    # Every real archive carries the whole header, so a shorter file is a
+    # download that stopped inside it. ``_declared_zim_size`` has no
+    # ``checksumPos`` to offer one, which is "no claim" below, not "intact".
+    if len(header) < ZIM_HEADER_SIZE:
         return False
     declared = _declared_zim_size(header)
     if declared is None:
@@ -425,14 +433,11 @@ def configure_libzim_caches(
     """
     global _LIBZIM_DIRENT_CACHE_MAX_COUNT
     if cluster_cache_max_size_bytes is not None:
-        try:
-            libzim.set_cluster_cache_max_size(cluster_cache_max_size_bytes)
-            logger.info(
-                "libzim cluster cache max size set to %d bytes (process-global)",
-                cluster_cache_max_size_bytes,
-            )
-        except Exception as e:  # pragma: no cover — defensive across versions
-            logger.debug("set_cluster_cache_max_size unavailable: %s", e)
+        libzim.set_cluster_cache_max_size(cluster_cache_max_size_bytes)
+        logger.info(
+            "libzim cluster cache max size set to %d bytes (process-global)",
+            cluster_cache_max_size_bytes,
+        )
     # Guard on None so a caller tuning only the cluster cache doesn't clobber
     # a dirent count another caller already set — ``None`` means "leave as-is",
     # not "reset to default" (symmetric with the cluster branch above).
@@ -578,17 +583,18 @@ def zim_archive(
     # see their patch take effect here. Late-binding via attribute lookup
     # also avoids any import cycle when the mixins import this module.
     import openzim_mcp.zim_operations as _zim_ops_shim
+    from openzim_mcp.bundle import archive_stat_token, holding_stat_token
+
+    # Taken BEFORE the open, so a refresh landing after it can only make the
+    # token older than the handle, never newer (see ``open_archive_token``).
+    stat_token = archive_stat_token(file_path)
 
     def open_archive() -> Archive:
         archive = _zim_ops_shim.Archive(str(file_path))
         # Apply the optional per-archive dirent-cache size (count of
-        # dirents). ``None`` leaves libzim's default. Guarded so a binding
-        # that predates the settable property degrades silently.
+        # dirents). ``None`` leaves libzim's default.
         if _LIBZIM_DIRENT_CACHE_MAX_COUNT is not None:
-            try:
-                archive.dirent_cache_max_size = _LIBZIM_DIRENT_CACHE_MAX_COUNT
-            except Exception as e:  # pragma: no cover — defensive across versions
-                logger.debug("dirent_cache_max_size unavailable: %s", e)
+            archive.dirent_cache_max_size = _LIBZIM_DIRENT_CACHE_MAX_COUNT
         return archive
 
     try:
@@ -617,7 +623,8 @@ def zim_archive(
 
     logger.debug(f"Opened ZIM archive: {file_path}")
     try:
-        yield archive
+        with holding_stat_token(file_path, stat_token):
+            yield archive
     finally:
         logger.debug(f"Releasing ZIM archive: {file_path}")
 
@@ -670,6 +677,17 @@ def _link_graph_report(archive_path: Any, live_uuid: str) -> Dict[str, Any]:
     }
 
 
+def _with_link_graph_report(
+    verdict: Dict[str, Any], archive_path: Any
+) -> "ArchiveValidationResponse":
+    """A cached archive ``verdict`` plus the sidecar as it is on disk now.
+
+    A fresh dict: ``verdict`` is the cache's own copy.
+    """
+    data = {**verdict, **_link_graph_report(archive_path, str(verdict["uuid"]))}
+    return cast("ArchiveValidationResponse", attach_meta(data))
+
+
 class ZimOperations(
     _ArchiveAccessMixin, _SearchMixin, _ContentMixin, _StructureMixin, _NamespaceMixin
 ):
@@ -700,6 +718,12 @@ class ZimOperations(
         self.path_validator = path_validator
         self.cache = cache
         self.content_processor = content_processor
+        # A persisted snapshot was rendered under SOME content settings; the
+        # cache only sees its own config, so it learns these from here and
+        # drops a snapshot rendered under others before anything reads it.
+        fingerprint = content_settings_fingerprint(config)
+        if fingerprint is not None:
+            cache.bind_content_settings(fingerprint)
         # Apply optional libzim cache tuning from config. Only touches
         # process/global libzim state when at least one knob is set, so
         # the default configuration leaves libzim's behaviour unchanged.
@@ -749,13 +773,20 @@ class ZimOperations(
         A path-set fingerprint (rather than a directory ``mtime``) is used
         deliberately: it is robust to coarse-resolution filesystem
         timestamps and detects nested-subdirectory changes, at the cost of
-        one ``readdir`` per call. An in-place same-name replacement
-        (identical path, new bytes) is intentionally not reflected here —
-        that archive's *content* caches invalidate via their own
-        ``archive_stat_token`` and the listing's stale size/mtime is bounded
-        by the cache TTL.
+        one ``readdir`` per call.
+
+        Each path carries its ``archive_stat_token`` too, one ``stat`` per
+        file. A download that completes in place keeps its path, and a
+        path-only key went on listing it as truncated and unreadable, which
+        put ``zim_health``'s listing at odds with its own warnings. The
+        token also brings the render epoch, so a release that changes what
+        a row says is not answered from a persisted listing.
         """
-        paths = sorted(str(p) for _dir, files in grouped for p in files)
+        from openzim_mcp.bundle import archive_stat_token
+
+        paths = sorted(
+            f"{p}\0{archive_stat_token(p)}" for _dir, files in grouped for p in files
+        )
         blob = "\n".join(paths).encode("utf-8", "surrogatepass")
         # Not a security digest — just a stable fingerprint of the directory
         # contents for cache invalidation; usedforsecurity=False documents
@@ -876,8 +907,6 @@ class ZimOperations(
         # Cache key bumped to v2c when the per-file dict gained the
         # ``readable`` / ``warning`` signature-probe fields, so a persisted
         # v2b listing (no marker) can't be served as if it had been probed.
-        # The files→results / count→total rename happens one layer up in
-        # ``list_zim_files_summary_data``.
         #
         # The directory signature is folded into the key so that adding,
         # removing, or renaming a ``.zim`` file at runtime invalidates the
@@ -901,49 +930,6 @@ class ZimOperations(
         if not needle:
             return all_zim_files
         return [f for f in all_zim_files if needle in f["name"].lower()]
-
-    def list_zim_files_summary_data(
-        self, name_filter: Optional[str] = None
-    ) -> "ListZimFilesResponse":
-        """Structured ``list_zim_files`` payload.
-
-        Wraps :py:meth:`list_zim_files_data` with the directories metadata
-        that the legacy markdown-header string variant carries in its
-        prose preamble, so MCP clients consuming the structured output
-        get the same context without reparsing a header.
-
-        v2 Phase B contract: the response carries the canonical pagination
-        keys (``results`` / ``next_cursor`` / ``total`` / ``done`` /
-        ``page_info``) plus the tool-specific ``directories_count`` and
-        ``name_filter`` fields. ``list_zim_files`` is non-paginated — every
-        matching file in the allowed directories is returned in a single
-        call — so ``next_cursor`` is always ``None`` and ``done`` is
-        always ``True``. The contract is applied for uniformity with the
-        other list-shaped responses.
-
-        Returns:
-            ``ListZimFilesResponse``-shaped dict carrying ``results`` (the
-            per-file dicts with name/path/directory/size/size_bytes/modified
-            — formerly ``files``), ``next_cursor`` (always ``None``),
-            ``total`` (the count, formerly ``count``), ``done`` (always
-            ``True``), ``page_info``, plus ``directories_count``,
-            ``name_filter``, and the ``_meta`` envelope.
-        """
-        files_list = self.list_zim_files_data(name_filter=name_filter)
-        payload: Dict[str, Any] = {
-            "name_filter": name_filter or "",
-            "directories_count": len(self.config.allowed_directories),
-            "results": files_list,
-            "next_cursor": None,
-            "total": len(files_list),
-            "done": True,
-            "page_info": {
-                "offset": 0,
-                "limit": len(files_list),
-                "returned_count": len(files_list),
-            },
-        }
-        return cast("ListZimFilesResponse", attach_meta(payload))
 
     def list_zim_files(self, name_filter: Optional[str] = None) -> str:
         """List all ZIM files in allowed directories.
@@ -995,7 +981,7 @@ class ZimOperations(
         tools can hand it straight to the SDK's structured-content path.
 
         Raises:
-            OpenZimMcpFileNotFoundError: If ZIM file not found
+            OpenZimMcpArchivePathError: If the ZIM file is missing or not an archive
             OpenZimMcpArchiveError: If metadata retrieval fails
         """
         # Validate and resolve file path
@@ -1060,7 +1046,7 @@ class ZimOperations(
             JSON string containing ZIM metadata
 
         Raises:
-            OpenZimMcpFileNotFoundError: If ZIM file not found
+            OpenZimMcpArchivePathError: If the ZIM file is missing or not an archive
             OpenZimMcpArchiveError: If metadata retrieval fails
         """
         return _json(self.get_zim_metadata_data(zim_file_path))
@@ -1077,7 +1063,7 @@ class ZimOperations(
         argument.
 
         Raises:
-            OpenZimMcpFileNotFoundError: If ZIM file not found
+            OpenZimMcpArchivePathError: If the ZIM file is missing or not an archive
             OpenZimMcpArchiveError: If validation fails
         """
         validated_path = self._validate_zim_path(zim_file_path)
@@ -1087,15 +1073,20 @@ class ZimOperations(
         # integrity assertion derived from the file's bytes — serving it
         # stale after the file changed would be exactly backwards for a
         # diagnostic tool. Mirrors the bundle / namespace / content caches.
+        #
+        # v2: only the archive's own verdict is cached. The sidecar report rode
+        # along under a key a sidecar build or delete cannot move, so it was
+        # misreported until the TTL ran out; it is read fresh on every call.
         from openzim_mcp.bundle import archive_stat_token
 
         cache_key = (
-            f"validation_data:{validated_path}:{archive_stat_token(validated_path)}"
+            f"validation_data:v2:{validated_path}:"
+            f"{archive_stat_token(validated_path)}"
         )
         cached_result = self.cache.get(cache_key)
         if cached_result is not None:
             logger.debug(f"Returning cached validation for: {validated_path}")
-            return cast("ArchiveValidationResponse", cached_result)
+            return _with_link_graph_report(cached_result, validated_path)
 
         import openzim_mcp.zim_operations as _zim_ops_shim
 
@@ -1118,12 +1109,10 @@ class ZimOperations(
                     "uuid": str(archive.uuid),
                     "is_multipart": bool(archive.is_multipart),
                 }
-                data.update(_link_graph_report(validated_path, str(archive.uuid)))
 
-            with_meta = attach_meta(data)
-            self.cache.set(cache_key, with_meta)
+            self.cache.set(cache_key, data)
             logger.info(f"Validated archive: {validated_path}")
-            return cast("ArchiveValidationResponse", with_meta)
+            return _with_link_graph_report(data, validated_path)
 
         except Exception as e:
             logger.error(f"Validation failed for {validated_path}: {e}")
@@ -1229,11 +1218,11 @@ class ZimOperations(
         cache_key: Optional[str] = None
         if validated_path is not None:
             try:
-                from openzim_mcp.bundle import archive_stat_token
+                from openzim_mcp.bundle import open_archive_token
 
                 cache_key = (
                     f"preset_entries:v1:{validated_path}:"
-                    f"{archive_stat_token(Path(validated_path))}"
+                    f"{open_archive_token(validated_path)}"
                 )
                 cached = self.cache.get(cache_key)
                 if isinstance(cached, dict):
@@ -1359,15 +1348,6 @@ class ZimOperations(
         content = bytes(item.content).decode("utf-8", errors="replace").strip()
         return content or None
 
-    def _read_new_scheme_metadata_value(
-        self, archive: Archive, meta_key: str
-    ) -> Optional[str]:
-        """Capped display form of :meth:`_read_new_scheme_metadata_raw`."""
-        content = self._read_new_scheme_metadata_raw(archive, meta_key)
-        if content is None:
-            return None
-        return self._cap_metadata_preview(content)
-
     def _read_old_scheme_metadata_raw(
         self, archive: Archive, meta_key: str
     ) -> Optional[str]:
@@ -1404,16 +1384,6 @@ class ZimOperations(
         item = entry.get_item()
         content = bytes(item.content).decode("utf-8", errors="replace").strip()
         return content or None
-
-    def _read_old_scheme_metadata_value(
-        self, archive: Archive, meta_key: str
-    ) -> Optional[str]:
-        """Distilled + capped display form of
-        :meth:`_read_old_scheme_metadata_raw`."""
-        content = self._read_old_scheme_metadata_raw(archive, meta_key)
-        if content is None:
-            return None
-        return self._format_metadata_html_value(content)
 
     def _format_metadata_html_value(self, content: str) -> str:
         """Distil an old-scheme metadata value's HTML wrapper + cap it.
@@ -1493,7 +1463,7 @@ class ZimOperations(
             Main page content or information about main page
 
         Raises:
-            OpenZimMcpFileNotFoundError: If ZIM file not found
+            OpenZimMcpArchivePathError: If the ZIM file is missing or not an archive
             OpenZimMcpArchiveError: If main page retrieval fails
         """
         validated_path, cache_key, cached_result = self._main_page_cache_lookup(
@@ -1588,7 +1558,7 @@ class ZimOperations(
         ``None`` the branch keeps its ``DEFAULT_MAIN_PAGE_TRUNCATION`` cap.
 
         Raises:
-            OpenZimMcpFileNotFoundError: If ZIM file not found
+            OpenZimMcpArchivePathError: If the ZIM file is missing or not an archive
             OpenZimMcpArchiveError: If main page retrieval fails
         """
         validated_path, cache_key, cached_result = self._main_page_cache_lookup(
@@ -1712,6 +1682,18 @@ class ZimOperations(
                     compact=compact,
                     scope_main_content=True,
                 )
+                # Strip link markup BEFORE measuring, as the path fetch does.
+                # This branch skipped it, so a compact main page shipped
+                # "[ ](Antarctica) [ ](Precipitation)…" and counted that
+                # markup in a total no path fetch of the same entry reports.
+                if compact:
+                    from openzim_mcp.zim.content import _strip_markdown_links_shared
+
+                    content = _strip_markdown_links_shared(content)
+                # A front page built of image links is left as bare
+                # whitespace, which has nothing to show or to page through.
+                if not content.strip():
+                    content = ""
                 total_length = len(content)
                 cap = (
                     max_content_length
@@ -1720,10 +1702,10 @@ class ZimOperations(
                 )
                 # Truncate content for main page display. ``paginatable
                 # = False`` because ``_handle_main_page`` doesn't
-                # thread ``content_offset`` — point the caller at
-                # ``get article`` for the rest (A11 third pass).
+                # thread ``content_offset`` — the hint routes the rest
+                # through a fetch of this path (A11 third pass).
                 truncated_content = self.content_processor.truncate_content(
-                    content, cap, paginatable=False
+                    content, cap, paginatable=False, compact=compact, entry_path=path
                 )
                 # Key on the cap, not the rendered lengths: ``truncate_content``
                 # appends a ~150-char note, so a length comparison reports
@@ -1732,7 +1714,7 @@ class ZimOperations(
                 payload: Dict[str, Any] = {
                     "path": path,
                     "title": title,
-                    "content": truncated_content,
+                    "content": truncated_content or "(No content)",
                 }
                 if mime_type:
                     payload["content_type"] = mime_type
@@ -1894,6 +1876,14 @@ class ZimOperations(
             entry = archive.get_entry_by_path(entry_path)
         if entry is not None:
             resolved = _follow(entry)
+            return resolved, resolved.path
+        # The plain-body ladder's exact probes, in its order: the other
+        # spellings before search. Without them the summary answered
+        # not-found for the percent-encoded path ``view="full"`` serves, which
+        # the search matcher cannot recover.
+        alternate = entry_by_alternate_spelling(archive, entry_path)
+        if alternate is not None:
+            resolved = _follow(alternate[0])
             return resolved, resolved.path
         actual_path = self._find_entry_by_search(archive, entry_path)
         if actual_path:
