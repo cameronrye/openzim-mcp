@@ -5,6 +5,66 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.5.0](https://github.com/cameronrye/openzim-mcp/compare/v3.4.1...v3.5.0) (2026-11-23)
+
+
+### Upgrade notes
+
+Rebuild any link-graph sidecars after upgrading, and check the configuration
+changes below if a server's startup now stops with a configuration error.
+
+**Link-graph sidecars must be rebuilt.** The builder now indexes same-host
+absolute links, and the sidecar schema moved from v3 to v4. A v3 sidecar is
+reported stale, so `zim_links` inbound lookups return
+`inbound_sidecar_unavailable` until it is rebuilt with
+`openzim-mcp build link-graph --force <archive>`.
+
+**With `cache.persistence_enabled` on, the saved cache snapshot is discarded
+once.** A snapshot now records the content-shaping settings it was rendered
+under, and is dropped when they change. A 3.4.x snapshot has no such record, so
+the first start after upgrading begins with an empty cache.
+
+**Startup refuses settings it used to accept and then misbehave on:** an auth
+token with leading or trailing whitespace or a control character, a NaN or
+infinite rate limit, and `enabled: false` inside a per-operation rate limit.
+Set `rate_limit.enabled=false` to turn rate limiting off.
+
+**HTTP no longer reads `X-Forwarded-For`, even from `127.0.0.1`.** Without an
+auth token, the rate limiter keys each client on the connecting address, so
+clients behind a reverse proxy on the same host now share the proxy's bucket.
+With a token, each client is keyed on its token.
+
+**`resources/read` is rate limited**, in the same bucket as its tool
+counterpart; `zim://files` uses `zim_files`.
+
+**A simple-mode HTTP server no longer advertises resource subscriptions** or
+runs the file watcher, since it registers no resources.
+
+**`meta.tokenizer_encoding` (`OPENZIM_MCP_META__TOKENIZER_ENCODING`) is gone.**
+It never had an effect, and a leftover setting is ignored.
+
+
+### Added
+
+* let operators replace the server instructions, with {{default}} to keep the built-in text ([#485](https://github.com/cameronrye/openzim-mcp/issues/485)) ([2d8d18c](https://github.com/cameronrye/openzim-mcp/commit/2d8d18cabfa559d85958cc49299d3a94521e1d11)), closes [#479](https://github.com/cameronrye/openzim-mcp/issues/479)
+
+
+### Fixed
+
+* close 70 defects across search, rendering, tools, transport and caching ([#491](https://github.com/cameronrye/openzim-mcp/issues/491)) ([cd8f9b4](https://github.com/cameronrye/openzim-mcp/commit/cd8f9b401b43794a412e3e33125a840d9fcc6ec8))
+
+
+### Documentation
+
+* correct the examples, snippets and claims that fail when followed ([#490](https://github.com/cameronrye/openzim-mcp/issues/490)) ([10fe8e0](https://github.com/cameronrye/openzim-mcp/commit/10fe8e02c2c0e9d29d3d6f8daf5ab9fa51b6fe26))
+* drop the Smithery listing, which Smithery's shutdown took offline ([#487](https://github.com/cameronrye/openzim-mcp/issues/487)) ([c0021fd](https://github.com/cameronrye/openzim-mcp/commit/c0021fd359ad74e0415763b3d5cc4b22c8cb13f4))
+* say an SSE client has to switch transports too, not just the server ([#489](https://github.com/cameronrye/openzim-mcp/issues/489)) ([92aeb89](https://github.com/cameronrye/openzim-mcp/commit/92aeb894de0dfb72c7ce25d810cc8fd274f7caaf))
+
+
+### Refactored
+
+* remove dead code and the tests that asserted nothing ([#492](https://github.com/cameronrye/openzim-mcp/issues/492)) ([9b58caa](https://github.com/cameronrye/openzim-mcp/commit/9b58caa19d3a8a9a76b5f2101d7395e508e91c1c))
+
 ## [3.4.1](https://github.com/cameronrye/openzim-mcp/compare/v3.4.0...v3.4.1) (2026-11-19)
 
 
