@@ -1,6 +1,7 @@
 import type { APIRoute } from 'astro';
 import { getCollection } from 'astro:content';
 import { sortDocsForNav } from '../lib/docs-order';
+import { stripMdxComments } from '../lib/mdx-source';
 import { RELEASED, VERSION } from './llms.txt';
 
 /**
@@ -43,7 +44,7 @@ Group: ${doc.data.group}
 Source: ${canonical}
 Markdown: ${SITE}/docs/${doc.id}.md
 
-${doc.body ?? ''}`;
+${stripMdxComments(doc.body ?? '')}`;
     })
     .join('\n\n');
 

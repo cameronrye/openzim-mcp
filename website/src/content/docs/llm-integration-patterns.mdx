@@ -403,7 +403,7 @@ def summarize_topic(topic):
 
 ### Structured tool errors
 
-OpenZIM MCP v2 tools return **structured `ToolErrorPayload` objects**, not exceptions. The payload is `{"error": true, "operation": "<op>", "message": "<text>"}`, plus `"context"` when the tool supplied one, plus any operation-specific extra keys — `zim_get_section`, for example, adds `available_section_ids`, `available_section_ids_truncated` and `available_section_ids_total` on an unknown section ID, and `closest_match` when a near-miss heading exists. There is no `status` key and no `hint` key; branch on `result["error"] is True`. No tool advertises an `outputSchema`, so nothing arrives in `structuredContent` — parse the JSON text block in `content`. The server also flags these envelopes with `isError: true` on the `CallToolResult`. Smart retrieval already handles "wrong path" cases automatically — see [Smart retrieval](/openzim-mcp/docs/smart-retrieval/).
+OpenZIM MCP v2 tools return **structured `ToolErrorPayload` objects**, not exceptions. The payload is `{"error": true, "operation": "<op>", "message": "<text>"}`, plus `"context"` when the tool supplied one, plus any operation-specific extra keys — `zim_get_section`, for example, adds `available_section_ids`, `available_section_ids_truncated`, `available_section_ids_total` and `available_sections` (`{id, title}` pairs; `section_id` also accepts a heading title) on an unknown section ID, and `closest_match` when a near-miss heading exists. There is no `status` key and no `hint` key; branch on `result["error"] is True`. No tool advertises an `outputSchema`, so nothing arrives in `structuredContent` — parse the JSON text block in `content`. The server also flags these envelopes with `isError: true` on the `CallToolResult`. Smart retrieval already handles "wrong path" cases automatically — see [Smart retrieval](/openzim-mcp/docs/smart-retrieval/).
 
 ```python
 def robust_content_access(entry_path):
@@ -565,7 +565,7 @@ Over the HTTP transport, open a `subscriptions/listen` stream to be told when ar
 
 In simple mode (the default) only `zim_query` is exposed — pass a natural-language request and the server's intent parser routes to the right underlying operation. If your host LLM is small or struggles with large tool catalogues, prefer simple mode and let the parser do the routing. For LLMs that handle the full 8-tool surface, switch to advanced mode (`OPENZIM_MCP_TOOL_MODE=advanced`) for fine-grained control.
 
-**The 8-tool advanced surface fits comfortably below the [MCP Tax](https://www.mmntm.net/articles/mcp-context-tax) pain band (~24.1KB vs the 25–50KB band)** — most 7-8B class open-weights models dispatch reliably against it. The 22-tool v1 surface (~36KB) sat squarely inside the band; if you saw dispatch confusion on v1 with a small model, v2 should be substantially better.
+**The 8-tool advanced surface fits comfortably below the [MCP Tax](https://www.mmntm.net/articles/mcp-context-tax) pain band (~23.8KB vs the 25–50KB band)** — most 7-8B class open-weights models dispatch reliably against it. The 22-tool v1 surface (~36KB) sat squarely inside the band; if you saw dispatch confusion on v1 with a small model, v2 should be substantially better.
 
 ### Contextual content assembly
 

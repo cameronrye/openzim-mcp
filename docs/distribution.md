@@ -12,8 +12,6 @@ Two channels, two artifacts, one source of truth (the PyPI release):
 | **Official MCP Registry** (`registry.modelcontextprotocol.io`) | [`server.json`](../server.json) | Points clients at the PyPI package, run via `uvx`. Aggregators (PulseMCP, mcp.so, …) ingest from here — highest-leverage. |
 | **Claude Desktop extension** (GitHub release asset) | `.mcpb` bundle | A local stdio server packaged as an MCPB bundle users download and double-click. |
 
-Smithery (`rye/openzim-mcp`) also carried the `.mcpb` until it retired; see §2.
-
 Both expose the **advanced 8-tool surface** (`OPENZIM_MCP_TOOL_MODE=advanced`),
 as does the Docker image — registry directories launch it with no
 configuration, so the image has to name the surface itself.
@@ -29,19 +27,18 @@ keeps both artifacts in lockstep with the package version and tool surface.
   a user's disk, so the server ships as a **local stdio** server — an MCPB
   (`.mcpb`) bundle.
 - **uvx launcher, not a vendored env.** The native `libzim` dependency makes a
-  self-contained bundle platform-locked and would blow the registry's 25 MB cap.
+  self-contained bundle platform-locked: one bundle per OS and architecture.
   The bundle instead launches `uvx openzim-mcp@<version>`, so `uvx` resolves the
   platform-correct `libzim` wheel from PyPI at run time. Trade-off: the host
-  needs [`uv`](https://docs.astral.sh/uv/). (Smithery's bundle publisher, which
-  the bundle was first built for, rejected `server.type: "uv"`, so the manifest
-  uses `server.type: "python"` with `command: "uvx"`.)
+  needs [`uv`](https://docs.astral.sh/uv/). The manifest declares
+  `server.type: "python"` and launches `command: "uvx"`.
 - **Plain zip, not `mcpb pack`.** A `.mcpb` is just a zip with `manifest.json`
   at its root. The MCPB manifest schema only allows `{name, description}` per
   tool, so `mcpb pack`/`mcpb validate` strip the `inputSchema`/`outputSchema`
-  keys — the full schemas, which Smithery scored listings on while it took
-  bundles.
-  [`scripts/build_mcpb.py`](../scripts/build_mcpb.py) injects the live tool
-  schemas and plain-zips to preserve them.
+  keys. [`scripts/build_mcpb.py`](../scripts/build_mcpb.py) injects the live
+  tool schemas and plain-zips to preserve them. Nothing in this repository
+  reads those two keys back; the capture step does fail the build unless the
+  advanced surface is exactly 8 tools.
 
 ---
 
@@ -71,14 +68,19 @@ tag time — so a missed/mis-pathed bump fails loudly before anything publishes.
 The release workflow ([`.github/workflows/release.yml`](../.github/workflows/release.yml))
 builds this automatically and attaches `openzim-mcp-<version>.mcpb` (plus a
 `.sha256`) to every GitHub release, so the README's one-click download is always
-populated. The bundle is built into a separate directory — never `dist/` — so it
-is excluded from the PyPI upload and attached to the GitHub release only.
+populated. The workflow builds the bundle into a separate directory,
+`dist-mcpb/`, never `dist/`, so it is excluded from the PyPI upload and
+attached to the GitHub release only.
 
 To build it by hand (e.g. to try a manifest change before a release):
 
 ```bash
 uv run python scripts/build_mcpb.py        # -> dist/openzim-mcp-<version>.mcpb (+ .sha256)
+uv run python scripts/build_mcpb.py --output dist-mcpb   # release.yml's directory
 ```
+
+A hand build defaults to `dist/`, beside the wheel and sdist; pass `--output`
+to keep it out of anything that uploads `dist/`.
 
 The script reads the version from `pyproject.toml`, spawns the server in
 advanced mode over stdio to capture the live tool schemas, injects them into the
@@ -91,20 +93,7 @@ cross-platform.
 
 ---
 
-## 2. Smithery — retired
-
-Smithery listed the `.mcpb` as `rye/openzim-mcp` until it shut down on
-2026-10-31 ([smithery.ai/future](https://smithery.ai/future)). Its accounts, CLI
-and publishing went with it, and smithery.ai now lists only a curated set of
-servers with direct MCP URLs. A local stdio server has no such URL, so the
-listing page has returned 404 since early November 2026, as did all 45 other
-local servers' pages sampled on 2026-11-21. There is nothing to publish there,
-and the README and website no longer link to it, because the website's link
-check fails on a 404.
-
----
-
-## 3. Official MCP Registry — `server.json`
+## 2. Official MCP Registry — `server.json`
 
 **Hard ordering constraint:** the registry validates the *live* PyPI package's
 README for an ownership marker — `<!-- mcp-name: io.github.cameronrye/openzim-mcp -->`
@@ -148,21 +137,23 @@ curl "https://registry.modelcontextprotocol.io/v0/servers?search=openzim-mcp"
 ```
 
 Downstream (no action needed): **PulseMCP** and **mcp.so** ingest from the
-official registry (up to ~1 week latency). **Glama** auto-indexes the public
-GitHub repo; claim it at glama.ai and tighten tool descriptions to raise its
-score (it weights tool-definition quality heavily — the schemas live in the
-server's tool definitions).
+official registry (up to ~1 week latency). **Glama** indexes the public
+GitHub repo, and the listing is already claimed through
+[`glama.json`](../glama.json). Glama scores the tool definitions the running
+server serves, and it builds the [`Dockerfile`](../Dockerfile) with the
+classic builder, not BuildKit, so keep that file free of BuildKit-only syntax
+(check with `DOCKER_BUILDKIT=0 docker build .`; `docker-publish.yml`'s
+`classic-builder` job does the same in CI).
 
 ---
 
-## Recommended sequence
+## Ongoing maintenance
 
 All of this is done and in steady state: the manifest, `server.json`, build
 script, README marker, guard test, release-please auto-bump, and `.mcpb`
 release-asset wiring have shipped, and the first registry publish went out
-with v2.5.1. Ongoing maintenance:
-
-1. Nothing for the official registry: the release workflow keeps the manifests
-   version-locked, publishes `server.json` via OIDC (§3), and attaches the
-   `.mcpb` (with its `.sha256`) to each GitHub release for you. Check the
-   `publish-registry` job if the registry search API lags a release.
+with v2.5.1. Nothing needs doing for the official registry: the release
+workflow keeps the manifests version-locked, publishes `server.json` via OIDC
+(§2), and attaches the `.mcpb` (with its `.sha256`) to each GitHub release for
+you. Check the `publish-registry` job if the registry search API lags a
+release.

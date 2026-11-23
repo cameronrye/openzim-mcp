@@ -115,33 +115,33 @@ Prompts (`/research`, `/summarize`, `/explore`) and resources (`zim://files`, `z
 
 The [MCP Tax](https://www.mmntm.net/articles/mcp-context-tax) is the context cost an MCP server's tool schemas impose on every LLM request — the LLM has to read every tool description and parameter spec before it can pick one. There's an empirically observed pain band around 25–50KB of schema where small models start dropping accuracy and tool-call latency climbs.
 
-v1.x's 22-tool advanced surface was roughly 36KB of schema — squarely in the pain band. The 8-tool surface is roughly 24.1KB (24,634 bytes, against a 25,600-byte band edge) — comfortably under it, and a v3.2.1 schema trim that dropped pydantic's `title` echoes and `default: null` entries bought another 1.6KB. Same functionality, lower context tax, fewer wrong-tool calls. The detailed argument shapes still live inside the consolidated tools (in the `mode` / `view` discriminator), so frontier models keep their granularity.
+v1.x's 22-tool advanced surface was roughly 36KB of schema — squarely in the pain band. The 8-tool surface is roughly 23.8KB (24,359 bytes, against a 25,600-byte band edge) — comfortably under it, and a v3.2.1 schema trim that dropped pydantic's `title` echoes and `default: null` entries bought another 1.6KB. Same functionality, lower context tax, fewer wrong-tool calls. The detailed argument shapes still live inside the consolidated tools (in the `mode` / `view` discriminator), so frontier models keep their granularity.
 
 ### How do I search for content?
 
 Use natural language with your MCP client:
 
-- "Search for biology in the ZIM files"
-- "Find articles about evolution"
+- "search for biology"
+- "search for evolution"
 - "Get search suggestions for 'bio'"
 
-The system supports various search strategies and filters.
+Keep requests in the shapes the [Recognized phrasings](/openzim-mcp/docs/api-reference/#recognized-phrasings) table lists. Extra words become part of the query: "Search for biology in the ZIM files" searches for `biology in the ZIM files` and finds nothing.
 
 ### How do I get specific articles?
 
 Request articles directly:
 
-- "Get the Biology article from the ZIM file"
-- "Show me the content of the Evolution page"
+- "get article Biology"
+- "summary of Evolution"
 
-The smart retrieval system automatically handles path encoding differences. See [Smart retrieval](/openzim-mcp/docs/smart-retrieval/) for the fallback ladder.
+The smart retrieval system automatically handles path encoding differences. See [Smart retrieval](/openzim-mcp/docs/smart-retrieval/) for the fallback ladder. A title the archive lacks gets the nearest article it does hold: the climate-change starter archive has neither page, and answers both requests with `A/Biodiversity`.
 
 ### Can I get article structure without full content?
 
 Yes. Use structure requests:
 
-- "Show me the structure of the Evolution article"
-- "What are the main sections in the Biology page?"
+- "show structure of Evolution"
+- "table of contents for Biology"
 
 This gives you headings, sections, and metadata without loading full content. Under the hood it's `zim_get(view="structure")` or `zim_get(view="toc")`.
 

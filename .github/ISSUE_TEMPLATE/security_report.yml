@@ -1,7 +1,6 @@
 name: Security Vulnerability Report
 description: Report a security vulnerability (use only for non-sensitive issues)
 title: "[Security]: "
-labels: ["security"]
 assignees: []
 
 body:
@@ -91,7 +90,9 @@ body:
       placeholder: |
         - OS: [e.g., Ubuntu 22.04, Windows 11, macOS 14]
         - Python version: [e.g., 3.12.1]
-        - openzim-mcp version: [e.g., 0.2.0]
+        - openzim-mcp version: [output of `openzim-mcp --version`]
+        - Tool mode and transport: [e.g., advanced + http, simple + stdio]
+        - MCP client: [e.g., Claude Desktop, Cursor, a custom client]
         - Deployment context: [e.g., local development, production server]
 
   - type: textarea
@@ -106,6 +107,6 @@ body:
       value: |
         ---
 
-        **Remember:** For sensitive security vulnerabilities, please use private reporting channels as described in our [SECURITY.md](../../SECURITY.md) file.
+        **Remember:** For sensitive security vulnerabilities, please use private reporting channels as described in our [SECURITY.md](https://github.com/cameronrye/openzim-mcp/blob/main/SECURITY.md) file.
 
         Thank you for helping to keep OpenZIM MCP secure! 🔒

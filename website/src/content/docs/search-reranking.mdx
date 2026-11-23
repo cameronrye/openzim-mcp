@@ -33,8 +33,10 @@ stands behind is Xapian's.
 ## Install
 
 ```bash
-pip install openzim-mcp[reranker]
+uv tool install "openzim-mcp[reranker]"    # or, in a virtualenv: pip install "openzim-mcp[reranker]"
 ```
+
+Keep the quotes: unquoted, zsh (the macOS default shell) reads the brackets as a glob and stops with `no matches found`.
 
 Install footprint: roughly 150 MB of Python packages (FastEmbed +
 onnxruntime + tokenizers + huggingface_hub). Installing the extra is

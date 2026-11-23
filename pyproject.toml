@@ -126,7 +126,7 @@ Homepage = "https://github.com/cameronrye/openzim-mcp"
 Repository = "https://github.com/cameronrye/openzim-mcp.git"
 Issues = "https://github.com/cameronrye/openzim-mcp/issues"
 Changelog = "https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md"
-Documentation = "https://github.com/cameronrye/openzim-mcp#readme"
+Documentation = "https://cameronrye.github.io/openzim-mcp/docs/"
 "Security Policy" = "https://github.com/cameronrye/openzim-mcp/blob/main/SECURITY.md"
 "Contributing" = "https://github.com/cameronrye/openzim-mcp/blob/main/CONTRIBUTING.md"
 

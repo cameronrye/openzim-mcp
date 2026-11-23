@@ -25,7 +25,7 @@ Tools return one of:
 
 - **JSON payload responses** (most tools) — typed payloads (`SearchResponse`, `ArchiveMetadataResponse`, `ServerHealthResponse`, etc.) serialized as JSON **text** inside a `TextContent` block. All 8 tools are annotated `-> Any`, so the SDK derives no `outputSchema` and **nothing arrives in `structuredContent`** — parse the text block as JSON.
 - **Markdown-string responses** — `zim_query` renders article bodies as a string that opens with the title as an `# ` heading, then a `Path:` line and a `Type:` line, and then a `## Content` block (when smart retrieval resolved somewhere else, a `Requested Path:` / `Actual Path:` pair replaces the single `Path:` line). This rendering is reachable **only** through `zim_query`; `zim_get` returns the JSON payload described under its own entry.
-- **Tool errors** — every tool catches exceptions and returns a structured `ToolErrorPayload` (`{error: true, operation, message, context?}`) rather than raising. The exception is `zim_query` on its default path, and only partly: its *guidance* failures — no archive specified, empty query, meta-only query, chained query — return markdown with `isError: false`, but a `zim_file_path` matching no archive returns a `zim_path_not_found` envelope and any other exception returns a `zim_query` envelope, both with `isError: true`. There is no `status` key and no `hint` key. Only `error`, `operation`, and `message` are guaranteed; individual failures may merge extra self-correction keys into the same envelope (a `section_not_found` error, for example, also carries `available_section_ids`, `available_section_ids_truncated`, `available_section_ids_total`, and `closest_match`). The envelope arrives as JSON text in the response's `content` — no tool advertises an `outputSchema`, so nothing lands in `structuredContent` — and `openzim_mcp/mcp_envelope.py` recognises it on the way out and sets `isError: true` on the `CallToolResult`. Path entries inside errors are redacted to `...filename.zim` form so the canonical allowed-directory layout is never leaked.
+- **Tool errors** — every tool catches exceptions and returns a structured `ToolErrorPayload` (`{error: true, operation, message, context?}`) rather than raising. The exception is `zim_query` on its default path, and only partly: its *guidance* failures — no archive specified, empty query, meta-only query, chained query — return markdown with `isError: false`, but a `zim_file_path` matching no archive returns a `zim_path_not_found` envelope and any other exception returns a `zim_query` envelope, both with `isError: true`. There is no `status` key and no `hint` key. Only `error`, `operation`, and `message` are guaranteed; individual failures may merge extra self-correction keys into the same envelope (a `section_not_found` error, for example, also carries `available_section_ids`, `available_section_ids_truncated`, `available_section_ids_total`, `available_sections` — `{id, title}` pairs — and `closest_match`). The envelope arrives as JSON text in the response's `content` — no tool advertises an `outputSchema`, so nothing lands in `structuredContent` — and `openzim_mcp/mcp_envelope.py` recognises it on the way out and sets `isError: true` on the `CallToolResult`. Path entries inside errors are redacted to `...filename.zim` form so the canonical allowed-directory layout is never leaked.
 
 ---
 
@@ -166,7 +166,7 @@ zim_query(
 ### Recognized phrasings
 
 In simple mode `zim_query` is the entire tool surface, so the phrasings it
-recognizes **are** the API. There are 21 of them. The parser scores every
+recognizes **are** the API. There are 22 of them. The parser scores every
 pattern and dispatches the most specific match, so wording matters more than
 it looks — the traps are called out below the table.
 
@@ -286,6 +286,7 @@ The pipeline: per-archive search → RRF fusion across archives → passage extr
 | `section_affinity_threshold` | `0.25` | Heading-overlap ratio before a section-attributed passage is boosted |
 | `section_affinity_boost` | `1.5` | Multiplier when it is. Deliberately conservative — it will not dominate a strong BM25 hit |
 | `max_secondary_archive_hits` | `2` | Cap per non-primary archive, bounding cross-archive flooding. `0` restricts to the primary archive |
+| `cross_archive_min_overlap` | `1` | Query tokens (1–10) a non-primary archive's hit must share with its entry path to be kept. RRF fuses by rank alone, so on a default install this lexical floor is the only relevance bar for secondary archives. Primary-archive hits are exempt, and the floor is skipped when no hit's path shares a query token |
 
 Unlike the default path, this one **does** return error envelopes: bad paths,
 meta-only queries and chained queries are refused with `isError: true` rather
@@ -447,7 +448,7 @@ zim_get_section(
 
 | Parameter | Notes |
 |-----------|-------|
-| `section_id` | Required; the heading ID or anchor from a prior `zim_get(view="toc")` or `zim_get(view="structure")` response |
+| `section_id` | Required; the heading ID or anchor from a prior `zim_get(view="toc")` or `zim_get(view="structure")` response, or the section's heading title: an exact match ignoring case comes first, then any title containing it, for three characters or more |
 | `max_chars` | Per-section char cap |
 | `include_subsections` | Default `True` — nested subsections are returned with the named section. Set `False` for just the section's own body |
 | `compact` | Default `True` (compact rendering — `[Table N: …]` placeholders instead of full tables). Since v2.4.0, `compact=False` returns the true raw section body with full tables |
@@ -577,7 +578,7 @@ zim_health(zim_file_path: Optional[str] = None) -> Any
   "configuration": {
     "configuration": {
       "server_name": "openzim-mcp",
-      "allowed_directories": ["...zim-files"],
+      "allowed_directories": ["<redacted>/zim"],
       "allowed_directories_count": 1,
       "cache_enabled": true,
       "cache_max_size": 100,
@@ -588,12 +589,12 @@ zim_health(zim_file_path: Optional[str] = None) -> Any
     "timestamp": "2026-05-27T15:30:00.000000+00:00"
   },
   "loaded_archives": [
-    { "name": "wikipedia_en_100_2026-02.zim", "path": "...wikipedia_en_100_2026-02.zim", "size": "119.07 MB", "size_bytes": 124857600, "modified": "2026-02-15T10:30:00" }
+    { "name": "wikipedia_en_100_2026-02.zim", "path": "/srv/zim/wikipedia_en_100_2026-02.zim", "directory": "/srv/zim", "size": "119.07 MB", "size_bytes": 124857600, "modified": "2026-02-15T10:30:00", "readable": true }
   ]
 }
 ```
 
-Over the **HTTP/SSE** transports `process_id` / `server_pid` are `"[REDACTED]"` and allowed directories are shown as `...basename` — diagnostic output frequently lands in bug reports. Over the local **stdio** transport these report the real PID and full paths, matching the unredacted `loaded_archives[].path` values that clients pass back to other tools.
+This is the **HTTP/SSE** form: `process_id` / `server_pid` are `"[REDACTED]"` and `configuration.allowed_directories` entries read `<redacted>/<basename>` — diagnostic output frequently lands in bug reports. Over the local **stdio** transport these report the real PID and full paths. `loaded_archives[].path` and `.directory` are absolute on every transport, because clients pass them back to other tools, so an HTTP client still sees where the archives live.
 
 The three blocks are built independently. If the health or configuration builder raises, that block alone is replaced by a `ToolErrorPayload` — `{"error": true, "operation": "get server health" | "get server configuration", "message": ..., "context": ...}`, the only two `operation` values in the codebase that are not snake_case — and the rest of the response, `loaded_archives` included, is still returned. The top-level dict is not an error envelope, so `isError` stays `false`; check `.health` and `.configuration` for an `error` key before reading their fields. A top-level envelope comes back only two ways — a rate-limit rejection (`operation: "rate_limited"`), or an exception escaping the tool body (`operation: "zim_health"`), which for the no-argument call means only the directory scan behind `loaded_archives`, since the other two builders swallow their own exceptions, and for the `zim_file_path` call below means any validation failure.
 
@@ -608,7 +609,7 @@ The three blocks are built independently. If the health or configuration builder
   "has_title_index": true,
   "uuid": "<archive uuid>",
   "is_multipart": false,
-  "path": "...archive.zim",
+  "path": "/srv/zim/archive.zim",
   "name": "archive.zim",
   "has_link_graph": true,
   "link_graph": {
@@ -744,7 +745,7 @@ A `next_cursor` is an opaque resume handle. "Opaque" is the contract — do not 
 properties govern whether a call using one will work.
 
 **Who issues and who accepts them.** Three tools emit a cursor: `zim_browse` (both modes),
-`zim_links` with `direction="outbound"`, and `zim_query` for its browse and walk intents. Four
+`zim_links` with `direction="outbound"` or `"inbound"`, and `zim_query` for its browse and walk intents. Four
 accept one: those three plus `zim_search`, which accepts the *parameter* and rejects every
 non-empty value with `invalid_combination` — it never emits one either, and nulls any the data
 layer mints. Paginate search with `offset`.
@@ -788,7 +789,7 @@ the cursor page and the equivalent `offset` page are the same rows.
 
 ## Error responses
 
-Every tool wraps exceptions and returns a structured `ToolErrorPayload` — except `zim_query`'s default path, which returns markdown guidance for handler-side failures — delivered as JSON text in the response's `content` — never in `structuredContent`, since no tool advertises an `outputSchema` — with `isError: true` set on the `CallToolResult`. `error` (always `true`), `operation`, and `message` are always present; `context` is added only when the tool supplies one. Three paths merge operation-specific self-correction keys: the `section_not_found` envelope returned by `zim_get_section` also carries `available_section_ids` (capped at 50), `available_section_ids_truncated`, and `available_section_ids_total`, plus `closest_match` when a near-miss section ID is found; an `unknown_argument` envelope carries `unknown_arguments` and `accepted_arguments`, plus `closest_matches` when a stray name is close to a real one; and an `invalid_argument` envelope carries `invalid_arguments`:
+Every tool wraps exceptions and returns a structured `ToolErrorPayload` — except `zim_query`'s default path, which returns markdown guidance for handler-side failures — delivered as JSON text in the response's `content` — never in `structuredContent`, since no tool advertises an `outputSchema` — with `isError: true` set on the `CallToolResult`. `error` (always `true`), `operation`, and `message` are always present; `context` is added only when the tool supplies one. Three paths merge operation-specific self-correction keys: the `section_not_found` envelope returned by `zim_get_section` also carries `available_section_ids` (capped at 50), `available_section_ids_truncated`, `available_section_ids_total`, and `available_sections` (`{id, title}` pairs under the same cap, since `section_id` also accepts a heading title), plus `closest_match` when a near-miss section ID is found; an `unknown_argument` envelope carries `unknown_arguments` and `accepted_arguments`, plus `closest_matches` when a stray name is close to a real one; and an `invalid_argument` envelope carries `invalid_arguments`:
 
 ```json
 {
@@ -806,7 +807,7 @@ The error classes in [openzim_mcp/exceptions.py](https://github.com/cameronrye/o
 - `OpenZimMcpArchiveError`
 - `OpenZimMcpRateLimitError`
 
-Absolute filesystem paths in error messages are redacted to `...filename.zim` form on all transports. PIDs and paths in `zim_health` diagnostics are redacted over the HTTP/SSE transports and shown in full over local stdio. Error text is safe to copy into bug reports.
+Absolute filesystem paths in error messages are redacted to `...filename.zim` form on all transports. In `zim_health` diagnostics the PID and `configuration.allowed_directories` are redacted over the HTTP/SSE transports and shown in full over local stdio; archive paths (`loaded_archives[].path`, `zim://files`, "list available ZIM files") are absolute on every transport. Error text is safe to copy into bug reports.
 
 ---
 

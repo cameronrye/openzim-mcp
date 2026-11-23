@@ -38,11 +38,13 @@ openzim-mcp --help
 ### Install from PyPI with pip
 
 ```bash
-# Install OpenZIM MCP from PyPI
-pip install openzim-mcp
+# Install into a virtualenv on Python 3.12+: Homebrew, Debian 12+ and
+# Ubuntu 23.04+ refuse a system-wide pip install (PEP 668)
+python3 -m venv ~/.venvs/openzim-mcp
+~/.venvs/openzim-mcp/bin/pip install openzim-mcp
 
 # Verify installation
-openzim-mcp --help
+~/.venvs/openzim-mcp/bin/openzim-mcp --help
 ```
 
 That's it! OpenZIM MCP is now installed and ready to use.
@@ -183,13 +185,17 @@ pip install -e .
 **Standard Installation:**
 
 ```bash
-# Install Python 3.12+ using Homebrew
-brew install python@3.12
+# Install uv (it fetches a suitable Python itself)
+curl -LsSf https://astral.sh/uv/install.sh | sh
 
-# Install OpenZIM MCP (uv recommended)
+# Install OpenZIM MCP
 uv tool install openzim-mcp
-# Or:
-pip install openzim-mcp
+
+# Or, with pip: Homebrew's Python refuses a system-wide install
+# ("externally-managed-environment", PEP 668), so use a virtualenv
+brew install python@3.12
+python3.12 -m venv ~/.venvs/openzim-mcp
+~/.venvs/openzim-mcp/bin/pip install openzim-mcp
 ```
 
 **Development Installation:**
@@ -209,14 +215,19 @@ uv sync
 **Standard Installation:**
 
 ```bash
-# Install Python 3.12+
-sudo apt update
-sudo apt install python3.12 python3-pip
+# Install uv (it fetches a suitable Python itself)
+curl -LsSf https://astral.sh/uv/install.sh | sh
 
-# Install OpenZIM MCP (uv recommended)
+# Install OpenZIM MCP
 uv tool install openzim-mcp
-# Or:
-pip install openzim-mcp
+
+# Or, with pip: Debian 12+ and Ubuntu 23.04+ refuse a system-wide install
+# (PEP 668), so use a virtualenv. The distro's python3 must be 3.12+
+# (Ubuntu 24.04, Debian 13); on older releases use uv above.
+sudo apt update
+sudo apt install python3-venv
+python3 -m venv ~/.venvs/openzim-mcp
+~/.venvs/openzim-mcp/bin/pip install openzim-mcp
 ```
 
 **Development Installation:**
@@ -239,20 +250,24 @@ uv sync
 **Standard Installation:**
 
 ```bash
-# Install Python 3.12+
-sudo dnf install python3.12 python3-pip
+# Install uv (it fetches a suitable Python itself)
+curl -LsSf https://astral.sh/uv/install.sh | sh
 
-# Install OpenZIM MCP (uv recommended)
+# Install OpenZIM MCP
 uv tool install openzim-mcp
-# Or:
-pip install openzim-mcp
+
+# Or, with pip, into a Python 3.12 virtualenv (Fedora's python3.12
+# package includes venv)
+sudo dnf install python3.12
+python3.12 -m venv ~/.venvs/openzim-mcp
+~/.venvs/openzim-mcp/bin/pip install openzim-mcp
 ```
 
 **Development Installation:**
 
 ```bash
-# Install development tools
-sudo dnf install python3.12-venv python3.12-devel git
+# Install development tools (venv ships with python3.12; there is no -venv package)
+sudo dnf install python3.12-devel git
 
 # Install uv
 curl -LsSf https://astral.sh/uv/install.sh | sh
@@ -332,6 +347,8 @@ make test
 
 ### Expected Output
 
+A start logs about a dozen `INFO` lines to stderr. These two confirm the tool mode and the directories the server will read:
+
 ```
 2026-05-27 15:30:00,000 - openzim_mcp.main - INFO - OpenZIM MCP server started in SIMPLE mode (1 intelligent tool)
 2026-05-27 15:30:00,001 - openzim_mcp.main - INFO - Allowed directories: /path/to/zim/files
@@ -339,12 +356,13 @@ make test
 
 Default mode is **Simple** (one natural-language tool). For all 8 tools (`zim_query`, `zim_search`, `zim_get`, `zim_get_section`, `zim_browse`, `zim_metadata`, `zim_links`, `zim_health`), pass `--mode advanced`.
 
-**The packaged distributions are the exception.** The Docker image bakes `OPENZIM_MCP_TOOL_MODE=advanced` into the image, and the `.mcpb` extension's manifest and the MCP Registry `server.json` set the same variable, so all three register all 8 tools with no flag. Pass `-e OPENZIM_MCP_TOOL_MODE=simple` if you want simple mode there.
+**The packaged distributions are the exception.** The Docker image bakes `OPENZIM_MCP_TOOL_MODE=advanced` into the image, and the `.mcpb` extension's manifest and the MCP Registry `server.json` set the same variable, so all three register all 8 tools with no flag. For simple mode, pass `-e OPENZIM_MCP_TOOL_MODE=simple` to `docker run`, or set `OPENZIM_MCP_TOOL_MODE=simple` in the client's environment for a registry install. The `.mcpb` bundle fixes the variable in its manifest and offers no setting for it, so it always runs advanced mode.
 
 ## MCP Client Configuration
 
 Almost every stdio MCP client takes the same shape — a server name, a
-`command`, and an `args` array. Only the file it lives in differs.
+`command`, and an `args` array. Mostly only the file it lives in differs;
+VS Code and Continue also change the wrapper around it (see the table below).
 
 ### Start from this
 
@@ -378,10 +396,11 @@ folders.
 
 | Client | Location |
 |---|---|
-| **Claude Desktop** | `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS), `%APPDATA%\Claude\claude_desktop_config.json` (Windows), `~/.config/claude/claude_desktop_config.json` (Linux) |
+| **Claude Desktop** | `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS), `%APPDATA%\Claude\claude_desktop_config.json` (Windows), `~/.config/Claude/claude_desktop_config.json` (Linux) |
 | **Claude Code** | `claude mcp add openzim-mcp -- uvx openzim-mcp /path/to/zim/files` — no file editing |
-| **VS Code / Cursor / Windsurf** | An `mcp.json` (or the MCP section of settings) in the workspace or user profile; the object shape above is unchanged |
-| **Continue** | `~/.continue/config.json`, under its MCP servers block |
+| **VS Code** | `.vscode/mcp.json` in the workspace (or the user-profile `mcp.json`), whose wrapper key is `servers`, not `mcpServers`: `{"servers": {"openzim-mcp": {"command": "uvx", "args": […]}}}` |
+| **Cursor / Windsurf** | `~/.cursor/mcp.json` (or `.cursor/mcp.json` in a project) and `~/.codeium/windsurf/mcp_config.json`; the `mcpServers` block above is unchanged |
+| **Continue** | `~/.continue/config.yaml`, as a YAML list: `mcpServers:` then `- name: openzim-mcp`, with `command: uvx` and `args: [openzim-mcp, /path/to/zim/files]` |
 | **Zed** | `settings.json`, under `context_servers` |
 | **Any other stdio client** | It needs a command line, not JSON: `uvx openzim-mcp /path/to/zim/files` |
 
@@ -407,7 +426,7 @@ Add to your Claude Desktop configuration file:
 
 - **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
 - **macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
-- **Linux**: `~/.config/claude/claude_desktop_config.json`
+- **Linux**: `~/.config/Claude/claude_desktop_config.json`
 
 **Standard Installation (Recommended):**
 
@@ -485,10 +504,12 @@ uv run python -m openzim_mcp /path/to/zim/files
 **Python Version Error**
 
 ```
-Error: Python 3.12+ required
+ERROR: Ignored the following versions that require a different python version: 0.2.0 Requires-Python >=3.12; …
+ERROR: Could not find a version that satisfies the requirement openzim-mcp (from versions: none)
+ERROR: No matching distribution found for openzim-mcp
 ```
 
-**Solution**: Install Python 3.12 or higher from [python.org](https://python.org)
+**Solution**: pip is running on a Python older than 3.12, and every release requires 3.12. Install with uv, which fetches a suitable Python itself, or create the virtualenv with Python 3.12 or later (`python3.12 -m venv …`), from [python.org](https://python.org) or your package manager
 
 **uv Not Found**
 

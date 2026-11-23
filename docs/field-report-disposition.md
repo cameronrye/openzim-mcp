@@ -29,7 +29,9 @@ tool to fall back to, and the tool's own description block *is* the API.
 
 ## What shipped
 
-Eighteen commits, `f19bfcb`..`26453df`. The first three closed 75 findings;
+Eighteen commits, `f19bfcb`..`26453df`, on the working branch; main carries
+them, rebased and squashed together with PR #429's three later commits, as
+`b722fa9`. The first three closed 75 findings;
 the remainder closed the audit's residues and the findings the first pass had
 left blocked on file ownership.
 
@@ -186,8 +188,8 @@ is never promoted past an article above it. Every demote call site — the
 fulltext ones above and the title, suggest and chooser ones from the first
 pass — is handed the same query string its cache key is built from, so a
 cached page cannot disagree with a cold one. The render epoch stays r4,
-which has not shipped; the code pin was re-pinned, and the order pin gained
-a translation query.
+which first shipped in 3.3.4; the code pin was re-pinned, and the order pin
+gained a translation query.
 
 The limits are deliberate. Suffix only: "japanese encephalitis" and "german
 measles" lead with the language word and ask about the disease, so they
@@ -252,7 +254,9 @@ stored title spells their own slug — × Spanish, Chinese and French, as
 on 66 of 150 pages on `main` (71560f1), on 35 with the demote alone
 (6b2953a6) and on 35 with the first version of the exemption (057e875),
 whose pages are identical to the demote-only ones query for query because
-that parser reads none of these 150 as a translation request. With the
+that parser reads none of these 150 as a translation request. (Those two are
+commits on the PR #435 branch; main carries them squashed into `c14258c`.)
+With the
 trailing noun droppable it is #1 on 77 of 150, no page loses #1 against
 `main`, and the 11 pages that gain it are again not promotions: every row
 above the hub on `main` in those cases was an artefact, and the

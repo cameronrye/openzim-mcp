@@ -72,7 +72,7 @@ Simple mode is the default. It exposes a single natural-language tool, `zim_quer
 # Start the server with your ZIM files directory
 openzim-mcp ~/zim-files
 
-# You should see two log lines like:
+# About a dozen log lines follow on stderr, including these two:
 # 2026-05-27 15:30:00,000 - openzim_mcp.main - INFO - OpenZIM MCP server started in SIMPLE mode (1 intelligent tool)
 # 2026-05-27 15:30:00,001 - openzim_mcp.main - INFO - Allowed directories: /home/user/zim-files
 ```
@@ -96,7 +96,7 @@ uv run python -m openzim_mcp ~/zim-files
 1. **Find your configuration file**:
    - **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
    - **macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
-   - **Linux**: `~/.config/claude/claude_desktop_config.json`
+   - **Linux**: `~/.config/Claude/claude_desktop_config.json`
 
 2. **Add OpenZIM MCP configuration**:
 
@@ -206,7 +206,7 @@ In simple mode, the server exposes one tool. Phrase the request in plain languag
 }
 ```
 
-**Expected response:** the rendered article body. (Server health and cache stats are an advanced-mode feature — the `zim_health` tool; the simple-mode intent parser has no health operation.)
+**Expected response:** the rendered article body. The Option A archive has no Evolution article either, so it answers with `A/Biodiversity`. (Server health and cache stats are an advanced-mode feature — the `zim_health` tool; the simple-mode intent parser has no health operation.)
 
 ## Step 5: Try advanced mode (`zim_search` + friends)
 
@@ -222,15 +222,15 @@ openzim-mcp --mode advanced ~/zim-files
 {
   "name": "zim_search",
   "arguments": {
-    "zim_file_path": "/home/user/zim-files/wikipedia_en_100.zim",
+    "zim_file_path": "/home/user/zim-files/wikipedia_en_climate_change_mini_2024-06.zim",
     "mode": "fulltext",
-    "query": "photosynthesis light reaction",
+    "query": "ocean acidification",
     "limit": 10
   }
 }
 ```
 
-**Expected response:** up to 10 ranked full-text hits with snippets and entry paths. From here, the LLM can call `zim_get` with one of the returned paths to retrieve the full article, or `zim_links(direction="outbound", ...)` to extract outgoing links.
+**Expected response:** up to 10 ranked full-text hits with snippets and entry paths. On the Option A archive that is 10 of 55, led by `A/Ocean_acidification`. From here, the LLM can call `zim_get` with one of the returned paths to retrieve the full article, or `zim_links(direction="outbound", ...)` to extract outgoing links.
 
 ## Step 6: Verify everything works
 
@@ -258,7 +258,7 @@ then
 }
 ```
 
-This exercises both search and content retrieval.
+This exercises both search and content retrieval. The Option A archive has no Computer article, so the second call answers with `A/Green_computing`.
 
 ## Success! What's next?
 

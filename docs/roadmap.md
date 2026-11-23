@@ -1,5 +1,7 @@
 # openzim-mcp Roadmap
 
+**Open work today:** one item, [#366](https://github.com/cameronrye/openzim-mcp/issues/366), which drops the deprecated `sse` transport in 4.0.0 (see [Deprecations in flight](https://cameronrye.github.io/openzim-mcp/docs/upgrading/#deprecations-in-flight)). It is not a roadmap item; everything below is the closed v2.5 record.
+
 **Status: ✅ COMPLETE (closed out 2026-07-29).** Every in-scope v2.5 item has shipped or formally closed; no open work remains on this roadmap. Latest release at roadmap closure: v2.5.3 (2026-07-01); see [CHANGELOG.md](../CHANGELOG.md) for the current release. The shipping history: `#17` archive-type presets a1 in **v2.2.0** (reprobe-validated against the live superuser sotoki v3.0.2 archive); `#16` inbound link-graph sidecar in **v2.3.0**; `#199` dispatch-eval scoping, `#18` `zim_get_section` raw-text, and the `#16` sidecar-v2 follow-ups in **v2.4.0** (PRs #277/#279/#280/#281); the `#17` a2 SE score-prefix trim in **v2.4.4**. The conditional Phase D sub-items (sub-D-3, sub-D-4) **closed by default on 2026-07-19** — no live-evidence trigger fired (see their status entries below). The `zim_get` `compact` default revisit is **explicitly deferred** with no deadline (see below). v2.0.0 GA shipped 2026-05-27; the v2.0.x/v2.1.x line was kept current via beta-sweep fixes plus the v2.1.0 native-libzim reader features.
 
 This document tracked open work past v2.0.0. Everything here was **additive**: opt-in extras, optional sidecars, or dispatch tuning. None of it changed the v2 tool surface or response contract. It is retained as the record of what shipped, what closed, and why.
@@ -52,7 +54,7 @@ Phase D shipped `#6` cross-encoder reranker and `#8` Tier 1 rules-based query re
 - Reranker hit rate is meaningful (≥15% of search-tool calls past the skip-on-short-query gate), AND
 - Operators or end-users report that semantic-divergent queries consistently miss in Xapian-only search even with the reranker active.
 
-**Status — ❌ CLOSED 2026-07-19 as "not justified by live evidence" (close-by-default executed alongside sub-D-3; recorded 2026-07-29).** Telemetry was never collected at the required granularity and no operator reports arrived. As with sub-D-3, both legs are operator-observable rather than server-aggregated: the reranker emits a per-call INFO line and the four `reranker_*` counters in the `zim_health` server-health report give the hit-rate denominator (see [extras-reranker.md](extras-reranker.md)), while the semantic-miss leg is inherently qualitative (operator / end-user reports). Neither leg produced evidence by the 2026-07-19 deadline, so the standing close-by-default decision took effect. **Reopens only if both triggers later fire** (reranker hit rate ≥15% of gated search calls AND consistent operator/end-user semantic-miss reports).
+**Status — ❌ CLOSED 2026-07-19 as "not justified by live evidence" (close-by-default executed alongside sub-D-3; recorded 2026-07-29).** Telemetry was never collected at the required granularity and no operator reports arrived. As with sub-D-3, both legs are operator-observable rather than server-aggregated: the reranker emits a per-call INFO line and the four `reranker_*` counters in the `zim_health` server-health report give the hit-rate denominator (see [Search reranking](https://cameronrye.github.io/openzim-mcp/docs/search-reranking/#telemetry)), while the semantic-miss leg is inherently qualitative (operator / end-user reports). Neither leg produced evidence by the 2026-07-19 deadline, so the standing close-by-default decision took effect. **Reopens only if both triggers later fire** (reranker hit rate ≥15% of gated search calls AND consistent operator/end-user semantic-miss reports).
 
 **Reference design.** Previous draft (sidecar format, build CLI, RRF fusion) preserved at commit [`a92d04e791a7`](https://github.com/cameronrye/openzim-mcp/commit/a92d04e791a7) — same pre-squash PR #163 branch commit as sub-D-3's reference; reachable on GitHub by hash only.
 
@@ -134,7 +136,7 @@ The deferred Phase D sub-Ds were conditional — their triggers never fired, so 
 - **HyDE** (hypothetical document expansion). Hurts small models per the v2 research; explicit non-goal.
 - **Network-fetching tools.** Offline-only.
 - **A built-in summarization LLM.** Synthesize mode (`#10`, shipped in v2.0.0a4) is retrieval + concatenation, not generation.
-- **Multi-archive federated search beyond what `search_all` already does.**
+- **Multi-archive federated search beyond what `zim_search(cross_file=True)` already does.**
 - **Replacing libzim.** v2.5 builds on libzim 9+.
 - **Tool surface changes.** Phase F locked the surface at v2.0.0.
 
@@ -148,13 +150,12 @@ For each item, when work began:
 2. Brainstorm against this roadmap to refine scope and approaches.
 3. Write a design spec in `docs/specs/YYYY-MM-DD-v2.5-<item>-design.md`.
 4. Update the milestones table above with the spec link and status.
-5. Generate an implementation plan via the writing-plans skill.
+5. Write an implementation plan.
 6. Execute, review, ship on the incremental release line.
 
 Design specs were removed post-ship; this document absorbed their outcomes. All in-scope items have now shipped or formally closed (2026-07-29), completing the process.
 
 ## Tracking
 
-- All v2.5 PRs used the label `v2.5`.
-- Per-item labels: `v2.5-sub-d-3`, `v2.5-sub-d-4`, `v2.5-link-graph`, `v2.5-presets`, `v2.5-dispatch`.
+- v2.5 PRs carried no labels; each named its item in the title instead (for example `feat: inbound link-graph sidecar (v2.5 #16)`, PR #274). No `v2.5` label exists.
 - This document was the source of truth for "where are we" and is now the closed record. A reopened item (a sub-D trigger firing in the field, or `compact` adoption data) gets a fresh design spec and a new roadmap entry rather than reanimating this one.

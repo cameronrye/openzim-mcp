@@ -1,5 +1,6 @@
 import type { APIRoute, GetStaticPaths } from 'astro';
 import { getCollection } from 'astro:content';
+import { stripMdxComments } from '../../lib/mdx-source';
 import { RELEASED, VERSION } from '../llms.txt';
 
 /**
@@ -12,7 +13,8 @@ import { RELEASED, VERSION } from '../llms.txt';
  * advertises this route so the cheap path is discoverable rather than folklore.
  *
  * The body is the collection entry's own source, so it cannot drift from the
- * rendered page — there is no second copy to keep in step.
+ * rendered page — there is no second copy to keep in step. Its MDX comments
+ * are stripped first, as the rendered page drops them (`lib/mdx-source.ts`).
  *
  * The header block carries the release stamp as well as the title, summary and
  * canonical URL. Without it an agent that fetches this route has nothing to
@@ -44,7 +46,7 @@ Released: ${RELEASED} (the release this documentation describes; not this page's
 
 ---
 
-${doc.body ?? ''}
+${stripMdxComments(doc.body ?? '')}
 `;
 
   return new Response(body, {

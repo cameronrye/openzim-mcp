@@ -115,6 +115,7 @@ openzim_mcp/
 ├── simple_tools.py          # zim_query NL handler (Simple mode)
 ├── intent_parser.py         # NL intent → underlying-tool routing
 ├── config.py                # OpenZimMcpConfig (pydantic-settings)
+├── instructions.py          # server instructions: built-in text per tool mode, operator override (3.5+)
 ├── defaults.py              # Frozen-dataclass defaults referenced by config.py
 ├── cache.py                 # LRU+TTL cache (with optional disk persistence)
 ├── rate_limiter.py          # Token-bucket limiter, per-client + per-operation
@@ -201,7 +202,7 @@ Polling-based mtime watcher, plus the mapping from its change kinds onto MCP not
 
 - **`PathValidator.validate_path`** — regex-based traversal-pattern check + `Path.is_relative_to(allowed_dir)` containment + canonical resolution.
 - **`PathValidator.validate_zim_file`** — re-resolves the file and re-checks containment immediately before the archive is opened, closing the TOCTOU window between path validation and the eventual libzim open (defends against symlink swaps), and returns the re-resolved path so the caller opens the inode that was just checked.
-- **`sanitize_input`** — strips control characters, caps length per input class.
+- **`sanitize_input`** — strips control characters and caps length. It has one call site, the `{path}` component of the `zim://{name}/entry/{path}` resource template (500 characters); tool arguments do not pass through it.
 - **`redact_paths_in_message`** / **`sanitize_path_for_error`** — regex `_ABS_PATH_RE` redacts absolute paths (cross-platform `/` and `\`, wrapped/quoted forms like `(/opt/foo)` / `"/opt/bar"` / `file=/opt/foo`, and URL-decoded forms like `%2Fopt%2Fzims`). Used in every error message and in diagnostics tools.
 
 ### Cache (`cache.py`)
@@ -273,9 +274,13 @@ class OpenZimMcpConfig(BaseSettings):
     insecure_disable_auth: bool = False
     cors_origins: List[str] = []
     allowed_hosts: List[str] = []
+    stateless_http: bool = False
     watch_interval_seconds: int = 5
+    resource_cache_ttl_seconds: int = 3600
     subscriptions_enabled: bool = True
     presets_override_path: Optional[Path] = None
+    instructions: Optional[str] = None          # 3.5+
+    instructions_path: Optional[Path] = None    # 3.5+
 
     # Component sub-configs
     cache: CacheConfig
@@ -299,7 +304,6 @@ MCP client         MCPServer              Server core         async_zim_operatio
     │── tools/call ───▶│                        │                          │                       │                  │
     │                  │── @mcp.tool wrapper ──▶│                          │                       │                  │
     │                  │                        │── rate_limiter.check ───▶│                       │                  │
-    │                  │                        │── sanitize_input        ─│                       │                  │
     │                  │                        │── async_op.fn ──────────▶│── to_thread(fn) ─────▶│── Archive.open ─▶│
     │                  │                        │                          │                       │── … ZIM I/O ────▶│
     │                  │                        │◀── ToolResponse / err ───│                       │                  │

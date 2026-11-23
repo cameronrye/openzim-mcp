@@ -40,7 +40,7 @@ openzim-mcp --mode advanced /path/to/zim/files
 | `simple` (default) | 1 tool: `zim_query` (NL intent router) | small/local LLMs, MCP hosts that struggle with large tool catalogs |
 | `advanced` | 8 tools: `zim_query`, `zim_search`, `zim_get`, `zim_get_section`, `zim_browse`, `zim_metadata`, `zim_links`, `zim_health` (see [API reference](/openzim-mcp/docs/api-reference/)) | hosts that handle a richer tool surface, scripting, fine-grained control |
 
-**The advanced surface is 8 consolidated tools** — collapsed from the prior 22-tool v1 surface. The advanced-mode wire footprint is ~24.1KB (24,634 bytes, held under a hard 25,600-byte budget by `tests/test_phase_f_schema_budget.py`), down from ~36KB, clearing the [MCP Tax](https://www.mmntm.net/articles/mcp-context-tax) pain band (25–50KB schema) for small-model dispatch. See the [v1 → v2 migration table](/openzim-mcp/docs/api-reference/#v1--v2-migration) if you're upgrading.
+**The advanced surface is 8 consolidated tools** — collapsed from the prior 22-tool v1 surface. The advanced-mode wire footprint is ~23.8KB (24,359 bytes, held under a hard 25,600-byte budget by `tests/test_phase_f_schema_budget.py`), down from ~36KB, clearing the [MCP Tax](https://www.mmntm.net/articles/mcp-context-tax) pain band (25–50KB schema) for small-model dispatch. See the [v1 → v2 migration table](/openzim-mcp/docs/api-reference/#v1--v2-migration) if you're upgrading.
 
 ## Transport
 
@@ -207,6 +207,8 @@ export OPENZIM_MCP_SERVER_NAME=openzim-mcp     # default openzim-mcp; reported i
 
 ## Server instructions
 
+**Requires 3.5 or later.** Earlier releases ignore `OPENZIM_MCP_INSTRUCTIONS` and `OPENZIM_MCP_INSTRUCTIONS_PATH` without an error.
+
 When a client connects, the server sends it a short block of `instructions`: in the `initialize` result for handshake-era clients, and in `server/discover` for 2026-07-28 clients. Most hosts put the text in the model's context. The built-in text says what the server is and, in advanced mode, which of the eight tools to reach for; in simple mode it says how to ask `zim_query`.
 
 Replace it to tell the model about your deployment: what your archives hold, and when to prefer this server over another tool. Use a file for anything longer than a line:
@@ -247,8 +249,8 @@ The rules:
 Every start logs one line saying which text is in effect, at INFO on stderr. Under stdio the host captures stderr; Claude Desktop, for example, writes it to its MCP server log files.
 
 ```text
-Server instructions: built-in, for simple mode (493 bytes)
-Server instructions: custom, from OPENZIM_MCP_INSTRUCTIONS_PATH='/etc/openzim-mcp/instructions.md' (637 bytes, 633 characters); the built-in simple-mode guidance is included via {{default}}
+Server instructions: built-in, for simple mode (547 bytes)
+Server instructions: custom, from OPENZIM_MCP_INSTRUCTIONS_PATH='/etc/openzim-mcp/instructions.md' (691 bytes, 687 characters); the built-in simple-mode guidance is included via {{default}}
 Server instructions: custom, from OPENZIM_MCP_INSTRUCTIONS (80 bytes, 80 characters); the built-in guidance is not included (no {{default}} token)
 ```
 
@@ -394,7 +396,7 @@ At least one directory is required; each is canonicalized (resolves symlinks and
 
 ## Complete reference table
 
-Sorted alphabetically by field name within each grouping.
+A nested field's environment variable joins its levels with `__`, so `cache.max_size` is `OPENZIM_MCP_CACHE__MAX_SIZE`. The specialized groups named below the thread-pool table are not listed here.
 
 | Field | Env var | Default | Notes |
 |-------|---------|---------|-------|
@@ -417,9 +419,9 @@ Sorted alphabetically by field name within each grouping.
 | `cors_origins` | `OPENZIM_MCP_CORS_ORIGINS` | `[]` | JSON list; `*` rejected |
 | `host` | `OPENZIM_MCP_HOST` | `127.0.0.1` | non-loopback requires auth (http) or refuses (sse) |
 | `insecure_disable_auth` | `OPENZIM_MCP_INSECURE_DISABLE_AUTH` | `false` | escape hatch: allows token-less non-loopback HTTP with a WARNING (closed networks only) |
-| `instructions` | `OPENZIM_MCP_INSTRUCTIONS` | unset | replaces the server instructions; `{{default}}` keeps the built-in text — [rules](/openzim-mcp/docs/configuration/#server-instructions). Not with `instructions_path` |
-| `instructions_path` | `OPENZIM_MCP_INSTRUCTIONS_PATH` | unset | UTF-8 file holding the instructions, read once at startup; a set but unusable file stops startup |
-| `logging.format` | `OPENZIM_MCP_LOGGING__FORMAT` | structured | format string |
+| `instructions` | `OPENZIM_MCP_INSTRUCTIONS` | unset | (3.5+) replaces the server instructions; `{{default}}` keeps the built-in text — [rules](/openzim-mcp/docs/configuration/#server-instructions). Not with `instructions_path` |
+| `instructions_path` | `OPENZIM_MCP_INSTRUCTIONS_PATH` | unset | (3.5+) UTF-8 file holding the instructions, read once at startup; a set but unusable file stops startup |
+| `logging.format` | `OPENZIM_MCP_LOGGING__FORMAT` | `%(asctime)s - %(name)s - %(levelname)s - %(message)s` | `logging` format string |
 | `meta.footer_enabled` | `OPENZIM_MCP_META__FOOTER_ENABLED` | `true` | Append the one-line `_meta` footer to simple-mode responses. Turning it off does not remove `_meta` itself — see [the `_meta` envelope](/openzim-mcp/docs/api-reference/#the-_meta-envelope) |
 | `meta.tokenizer_encoding` | `OPENZIM_MCP_META__TOKENIZER_ENCODING` | `cl100k_base` | **Declared but not wired.** `meta.py` hard-codes `cl100k_base`; setting this has no effect today |
 | `logging.level` | `OPENZIM_MCP_LOGGING__LEVEL` | `INFO` | DEBUG/INFO/WARNING/ERROR/CRITICAL |
@@ -502,7 +504,7 @@ Two things to know before you write one:
 - **The pin key is `M/Name`, not the filename.** For
   `wikipedia_en_climate_change_mini_2024-06.zim` the key is `wikipedia_en_climate_change`. A table
   keyed on the filename matches nothing and fails silently — you get the type preset, and no
-  warning. Read the value back with `zim_metadata`, under `metadata_entries.Name`.
+  warning. Read the value back with `zim_metadata`, under `metadata.Name`.
 - **A broken override never stops the server.** An unreadable file, invalid TOML, or an unknown
   key logs a warning and falls back to the bundled defaults. That is deliberate — a typo in an
   operator file must not take the server down — but it does mean a silently ineffective override
@@ -639,7 +641,8 @@ $env:OPENZIM_MCP_CACHE__MAX_SIZE = "200"
 [Service]
 Environment=OPENZIM_MCP_TRANSPORT=http
 Environment=OPENZIM_MCP_HOST=127.0.0.1
-EnvironmentFile=/etc/openzim-mcp/secrets.env   # OPENZIM_MCP_AUTH_TOKEN here
+# Holds OPENZIM_MCP_AUTH_TOKEN
+EnvironmentFile=/etc/openzim-mcp/secrets.env
 ExecStart=/usr/local/bin/openzim-mcp /srv/zim
 ```
 

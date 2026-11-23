@@ -1,8 +1,7 @@
 Inspect a ZIM archive's metadata + namespace inventory.
 
 Returns the M-namespace fields (Name, Title, Creator, Date, …) plus
-the per-namespace entry counts in one combined response. Replaces
-the legacy `get_zim_metadata` + `list_namespaces` pair.
+the per-namespace entry counts in one combined response.
 
 ALIASES: callers may say "metadata for <archive>", "what's in this
 zim", "describe the archive". Route through THIS tool.
