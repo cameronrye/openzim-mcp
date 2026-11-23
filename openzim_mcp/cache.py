@@ -57,6 +57,19 @@ def _default_cache_directory() -> Path:
     return Path(xdg) if xdg else Path.home() / ".cache"
 
 
+def _failure_reason(exc: BaseException) -> str:
+    """Why a persistence step failed, without the path ``str(OSError)`` repeats.
+
+    ``str()`` of an ``OSError`` is ``[Errno 20] Not a directory: '<path>'``,
+    and the messages built from it already name the path, so it appeared
+    twice — and ``zim_health`` serves this text to remote clients, where
+    every copy of a host path is one more thing to redact.
+    """
+    if isinstance(exc, OSError) and exc.strerror:
+        return exc.strerror
+    return str(exc)
+
+
 def _is_package_default_path(configured_path: Any) -> bool:
     """Whether ``configured_path`` is the untouched package default."""
     if not configured_path:
@@ -77,6 +90,39 @@ def _cache_config_fingerprint(config: CacheConfig) -> str:
         str(getattr(config, name, None))
         for name in ("max_size", "max_bytes", "ttl_seconds")
     )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+
+
+# The server settings that shape what is rendered into the cache. A snapshot's
+# keys name the archive and the request, not these, so a value rendered under
+# one ``snippet_length`` was served after a restart under another until its TTL
+# ran out. Named one by one rather than "everything but": a secret such as
+# ``auth_token`` must not reach the snapshot file, not even hashed.
+# ``allowed_directories`` is left out on purpose: every key already carries the
+# archive's absolute path, and peers that share the default snapshot path while
+# serving different directories would otherwise discard each other's warm
+# cache on every restart.
+_CONTENT_SETTINGS = frozenset(
+    {
+        "content",
+        "meta",
+        "ml",
+        "presets_override_path",
+        "query_rewrite",
+        "search",
+        "synthesize",
+        "tool_mode",
+    }
+)
+
+
+def content_settings_fingerprint(config: Any) -> Optional[str]:
+    """Digest of ``config``'s content-shaping settings; None if unreadable."""
+    try:
+        settings = config.model_dump(mode="json", include=_CONTENT_SETTINGS)
+        payload = json.dumps(settings, sort_keys=True)
+    except Exception:  # a test double, not an OpenZimMcpConfig
+        return None
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
 
 
@@ -238,6 +284,12 @@ class OpenZimMcpCache:
         # Identity of the snapshot this instance last wrote, so an empty save
         # can tell its own file from a peer's. See ``_save_to_disk``.
         self._saved_snapshot_id: Optional[Tuple[int, int]] = None
+        # The content settings this server renders under, the ones the loaded
+        # snapshot was rendered under, and the keys it restored, until
+        # ``bind_content_settings`` compares the two.
+        self._content_fingerprint: Optional[str] = None
+        self._restored_fingerprint: Optional[str] = None
+        self._restored_keys: set = set()
         configured_path = getattr(config, "persistence_path", None)
         if _is_package_default_path(configured_path):
             # The package default is a single per-user path, so every server
@@ -269,7 +321,8 @@ class OpenZimMcpCache:
                 except OSError as e:
                     self._persistence_error = (
                         f"cache directory {self._persistence_path.parent} could "
-                        f"not be created ({e}); persistence is disabled"
+                        f"not be created ({_failure_reason(e)}); persistence "
+                        "is disabled"
                     )
                     logger.warning("Cache persistence disabled: %s", e)
                     self._persistence_enabled = False
@@ -781,7 +834,13 @@ class OpenZimMcpCache:
                 entries_to_save: Dict[str, Dict[str, Any]] = {}
                 now_monotonic = time.monotonic()
                 now_wall = time.time()
-                for key, entry in self._cache.items():
+                # Least recently used first: ``_restore_entry`` touches entries
+                # in file order, so this is the order the restart rebuilds.
+                # Insertion order made the hottest entry the first eviction.
+                for key in sorted(
+                    self._cache, key=lambda k: self._access_order.get(k, 0)
+                ):
+                    entry = self._cache[key]
                     # Clamp on the save side too: an already-poisoned in-memory
                     # entry (created_at in the future) would otherwise be
                     # written back with a future wall-clock timestamp and
@@ -836,6 +895,7 @@ class OpenZimMcpCache:
                             {
                                 "version": 1,
                                 "saved_at": now_wall,
+                                "content_fingerprint": self._content_fingerprint,
                                 "entries": entries_to_save,
                             },
                             f,
@@ -871,7 +931,9 @@ class OpenZimMcpCache:
             # Recorded as well as logged: the log line lands on stderr at
             # process exit, which is after the last moment anyone could act
             # on it, so ``stats()`` carries it to ``zim_health`` too.
-            self._persistence_error = f"cannot write {self._persistence_path} ({e})"
+            self._persistence_error = (
+                f"cannot write {self._persistence_path} ({_failure_reason(e)})"
+            )
             logger.warning(f"Failed to save cache to disk: {e}")
 
     def _restore_entry(
@@ -889,7 +951,13 @@ class OpenZimMcpCache:
             raise ValueError("entry missing 'value' field")
 
         created_at = entry_data.get("created_at", 0)
-        ttl_seconds = entry_data.get("ttl_seconds", self.config.ttl_seconds)
+        # Capped at the current setting: every entry is set under the
+        # configured TTL, so a longer saved one belongs to an old config, and
+        # an operator who lowered 86400 to 60 kept restored entries all day.
+        ttl_seconds = min(
+            entry_data.get("ttl_seconds", self.config.ttl_seconds),
+            self.config.ttl_seconds,
+        )
 
         # Skip expired entries (compare wall-clock-to-wall-clock).
         # Clamp: a persisted timestamp ahead of our wall clock (NTP step-back,
@@ -968,6 +1036,7 @@ class OpenZimMcpCache:
                 loaded_count = 0
                 skipped_count = 0
 
+                self._restored_fingerprint = data.get("content_fingerprint")
                 for key, entry_data in entries.items():
                     # Per-entry try/except so a single malformed entry
                     # doesn't abort the load of every other valid entry.
@@ -976,6 +1045,7 @@ class OpenZimMcpCache:
                             key, entry_data, now_wall, now_monotonic
                         ):
                             loaded_count += 1
+                            self._restored_keys.add(key)
                     except Exception as entry_err:
                         skipped_count += 1
                         logger.debug(
@@ -1005,3 +1075,25 @@ class OpenZimMcpCache:
             logger.warning(f"Failed to parse cache persistence file: {e}")
         except Exception as e:
             logger.warning(f"Failed to load cache from disk: {e}")
+
+    def bind_content_settings(self, fingerprint: str) -> None:
+        """Record the settings values are rendered under; drop a snapshot that differs.
+
+        The cache sees only its own config, so the server's content settings
+        arrive here once, before anything is read (``ZimOperations`` calls it
+        on construction). A restored snapshot rendered under other settings,
+        or saved before snapshots carried them, is dropped whole: its keys
+        cannot say which of its values the change affects.
+        """
+        with self._lock:
+            self._content_fingerprint = fingerprint
+            if self._restored_fingerprint != fingerprint:
+                for key in self._restored_keys:
+                    self._remove(key)
+                if self._restored_keys:
+                    logger.info(
+                        "Dropped %d restored cache entries rendered under other "
+                        "content settings",
+                        len(self._restored_keys),
+                    )
+            self._restored_keys = set()

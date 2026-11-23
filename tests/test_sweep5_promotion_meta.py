@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import json
 
-from openzim_mcp.meta import tokens_est
+from openzim_mcp.meta import _raw_tokens_est
 from openzim_mcp.tools.zim_search import _merge_promotion_into_title_results
 
 
@@ -34,7 +34,7 @@ def _fresh_size(payload: dict) -> tuple:
     rendered = json.dumps(
         {k: v for k, v in payload.items() if k != "_meta"}, ensure_ascii=False
     )
-    return len(rendered), int(tokens_est(rendered) * 1.05) + 1
+    return len(rendered), int(_raw_tokens_est(rendered) * 1.05) + 1
 
 
 class TestEmptyPageBranch:

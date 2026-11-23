@@ -4,7 +4,6 @@ from openzim_mcp.exceptions import (
     OpenZimMcpArchiveError,
     OpenZimMcpConfigurationError,
     OpenZimMcpError,
-    OpenZimMcpFileNotFoundError,
     OpenZimMcpRateLimitError,
     OpenZimMcpSecurityError,
     OpenZimMcpValidationError,
@@ -39,12 +38,6 @@ class TestOpenZimMcpExceptions:
         error = OpenZimMcpValidationError("Validation failed")
         assert isinstance(error, OpenZimMcpError)
         assert str(error) == "Validation failed"
-
-    def test_openzim_mcp_file_not_found_error(self):
-        """Test OpenZimMcpFileNotFoundError inheritance."""
-        error = OpenZimMcpFileNotFoundError("File not found")
-        assert isinstance(error, OpenZimMcpError)
-        assert str(error) == "File not found"
 
     def test_openzim_mcp_archive_error(self):
         """Test OpenZimMcpArchiveError inheritance."""

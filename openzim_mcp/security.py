@@ -473,7 +473,7 @@ def _strip_trailing_punct(token: str) -> tuple[str, str]:
     return stripped, token[len(stripped) :]
 
 
-def sanitize_path_for_error(path: str, show_filename: bool = True) -> str:
+def sanitize_path_for_error(path: str) -> str:
     r"""Sanitize a file path for inclusion in error messages.
 
     This function obscures the full directory path while keeping the filename
@@ -486,7 +486,6 @@ def sanitize_path_for_error(path: str, show_filename: bool = True) -> str:
 
     Args:
         path: The file path to sanitize
-        show_filename: If True, show the filename; if False, completely obscure
 
     Returns:
         Sanitized path string
@@ -494,16 +493,9 @@ def sanitize_path_for_error(path: str, show_filename: bool = True) -> str:
     Example:
         >>> sanitize_path_for_error("/home/user/data/wikipedia.zim")
         '...wikipedia.zim'
-        >>> sanitize_path_for_error(
-        ...     "/home/user/data/wikipedia.zim", show_filename=False
-        ... )
-        '<path-hidden>'
     """
     if not path:
         return NO_PATH_PLACEHOLDER
-
-    if not show_filename:
-        return PATH_HIDDEN_PLACEHOLDER
 
     try:
         # Manual split on both separators so this works for Windows-style

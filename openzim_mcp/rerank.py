@@ -99,9 +99,7 @@ class _RerankMixin:
         self._track(event)
         _RERANK_STATE_VAR.set(_RERANK_EVENT_LABELS.get(event))
 
-    def _compute_rerank_state(
-        self, before: Optional[Dict[str, int]] = None
-    ) -> Optional[str]:
+    def _compute_rerank_state(self) -> Optional[str]:
         """Return the per-request reranker engagement state for the
         ``<!-- reranker=<state> -->`` marker.
 
@@ -116,8 +114,7 @@ class _RerankMixin:
         which made the marker non-deterministic for identical inputs: a
         concurrent request's increment leaked into the delta, and the
         priority order surfaced an internal sub-search's ``no_results`` over
-        the main search's real outcome. ``before`` is accepted (and ignored)
-        for backward compatibility with the old call signature.
+        the main search's real outcome.
         """
         state = _RERANK_STATE_VAR.get()
         _RERANK_STATE_VAR.set(None)

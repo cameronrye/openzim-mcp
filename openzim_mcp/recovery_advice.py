@@ -3,7 +3,7 @@
 Every clause here is the tail of a message a *client* reads while it is
 recovering from a failure, so it may only name something that client can
 actually issue. ``tool_mode='simple'`` (the default —
-``ServerDefaults.TOOL_MODE``, and what the README tells users to
+``OpenZimMcpConfig.tool_mode``, and what the README tells users to
 copy-paste) registers ``zim_query`` alone, so an advanced tool name there
 describes a tool the client cannot see. The simple half is therefore
 phrased as a query :class:`openzim_mcp.intent_parser.IntentParser`

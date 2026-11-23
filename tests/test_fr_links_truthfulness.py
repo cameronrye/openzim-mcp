@@ -37,6 +37,7 @@ from typing import Any, Optional
 import pytest
 
 from openzim_mcp.config import CacheConfig, OpenZimMcpConfig
+from openzim_mcp.linkgraph.schema import SCHEMA_VERSION
 from openzim_mcp.server import OpenZimMcpServer
 
 _MINI = "wikipedia_en_climate_change_mini_2024-06.zim"
@@ -89,7 +90,7 @@ async def test_a_present_sidecar_is_described_not_just_flagged(advanced, monkeyp
     """
     server, archive = advanced
     meta = {
-        "schema_version": "3",
+        "schema_version": str(SCHEMA_VERSION),
         "archive_uuid": "2a11f796-0000-0000-0000-000000000000",
         "built_at": "2026-09-04T16:05:54Z",
         "node_count": "15990",
@@ -123,7 +124,7 @@ async def test_a_sidecar_built_for_another_archive_is_reported_as_stale(
     monkeypatch.setattr(
         "openzim_mcp.linkgraph.reader.read_sidecar_meta",
         lambda _path: {
-            "schema_version": "3",
+            "schema_version": str(SCHEMA_VERSION),
             "archive_uuid": "ffffffff-dead-beef-dead-ffffffffffff",
             "built_at": "2025-01-01T00:00:00Z",
             "node_count": "1",

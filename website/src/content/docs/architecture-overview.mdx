@@ -168,7 +168,6 @@ path_validator    → PathValidator(allowed_directories)
 cache             → OpenZimMcpCache(config.cache)
 content_processor → ContentProcessor(config.content)
 zim_operations    → ZimOperations(config, path_validator, cache, content_processor)
-async_zim_ops     → AsyncZimOperations(zim_operations)
 rate_limiter      → RateLimiter(config.rate_limit)
 subscription_bus  → InMemorySubscriptionBus()  (only when subscriptions_enabled and transport='http')
 simple_tools_h    → SimpleToolsHandler(zim_operations)
@@ -299,7 +298,7 @@ There is no `SecurityConfig` and no `InstanceConfig` — security policy is hard
 ## Data flow — typical tool call (stdio)
 
 ```
-MCP client         MCPServer              Server core         async_zim_operations         ZimOperations         libzim
+MCP client         MCPServer              Server core         AsyncZimOperations           ZimOperations         libzim
     │                  │                        │                          │                       │                  │
     │── tools/call ───▶│                        │                          │                       │                  │
     │                  │── @mcp.tool wrapper ──▶│                          │                       │                  │

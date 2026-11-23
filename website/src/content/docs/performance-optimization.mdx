@@ -77,7 +77,7 @@ Per-operation costs (defaults from `RATE_LIMIT_COSTS`):
 
 A batch is charged per entry, but the total is clamped to the bucket's capacity (`burst_size`, default 40) — so a 50-entry batch costs 40 slots, not 50, and one batch can never cost more than a full bucket. Plan burst size with batch tools in mind.
 
-To carve out a different limit for one operation, use the per-operation overrides. **Keys are usually the internal operation names, not the tool names** — most tools are multiplexers and resolve the branch they are about to dispatch. The exceptions are `zim_query`, `zim_get_section` and `zim_health`, which are keyed on their **wire tool name** and charge the `default` cost. See the full mapping table in [Configuration → Rate limiting](/openzim-mcp/docs/configuration/#rate-limiting).
+To carve out a different limit for one operation, use the per-operation overrides. **Keys are usually the internal operation names, not the tool names** — most tools are multiplexers and resolve the branch they are about to dispatch. The exceptions are `zim_query`, `zim_get_section` and `zim_health`, which are keyed on their **wire tool name** and charge the `default` cost, and a `resources/read` of `zim://files`, keyed `zim_files`. Other resource reads share their tool counterpart's key (`get_entry`, `get_metadata`). See the full mapping table in [Configuration → Rate limiting](/openzim-mcp/docs/configuration/#rate-limiting).
 
 ```bash
 export OPENZIM_MCP_RATE_LIMIT__PER_OPERATION_LIMITS='{"search": {"requests_per_second": 4, "burst_size": 8}}'

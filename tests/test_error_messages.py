@@ -14,7 +14,7 @@ from openzim_mcp.error_messages import (
 )
 from openzim_mcp.exceptions import (
     OpenZimMcpArchiveError,
-    OpenZimMcpFileNotFoundError,
+    OpenZimMcpArchivePathError,
     OpenZimMcpRateLimitError,
     OpenZimMcpSecurityError,
     OpenZimMcpValidationError,
@@ -50,13 +50,6 @@ class TestErrorConfig:
 
 class TestErrorConfigs:
     """Test ERROR_CONFIGS dictionary."""
-
-    def test_file_not_found_config_exists(self):
-        """Test FileNotFoundError config exists."""
-        assert OpenZimMcpFileNotFoundError in ERROR_CONFIGS
-        config = ERROR_CONFIGS[OpenZimMcpFileNotFoundError]
-        assert "File Not Found" in config.title
-        assert len(config.steps) > 0
 
     def test_archive_error_config_exists(self):
         """Test ArchiveError config exists."""
@@ -219,11 +212,11 @@ class TestGetErrorConfig:
 
     def test_get_error_config_exact_match(self):
         """Test getting config for exact exception type."""
-        error = OpenZimMcpFileNotFoundError("Test")
+        error = OpenZimMcpArchivePathError("File does not exist: /srv/zim/x.zim")
         config = get_error_config(error)
 
         assert config is not None
-        assert "File Not Found" in config.title
+        assert config.title == "Archive Not Available"
 
     def test_get_error_config_archive_error(self):
         """Test getting config for archive error."""
@@ -308,13 +301,13 @@ class TestGetErrorConfig:
 class TestErrorConfigSteps:
     """Test that error configs have useful steps."""
 
-    def test_file_not_found_steps_are_actionable(self):
-        """Test that file not found steps are actionable."""
-        config = ERROR_CONFIGS[OpenZimMcpFileNotFoundError]
+    def test_missing_archive_steps_are_actionable(self):
+        """A missing archive's steps name the real paths to use instead."""
+        config = ERROR_CONFIGS[OpenZimMcpArchivePathError]
 
-        # Should mention checking the path
         steps_text = " ".join(config.steps).lower()
-        assert "path" in steps_text or "file" in steps_text
+        assert "list available zim files" in steps_text
+        assert "zim_file_path" in steps_text
 
     def test_archive_error_steps_mention_diagnostics(self):
         """Test that archive error steps mention diagnostics."""

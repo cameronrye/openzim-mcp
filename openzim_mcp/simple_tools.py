@@ -13,6 +13,7 @@ import json
 import logging
 import re
 import threading
+import unicodedata
 from collections import Counter
 from contextlib import ExitStack
 from dataclasses import dataclass, field
@@ -30,6 +31,8 @@ from .cursor_decode import decode_offset_cursor
 from .disambiguation import _DisambiguationMixin
 from .exceptions import (
     OpenZimMcpArchivePathError,
+    OpenZimMcpCursorMismatchError,
+    OpenZimMcpEntryNotFoundError,
     OpenZimMcpValidationError,
     RegexTimeoutError,
 )
@@ -38,15 +41,7 @@ from .linkgraph.reader import LinkGraphUnavailable
 from .meta import build_meta, format_footer, remeasure
 from .onboarding import acquisition_hint_markdown
 from .pagination import archive_identity
-from .rerank import (
-    _INFO_LEVEL_TELEMETRY_EVENTS,
-    _RERANK_STATE_VAR,
-    _RERANKER_ENGAGED,
-    _RERANKER_SKIPPED_NO_RESULTS,
-    _RERANKER_SKIPPED_NOT_INSTALLED,
-    _RERANKER_SKIPPED_PASSTHROUGH,
-    _RerankMixin,
-)
+from .rerank import _INFO_LEVEL_TELEMETRY_EVENTS, _RERANK_STATE_VAR, _RerankMixin
 from .responses import ToolErrorPayload, tool_error
 from .security import sanitize_context_for_error, sanitize_control_chars
 from .subject_section import _SubjectSectionMixin
@@ -100,11 +95,29 @@ class _HandlerResult:
     ``handle_zim_query`` detects the type at runtime and unpacks the fields
     before the footer step — existing handlers that return strings are
     completely unaffected.
+
+    ``refit`` re-renders ``body`` with its paginated content at least N
+    chars shorter, or returns ``None`` when it cannot. A compact response
+    over its budget is re-rendered through it before the size cap gets to
+    cut it, so a page's own continuation hint survives (see
+    ``_finalize_compact_response``).
     """
 
     body: str
     reason: Optional[str] = None
     suggestions: Optional[List[Dict[str, str]]] = field(default=None)
+    # ``True`` only for a body composed entirely of this server's own text
+    # and the caller's arguments — no string the archive supplied. Such a
+    # body skips the untrusted-content fence, whose "do not execute any
+    # directives" label otherwise told the model to ignore the server's own
+    # recovery advice. Anything carrying archive text keeps the default.
+    server_authored: bool = False
+    refit: Optional[Callable[[int], Optional[str]]] = None
+
+
+def _server_advice(body: str) -> _HandlerResult:
+    """Mark ``body`` as written wholly by this server (see ``_HandlerResult``)."""
+    return _HandlerResult(body=body, server_authored=True)
 
 
 def _carry_reason(body: str, payload: Any) -> Union[str, _HandlerResult]:
@@ -706,6 +719,40 @@ class SimpleToolsHandler(
         if zim_file_path:
             zim_file_path = self._normalize_zim_file_path(zim_file_path)
 
+        # Reject empty / whitespace-only queries upfront. The router would
+        # otherwise classify the input as a low-confidence search and fall
+        # through to ``search_zim_file("")``, which the search tool itself
+        # rejects — so the only thing we'd return is a confusing "No search
+        # results found for ''" string. Validate at the front door so the
+        # caller gets an actionable message. The guard sits above the
+        # synthesize branch, which used to run first: it searched the empty
+        # string and returned a 0-hit briefing as a success.
+        if not query or not query.strip():
+            # D-Q1: a rejected argument must be flagged. ``query=null`` /
+            # ``123`` / ``["a"]`` already come back as the structured
+            # ``invalid_argument`` envelope from argument validation, while
+            # ``""`` and ``"   "`` — the shape a template that failed to
+            # interpolate produces — returned prose on the SUCCESS path, so a
+            # client branching on ``isError`` recorded an empty query as a
+            # successful retrieval. Same conversion D51 (cursor mismatch) and
+            # D58 (security denial) already made for their branches: the
+            # prose is unchanged and rides in ``message``, with ``operation``
+            # replacing the inline telemetry marker.
+            return tool_error(
+                operation="query_required",
+                message=(
+                    "**Query Required**\n\n"
+                    "**Issue**: query must be a non-empty "
+                    "natural-language string.\n\n"
+                    "**Examples**:\n"
+                    "- `list available ZIM files`\n"
+                    '- `search for "evolution"`\n'
+                    "- `get article Tiger`\n"
+                    "- `show structure of Biology`"
+                ),
+                extras={"invalid_arguments": ["query"]},
+            )
+
         if options.get("synthesize"):
             try:
                 return self._handle_synthesize_query(
@@ -726,56 +773,9 @@ class SimpleToolsHandler(
         # request so a prior request's outcome can never leak into this
         # request's ``<!-- reranker=<state> -->`` marker. The marker is read
         # from ``_RERANK_STATE_VAR`` (stamped as the rerank runs), not the
-        # process-wide Counter below — see ``_compute_rerank_state``.
+        # process-wide telemetry Counter — see ``_compute_rerank_state``.
         _RERANK_STATE_VAR.set(None)
-        # The ``_RERANK_EVENTS_BEFORE`` snapshot is retained only for the
-        # ``get_server_health`` telemetry contract; the in-band marker no
-        # longer derives from it.
-        _RERANK_EVENTS_BEFORE = {
-            _RERANKER_ENGAGED: self._telemetry.get(_RERANKER_ENGAGED, 0),
-            _RERANKER_SKIPPED_NOT_INSTALLED: self._telemetry.get(
-                _RERANKER_SKIPPED_NOT_INSTALLED, 0
-            ),
-            _RERANKER_SKIPPED_NO_RESULTS: self._telemetry.get(
-                _RERANKER_SKIPPED_NO_RESULTS, 0
-            ),
-            _RERANKER_SKIPPED_PASSTHROUGH: self._telemetry.get(
-                _RERANKER_SKIPPED_PASSTHROUGH, 0
-            ),
-        }
         try:
-            # Reject empty / whitespace-only queries upfront. The router
-            # would otherwise classify the input as a low-confidence search
-            # and fall through to ``search_zim_file("")``, which the search
-            # tool itself rejects — so the only thing we'd return is a
-            # confusing "No search results found for ''" string. Validate
-            # at the front door so the caller gets an actionable message.
-            if not query or not query.strip():
-                # D-Q1: a rejected argument must be flagged. ``query=null``
-                # / ``123`` / ``["a"]`` already come back as the structured
-                # ``invalid_argument`` envelope from argument validation,
-                # while ``""`` and ``"   "`` — the shape a template that
-                # failed to interpolate produces — returned prose on the
-                # SUCCESS path, so a client branching on ``isError``
-                # recorded an empty query as a successful retrieval. Same
-                # conversion D51 (cursor mismatch) and D58 (security
-                # denial) already made for their branches: the prose is
-                # unchanged and rides in ``message``, with ``operation``
-                # replacing the inline telemetry marker.
-                return tool_error(
-                    operation="query_required",
-                    message=(
-                        "**Query Required**\n\n"
-                        "**Issue**: query must be a non-empty "
-                        "natural-language string.\n\n"
-                        "**Examples**:\n"
-                        "- `list available ZIM files`\n"
-                        '- `search for "evolution"`\n'
-                        "- `get article Tiger`\n"
-                        "- `show structure of Biology`"
-                    ),
-                    extras={"invalid_arguments": ["query"]},
-                )
             # Conversational filler / meta-instructions ("do both",
             # "try again", "test this", "ok") have no information content
             # for the intent classifier and would otherwise produce one of:
@@ -869,7 +869,6 @@ class SimpleToolsHandler(
                     low_confidence_note=low_confidence_note,
                     handler_reason=None,
                     handler_suggestions=None,
-                    rerank_events_before=_RERANK_EVENTS_BEFORE,
                 )
 
             # Post-v2.0.0 D-A: ``search_all`` is semantically cross-archive
@@ -931,7 +930,6 @@ class SimpleToolsHandler(
                         low_confidence_note="",
                         handler_reason=None,
                         handler_suggestions=None,
-                        rerank_events_before=_RERANK_EVENTS_BEFORE,
                     )
             # Hallucinated paths were already normalized at the top of
             # ``handle_zim_query`` (see comment above the synthesize branch).
@@ -971,14 +969,18 @@ class SimpleToolsHandler(
                 return raw
             # Unpack structured handler results; plain string handlers are
             # unaffected — they return a ``str`` as before.
+            refit: Optional[Callable[[int], Optional[str]]] = None
             if isinstance(raw, _HandlerResult):
                 result = raw.body
                 handler_reason: Optional[str] = raw.reason
                 handler_suggestions: Optional[List[Dict[str, str]]] = raw.suggestions
+                server_authored = raw.server_authored
+                refit = raw.refit
             else:
                 result = raw
                 handler_reason = None
                 handler_suggestions = None
+                server_authored = False
             result = self._finalize_compact_response(
                 result,
                 intent=intent,
@@ -987,7 +989,8 @@ class SimpleToolsHandler(
                 low_confidence_note=low_confidence_note,
                 handler_reason=handler_reason,
                 handler_suggestions=handler_suggestions,
-                rerank_events_before=_RERANK_EVENTS_BEFORE,
+                server_authored=server_authored,
+                refit=refit,
             )
             return result
 
@@ -1131,34 +1134,21 @@ class SimpleToolsHandler(
         low_confidence_note: str,
         handler_reason: Optional[str],
         handler_suggestions: Optional[List[Dict[str, str]]],
-        rerank_events_before: Dict[str, int],
+        server_authored: bool = False,
+        refit: Optional[Callable[[int], Optional[str]]] = None,
     ) -> str:
         """Apply the compact-mode post-processing pipeline to a handler result:
         link-strip, snippet-truncate, low-confidence note, intent/rerank
         telemetry markers, size-cap, and footer. (Extracted verbatim from
         handle_zim_query; behavior unchanged.)
+
+        ``refit`` is the handler's ``_HandlerResult.refit``: an over-budget
+        page is re-rendered through it before the size cap gets to cut it.
         """
-        if options.get("compact", False) and intent in self._TEXT_HEAVY_INTENTS:
-            # Strip markdown link-soup ([text](href "tooltip") -> text)
-            # from article-body and search-snippet responses. Wikipedia
-            # markdown is ~50% link syntax in the head of a typical
-            # article, ~86% in main-page nav lists. Stripping ~halves
-            # the context cost for the same prose payload, without
-            # losing any content that a small LLM was going to use
-            # anyway (small LLMs don't follow inline links from inside
-            # tool responses; they issue follow-up tool calls). The
-            # JSON-returning intents (structure / links / find_by_title
-            # / related / etc.) handle their own compact rendering and
-            # are deliberately not in _TEXT_HEAVY_INTENTS.
-            result = self._strip_markdown_links(result)
-        if options.get("compact", False) and intent in self._SEARCH_RENDER_INTENTS:
-            # Search snippets default to 3000 chars per result. For
-            # 5 results that's 15k chars of preview alone — a small
-            # LLM only needs ~250 chars to rank relevance. Truncate
-            # each snippet AFTER the link-soup strip so the cap
-            # applies to the post-stripped char count.
-            result = self._truncate_search_snippets(result)
-        result = result + low_confidence_note
+        result = (
+            self._shape_compact_body(result, intent=intent, options=options)
+            + low_confidence_note
+        )
         # A11 Opp6: intent telemetry footer. Invisible to humans
         # (HTML comment, not rendered) but visible in the raw token
         # stream so a calling LLM can branch on the parsed intent
@@ -1184,7 +1174,7 @@ class SimpleToolsHandler(
             # calling LLM). Emitted only when the request actually
             # touched a search path — non-search intents leave the
             # counter untouched and the comment is suppressed.
-            _rerank_state = self._compute_rerank_state(rerank_events_before)
+            _rerank_state = self._compute_rerank_state()
             if _rerank_state is not None:
                 telemetry_markers += f"\n<!-- reranker={_rerank_state} -->"
             # In compact mode the markers are appended AFTER the size cap
@@ -1206,8 +1196,11 @@ class SimpleToolsHandler(
             # LLM knows it's seeing a tail.
             budget = self._resolve_compact_budget(options.get("compact_budget"))
             # Reserve room for the prompt-injection fence so its
-            # closing tag is never cut by the cap.
-            will_wrap = intent in self._PROMPT_INJECTION_FENCE_INTENTS
+            # closing tag is never cut by the cap. A server-authored body
+            # (see ``_HandlerResult``) carries no archive text to fence.
+            will_wrap = (
+                intent in self._PROMPT_INJECTION_FENCE_INTENTS and not server_authored
+            )
             effective_budget = (
                 budget - self._CONTENT_FENCE_OVERHEAD if will_wrap else budget
             )
@@ -1215,58 +1208,155 @@ class SimpleToolsHandler(
             # cap so the marker-carrying response stays within the same
             # budget envelope.
             effective_budget -= len(telemetry_markers)
-            # Capture pre-cap size to report truncation in footer
-            pre_cap_chars = len(result)
-            # ``_SELF_CAPPED_INTENTS`` render their own budget-aware,
-            # structurally-valid output (e.g. ``structure`` keeps the whole
-            # heading skeleton as valid JSON). The generic byte-cap would
-            # sever that mid-JSON and drop trailing sections, so skip it.
-            if intent in self._SELF_CAPPED_INTENTS:
-                was_truncated = False
-            else:
-                if len(result) > effective_budget:
-                    self._track("response_truncated")
-                result = self._cap_response_size(
-                    result, effective_budget, intent=intent
+            # A page that can re-render itself smaller does so before the cap
+            # gets to cut it: the data layer re-cuts the page, so its own
+            # ``content_offset`` hint names the first character not served.
+            # Cutting the rendered page severed that hint instead, and the
+            # next page by the page size skipped everything the cut removed.
+            if refit is not None:
+                for _ in range(self._FOOTER_FIT_ROUNDS):
+                    whole, _uncut = self._assemble_compact_response(
+                        result,
+                        None,
+                        intent=intent,
+                        will_wrap=will_wrap,
+                        telemetry_markers=telemetry_markers,
+                        handler_reason=handler_reason,
+                        handler_suggestions=handler_suggestions,
+                    )
+                    over = len(whole) - budget
+                    if over <= 0:
+                        break
+                    smaller = refit(over)
+                    if smaller is None:
+                        break
+                    result = (
+                        self._shape_compact_body(
+                            smaller, intent=intent, options=options
+                        )
+                        + low_confidence_note
+                    )
+            # The ``>`` footer measures the finished response, so its length
+            # is only known once the body is capped: assemble, and when the
+            # footer pushed the total past ``budget``, take the overshoot off
+            # the cap and assemble again. Nothing reserved it before, so
+            # ``tiny`` shipped 2,036 chars against its documented 2,000.
+            cap_at = effective_budget
+            for _ in range(self._FOOTER_FIT_ROUNDS):
+                assembled, was_truncated = self._assemble_compact_response(
+                    result,
+                    cap_at,
+                    intent=intent,
+                    will_wrap=will_wrap,
+                    telemetry_markers=telemetry_markers,
+                    handler_reason=handler_reason,
+                    handler_suggestions=handler_suggestions,
                 )
-                # Determine if truncation occurred
-                was_truncated = len(result) < pre_cap_chars
-            if telemetry_markers and isinstance(result, str):
-                result = result + telemetry_markers
-            if will_wrap and isinstance(result, str):
-                result = self._wrap_retrieved_content(result)
-
-            # Op5 (v2.0.0a9): simple-mode truncation comes from
-            # ``_cap_response_size`` capping the *rendered output*
-            # — the operation underneath doesn't support content-
-            # byte re-pagination from this layer. Passing
-            # ``content_chars=None`` suppresses the misleading
-            # ``pass offset=N for more`` footer hint (which
-            # interprets ``offset`` as a result-set index for
-            # search/browse, not a byte offset). The
-            # ``_cap_response_size`` body already carries the
-            # actionable recovery advice (``tighter query`` /
-            # ``compact=False``) so the user isn't blind.
-            # ``total_chars`` stays so callers can still see how
-            # much was elided. ``handler_reason`` /
-            # ``handler_suggestions`` (compact-mode zero-result
-            # search) drive the empty-result footer variant.
-            meta = build_meta(
-                rendered=result,
-                truncated=was_truncated,
-                content_chars=None,
-                total_chars=pre_cap_chars if was_truncated else None,
-                reason=handler_reason,
-                suggestions=handler_suggestions,
-            )
-            footer = format_footer(
-                meta,
-                footer_enabled=self.zim_operations.config.meta.footer_enabled,
-                tool_mode=self.zim_operations.config.tool_mode,
-            )
-            if footer:
-                result = result + "\n\n" + footer
+                over = len(assembled) - budget
+                if over <= 0 or intent in self._SELF_CAPPED_INTENTS:
+                    break
+                cap_at = max(cap_at - over, 0)
+            if was_truncated:
+                self._track("response_truncated")
+            result = assembled
         return result
+
+    def _shape_compact_body(
+        self, result: str, *, intent: str, options: Dict[str, Any]
+    ) -> str:
+        """The per-intent compact trims a handler's body gets before the cap."""
+        if options.get("compact", False) and intent in self._TEXT_HEAVY_INTENTS:
+            # Strip markdown link-soup ([text](href "tooltip") -> text)
+            # from article-body and search-snippet responses. Wikipedia
+            # markdown is ~50% link syntax in the head of a typical
+            # article, ~86% in main-page nav lists. Stripping ~halves
+            # the context cost for the same prose payload, without
+            # losing any content that a small LLM was going to use
+            # anyway (small LLMs don't follow inline links from inside
+            # tool responses; they issue follow-up tool calls). The
+            # JSON-returning intents (structure / links / find_by_title
+            # / related / etc.) handle their own compact rendering and
+            # are deliberately not in _TEXT_HEAVY_INTENTS.
+            result = self._strip_markdown_links(result)
+        if options.get("compact", False) and intent in self._SEARCH_RENDER_INTENTS:
+            # Search snippets default to 3000 chars per result. For
+            # 5 results that's 15k chars of preview alone — a small
+            # LLM only needs ~250 chars to rank relevance. Truncate
+            # each snippet AFTER the link-soup strip so the cap
+            # applies to the post-stripped char count.
+            result = self._truncate_search_snippets(result)
+        return result
+
+    # Rounds of re-capping it takes the ``>`` footer to settle: its numbers
+    # move a few characters as the body shrinks, and its truncated form is
+    # longer than the plain one, so the first overshoot under-counts.
+    _FOOTER_FIT_ROUNDS = 6
+
+    def _assemble_compact_response(
+        self,
+        result: str,
+        cap_at: Optional[int],
+        *,
+        intent: str,
+        will_wrap: bool,
+        telemetry_markers: str,
+        handler_reason: Optional[str],
+        handler_suggestions: Optional[List[Dict[str, str]]],
+    ) -> Tuple[str, bool]:
+        """Cap ``result`` at ``cap_at`` and add what follows the cap.
+
+        Returns ``(response, was_truncated)``: the capped body with the
+        telemetry markers, the content fence and the ``>`` footer applied.
+        ``cap_at=None`` skips the cap, to measure the response uncut.
+        """
+        # Capture pre-cap size to report truncation in footer
+        pre_cap_chars = len(result)
+        # ``_SELF_CAPPED_INTENTS`` render their own budget-aware,
+        # structurally-valid output (e.g. ``structure`` keeps the whole
+        # heading skeleton as valid JSON). The generic byte-cap would
+        # sever that mid-JSON and drop trailing sections, so skip it.
+        if cap_at is None or intent in self._SELF_CAPPED_INTENTS:
+            was_truncated = False
+        else:
+            result = self._cap_response_size(result, cap_at, intent=intent)
+            # Determine if truncation occurred
+            was_truncated = len(result) < pre_cap_chars
+        if telemetry_markers and isinstance(result, str):
+            result = result + telemetry_markers
+        if will_wrap and isinstance(result, str):
+            result = self._wrap_retrieved_content(result)
+
+        # Op5 (v2.0.0a9): simple-mode truncation comes from
+        # ``_cap_response_size`` capping the *rendered output*
+        # — the operation underneath doesn't support content-
+        # byte re-pagination from this layer. Passing
+        # ``content_chars=None`` suppresses the misleading
+        # ``pass offset=N for more`` footer hint (which
+        # interprets ``offset`` as a result-set index for
+        # search/browse, not a byte offset). The
+        # ``_cap_response_size`` body already carries the
+        # actionable recovery advice (``tighter query`` /
+        # ``compact=False``) so the user isn't blind.
+        # ``total_chars`` stays so callers can still see how
+        # much was elided. ``handler_reason`` /
+        # ``handler_suggestions`` (compact-mode zero-result
+        # search) drive the empty-result footer variant.
+        meta = build_meta(
+            rendered=result,
+            truncated=was_truncated,
+            content_chars=None,
+            total_chars=pre_cap_chars if was_truncated else None,
+            reason=handler_reason,
+            suggestions=handler_suggestions,
+        )
+        footer = format_footer(
+            meta,
+            footer_enabled=self.zim_operations.config.meta.footer_enabled,
+            tool_mode=self.zim_operations.config.tool_mode,
+        )
+        if footer:
+            result = result + "\n\n" + footer
+        return result, was_truncated
 
     def _zim_path_recovery_hint(self) -> Optional[str]:
         """Post-a20 PD2-4: render the recovery hint surfaced by the
@@ -1459,7 +1549,12 @@ class SimpleToolsHandler(
 
           * capped at 4 tokens — anything longer is a real phrase;
           * every alphanumeric token must be in
-            ``IntentParser._COMMON_FILLER_TOKENS``;
+            ``IntentParser._ALWAYS_FILLER_TOKENS``. Not the full
+            ``_COMMON_FILLER_TOKENS``: its bare-query-only nouns are
+            meta-talk as a whole message (``stress test``) but a topic
+            once the caller frames them as one — ``tell me about stress``
+            and ``what is being`` were refused with the playbook while
+            the archive held both articles;
           * a capitalized occurrence of any of those tokens in what the
             caller actually TYPED is a proper-noun signal (``tell me
             about It``, the film) and defers to the parser. Rule 1
@@ -1470,7 +1565,7 @@ class SimpleToolsHandler(
         if not tokens or len(tokens) > 4:
             return False
         lowered = {t.lower() for t in tokens}
-        if not all(t in IntentParser._COMMON_FILLER_TOKENS for t in lowered):
+        if not all(t in IntentParser._ALWAYS_FILLER_TOKENS for t in lowered):
             return False
         for raw in re.findall(r"[A-Za-z0-9]+", original_query or ""):
             if raw.lower() in lowered and raw[0].isupper():
@@ -1538,6 +1633,10 @@ class SimpleToolsHandler(
     # bodies in one response — strictly more untrusted prose than the
     # single-article surfaces — so it must be fenced. This set is therefore
     # not a subset of ``_TEXT_HEAVY_INTENTS``.
+    #
+    # The one exemption is a body these intents answer with that holds no
+    # archive text at all — missing-argument guidance, a not-found on the
+    # caller's own path — which its handler returns via ``_server_advice``.
     _PROMPT_INJECTION_FENCE_INTENTS = frozenset(
         {
             "main_page",
@@ -1753,15 +1852,17 @@ class SimpleToolsHandler(
     @staticmethod
     def _canonicalize_entry_path(value: str) -> str:
         """Fold an entry path to a comparison key: lowercase, with ``_`` and
-        whitespace treated as equivalent.
+        whitespace treated as equivalent, and a client's leading ``/`` gone.
 
         Simple mode rewrites the caller's phrasing on the way to the backend
         (``links in Berlin`` reaches it as ``berlin``), so an exact ``!=``
         against a cursor's raw ``ep`` would false-reject legitimate resumes.
-        The advanced ``zim_links`` surface can afford a plain ``!=`` because
-        it never rewrites ``entry_path``.
+        The cursor's ``ep`` is minted from the slash-stripped path
+        (``normalize_entry_path``), so the slash has to go here too. The
+        advanced ``zim_links`` surface compares the normalized path exactly,
+        because it never rewrites ``entry_path`` otherwise.
         """
-        return " ".join(value.replace("_", " ").split()).lower()
+        return " ".join(value.lstrip("/").replace("_", " ").split()).lower()
 
     @classmethod
     def _cursor_entry_mismatch(
@@ -1975,7 +2076,8 @@ class SimpleToolsHandler(
         entry_path: str,
         exc: Exception,
         op_label: str,
-    ) -> str:
+        requested: Optional[str] = None,
+    ) -> Union[str, _HandlerResult]:
         """Render a structured "entry not found" response for handlers
         whose underlying backend call raised on an unknown entry path.
 
@@ -1993,8 +2095,30 @@ class SimpleToolsHandler(
         ``<!-- intent=... cert=... -->`` telemetry comment on success
         — which now fires because the handler returned a string instead
         of raising.
+
+        ``requested`` is the path as the caller wrote it, before title
+        resolution. When the failure is a plain not-found on that same path,
+        nothing here came from the archive: the bullets are constants, the
+        path is the caller's, and every ``OpenZimMcpEntryNotFoundError`` is
+        composed from the requested path and server text. The body then
+        skips the untrusted-content fence, so its recovery advice is not
+        labelled as text to ignore. It is rendered from the not-found's own
+        message — the error itself, or the one a data-layer wrapper (the
+        summary's) was raised from — never the wrapper's, which this layer
+        cannot vouch for. Any other failure, or a path the title index
+        supplied, stays a plain string and keeps the fence.
         """
-        err = self._strip_backend_recovery(sanitize_context_for_error(str(exc)))
+        not_found = next(
+            (
+                e
+                for e in (exc, exc.__cause__)
+                if isinstance(e, OpenZimMcpEntryNotFoundError)
+            ),
+            None,
+        )
+        trusted = not_found is not None and entry_path == requested
+        source = not_found if trusted else exc
+        err = self._strip_backend_recovery(sanitize_context_for_error(str(source)))
         recovery_path = entry_path[:60]
         # Post-v2.0.5 D-P: add `tell me about X` as a fourth
         # recovery option. Same sibling-widening as D-N (which added
@@ -2004,7 +2128,7 @@ class SimpleToolsHandler(
         # pure ``find article titled X`` title-only path — worth
         # both, since the caller may have a typo (title-index
         # recovers) or a paraphrase (RAG recovers).
-        return (
+        body = (
             f"**Article not found: `{entry_path}`**\n\n"
             f"`{op_label} {entry_path}` failed: {err}\n\n"
             "**Try one of these to recover:**\n"
@@ -2016,6 +2140,7 @@ class SimpleToolsHandler(
             f"- `tell me about {entry_path}` — fuzzy title-index "
             "lookup with RAG fallback when no exact title matches\n"
         )
+        return _server_advice(body) if trusted else body
 
     def _render_invalid_request(
         self,
@@ -2023,7 +2148,7 @@ class SimpleToolsHandler(
         exc: "OpenZimMcpValidationError",
         op_label: str,
         limit_capable: bool = False,
-    ) -> str:
+    ) -> ToolErrorPayload:
         """Render a structured "invalid request" response for a backend
         ``OpenZimMcpValidationError``.
 
@@ -2064,6 +2189,15 @@ class SimpleToolsHandler(
         exception type, so the argument the message names is the only
         signal available; it selects the BULLET ORDER only, never routing,
         and every arm still lists the other two recoveries below.
+
+        A rejected argument is a failure, so the prose rides in a
+        ``tool_error`` envelope's ``message`` — the conversion D-Q1 / D51 /
+        D58 made for their branches. Returned as a string it travelled the
+        success path: ``isError`` stayed false, and on a fenced intent the
+        advice was wrapped as untrusted archive content. A cursor fault is
+        reported as ``cursor_decode``, the code ``zim_query`` uses for every
+        cursor fault — browse's handler-edge archive check already answered
+        with it. The exception TYPE decides that, not the message.
         """
         err = self._strip_backend_recovery(sanitize_context_for_error(str(exc)))
         if "cursor" in str(exc).lower():
@@ -2083,14 +2217,21 @@ class SimpleToolsHandler(
                 "option — this operation takes no `limit`, so the constraint "
                 "named above is on some other argument\n"
             )
-        return (
-            f"**Invalid Request**\n\n"
-            f"`{op_label} {entry_path}` was rejected: {err}\n\n"
-            "**Try one of these to recover:**\n"
-            + first_bullet
-            + "- Drop the offending option entirely to use the default\n"
-            + f"- `{op_label} {entry_path}` with no extra options — the "
-            "constraint named above is on an argument, not on the archive\n"
+        return tool_error(
+            operation=(
+                "cursor_decode"
+                if isinstance(exc, OpenZimMcpCursorMismatchError)
+                else "invalid_request"
+            ),
+            message=(
+                f"**Invalid Request**\n\n"
+                f"`{op_label} {entry_path}` was rejected: {err}\n\n"
+                "**Try one of these to recover:**\n"
+                + first_bullet
+                + "- Drop the offending option entirely to use the default\n"
+                + f"- `{op_label} {entry_path}` with no extra options — the "
+                "constraint named above is on an argument, not on the archive\n"
+            ),
         )
 
     @staticmethod
@@ -2139,8 +2280,20 @@ class SimpleToolsHandler(
         elsewhere so the same single-edit typos that route through
         ``tell me about`` also route through these handlers.
         """
+        promoted = self._title_index_match(zim_file_path, entry_path)
+        return str(promoted["path"]) if promoted is not None else entry_path
+
+    def _title_index_match(
+        self, zim_file_path: str, entry_path: str
+    ) -> Optional[Dict[str, Any]]:
+        """The title-index row ``_resolve_natural_language_path`` promotes.
+
+        ``None`` when there is none, so the literal path is looked up. Split
+        out so a handler can also see WHAT the row matched, which is how
+        ``_substitution_note`` tells a respelling from a different article.
+        """
         if not entry_path:
-            return entry_path
+            return None
         try:
             promoted = find_title_match(
                 self.zim_operations,
@@ -2154,10 +2307,52 @@ class SimpleToolsHandler(
                 entry_path,
                 e,
             )
-            return entry_path
+            return None
         if promoted is not None and promoted.get("path"):
-            return str(promoted["path"])
-        return entry_path
+            return promoted
+        return None
+
+    @staticmethod
+    def _substitution_note(asked: str, promoted: Optional[Dict[str, Any]]) -> str:
+        """A one-line note when the promoted entry is not the one ``asked``.
+
+        mini has no Evolution article, and ``get article Evolution`` served
+        Biodiversity — a 0.95 suggestion that walked the associative redirect
+        ``A/Biodiversity_and_evolution`` — under a header that read like a
+        direct hit. Promotion at ``min_score=0.8`` is deliberate (it is what
+        resolves ``list of common misconceptions``), so the result stands;
+        it just has to say so.
+
+        Silent when the row only respelled the request. ``direct`` is the
+        title index's own verdict of an exact match — case-insensitive, and
+        after a scraped title's site suffix is dropped ("Virtue Ethics |
+        Internet Encyclopedia of Philosophy" for ``virtue ethics``, whose
+        path spells nothing of it). Any other row still counts when the
+        request, with ``_`` read as a space, names the served title or path,
+        or the redirect stub it came through (``global warming`` reaching
+        Climate change through ``A/Global_warming``).
+        """
+        if promoted is None or promoted.get("match_type") == "direct":
+            return ""
+
+        def spelling(text: str) -> str:
+            name = re.sub(r"^[A-Za-z-]/", "", text)
+            return " ".join(name.replace("_", " ").split()).casefold()
+
+        wanted = spelling(asked)
+        named = (
+            promoted.get("path"),
+            promoted.get("title"),
+            promoted.get("pre_redirect_path"),
+        )
+        if any(isinstance(n, str) and n and spelling(n) == wanted for n in named):
+            return ""
+        path = str(promoted["path"])
+        title = str(promoted.get("title") or path)
+        return (
+            f'> No entry is named "{asked}"; showing the closest title match, '
+            f'"{title}" ({path}).\n\n'
+        )
 
     def _handle_structure(
         self,
@@ -2165,7 +2360,7 @@ class SimpleToolsHandler(
         zim_file_path: str,
         params: Dict[str, Any],
         options: Dict[str, Any],
-    ) -> str:
+    ) -> Union[str, _HandlerResult, ToolErrorPayload]:
         """O6 (beta): the ``show structure`` operation returns a FLAT list
         of headings (with per-heading summaries in non-compact mode), while
         the sibling ``table of contents`` operation
@@ -2199,10 +2394,12 @@ class SimpleToolsHandler(
                 # never severs the JSON mid-heading. ``structure`` is in
                 # ``_SELF_CAPPED_INTENTS`` so the generic cap is skipped for
                 # it. Reserve a small margin for the trailing intent/reranker
-                # telemetry comments appended after the body.
+                # telemetry comments and ``>`` footer appended after the
+                # body. No floor: the budget is already clamped to 500, and
+                # ``max(budget - 200, 500)`` spent the whole margin there.
                 budget = self._resolve_compact_budget(options.get("compact_budget"))
                 return compact_renderers.compact_structure_payload(
-                    payload, budget=max(budget - 200, 500)
+                    payload, budget=budget - 200
                 )
             return self.zim_operations.get_article_structure(zim_file_path, entry_path)
         except OpenZimMcpArchivePathError:
@@ -2222,7 +2419,7 @@ class SimpleToolsHandler(
         zim_file_path: str,
         params: Dict[str, Any],
         options: Dict[str, Any],
-    ) -> str:
+    ) -> Union[str, _HandlerResult, ToolErrorPayload]:
         """O6 (beta): returns the article's heading set as a NESTED tree
         with ``children`` links per node, distinct from the FLAT
         :meth:`_handle_structure` listing. Use ``show structure`` for a
@@ -2267,15 +2464,16 @@ class SimpleToolsHandler(
         zim_file_path: str,
         params: Dict[str, Any],
         options: Dict[str, Any],
-    ) -> str:
+    ) -> Union[str, _HandlerResult, ToolErrorPayload]:
         entry_path = params.get("entry_path")
         if not entry_path:
-            return (
+            return _server_advice(
                 "**Missing Article Path**\n\n"
                 "Please specify which article you want a summary for.\n"
                 "**Example**: 'summary of Biology' or "
                 "'summarize \"C/Evolution\"'"
             )
+        requested = entry_path
         entry_path = self._resolve_natural_language_path(zim_file_path, entry_path)
         try:
             return self.zim_operations.get_entry_summary(
@@ -2293,7 +2491,9 @@ class SimpleToolsHandler(
         except OpenZimMcpValidationError as e:
             return self._render_invalid_request(entry_path, e, "summary of")
         except Exception as e:
-            return self._render_not_found_recovery(entry_path, e, "summary of")
+            return self._render_not_found_recovery(
+                entry_path, e, "summary of", requested=requested
+            )
 
     # D-S1: connector inside a section NAME. ``section Table of Contents of
     # iep.utm.edu/aristotle/`` is split by ``_extract_get_section`` at the
@@ -2370,14 +2570,19 @@ class SimpleToolsHandler(
             if 0 <= idx < len(headings):
                 target = headings[idx]
         if target is None:
-            wanted = section_name.lower()
+            # NFC on both sides: an archive may store a heading decomposed
+            # (IEP's "Al-Ghazālī") that the caller types composed.
+            def fold(text: str) -> str:
+                return unicodedata.normalize("NFC", text.strip()).lower()
+
+            wanted = fold(section_name)
             for h in headings:
-                if h.get("text", "").strip().lower() == wanted:
+                if fold(h.get("text", "")) == wanted:
                     target = h
                     break
             if target is None and not section_name.isdecimal():
                 for h in headings:
-                    if wanted in h.get("text", "").strip().lower():
+                    if wanted in fold(h.get("text", "")):
                         target = h
                         break
         return target
@@ -2388,7 +2593,7 @@ class SimpleToolsHandler(
         zim_file_path: str,
         params: Dict[str, Any],
         options: Dict[str, Any],
-    ) -> str:
+    ) -> Union[str, _HandlerResult]:
         """Fetch a single named section out of an article.
 
         Closes the loop on the lead-section + TOC pattern in
@@ -2404,7 +2609,7 @@ class SimpleToolsHandler(
         section_name = params.get("section_name", "").strip()
         entry_path = params.get("entry_path", "").strip()
         if not section_name or not entry_path:
-            return (
+            return _server_advice(
                 "**Missing Section Reference**\n\n"
                 "Please specify both a section name and an article.\n"
                 "**Examples**:\n"
@@ -2535,11 +2740,15 @@ class SimpleToolsHandler(
         section_id = target.get("id") or ""
         include_subsections = not bool(params.get("narrow"))
         try:
+            # ``compact`` picks the bundle: the compact one replaces large
+            # tables with "pass compact=False to expand" placeholders, so
+            # leaving it at the data layer's default made that advice loop.
             section = self.zim_operations.get_section_data(
                 zim_file_path,
                 entry_path,
                 section_id,
                 include_subsections=include_subsections,
+                compact=options.get("compact", True),
             )
         except Exception as e:
             return (
@@ -2600,7 +2809,7 @@ class SimpleToolsHandler(
         zim_file_path: str,
         params: Dict[str, Any],
         options: Dict[str, Any],
-    ) -> Union[str, ToolErrorPayload]:
+    ) -> Union[str, _HandlerResult, ToolErrorPayload]:
         entry_path = params.get("entry_path")
         if not entry_path:
             return (
@@ -2726,9 +2935,26 @@ class SimpleToolsHandler(
         zim_file_path: str,
         params: Dict[str, Any],
         options: Dict[str, Any],
-    ) -> str:
+    ) -> Union[str, _HandlerResult, ToolErrorPayload]:
         entry_path = params.get("entry_path")
         if not entry_path:
+            # The tip used to send callers to ``links in <article>``, which
+            # never shows a media path: the compact view drops the media
+            # bucket and the full view lists internal links only. Only the
+            # advanced surface lists an article's media; simple mode can list
+            # an ``I`` namespace, or keep the image links in the full body.
+            if self.zim_operations.config.tool_mode == recovery_advice.ADVANCED:
+                tip = (
+                    '`zim_links(entry_path=<article>, kind="media")` lists the '
+                    "media paths an article embeds."
+                )
+            else:
+                tip = (
+                    "`browse namespace I` lists an archive's media entries when "
+                    "it files them under `I`; otherwise `get article <article>` "
+                    "with `compact=False` keeps the article's image links, "
+                    "relative to its path."
+                )
             return (
                 "**Missing Entry Path**\n\n"
                 "Please specify the path of the binary content.\n"
@@ -2736,8 +2962,7 @@ class SimpleToolsHandler(
                 "- 'get binary content from \"I/image.png\"'\n"
                 "- 'extract pdf \"I/document.pdf\"'\n"
                 "- 'retrieve image I/logo.png'\n\n"
-                "**Tip**: `links in <article>` lists the media paths an "
-                "article embeds."
+                f"**Tip**: {tip}"
             )
         # D52: the sibling entry-taking handlers (structure / summary /
         # links / get article) route a backend miss through
@@ -2767,18 +2992,40 @@ class SimpleToolsHandler(
         zim_file_path: str,
         params: Dict[str, Any],
         options: Dict[str, Any],
-    ) -> str:
+    ) -> Union[str, _HandlerResult]:
         partial_query = params.get("partial_query", "")
         if not partial_query:
-            return (
+            return _server_advice(
                 "**Missing Search Term**\n\n"
                 "Please specify what you want suggestions for.\n"
                 "**Example**: 'suggestions for bio' or "
                 "'autocomplete \"evol\"'"
             )
-        return self.zim_operations.get_search_suggestions(
-            zim_file_path, partial_query, options.get("limit", 10)
+        # The suggestion index caps at 50 while ``zim_query`` documents
+        # 1..1000; unreconciled, 51+ reached the backend's rejection and came
+        # back as the generic "Error Processing Query".
+        limit, limit_note = self._clamp_intent_limit(
+            options.get("limit", 10), cap=50, default=10
         )
+        if not limit_note:
+            return self.zim_operations.get_search_suggestions(
+                zim_file_path, partial_query, limit
+            )
+        # This body is JSON, and the compact cap shrinks a JSON body by
+        # re-parsing it: the note the markdown intents append after their
+        # body would stop it parsing, and the character slice that follows
+        # cuts the note too. Carry it inside the payload — on a copy, because
+        # the data layer caches the dict it returns.
+        payload: Dict[str, Any] = dict(
+            self.zim_operations.get_search_suggestions_data(
+                zim_file_path, partial_query, limit
+            )
+        )
+        payload["note"] = limit_note.strip()
+        meta = payload.get("_meta")
+        if isinstance(meta, dict):
+            payload["_meta"] = dict(meta)
+        return json.dumps(remeasure(payload), indent=2, ensure_ascii=False)
 
     def _handle_filtered_search(
         self,
@@ -2809,7 +3056,7 @@ class SimpleToolsHandler(
             # missing-namespace envelopes never embedded it and rely on
             # the auto-append. Drop the embedded comment so the
             # response carries exactly one intent footer.
-            return (
+            return _server_advice(
                 "**Missing or Invalid Namespace**\n\n"
                 "**Issue**: `search ... in namespace` needs a single "
                 "namespace letter (A, C, M, W, etc.; case-insensitive).\n"
@@ -2946,7 +3193,7 @@ class SimpleToolsHandler(
         zim_file_path: str,
         params: Dict[str, Any],
         options: Dict[str, Any],
-    ) -> str:
+    ) -> Union[str, _HandlerResult, ToolErrorPayload]:
         entry_path = params.get("entry_path")
         if not entry_path:
             # If no specific path, strip common request words and use the
@@ -2973,7 +3220,7 @@ class SimpleToolsHandler(
             # regenerates the literal from ``query`` and bypasses it).
             cleaned_query = _strip_quote_pair(cleaned_query)
             if not cleaned_query:
-                return (
+                return _server_advice(
                     "**Missing Article Path**\n\n"
                     "Please specify which article you want to read.\n"
                     "**Example**: 'get article Biology' or "
@@ -2997,15 +3244,27 @@ class SimpleToolsHandler(
         # unchanged, so namespace-prefixed paths (``A/Biology``)
         # still fall through to the direct lookup at zero behaviour
         # cost.
-        entry_path = self._resolve_natural_language_path(zim_file_path, entry_path)
-        try:
-            return self.zim_operations.get_zim_entry(
+        requested = entry_path
+        asked = self._recase_from_original(entry_path, query)
+        promoted = self._title_index_match(zim_file_path, entry_path)
+        if promoted is not None:
+            entry_path = str(promoted["path"])
+        compact = options.get("compact", False)
+        # The substitution note rides inside ``fetch`` so a page the size cap
+        # re-fits (see ``_article_page_refit``) keeps it too.
+        note = self._substitution_note(asked, promoted)
+
+        def fetch(max_content_length: Optional[int]) -> str:
+            return note + self.zim_operations.get_zim_entry(
                 zim_file_path,
                 entry_path,
-                options.get("max_content_length"),
+                max_content_length,
                 options.get("content_offset", 0),
-                compact=options.get("compact", False),
+                compact=compact,
             )
+
+        try:
+            page = fetch(options.get("max_content_length"))
         except OpenZimMcpArchivePathError:
             # Archive-level failure (missing file, not a ZIM, unresolvable):
             # nothing about the *arguments* is wrong. Let it reach
@@ -3015,7 +3274,52 @@ class SimpleToolsHandler(
         except OpenZimMcpValidationError as e:
             return self._render_invalid_request(entry_path, e, "get article")
         except Exception as e:
-            return self._render_not_found_recovery(entry_path, e, "get article")
+            return self._render_not_found_recovery(
+                entry_path, e, "get article", requested=requested
+            )
+        if not compact:
+            return page
+        return _HandlerResult(page, refit=self._article_page_refit(page, fetch))
+
+    # How ``get_zim_entry`` lays out an article page: a header ending in
+    # ``## Content``, the body, and — when the body was cut to the page size —
+    # the note naming the ``content_offset`` of the first character not served.
+    _ARTICLE_BODY_START = "\n## Content\n\n"
+    _ARTICLE_PAGE_NOTE_RE = re.compile(
+        r"\n\n\.\.\. \[Content truncated, [^\n]*\] \.\.\.\Z"
+    )
+
+    def _article_page_refit(
+        self, page: str, fetch: Callable[[Optional[int]], str]
+    ) -> Callable[[int], Optional[str]]:
+        """``_HandlerResult.refit`` for an article page.
+
+        Re-fetches the page with its body ``over`` chars shorter, so the data
+        layer cuts it and computes its continuation note itself — the cap
+        that ran instead cut that note off along with the body it served.
+        """
+        current = [page]
+
+        def refit(over: int) -> Optional[str]:
+            text = current[0]
+            start = text.find(self._ARTICLE_BODY_START)
+            if start == -1:
+                return None
+            start += len(self._ARTICLE_BODY_START)
+            note = self._ARTICLE_PAGE_NOTE_RE.search(text, start)
+            body_chars = (note.start() if note else len(text)) - start - over
+            # Nothing smaller left to render: the size cap takes over. A
+            # zero-char page would hand back its own offset as the next one.
+            if body_chars < 1:
+                return None
+            try:
+                current[0] = fetch(body_chars)
+            except Exception as e:  # the cap still applies to the first page
+                logger.debug("get article: re-fit fetch failed: %s", e)
+                return None
+            return current[0]
+
+        return refit
 
     def _handle_search(
         self,
@@ -4220,15 +4524,37 @@ class SimpleToolsHandler(
         zim_file_path: str,
         params: Dict[str, Any],
         options: Dict[str, Any],
-    ) -> "Union[str, _HandlerResult]":
+    ) -> "Union[str, _HandlerResult, ToolErrorPayload]":
+        # The fan-out returns each archive's top hits and has no next page,
+        # so an ``offset`` was accepted and dropped — ``offset=300`` answered
+        # with page one. Refuse it the way ``zim_search(cross_file=True)``
+        # does, naming the single-archive search that does page.
+        offset = int(options.get("offset", 0) or 0)
+        if offset:
+            return tool_error(
+                operation="invalid_combination",
+                message=(
+                    "`search all files for` does not paginate: it returns the "
+                    f"top hits from every archive, so `offset` (provided: "
+                    f"{offset}) would return the same page. Drop `offset` and "
+                    "raise `limit` (up to 50 per archive) for more hits, or "
+                    "page one archive with `search for <terms>`, passing its "
+                    "`zim_file_path` and the `offset`."
+                ),
+            )
         # Honour caller-supplied ``limit`` (mapped to ``limit_per_file`` for
         # symmetry with other tools) and fall back to 5 — matching
-        # ``search_zim_file``'s explicit ``limit_per_file=5`` default.
+        # ``search_zim_file``'s explicit ``limit_per_file=5`` default. The
+        # fan-out caps ``limit_per_file`` at 50 while ``zim_query`` documents
+        # 1..1000, so clamp rather than let 51+ reach the backend's rejection.
+        limit, limit_note = self._clamp_intent_limit(
+            options.get("limit", 5), cap=50, default=5
+        )
         if options.get("compact", False):
             actual_query = params.get("query", query)
             data = self.zim_operations.search_all_data(
                 actual_query,
-                limit_per_file=options.get("limit", 5),
+                limit_per_file=limit,
             )
             # ``search all files for X`` is the one phrase the *ambiguous*
             # arm of the no-archive gate actively advertises, so a user who
@@ -4284,10 +4610,15 @@ class SimpleToolsHandler(
                 isinstance(e, dict) and e.get("error") for e in per_file
             ):
                 reason = "archive_unavailable"
-            return _HandlerResult(body=body, reason=reason, suggestions=suggestions)
+            return _HandlerResult(
+                body=body + limit_note, reason=reason, suggestions=suggestions
+            )
+        # Non-compact returns a JSON string, so — as on the links and related
+        # legacy paths — the clamp is not appended as prose; each file's
+        # ``page_info.limit`` still reports the size actually served.
         legacy = self.zim_operations.search_all(
             params.get("query", query),
-            limit_per_file=options.get("limit", 5),
+            limit_per_file=limit,
         )
         # Same signal, read out of the legacy JSON string variant. This is
         # this server's own envelope (``search_all`` is a ``json.dumps`` of
@@ -4298,9 +4629,9 @@ class SimpleToolsHandler(
             return self._nothing_to_search_response()
         return legacy
 
-    def _nothing_to_search_response(self) -> str:
+    def _nothing_to_search_response(self) -> _HandlerResult:
         """What ``search all files`` says when there is nothing to fan out over."""
-        return (
+        return _server_advice(
             "**No ZIM Archives Loaded**\n\n"
             "There is nothing to search across — the allowed directories "
             "contain no `.zim` files.\n\n"
@@ -4463,7 +4794,14 @@ class SimpleToolsHandler(
         # for slash-shaped titles and redirect only when it returns nothing;
         # otherwise render the real hits. The ≥3-char suffix floor avoids
         # false-positiving genuinely short slash titles (``a/b``).
-        limit = options.get("limit", 10)
+        #
+        # Clamped like the links and related intents: the title data layer
+        # caps ``limit`` at 50 while ``zim_query`` documents 1..1000, so 51+
+        # raised through to a generic "Error Processing Query" with a
+        # traceback logged at ERROR.
+        limit, limit_note = self._clamp_intent_limit(
+            options.get("limit", 10), cap=50, default=10
+        )
         compact = options.get("compact", False)
         looks_like_namespace_path = (
             len(title) >= 4
@@ -4472,11 +4810,14 @@ class SimpleToolsHandler(
             and title[1] == "/"
             and len(title[2:].strip()) >= 3
         )
+        typed_page = None
         if looks_like_namespace_path:
-            data = self.zim_operations.find_entry_by_title_data(
+            typed_page = self.zim_operations.find_entry_by_title_data(
                 zim_file_path, title, cross_file=False, limit=limit
             )
-            results = data.get("results") if isinstance(data, dict) else None
+            results = (
+                typed_page.get("results") if isinstance(typed_page, dict) else None
+            )
             if not results:
                 # Confirmed: a slash-shaped title with no title-index hit is a
                 # misrouted namespace path. libzim namespace lookups are
@@ -4493,21 +4834,25 @@ class SimpleToolsHandler(
                     f"- `find article titled {title[2:].strip()}` — "
                     "title-only lookup (drops the namespace prefix)\n"
                 )
-            # Real title that happens to contain '/': render its hits.
-            if compact:
-                return compact_renderers.render_find_by_title(data, title)
-            return self.zim_operations.find_entry_by_title(
-                zim_file_path, title, cross_file=False, limit=limit
-            )
+            # Real title that happens to contain '/': render its hits below.
+            # The verdict above reads the raw lookup on purpose: promotion
+            # can resolve a tail of ``M/Title`` to some unrelated ``Title``.
 
-        if compact:
-            data = self.zim_operations.find_entry_by_title_data(
-                zim_file_path, title, cross_file=False, limit=limit
-            )
-            return compact_renderers.render_find_by_title(data, title)
-        return self.zim_operations.find_entry_by_title(
-            zim_file_path, title, cross_file=False, limit=limit
+        # The page ``zim_search(mode='title')`` serves for the same string:
+        # rendering the raw lookup skipped its promotion and crawl-artefact
+        # demote, so the two surfaces disagreed on the order.
+        from .tools.zim_search import resolve_title_page
+        from .zim._ops_base import _json
+
+        data = resolve_title_page(
+            self.zim_operations, zim_file_path, title, limit=limit, raw=typed_page
         )
+        if compact:
+            return compact_renderers.render_find_by_title(data, title) + limit_note
+        # Non-compact returns a JSON string; appending the prose note would
+        # make it unparseable, so the clamp is surfaced only on the markdown
+        # (compact) rendering, as on the related intent.
+        return _json(data)
 
     def _handle_inbound_links(
         self,
@@ -4515,7 +4860,7 @@ class SimpleToolsHandler(
         zim_file_path: str,
         params: Dict[str, Any],
         options: Dict[str, Any],
-    ) -> str:
+    ) -> Union[str, ToolErrorPayload]:
         """Answer "what links HERE" from the link-graph sidecar.
 
         v3.3.1 field report: simple mode had no inbound concept at all. Every
@@ -4590,7 +4935,7 @@ class SimpleToolsHandler(
         zim_file_path: str,
         params: Dict[str, Any],
         options: Dict[str, Any],
-    ) -> str:
+    ) -> Union[str, ToolErrorPayload]:
         entry_path = params.get("entry_path")
         if not entry_path:
             # An empty entry_path used to be passed straight to the
@@ -4686,7 +5031,7 @@ class SimpleToolsHandler(
         zim_file_path: str,
         params: Dict[str, Any],
         options: Dict[str, Any],
-    ) -> str:
+    ) -> Union[str, _HandlerResult]:
         entry_paths = params.get("entries") or []
         if not entry_paths:
             # D50: teach both path shapes. zimit / warc2zim archives
@@ -4694,7 +5039,7 @@ class SimpleToolsHandler(
             # response's ``Path:`` line prints for them — pasting those
             # back must work, and the example must show the shape the
             # loaded archive actually uses.
-            return (
+            return _server_advice(
                 "**Missing Entry Paths**\n\n"
                 "I couldn't extract entry paths from your query. "
                 "Paste the `Path:` values other responses print, e.g., "
@@ -4831,7 +5176,15 @@ class SimpleToolsHandler(
                     logger.warning(
                         "Could not open archive %s for synthesize: %s", vp, e
                     )
-                    failed.append({"archive": Path(str(vp)).stem, "error": str(e)})
+                    # The open error embeds the absolute archive path; the
+                    # client gets it redacted to the filename, as every other
+                    # diagnostic does. The log line above keeps the real one.
+                    failed.append(
+                        {
+                            "archive": Path(str(vp)).stem,
+                            "error": sanitize_context_for_error(str(e)),
+                        }
+                    )
                     continue
 
             if not archives:
@@ -4871,8 +5224,13 @@ class SimpleToolsHandler(
                 # Present only when something failed: a key that is always
                 # there is one a reader stops looking at, and its absence
                 # is the "every archive was searched" signal.
+                #
+                # No ``remeasure``: synthesize's ``_meta`` measures the
+                # answer, not the envelope (see ``synthesize_query``), and
+                # this key leaves the answer untouched. Re-measuring switched
+                # ``chars`` to the whole JSON payload on exactly the responses
+                # that carry a failure — 5,267 became 8,265 for one answer.
                 response["archives_failed"] = failed
-                remeasure(cast(Dict[str, Any], response))
             return response
 
     def _synthesize_reject_meta_or_chained(

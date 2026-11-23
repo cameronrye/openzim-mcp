@@ -33,7 +33,7 @@ import json
 import re
 from pathlib import Path
 from types import MethodType
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, cast
 from unittest.mock import MagicMock
 
 import pytest
@@ -41,6 +41,7 @@ import pytest
 from openzim_mcp.bundle import extract_entry_bundle
 from openzim_mcp.content_processor import ContentProcessor
 from openzim_mcp.meta import _raw_tokens_est, build_meta
+from openzim_mcp.pagination import Cursor
 from openzim_mcp.simple_tools import SimpleToolsHandler
 from openzim_mcp.tools.zim_get import MAX_BINARY_CONTENT_LENGTH
 from openzim_mcp.zim.search import _SearchMixin
@@ -80,10 +81,29 @@ def _make_handler(**backend: Any) -> SimpleToolsHandler:
     return SimpleToolsHandler(mock)
 
 
-def _browse_payload(
-    rows: int, *, next_cursor: str = "eyJ2IjoyLCJ0IjoiYnJvd3NlIn0"
-) -> str:
-    """A ``browse_namespace`` response in the exact shape the backend emits."""
+def _cursor(tool: str, o: int, rows: int) -> str:
+    """A cursor as the backend mints it for a ``rows``-row page at offset 0."""
+    return Cursor.encode(
+        tool=tool,
+        state=cast(
+            Any, {"o": o, "l": rows, "ns": "C", "as": False, "ai": "0123456789ab"}
+        ),
+    )
+
+
+def _cursor_state(token: str) -> Dict[str, Any]:
+    raw = base64.urlsafe_b64decode(token + "=" * (-len(token) % 4))
+    return dict(json.loads(raw)["s"])
+
+
+def _browse_payload(rows: int, *, next_cursor: Optional[str] = None) -> str:
+    """A ``browse_namespace`` response in the exact shape the backend emits.
+
+    The default cursor is the one the backend mints for this page: one row
+    per offset, so it resumes at ``rows``.
+    """
+    if next_cursor is None:
+        next_cursor = _cursor("browse_namespace", rows, rows)
     return json.dumps(
         {
             "namespace": "C",
@@ -115,14 +135,21 @@ def _browse_payload(
 class TestCompactCapKeepsJsonParseable:
     """`browse namespace C` at default arguments returned unparseable JSON."""
 
-    def test_browse_body_still_parses_and_keeps_its_cursor(self) -> None:
+    def test_browse_body_still_parses_and_resumes_at_the_first_cut_row(self) -> None:
         handler = _make_handler(browse_namespace=_browse_payload(60))
         out = handler.handle_zim_query("browse namespace C", options={"compact": True})
 
         assert "Response truncated" in out, out[-400:]
         payload = _body_json(out)
-        # Positive: the continuation cursor and the envelope survive.
-        assert payload["next_cursor"] == "eyJ2IjoyLCJ0IjoiYnJvd3NlIn0"
+        # Positive: the continuation cursor and the envelope survive — the
+        # cursor re-pointed at the first row the cap cut, since the one the
+        # backend minted (``o=60``) would skip every one of them.
+        shipped = len(payload["results"])
+        state = _cursor_state(payload["next_cursor"])
+        assert state == {
+            **_cursor_state(_cursor("browse_namespace", 60, 60)),
+            "o": shipped,
+        }
         assert payload["total"] == 3178
         assert isinstance(payload["_meta"], dict)
         # The rows that DID ship are whole rows, not a severed prefix.
@@ -138,11 +165,39 @@ class TestCompactCapKeepsJsonParseable:
         assert payload["page_info"]["returned_count"] == len(payload["results"])
 
     def test_footer_names_a_route_that_exists(self) -> None:
-        """The generic footer points at a cursor; when rows were dropped the
-        cursor skips them, so the footer must name the smaller-limit route."""
+        """When rows were dropped the footer names the route that reaches
+        them: the re-pointed cursor here."""
         handler = _make_handler(browse_namespace=_browse_payload(60))
         out = handler.handle_zim_query("browse namespace C", options={"compact": True})
         assert "result rows were dropped" in out
+        assert "the cursor in the body above resumes at the first of them" in out
+
+    def test_a_cursor_that_cannot_be_re_pointed_is_dropped(self) -> None:
+        """``o=75`` for a 60-row page: the page consumed offsets it did not
+        render, so the first cut row's offset is unknowable. Shipping the
+        cursor would skip rows; the smaller-limit route recovers them."""
+        handler = _make_handler(
+            browse_namespace=_browse_payload(
+                60, next_cursor=_cursor("browse_namespace", 75, 60)
+            )
+        )
+        out = handler.handle_zim_query("browse namespace C", options={"compact": True})
+        payload = _body_json(out)
+        assert payload["next_cursor"] is None
+        assert payload["results"] and len(payload["results"]) < 60
+        assert "result rows were dropped" in out
+        assert "smaller `limit`" in out
+
+    def test_a_page_without_its_offset_does_not_keep_its_cursor(self) -> None:
+        """No ``page_info.offset``: nothing to count the first cut row from,
+        so the cursor (minted for the whole page) cannot be re-pointed."""
+        page = json.loads(_browse_payload(60))
+        del page["page_info"]
+        handler = _make_handler(browse_namespace=json.dumps(page, indent=2))
+        out = handler.handle_zim_query("browse namespace C", options={"compact": True})
+        payload = _body_json(out)
+        assert payload["next_cursor"] is None
+        assert payload["results"] and len(payload["results"]) < 60
         assert "smaller `limit`" in out
 
     def test_response_stays_within_the_budget(self) -> None:
@@ -153,7 +208,7 @@ class TestCompactCapKeepsJsonParseable:
         body = out.split("\n<!-- intent=")[0]
         assert len(body) <= 2_000
         payload = _body_json(out)
-        assert payload["next_cursor"] == "eyJ2IjoyLCJ0IjoiYnJvd3NlIn0"
+        assert _cursor_state(payload["next_cursor"])["o"] == len(payload["results"])
 
 
 class TestCompactCapKeepsMarkdownListings:
@@ -170,7 +225,8 @@ class TestCompactCapKeepsMarkdownListings:
                 }
                 for i in range(rows)
             ],
-            "next_cursor": "eyJ2IjoyLCJ0Ijoid2Fsa19uYW1lc3BhY2UifQ",
+            # One row per scanned entry id, so the walk resumes at id ``rows``.
+            "next_cursor": _cursor("walk_namespace", rows, rows),
             "done": False,
             "page_info": {"offset": 0, "limit": rows, "returned_count": rows},
             "scanned_count": rows,
@@ -183,7 +239,6 @@ class TestCompactCapKeepsMarkdownListings:
         out = handler.handle_zim_query("walk namespace C", options={"compact": True})
 
         assert "Response truncated" in out
-        assert "Pass `cursor=eyJ2IjoyLCJ0Ijoid2Fsa19uYW1lc3BhY2UifQ`" in out
         # Positive/negative pair: real bullets shipped, and none of them is
         # a half-emitted line.
         body = _strip_footer(out)
@@ -193,10 +248,13 @@ class TestCompactCapKeepsMarkdownListings:
             assert line.endswith(("`", "`)")), line
             assert line.count("`") % 2 == 0, line
             assert line.count("**") % 2 == 0, line
-        # The cursor skips the bullets that were cut, so the footer names the
-        # route that recovers them rather than the one that does not.
+        # The cursor line survives, re-pointed at the first bullet that was
+        # cut: the backend's ``o=200`` would skip every one of them.
+        cursor = re.search(r"Pass `cursor=([A-Za-z0-9_\-=]+)`", out)
+        assert cursor, out[-600:]
+        assert _cursor_state(cursor.group(1))["o"] == len(bullets)
         assert "result rows were dropped" in out
-        assert "smaller `limit`" in out
+        assert "the cursor in the body above resumes at the first of them" in out
 
     def test_body_stays_within_budget(self) -> None:
         handler = _make_handler(walk_namespace_data=self._walk_data(200))

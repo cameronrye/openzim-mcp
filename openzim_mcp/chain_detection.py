@@ -26,7 +26,8 @@ class _ChainMixin:
 
         zim_operations: "ZimOperations"
 
-        def _recase_from_original(self, token: str, original_query: str) -> str: ...
+        @staticmethod
+        def _recase_from_original(token: str, original_query: str) -> str: ...
 
     # A11 B1: connector tokens that split a chained query into two
     # halves. Each connector is a whole-word match (surrounded by
@@ -539,10 +540,17 @@ class _ChainMixin:
                 continue
             # Both halves must look like substantive proper-noun
             # phrases (filters ``He or she`` and other prose where
-            # the connector word is a normal English particle).
-            if not self._is_substantive_topic(left) or not self._is_substantive_topic(
-                right
-            ):
+            # the connector word is a normal English particle). Judged
+            # in the caller's typed case: Rule 1 lowercased the topic, so
+            # the short-ALL-CAPS-acronym clause never saw the ``COPD`` of
+            # ``asthma and COPD`` and the dropped half went unnamed.
+            left_typed, right_typed = left, right
+            if original_query:
+                left_typed = self._recase_from_original(left, original_query)
+                right_typed = self._recase_from_original(right, original_query)
+            if not self._is_substantive_topic(
+                left_typed
+            ) or not self._is_substantive_topic(right_typed):
                 continue
             title_lower = top_title.lower()
             left_in = left.lower() in title_lower
@@ -696,10 +704,20 @@ class _ChainMixin:
         return False
 
     @classmethod
-    def _split_multi_entity(cls, topic: str) -> Optional[List[str]]:
+    def _split_multi_entity(
+        cls, topic: str, original_query: Optional[str] = None
+    ) -> Optional[List[str]]:
         """Split ``topic`` into N substantive halves on any soft
         connector. Returns the list iff N ≥ 3 AND every half passes
         ``_is_substantive_topic``; otherwise None.
+
+        ``original_query`` is the caller's pre-Rule-1 text. When given,
+        each half is re-cased from it before the substantive check (and
+        returned that way): the live topic arrives lowercased, and the
+        short-ALL-CAPS-acronym clause cannot see ``HTTP`` as ``http``.
+        The typed case also lets one topic's aspect list (``the causes,
+        symptoms and treatments of asthma``) be told apart from N
+        entities and return None — see ``_is_aspect_list``.
 
         Used by ``_multi_entity_chain_guidance`` to decide whether a
         topic deserves the structured ``Multi-Entity Chain Detected``
@@ -810,9 +828,55 @@ class _ChainMixin:
                 cleaned.append(p)
         if len(cleaned) < 3:
             return None
+        if original_query:
+            cleaned = [cls._recase_from_original(p, original_query) for p in cleaned]
+            # Only with the typed case: Rule 1 makes ``causes`` and
+            # ``france`` look alike, so without it the halves are judged
+            # as entities, as before.
+            if cls._is_aspect_list(cleaned):
+                return None
         if not all(cls._is_substantive_topic(p) for p in cleaned):
             return None
         return cleaned
+
+    # Words that may open an aspect part (``the causes, ...``), and the
+    # prepositions that attach the shared object to the last one.
+    _ASPECT_DETERMINERS = frozenset({"the", "a", "an"})
+    _ASPECT_CONNECTORS = frozenset({"of", "for", "in"})
+
+    @classmethod
+    def _is_aspect_list(cls, parts: List[str]) -> bool:
+        """True when ``parts`` are one topic's aspects rather than N topics.
+
+        ``what are the causes, symptoms and treatments of asthma`` splits
+        into ``the causes`` / ``symptoms`` / ``treatments of asthma`` and
+        was rejected as three entities, with follow-ups ``tell me about
+        the causes`` and ``tell me about symptoms``. The ``of asthma`` in
+        the last part applies to every part. The shape: the last part is
+        ``<noun> of|for|in <X>``, and it and every earlier part is a bare
+        common noun — at most two words past an optional article, all
+        lowercase. ``parts`` must carry the caller's typed case, which is
+        what separates the aspects of ``causes, symptoms and ...`` from
+        the names in ``Plato, Aristotle and the philosophy of mind``.
+
+        String scans rather than a regex, like the conjunction strips
+        above, to keep S5852 quiet.
+        """
+
+        def bare_noun(words: List[str]) -> bool:
+            if words and words[0] in cls._ASPECT_DETERMINERS:
+                words = words[1:]
+            return 1 <= len(words) <= 2 and all(
+                w.isalpha() and w.islower() for w in words
+            )
+
+        *aspects, last = parts
+        words = last.split()
+        at = next((i for i, w in enumerate(words) if w in cls._ASPECT_CONNECTORS), -1)
+        # A connector with a head noun before it and an object after it.
+        if at < 1 or at == len(words) - 1 or not bare_noun(words[:at]):
+            return False
+        return all(bare_noun(a.split()) for a in aspects)
 
     @staticmethod
     def _path_matches_topic_loosely(path: str, topic: str) -> bool:
@@ -866,15 +930,18 @@ class _ChainMixin:
         topic = (params.get("topic") or "").strip() if isinstance(params, dict) else ""
         if not topic:
             return None
-        halves = self._split_multi_entity(topic)
-        if not halves:
-            return None
-        # Post-b1 P1-D2: recase each half against the original query.
+        # Post-b1 P1-D2: each half comes back recased against the original
+        # query, which the substantive check needs as well as the bullets
+        # (``tell me about TCP/IP and HTTP and HTTPS`` was never rejected,
+        # because ``http`` is not an ALL-CAPS acronym).
         original_query = (
             params.get("_pre_rewrite_query") if isinstance(params, dict) else None
         )
-        if isinstance(original_query, str) and original_query:
-            halves = [self._recase_from_original(h, original_query) for h in halves]
+        halves = self._split_multi_entity(
+            topic, original_query if isinstance(original_query, str) else None
+        )
+        if not halves:
+            return None
         # Probe the title index for the whole topic — if it resolves
         # cleanly to a single article whose path loosely matches the
         # topic, the user meant a real multi-entity title (band name,

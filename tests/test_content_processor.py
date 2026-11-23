@@ -143,24 +143,6 @@ class TestContentProcessor:
             # Should return original content when exception occurs (line 92)
             assert result == "test content"
 
-    def test_extract_html_structure_exception_handling(
-        self, content_processor: ContentProcessor
-    ):
-        """Test extract_html_structure exception handling."""
-        from unittest.mock import patch
-
-        # Test with content that causes an exception during processing
-        with patch(
-            "openzim_mcp.content_processor.BeautifulSoup",
-            side_effect=Exception("Parse error"),
-        ):
-            result = content_processor.extract_html_structure(
-                "<html><body>test</body></html>"
-            )
-            # Should return basic structure when exception occurs
-            assert "headings" in result
-            assert "sections" in result
-
     def test_extract_html_links_exception_handling(
         self, content_processor: ContentProcessor
     ):
@@ -178,67 +160,6 @@ class TestContentProcessor:
             # Should return empty structure when exception occurs
             assert "internal_links" in result
             assert "external_links" in result
-
-    def test_extract_html_structure(self, content_processor: ContentProcessor):
-        """Test HTML structure extraction."""
-        html_content = """
-        <html>
-        <head>
-            <title>Test Article</title>
-            <meta name="description" content="Test description">
-        </head>
-        <body>
-            <h1 id="intro">Introduction</h1>
-            <p>This is the introduction paragraph.</p>
-            <h2>Section 1</h2>
-            <p>Content of section 1 with multiple words.</p>
-            <h3>Subsection 1.1</h3>
-            <p>Subsection content here.</p>
-            <h2>Section 2</h2>
-            <p>Content of section 2.</p>
-        </body>
-        </html>
-        """
-
-        structure = content_processor.extract_html_structure(html_content)
-
-        # Check basic structure
-        assert "headings" in structure
-        assert "sections" in structure
-        assert "metadata" in structure
-        assert "word_count" in structure
-
-        # Check headings
-        headings = structure["headings"]
-        assert len(headings) == 4
-        assert headings[0]["level"] == 1
-        assert headings[0]["text"] == "Introduction"
-        assert headings[0]["id"] == "intro"
-        assert headings[1]["level"] == 2
-        assert headings[1]["text"] == "Section 1"
-
-        # Check sections
-        sections = structure["sections"]
-        assert len(sections) > 0
-        assert any("Introduction" in section["title"] for section in sections)
-
-        # Check metadata
-        metadata = structure["metadata"]
-        assert "description" in metadata
-        assert metadata["description"] == "Test description"
-
-        # Check word count
-        assert structure["word_count"] > 0
-
-    def test_extract_html_structure_empty(self, content_processor: ContentProcessor):
-        """Test HTML structure extraction with empty content."""
-        structure = content_processor.extract_html_structure("")
-
-        assert "headings" in structure
-        assert "sections" in structure
-        assert "metadata" in structure
-        assert "word_count" in structure
-        assert structure["word_count"] == 0
 
     def test_extract_html_links(self, content_processor: ContentProcessor):
         """Test HTML link extraction."""
@@ -419,10 +340,12 @@ class TestSlugifyHeading:
         text = "Some Heading Title 测试"
         assert _slugify_heading(text) == _slugify_heading(text)
 
-    def test_extract_structure_disambiguates_duplicate_heading_slugs(
-        self, content_processor: ContentProcessor
-    ):
+    def test_build_headings_disambiguates_duplicate_heading_slugs(self):
         """Identical headings get _2, _3 disambiguation suffixes (MediaWiki-style)."""
+        from bs4 import BeautifulSoup
+
+        from openzim_mcp.content_processor import HTML_PARSER, _build_headings
+
         html = (
             "<html><body>"
             "<h1>Intro</h1>"
@@ -430,22 +353,24 @@ class TestSlugifyHeading:
             "<h1>Intro</h1>"
             "</body></html>"
         )
-        structure = content_processor.extract_html_structure(html)
-        ids = [h["id"] for h in structure["headings"]]
+        headings = _build_headings(BeautifulSoup(html, HTML_PARSER))
+        ids = [h["id"] for h in headings]
         assert ids == ["intro", "intro_2", "intro_3"]
 
-    def test_extract_structure_does_not_disambiguate_explicit_ids(
-        self, content_processor: ContentProcessor
-    ):
+    def test_build_headings_does_not_disambiguate_explicit_ids(self):
         """Explicit heading ids should pass through unchanged (no _2 suffix)."""
+        from bs4 import BeautifulSoup
+
+        from openzim_mcp.content_processor import HTML_PARSER, _build_headings
+
         html = (
             "<html><body>"
             '<h1 id="real-anchor">Intro</h1>'
             "<h1>Other</h1>"
             "</body></html>"
         )
-        structure = content_processor.extract_html_structure(html)
-        ids = [h["id"] for h in structure["headings"]]
+        headings = _build_headings(BeautifulSoup(html, HTML_PARSER))
+        ids = [h["id"] for h in headings]
         assert ids[0] == "real-anchor"
         assert ids[1] == "other"
 

@@ -79,8 +79,11 @@ class TestValidationErrorsAreNotArticleNotFound:
             "limit must be between 1 and 500 (provided: 1000)"
         )
         handler = SimpleToolsHandler(ops)
-        out = handler.handle_zim_query(query, "/x.zim")
-        assert isinstance(out, str)
+        result = handler.handle_zim_query(query, "/x.zim")
+        # Flagged as the failure it is; the prose is the envelope's message.
+        assert isinstance(result, dict), result
+        assert result["operation"] == "invalid_request", result
+        out = result["message"]
         assert "Article not found" not in out, out[:400]
         assert "**Invalid Request**" in out, out[:400]
         # The real constraint must be named, not paraphrased away.

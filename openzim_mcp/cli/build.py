@@ -40,7 +40,9 @@ def _link_graph(args: argparse.Namespace) -> int:
         print(f"error: not a file: {args.archive}", file=sys.stderr)
         return 1
 
-    out = args.output or sidecar_path_for(args.archive)
+    # Resolved the way ``build_link_graph`` resolves it, so the messages name
+    # the file it writes: the one the server reads for a symlinked archive.
+    out = args.output or sidecar_path_for(os.path.realpath(args.archive))
     try:
         stats = build_link_graph(
             args.archive, args.output, force=args.force, progress=_progress

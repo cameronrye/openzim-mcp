@@ -16,9 +16,11 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
+from contextlib import contextmanager
 from itertools import groupby
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, Optional, cast
+from typing import TYPE_CHECKING, Any, Dict, Iterator, List, Optional, cast
 
 from openzim_mcp.tool_schemas import (
     EntryBundle,
@@ -93,7 +95,28 @@ _BUNDLE_KEY_PREFIX = "bundle:v2h"
 # r3 -> r4: fulltext and filtered search pages now sink crawl artefacts before
 # they are cached (fid 71, fulltext half), except the translation hub a query
 # asks for ("asthma in spanish"), which keeps its archive position.
-_RENDER_EPOCH = "r4"
+#
+# r4 -> r5: cached search rows no longer take an image-only H1's lead
+# sentence as the page title, a snippet slid to its first hit keeps the
+# words before it, a compact page fetched while the regex pool was busy is
+# no longer cached with its link markup, a compact main page is
+# link-stripped like any other entry, and the batch and main-page
+# continuation footers name ``compact`` and speak the caller's tool mode.
+# A compact bundle also opens with its FIRST infobox's rows, as the compact
+# article fetch does, and a later infobox stays in its own section; an r4
+# bundle hoisted the second infobox above the lead. Every compact render
+# also reports the infobox fields its ``infobox_kv_limit`` cut, and a heading
+# whose text slugs to nothing ("* * *") is now a section with its own id.
+# The bundle records ``lead_offset`` so the summary starts at the article's
+# lead, not at those infobox rows.
+# A cached title-lookup page (find_title:v2) also reads a fixed window of
+# suggestion rows whatever its limit, so a small page leads with the exact
+# match a wider read would have found rather than a fuzzy row.
+# Title-lookup rows sharing a title (one slideshow's frames) collapse to
+# the first.
+# A full filtered page whose remaining candidates are all twins now reports
+# done.
+_RENDER_EPOCH = "r5"
 
 
 def archive_stat_token(validated_path: Any) -> str:
@@ -128,6 +151,44 @@ def archive_stat_token(validated_path: Any) -> str:
         return f"0:0:{_RENDER_EPOCH}"
 
 
+# A key built while an archive is open has to describe the revision that
+# HANDLE reads, and a fresh ``stat()`` describes whatever file sits at the path
+# now: a refresh landing between the open and the key filed the old revision's
+# output under the new revision's token, where every later call hit it until
+# the TTL ran out (and across restarts with persistence on). ``zim_archive``
+# takes the token BEFORE it opens and holds it here, per thread and path, for
+# as long as the handle is open. Per thread, because a sync call runs on one
+# thread start to finish while other threads may hold other revisions.
+_held_tokens = threading.local()
+
+
+@contextmanager
+def holding_stat_token(validated_path: Any, token: str) -> Iterator[None]:
+    """Hold ``token`` as the revision this thread's handle on the path reads."""
+    held: Dict[str, List[str]] = _held_tokens.__dict__.setdefault("by_path", {})
+    stack = held.setdefault(str(validated_path), [])
+    stack.append(token)
+    try:
+        yield
+    finally:
+        stack.remove(token)
+
+
+def open_archive_token(validated_path: Any) -> str:
+    """``archive_stat_token`` for the revision this thread has open, if any.
+
+    When one call has the same path open twice, the OUTERMOST handle wins: it
+    opened first, so it reads the oldest revision, and a key can then only
+    under-describe a value (a wasted entry), never over-describe it (a stale
+    one). With no handle open, this is a fresh ``archive_stat_token``.
+    """
+    held: Dict[str, List[str]] = getattr(_held_tokens, "by_path", {})
+    stack = held.get(str(validated_path))
+    if stack:
+        return stack[0]
+    return archive_stat_token(validated_path)
+
+
 def _bundle_cache_key(validated_path: "Path", entry_path: str, compact: bool) -> str:
     """Cache key that invalidates when the underlying ZIM is replaced.
 
@@ -144,11 +205,14 @@ def _bundle_cache_key(validated_path: "Path", entry_path: str, compact: bool) ->
     Falls back gracefully when stat() fails (path no longer exists, race
     with replacement): the key drops to the prior shape so the cache
     still works, just without the invalidation guarantee.
+
+    The bundle is built from a handle that is already open, so the token is
+    the one that handle was opened under (``open_archive_token``).
     """
     mode = "compact" if compact else "raw"
     return (
         f"{_BUNDLE_KEY_PREFIX}:{validated_path}:"
-        f"{archive_stat_token(validated_path)}:{entry_path}:{mode}"
+        f"{open_archive_token(validated_path)}:{entry_path}:{mode}"
     )
 
 
@@ -191,7 +255,21 @@ def _resolve_entry_html(
 
     Raises whatever the libzim layer raises; callers wrap.
     """
-    entry = archive.get_entry_by_path(entry_path)
+    try:
+        entry = archive.get_entry_by_path(entry_path)
+    except KeyError:
+        # The archive's own hrefs are percent-encoded, and ``view="full"``
+        # serves that spelling through its ladder's exact probes — so the
+        # toc, structure, section and links views must probe them too, or
+        # they answer not-found for a path the same tool just served. A miss
+        # on every spelling re-raises the raw lookup's KeyError, which
+        # callers already turn into not-found.
+        from openzim_mcp.zim.content import entry_by_alternate_spelling
+
+        alternate = entry_by_alternate_spelling(archive, entry_path)
+        if alternate is None:
+            raise
+        entry, entry_path = alternate
     item = entry.get_item()
     title = entry.title or "Untitled"
     mime = item.mimetype or ""
@@ -229,28 +307,37 @@ def _resolve_entry_html(
     return title, mime, html, resolved_path
 
 
-def _extract_infobox(
-    soup: Any, content_processor: "ContentProcessor"
-) -> Optional[InfoboxData]:
-    """Extract the first infobox as InfoboxData, or None if absent.
-
-    Degrades to ``None`` on any extraction failure: every other step in
-    ``extract_entry_bundle`` already survives malformed markup, and an
-    infobox is supplementary. Without this, a pathological cell (e.g. one
-    deeply nested enough to blow the recursion limit) propagated out of
-    ``get_or_build_bundle`` and took summary/toc/structure/section with it.
-    """
-    try:
-        rows = content_processor.extract_infobox(soup)
-    except Exception as exc:
-        logger.warning("Infobox extraction failed; continuing without: %s", exc)
-        return None
+def _infobox_data(rows: list[Dict[str, str]]) -> Optional[InfoboxData]:
+    """``extract_infobox`` rows as InfoboxData, or None when there are none."""
     if not rows:
         return None
     fields: list[InfoboxField] = [
         {"label": r["label"], "value": r["value"]} for r in rows
     ]
     return cast("InfoboxData", {"fields": fields})
+
+
+def _extract_infobox(
+    soup: Any, content_processor: "ContentProcessor"
+) -> Optional[InfoboxData]:
+    """Extract the first infobox as InfoboxData, or None if absent.
+
+    The raw (``compact=False``) bundle's lift: that render keeps tables
+    whole and never extracts, so the infobox is lifted out here instead. The
+    compact render extracts for itself (see ``extract_entry_bundle``).
+
+    Degrades to ``None`` on any extraction failure: every other step in
+    ``extract_entry_bundle`` already survives malformed markup, and an
+    infobox is supplementary. Without this, a pathological cell (e.g. one
+    deeply nested enough to blow the recursion limit) propagated out of
+    ``get_or_build_bundle`` and took the section read with it.
+    """
+    try:
+        rows = content_processor.extract_infobox(soup)
+    except Exception as exc:
+        logger.warning("Infobox extraction failed; continuing without: %s", exc)
+        return None
+    return _infobox_data(rows)
 
 
 def _build_link_buckets(links_dict: Dict[str, Any]) -> LinkBuckets:
@@ -635,21 +722,35 @@ def extract_entry_bundle(
     # not leak into headings (TOC), links (related articles), or the rendered
     # markdown (summary). No landmark -> the whole document, unchanged.
     # ``extract_html_links`` is fed the scoped subtree's HTML rather than the
-    # raw entry HTML so nav links are excluded too; capture it BEFORE
-    # ``_extract_infobox`` decomposes the infobox, preserving the prior order
-    # in which links were extracted ahead of infobox removal.
+    # raw entry HTML so nav links are excluded too; capture it BEFORE the
+    # infobox is lifted out below, preserving the prior order in which links
+    # were extracted ahead of infobox removal.
     content_root = select_main_content(soup)
     headings = _build_headings(content_root, include_line_text=True)
     raw_links = content_processor.extract_html_links(str(content_root))
     link_buckets = _build_link_buckets(raw_links)
-    infobox = _extract_infobox(content_root, content_processor)
     # Render in the requested mode. ``compact=True`` (the default, used by
     # summary/TOC/structure/synthesize) carries the same table-stripping
-    # placeholders that direct ``get_zim_entry`` callers see, so a section
-    # slice matches the article-fetch path. ``compact=False`` (the #18
-    # raw-text path) keeps full pipe-delimited tables. The infobox is
-    # already ``decompose()``d above in both modes.
-    rendered = content_processor._render_soup_to_text(content_root, compact=compact)
+    # placeholders and the same leading infobox rows that direct
+    # ``get_zim_entry`` callers see, so a section slice matches the
+    # article-fetch path. ``compact=False`` (the #18 raw-text path) keeps
+    # full pipe-delimited tables; the infobox is lifted out of it unrendered.
+    if compact:
+        # One extraction, the render's own, read back for the bundle field.
+        # Lifting here as well made the render's extraction find the SECOND
+        # infobox and hoist it above the lead: mini's Kyoto Protocol summary
+        # opened with the Doha Amendment's rows.
+        infobox_rows: list[Dict[str, str]] = []
+        lead: list[int] = []
+        rendered = content_processor._render_soup_to_text(
+            content_root, compact=True, infobox_sink=infobox_rows, lead_sink=lead
+        )
+        infobox = _infobox_data(infobox_rows)
+        lead_offset = lead[0] if lead else 0
+    else:
+        infobox = _extract_infobox(content_root, content_processor)
+        rendered = content_processor._render_soup_to_text(content_root, compact=False)
+        lead_offset = 0
     sections = _compute_section_offsets(rendered, headings)
 
     bundle: EntryBundle = cast(
@@ -664,6 +765,7 @@ def extract_entry_bundle(
             "sections": sections,
             "links": link_buckets,
             "infobox": infobox,
+            "lead_offset": lead_offset,
         },
     )
     return bundle

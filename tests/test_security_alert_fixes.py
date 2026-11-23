@@ -30,6 +30,21 @@ class _WorkerAbort(BaseException):
     """A BaseException that is not an Exception, like SystemExit."""
 
 
+def _join_reranker_load_workers(timeout: float = 5.0) -> None:
+    """Wait for every reranker load worker to finish.
+
+    The worker posts its outcome in a ``finally`` and only then lets a
+    ``BaseException`` escape, so the caller wakes up before the thread is
+    done. Leaving the excepthook patch before the thread exits lets
+    pytest's thread-exception hook see the escape and pin a warning on
+    whichever test happens to run next.
+    """
+    for thread in threading.enumerate():
+        if thread.name == "openzim-reranker-load":
+            thread.join(timeout)
+            assert not thread.is_alive(), "reranker load worker never exited"
+
+
 def _heading(html: str):
     tag = BeautifulSoup(html, "html.parser").find(["h1", "h2", "h3"])
     assert tag is not None
@@ -63,6 +78,7 @@ class TestRerankerWorkerAlwaysReportsBack:
             with patch.object(threading, "excepthook", lambda _args: None):
                 with pytest.raises(RuntimeError) as excinfo:
                     BGEReranker._load_with_timeout(cfg)
+                _join_reranker_load_workers()
 
         assert not isinstance(excinfo.value, TimeoutError), (
             "caller waited out the full timeout — the worker died without "
@@ -83,8 +99,11 @@ class TestRerankerWorkerAlwaysReportsBack:
 
         cfg = RerankerConfig(first_call_timeout_seconds=5.0)
         with patch("openzim_mcp.ml.reranker._load_model", side_effect=abort):
-            with pytest.raises(RuntimeError):
-                BGEReranker._load_with_timeout(cfg)
+            # Same escape as above: silence it, and outlast the worker.
+            with patch.object(threading, "excepthook", lambda _args: None):
+                with pytest.raises(RuntimeError):
+                    BGEReranker._load_with_timeout(cfg)
+                _join_reranker_load_workers()
 
     def test_ordinary_exception_is_still_relayed_verbatim(self) -> None:
         """The real cause must survive, not be replaced by the sentinel."""

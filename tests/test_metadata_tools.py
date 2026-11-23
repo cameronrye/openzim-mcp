@@ -1,11 +1,8 @@
 """Tests for metadata_tools module."""
 
-from unittest.mock import MagicMock
-
 import pytest
 
 from openzim_mcp.config import OpenZimMcpConfig
-from openzim_mcp.exceptions import OpenZimMcpRateLimitError
 from openzim_mcp.server import OpenZimMcpServer
 
 
@@ -16,142 +13,6 @@ class TestRegisterMetadataTools:
         """Test that metadata tools are registered correctly."""
         server = OpenZimMcpServer(test_config)
         assert server.mcp is not None
-
-
-class TestGetZimMetadataTool:
-    """Test get_zim_metadata tool functionality."""
-
-    @pytest.fixture
-    def server(self, test_config: OpenZimMcpConfig) -> OpenZimMcpServer:
-        """Create a test server instance."""
-        return OpenZimMcpServer(test_config)
-
-    @pytest.mark.asyncio
-    async def test_get_zim_metadata_forwards_to_ops_layer(
-        self, server: OpenZimMcpServer
-    ):
-        """L7: exercise the REAL async wrapper by mocking the sync ops one
-        level down (the previous test awaited the AsyncMock itself, testing
-        unittest.mock rather than any server code)."""
-        server.zim_operations.get_zim_metadata = MagicMock(
-            return_value='{"title": "Test", "language": "en"}'
-        )
-
-        result = await server.async_zim_operations.get_zim_metadata("/path/to/file.zim")
-
-        assert "title" in result
-        server.zim_operations.get_zim_metadata.assert_called_once_with(
-            "/path/to/file.zim"
-        )
-
-    @pytest.mark.asyncio
-    async def test_get_zim_metadata_rate_limit_error(self, server: OpenZimMcpServer):
-        """Test rate limit handling in get_zim_metadata."""
-        error = OpenZimMcpRateLimitError("Rate limit exceeded")
-        error_msg = server._create_enhanced_error_message(
-            operation="get ZIM metadata",
-            error=error,
-            context="File: /test/file.zim",
-        )
-        assert "get ZIM metadata" in error_msg or "Operation" in error_msg
-
-    @pytest.mark.asyncio
-    async def test_get_zim_metadata_propagates_ops_exception(
-        self, server: OpenZimMcpServer
-    ):
-        """L7: the async wrapper propagates a sync-ops exception across the
-        to_thread boundary (real code path, not an AsyncMock side_effect)."""
-        server.zim_operations.get_zim_metadata = MagicMock(
-            side_effect=Exception("Test error")
-        )
-
-        with pytest.raises(Exception) as exc_info:
-            await server.async_zim_operations.get_zim_metadata("/path/to/file.zim")
-        assert "Test error" in str(exc_info.value)
-
-
-class TestGetMainPageTool:
-    """Test get_main_page tool functionality."""
-
-    @pytest.fixture
-    def server(self, test_config: OpenZimMcpConfig) -> OpenZimMcpServer:
-        """Create a test server instance."""
-        return OpenZimMcpServer(test_config)
-
-    @pytest.mark.asyncio
-    async def test_get_main_page_forwards_to_ops_layer(self, server: OpenZimMcpServer):
-        """L7: exercise the real async wrapper (mock the sync ops one level
-        down) instead of awaiting the AsyncMock itself."""
-        server.zim_operations.get_main_page = MagicMock(
-            return_value="Main page content"
-        )
-
-        result = await server.async_zim_operations.get_main_page("/path/to/file.zim")
-
-        assert result == "Main page content"
-        server.zim_operations.get_main_page.assert_called_once_with("/path/to/file.zim")
-
-    @pytest.mark.asyncio
-    async def test_get_main_page_rate_limit_error(self, server: OpenZimMcpServer):
-        """Test rate limit handling in get_main_page."""
-        error = OpenZimMcpRateLimitError("Rate limit exceeded")
-        error_msg = server._create_enhanced_error_message(
-            operation="get main page",
-            error=error,
-            context="File: /test/file.zim",
-        )
-        assert "get main page" in error_msg or "Operation" in error_msg
-
-
-class TestListNamespacesTool:
-    """Test list_namespaces tool functionality."""
-
-    @pytest.fixture
-    def server(self, test_config: OpenZimMcpConfig) -> OpenZimMcpServer:
-        """Create a test server instance."""
-        return OpenZimMcpServer(test_config)
-
-    @pytest.mark.asyncio
-    async def test_list_namespaces_forwards_to_ops_layer(
-        self, server: OpenZimMcpServer
-    ):
-        """L7: exercise the real async wrapper (mock the sync ops one level
-        down) instead of awaiting the AsyncMock itself."""
-        server.zim_operations.list_namespaces = MagicMock(
-            return_value='{"namespaces": ["A", "C", "M"]}'
-        )
-
-        result = await server.async_zim_operations.list_namespaces("/path/to/file.zim")
-
-        assert "namespaces" in result
-        server.zim_operations.list_namespaces.assert_called_once_with(
-            "/path/to/file.zim"
-        )
-
-    @pytest.mark.asyncio
-    async def test_list_namespaces_rate_limit_error(self, server: OpenZimMcpServer):
-        """Test rate limit handling in list_namespaces."""
-        error = OpenZimMcpRateLimitError("Rate limit exceeded")
-        error_msg = server._create_enhanced_error_message(
-            operation="list namespaces",
-            error=error,
-            context="File: /test/file.zim",
-        )
-        assert "list namespaces" in error_msg or "Operation" in error_msg
-
-    @pytest.mark.asyncio
-    async def test_list_namespaces_propagates_ops_exception(
-        self, server: OpenZimMcpServer
-    ):
-        """L7: the async wrapper propagates a sync-ops exception across the
-        to_thread boundary (real code path, not an AsyncMock side_effect)."""
-        server.zim_operations.list_namespaces = MagicMock(
-            side_effect=Exception("Test error")
-        )
-
-        with pytest.raises(Exception) as exc_info:
-            await server.async_zim_operations.list_namespaces("/path/to/file.zim")
-        assert "Test error" in str(exc_info.value)
 
 
 class TestInputSanitizationMetadata:

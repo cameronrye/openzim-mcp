@@ -199,8 +199,14 @@ class TestD6FindByTitleNamespacePathRedirect:
             options={"compact": True},
         )
         assert "Namespace Path, Not a Title" not in out
-        # Backend was called.
-        mock.find_entry_by_title_data.assert_called_once()
+        # Backend was called, once for the title itself; the promotion probes
+        # title mode runs come after it.
+        typed = [
+            c
+            for c in mock.find_entry_by_title_data.call_args_list
+            if c.args[1] == "photosynthesis" and c.kwargs.get("limit") == 10
+        ]
+        assert len(typed) == 1, mock.find_entry_by_title_data.call_args_list
 
     def test_lowercase_first_char_not_redirected(self) -> None:
         # ``find article titled a/b`` doesn't look like a namespace

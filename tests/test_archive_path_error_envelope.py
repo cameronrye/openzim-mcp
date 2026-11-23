@@ -104,9 +104,12 @@ def test_out_of_range_argument_still_renders_invalid_request(
         "limit must be between 1 and 500 (provided: 1000)"
     )
     handler = SimpleToolsHandler(ops)
-    out = handler.handle_zim_query(query, "/archives/wikipedia.zim")
+    result = handler.handle_zim_query(query, "/archives/wikipedia.zim")
 
-    assert isinstance(out, str)
+    # A rejected argument is flagged: the prose rides in the envelope.
+    assert isinstance(result, dict), result
+    assert result["operation"] == "invalid_request", result
+    out = result["message"]
     assert "**Invalid Request**" in out, out[:500]
     assert "Article not found" not in out, out[:500]
     assert "1 and 500" in out, out[:500]
@@ -123,9 +126,11 @@ def test_limit_advice_only_where_a_limit_exists(
         "kind must be one of internal, external, all (provided: bogus)"
     )
     handler = SimpleToolsHandler(ops)
-    out = handler.handle_zim_query(query, "/archives/wikipedia.zim")
+    result = handler.handle_zim_query(query, "/archives/wikipedia.zim")
 
-    assert isinstance(out, str)
+    assert isinstance(result, dict), result
+    assert result["operation"] == "invalid_request", result
+    out = result["message"]
     assert "**Invalid Request**" in out, out[:500]
     if limit_capable:
         assert "smaller `limit`" in out, out[:500]

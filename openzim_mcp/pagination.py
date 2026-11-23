@@ -112,6 +112,22 @@ class Cursor:
                 fields, or carries an unsupported version. Subclasses include:
             CursorMismatchError: Token's ``t`` field doesn't match ``expected_tool``.
         """
+        payload = Cursor.peek(token)
+        if payload["t"] != expected_tool:
+            raise CursorMismatchError(
+                f"Cursor was issued by '{payload['t']}', cannot be used by '{expected_tool}'"
+            )
+        return payload
+
+    @staticmethod
+    def peek(token: str) -> "CursorPayload":
+        """Decode a cursor without binding it to a tool.
+
+        :meth:`decode` minus the tool check, for code that re-issues a cursor
+        it did not mint and so cannot name the issuing tool up front — the
+        compact size cap re-points a page's ``o`` at the first row it had to
+        drop. Raises ``ValueError`` exactly where ``decode`` does.
+        """
         try:
             padded = token + "=" * (-len(token) % 4)
             raw = base64.urlsafe_b64decode(padded.encode("ascii")).decode("utf-8")
@@ -133,10 +149,6 @@ class Cursor:
             raise ValueError("Invalid pagination cursor: 't' must be a string")
         if not isinstance(payload["s"], dict):
             raise ValueError("Invalid pagination cursor: 's' must be an object")
-        if payload["t"] != expected_tool:
-            raise CursorMismatchError(
-                f"Cursor was issued by '{payload['t']}', cannot be used by '{expected_tool}'"
-            )
         return cast("CursorPayload", payload)
 
     @staticmethod

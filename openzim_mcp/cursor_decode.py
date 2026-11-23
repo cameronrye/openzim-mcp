@@ -21,14 +21,36 @@ caller's logging behavior is unchanged.
 import base64
 import json
 import logging
+import re
+import unicodedata
 from dataclasses import dataclass
-from typing import AbstractSet, Optional, Union
+from typing import AbstractSet, Optional, Set, Union
 
 from .constants import MAX_SEARCH_RESULT_LIMIT
 from .responses import ToolErrorPayload, tool_error
-from .text_utils import tokenize_for_relevance
+from .text_utils import RELEVANCE_TOKEN_MIN_LEN
 
 logger = logging.getLogger(__name__)
+
+# Letters and digits in any script. ``tokenize_for_relevance`` keeps only
+# ``[a-z0-9]`` runs, so the continuity check below lost every non-Latin
+# word ("Москва 2020" kept just ``2020``) and split an accented one
+# ("Zürich" became ``rich``), refusing replays that named the same topic.
+_QUERY_TOKEN_RE = re.compile(r"[^\W_]+")
+
+
+def _fold_query(text: str) -> str:
+    """Casefold ``text`` and drop its combining marks, as search's relevance
+    check folds before it tokenises: ``Zürich`` and ``Zurich`` compare equal.
+    """
+    decomposed = unicodedata.normalize("NFKD", text.casefold())
+    return "".join(ch for ch in decomposed if not unicodedata.combining(ch))
+
+
+def _query_tokens(folded: str) -> Set[str]:
+    return {
+        t for t in _QUERY_TOKEN_RE.findall(folded) if len(t) >= RELEVANCE_TOKEN_MIN_LEN
+    }
 
 
 @dataclass
@@ -264,10 +286,12 @@ def decode_offset_cursor(
             or cursor_t in q_emitting_tools
         )
         if isinstance(cursor_q, str) and cursor_q.strip() and cursor_t_emits_q:
-            cursor_tokens = tokenize_for_relevance(cursor_q)
-            query_tokens = tokenize_for_relevance(query or "")
-            cursor_q_lower = cursor_q.lower()
-            query_lower = (query or "").lower()
+            # Both sides are folded before either test, so the substring
+            # fallback below agrees with the token test on accents.
+            cursor_q_lower = _fold_query(cursor_q)
+            query_lower = _fold_query(query or "")
+            cursor_tokens = _query_tokens(cursor_q_lower)
+            query_tokens = _query_tokens(query_lower)
             # Three outcomes:
             #   1. Cursor has meaningful tokens AND they
             #      share at least one with the query → ok.

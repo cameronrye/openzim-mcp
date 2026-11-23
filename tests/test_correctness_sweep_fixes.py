@@ -773,7 +773,8 @@ class TestBackendLimitRejectionsAreTargeted:
             {"namespace": "C"},
             {"limit": 500},
         )
-        assert "Limit must be between 1 and 200" in out
+        assert out["error"] is True and out["operation"] == "invalid_request"
+        assert "Limit must be between 1 and 200" in out["message"]
 
     def test_walk_limit_rejection_names_the_range(self, tmp_path) -> None:
         from openzim_mcp.exceptions import OpenZimMcpValidationError
@@ -789,7 +790,8 @@ class TestBackendLimitRejectionsAreTargeted:
             {"namespace": "C"},
             {"limit": 900},
         )
-        assert "limit must be between 1 and 500" in out
+        assert out["error"] is True and out["operation"] == "invalid_request"
+        assert "limit must be between 1 and 500" in out["message"]
 
     def test_filtered_limit_rejection_names_the_range(self, tmp_path) -> None:
         from openzim_mcp.exceptions import OpenZimMcpValidationError
@@ -805,7 +807,8 @@ class TestBackendLimitRejectionsAreTargeted:
             {"query": "berlin", "namespace": "C"},
             {"limit": 400},
         )
-        assert "Limit must be between 1 and 100" in out
+        assert out["error"] is True and out["operation"] == "invalid_request"
+        assert "Limit must be between 1 and 100" in out["message"]
 
 
 # --------------------------------------------------------------------------

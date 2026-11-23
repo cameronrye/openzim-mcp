@@ -69,7 +69,6 @@ def test_paginated_responses_carry_contract_keys() -> None:
         ts.BrowseNamespaceResponse,
         ts.WalkNamespaceResponse,
         ts.LinksResponse,
-        ts.ListZimFilesResponse,
         ts.RelatedArticlesResponse,
         ts.BatchEntryResponse,
     ]

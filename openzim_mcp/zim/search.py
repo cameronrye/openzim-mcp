@@ -64,6 +64,17 @@ _FILTERED_MAX_SCAN = 10000
 # same score whatever was requested.
 _SUGGESTION_SCORE_DECAY_WINDOW = 10
 
+# Suggestion rows a title lookup reads before it scores, sorts and trims,
+# whatever ``limit`` is. A row is only known to be an exact title match once
+# it has been read, and the index does not rank exact matches first:
+# MedlinePlus files ``stroke.html`` ninth for ``stroke``, behind four "Stroke -
+# series" slideshow frames. Reading ``limit + 1`` rows made the answer depend
+# on the page size — ``limit=3`` led with a frame, ``limit=10`` with the
+# article — and the promotion probes, which ask for ``limit=3``, hoisted the
+# frame over the article. Pages larger than this still read one row past
+# themselves (R2-4).
+_TITLE_SUGGESTION_WINDOW = 25
+
 # How many ranked rows before a page ``_collect_distinct_hits`` re-reads to
 # seed its canonical set. Within-page dedup alone lets a duplicate pair leak
 # whenever it straddles a page boundary; a lookbehind makes the rule
@@ -952,7 +963,7 @@ class _SearchMixin:
             Search result text
 
         Raises:
-            OpenZimMcpFileNotFoundError: If ZIM file not found
+            OpenZimMcpArchivePathError: If the ZIM file is missing or not an archive
             OpenZimMcpArchiveError: If search operation fails
         """
         payload = self.search_zim_file_data(zim_file_path, query, limit, offset)
@@ -980,7 +991,7 @@ class _SearchMixin:
         as ``walk_namespace`` / ``extract_article_links``.
 
         Raises:
-            OpenZimMcpFileNotFoundError: If ZIM file not found
+            OpenZimMcpArchivePathError: If the ZIM file is missing or not an archive
             OpenZimMcpArchiveError: If search operation fails
             OpenZimMcpValidationError: If a cursor was issued for a different archive
         """
@@ -1934,9 +1945,8 @@ class _SearchMixin:
         # a13: imports hoisted from function-local to module-level
         # (see top of file) so unit tests can patch
         # ``openzim_mcp.zim.search.find_title_match`` directly. The
-        # ``is_strong_title_match`` reference is retained for
-        # historical callers but the splice gate (post-a13 D5) uses
-        # exact path comparison rather than the strong-match predicate.
+        # splice gate (post-a13 D5) uses exact path comparison rather
+        # than the strong-match predicate.
         try:
             canonical = find_title_match(self, zim_file_path, query)
         except Exception:  # pragma: no cover — defensive
@@ -2190,7 +2200,7 @@ class _SearchMixin:
             Search result text
 
         Raises:
-            OpenZimMcpFileNotFoundError: If ZIM file not found
+            OpenZimMcpArchivePathError: If the ZIM file is missing or not an archive
             OpenZimMcpValidationError: If parameter validation fails
                 (limit out of range, negative offset, malformed namespace).
             OpenZimMcpArchiveError: If search operation fails
@@ -2316,7 +2326,7 @@ class _SearchMixin:
         contract.
 
         Raises:
-            OpenZimMcpFileNotFoundError: If ZIM file not found
+            OpenZimMcpArchivePathError: If the ZIM file is missing or not an archive
             OpenZimMcpValidationError: If parameter validation fails
                 (limit out of range, negative offset, malformed namespace,
                 cursor archive mismatch).
@@ -2457,6 +2467,12 @@ class _SearchMixin:
         }
         if scan.total_filtered_is_lower_bound:
             page_info["total_is_lower_bound"] = True
+        # v3.3.1 field report (fid 67) made the resume point a value on the
+        # unfiltered page and stopped there. Here it is the consumed-slot
+        # count the cursor encodes, which ``offset + returned_count`` misses
+        # whenever a candidate inside the window failed materialisation.
+        if not done:
+            page_info["next_offset"] = scan.filtered_count
 
         payload: Dict[str, Any] = {
             "query": query,
@@ -2776,13 +2792,89 @@ class _SearchMixin:
         # the cap (clients thought iteration was complete when filtered
         # entries remained past the cap). Both stopping conditions imply
         # the filtered count is a lower bound.
-        page_filled_short_of_scan = len(page) >= limit and scanned < total_results
+        #
+        # A full page stopping short of the tail is not by itself a next
+        # page: when every remaining candidate is a twin of a counted row or
+        # fails the filters, the next page is empty. ``asthma quiz`` in
+        # namespace C at ``limit=5`` said ``done: false`` on page 5 and served
+        # 0 rows on page 6. So look past the page for one row the next page
+        # would emit, by the same rules — R2-4's one-row-past-the-page.
+        page_filled_short_of_scan = False
+        if len(page) >= limit and scanned < total_results:
+            page_filled_short_of_scan, scanned, lookahead_capped = (
+                self._next_filtered_row_exists(
+                    archive,
+                    search,
+                    start=scanned,
+                    total_results=total_results,
+                    namespace=namespace,
+                    content_type=content_type,
+                    has_new_scheme=has_new_scheme,
+                    seen_canonical=seen_canonical,
+                )
+            )
+            scan_cap_hit = scan_cap_hit or lookahead_capped
         return page, _FilteredScanState(
             filtered_count=filtered_count,
             scanned=scanned,
             scan_cap_hit=scan_cap_hit,
             total_filtered_is_lower_bound=page_filled_short_of_scan or scan_cap_hit,
         )
+
+    def _next_filtered_row_exists(
+        self,
+        archive: Archive,
+        search: Any,
+        *,
+        start: int,
+        total_results: int,
+        namespace: Optional[str],
+        content_type: Optional[str],
+        has_new_scheme: bool,
+        seen_canonical: set[str],
+    ) -> Tuple[bool, int, bool]:
+        """Whether the page after a full one would emit a row.
+
+        Returns ``(found, scanned, cap_hit)``. Walks the ranked stream from
+        ``start`` with the scan's own rules — cheap namespace check, the
+        scan-scoped canonical set, then materialisation — and stops at the
+        first row that passes, at the end of the stream, or at the scan cap
+        (where the answer is unknown, so the caller keeps the lower bound).
+        Touches neither ``filtered_count`` nor the page: the resume offset is
+        still the slot after the last row served.
+        """
+        scanned = start
+        while scanned < total_results:
+            if scanned >= _FILTERED_MAX_SCAN:
+                return False, scanned, True
+            batch_end = min(
+                scanned + _FILTERED_BATCH_SIZE, total_results, _FILTERED_MAX_SCAN
+            )
+            batch = list(search.getResults(scanned, batch_end - scanned))
+            if not batch:
+                break
+            for batch_idx, entry_id in enumerate(batch):
+                if namespace and not self._matches_cheap_namespace(
+                    entry_id, namespace, has_new_scheme=has_new_scheme
+                ):
+                    continue
+                canonical = canonical_result_path(entry_id)
+                if canonical in seen_canonical:
+                    continue
+                seen_canonical.add(canonical)
+                if (
+                    self._materialise_filtered_entry(
+                        archive,
+                        entry_id,
+                        namespace,
+                        content_type,
+                        has_new_scheme=has_new_scheme,
+                    )
+                    is not None
+                ):
+                    return True, scanned + batch_idx + 1, False
+            scanned = batch_end
+        return False, scanned, False
 
     def _matches_cheap_namespace(
         self, entry_id: str, namespace: str, has_new_scheme: bool = False
@@ -2936,7 +3028,7 @@ class _SearchMixin:
         honoured here.
 
         Raises:
-            OpenZimMcpFileNotFoundError: If ZIM file not found
+            OpenZimMcpArchivePathError: If the ZIM file is missing or not an archive
             OpenZimMcpValidationError: If ``limit`` is outside ``1..50``.
             OpenZimMcpArchiveError: If suggestion generation fails
         """
@@ -3074,7 +3166,7 @@ class _SearchMixin:
             JSON string containing search suggestions
 
         Raises:
-            OpenZimMcpFileNotFoundError: If ZIM file not found
+            OpenZimMcpArchivePathError: If the ZIM file is missing or not an archive
             OpenZimMcpValidationError: If ``limit`` is outside ``1..50``.
             OpenZimMcpArchiveError: If suggestion generation fails
         """
@@ -4062,16 +4154,23 @@ class _SearchMixin:
         # ``canonical_result_path`` since D27 (``_collect_distinct_hits``);
         # title mode was the last surface still showing both. The sort above
         # means the survivor is whichever twin the index ranked higher.
+        #
+        # A shared title collapses too, as suggest mode's title-index pass
+        # does: MedlinePlus files each slideshow frame under its own path with
+        # one title, so ``stroke`` gave four of ten rows to "Stroke - series".
+        # The first row always survives, so ``find_title_match`` still reads
+        # the same ``results[0]``.
         seen: set[tuple[str, str]] = set()
+        seen_titles: set[tuple[str, str]] = set()
         deduped: List[Dict[str, Any]] = []
         for row in aggregate_results:
-            key = (
-                str(row.get("zim_file", "")),
-                canonical_result_path(str(row.get("path", ""))),
-            )
-            if key in seen:
+            zim_file = str(row.get("zim_file", ""))
+            key = (zim_file, canonical_result_path(str(row.get("path", ""))))
+            title_key = (zim_file, str(row.get("title") or "").strip().lower())
+            if key in seen or (title_key[1] and title_key in seen_titles):
                 continue
             seen.add(key)
+            seen_titles.add(title_key)
             deduped.append(row)
         # v3.3.1 field report (fid 71) is NOT applied here, deliberately.
         # This list is score-descending, and ``title_promotion.find_title_match``
@@ -4250,13 +4349,20 @@ class _SearchMixin:
                         ).suggest(title)
                         total = suggestion_search.getEstimatedMatches()
                         if total > 0:
-                            # R2-4: pull one row past the page so the
+                            # R2-4: pull at least one row past the page so the
                             # assembler's trim can tell "exactly ``limit``
                             # matched" from "more exist" — pulling exactly
                             # ``limit`` made every full page claim ``done``.
-                            # Rank scores decay against a fixed window, so
-                            # the extra row leaves the page's scores alone.
-                            paths = list(suggestion_search.getResults(0, limit + 1))
+                            # Small pages read the whole fixed window, so an
+                            # exact match ranked past the page is still seen
+                            # and sorted to the top before the trim. Rank
+                            # scores decay against a fixed window, so the
+                            # extra rows leave the page's scores alone.
+                            paths = list(
+                                suggestion_search.getResults(
+                                    0, max(limit + 1, _TITLE_SUGGESTION_WINDOW)
+                                )
+                            )
                             # Score by rank — first result is the best
                             # libzim suggestion match. Legacy behaviour was a
                             # hardcoded 0.8 for every hit, which made the
@@ -4795,6 +4901,12 @@ class _SearchMixin:
         snippet render is cached per (path, entry, stat-token) — without it
         the synthesize hot path re-renders the same entries the EntryBundle
         already rendered (the snippet-vs-bundle double render M31 targeted).
+
+        warc2zim query-string twins (``quiz.htm`` / ``quiz.htm?quiz=1``)
+        collapse on ``canonical_result_path`` like every other search
+        surface; ``diabetes quiz`` spent four of ten citations on them. The
+        survivor is whichever twin ranked higher, and the stream is read past
+        ``k`` until ``k`` distinct pages are found or it ends.
         """
         query_obj = _zim_ops_mod.Query().set_query(query)
         searcher = _zim_ops_mod.Searcher(archive)
@@ -4802,8 +4914,21 @@ class _SearchMixin:
         total_results = search.getEstimatedMatches()
         if total_results == 0:
             return []
-        result_count = min(k, total_results)
-        entry_ids: List[str] = list(search.getResults(0, result_count))
+        entry_ids: List[str] = []
+        seen_canonical: set[str] = set()
+        read = 0
+        while len(entry_ids) < k and read < total_results:
+            want = min(k - len(entry_ids), total_results - read)
+            batch = list(search.getResults(read, want))
+            read += len(batch)
+            for entry_id in batch:
+                canonical = canonical_result_path(entry_id)
+                if canonical not in seen_canonical:
+                    seen_canonical.add(canonical)
+                    entry_ids.append(entry_id)
+            if len(batch) < want:
+                # The estimate over-reported; the stream has ended.
+                break
         hits: list[dict] = []
         for rank, entry_id in enumerate(entry_ids, start=1):
             try:

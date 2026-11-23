@@ -40,16 +40,19 @@ def test_edges_has_anchor_text_column(tmp_path) -> None:
     assert cols == {"target_id", "source_id", "anchor_text"}
 
 
-def test_schema_version_is_3() -> None:
-    """SCHEMA_VERSION equals 3.
+def test_schema_version_is_4() -> None:
+    """SCHEMA_VERSION equals 4.
 
     Bumped from 2 when edge targets started being stored in the spelling the
     archive can serve (decoded) rather than the raw percent-encoded href. The
     table shapes did not change, so a v2 file still loads — which is exactly
     why the version has to move: without it the reader accepts a sidecar whose
     non-ASCII targets no caller can look up any more.
+
+    Bumped from 3 when the builder started indexing a page's links to its own
+    site written absolutely (fid 17's promotion); a v3 sidecar lacks them.
     """
-    assert SCHEMA_VERSION == 3
+    assert SCHEMA_VERSION == 4
 
 
 def test_apply_build_pragmas_runs_without_error() -> None:

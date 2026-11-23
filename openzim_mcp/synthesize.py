@@ -28,6 +28,7 @@ if TYPE_CHECKING:
     from openzim_mcp.content_processor import ContentProcessor
 
 from openzim_mcp import bundle as _bundle_mod
+from openzim_mcp.content_processor import _strip_dangling_bold
 from openzim_mcp.text_utils import tokenize_for_relevance
 from openzim_mcp.title_promotion import (
     _TAIL_TOKEN_RE,
@@ -268,6 +269,11 @@ def _locate_passage(md: str, passage_text: str) -> int:
     section-affinity citation back to this asymmetry.
     """
     passage_text = _strip_bold(passage_text)
+    # A re-windowed snippet opens with the ``...`` that marks its cut. It is
+    # not in the article, and it heads the probe below too, so the passage
+    # located nowhere and lost its section. (A trailing one only defeats the
+    # exact match; the probe reads the head.)
+    passage_text = passage_text.removeprefix("...")
     md_clean, remap = _strip_bold_with_remap(md)
     pos = md_clean.find(passage_text)
     if pos >= 0:
@@ -877,6 +883,11 @@ def _enforce_budget(
             snap = max(truncated.rfind(" "), truncated.rfind("\n"))
             if snap > budget // 2:
                 truncated = truncated[:snap]
+            # A cut inside a ``**bold**`` run left its opener unclosed
+            # ("**Big Rapi") and the rest of the rendered answer read as
+            # bold. Back off to before the run, as ``create_snippet`` does at
+            # its own cut sites.
+            truncated = _strip_dangling_bold(truncated)
             new_p = dict(p)
             new_p["text_markdown"] = truncated
             capped.append(cast("SynthesizePassage", new_p))

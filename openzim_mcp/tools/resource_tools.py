@@ -32,10 +32,16 @@ from mcp_types import INTERNAL_ERROR, INVALID_PARAMS
 from pydantic import ConfigDict, Field
 
 from ..constants import INPUT_LIMIT_ENTRY_PATH
-from ..exceptions import OpenZimMcpArchiveError, OpenZimMcpValidationError
+from ..exceptions import (
+    OpenZimMcpArchiveError,
+    OpenZimMcpEntryNotFoundError,
+    OpenZimMcpValidationError,
+)
 from ..security import sanitize_input
+from ..zim.content import rewrite_well_known_path
 from ..zim.redirects import resolve_redirect_chain
 from ..zim_operations import zim_archive
+from ._common import enforce_rate_limit
 
 if TYPE_CHECKING:
     from ..server import OpenZimMcpServer
@@ -81,6 +87,36 @@ def _truncate_text_body(body: str, max_bytes: int) -> str:
     # would split a multi-byte sequence.
     head = encoded[:max_bytes].decode("utf-8", errors="replace")
     return head + notice_template.format(limit=max_bytes, total=total)
+
+
+def _charge_read(server: "OpenZimMcpServer", operation: str) -> None:
+    """Debit the caller's rate-limit bucket for one resource read, or refuse it.
+
+    Only the tool wrappers used to reach the limiter, so once ``zim_get`` was
+    refused as ``rate_limited`` the same entry could still be read through
+    ``resources/read`` as often as the client liked. Each read is charged
+    under the operation its tool counterpart uses (``zim://files``, which has
+    none, under its own name), so a ``per_operation_limits`` entry an
+    operator wrote for the tool covers the resource as well, and it is
+    charged up front, before the archive lookup, as the tools charge a call
+    they go on to reject.
+
+    The refusal is raised as ``MCPError``, the one type the SDK forwards
+    verbatim, with the tool envelope's ``operation`` (``rate_limited``) and
+    ``context`` in ``data`` so a client can tell it from a failed read.
+    ``-32603`` rather than ``-32602``: nothing is wrong with the request, and
+    the same read succeeds once the wait the message names has passed.
+    """
+    refusal = enforce_rate_limit(server, operation)
+    if refusal is not None:
+        raise MCPError(
+            code=INTERNAL_ERROR,
+            message=refusal["message"],
+            data={
+                "operation": refusal["operation"],
+                "context": refusal.get("context"),
+            },
+        )
 
 
 def _resolve_zim_name(server: "OpenZimMcpServer", name: str) -> Optional[str]:
@@ -131,6 +167,7 @@ class ZimEntryResource(Resource):
     archive_path: str = Field(description="Resolved path to the ZIM file")
     entry_path: str = Field(description="Decoded entry path inside the archive")
     path_validator: Any = Field(default=None, exclude=True, repr=False)
+    tool_mode: str = Field(default="simple", exclude=True, repr=False)
 
     async def read(self) -> Union[str, bytes]:
         """Read the entry, set ``self.mime_type`` to the libzim native MIME."""
@@ -140,7 +177,14 @@ class ZimEntryResource(Resource):
             validated = self.path_validator.validate_zim_file(validated)
 
             with zim_archive(validated) as archive:
-                entry = archive.get_entry_by_path(self.entry_path)
+                # ``W/mainPage`` is what zim_browse lists for a new-scheme
+                # archive's landing page, and zim_get serves it, but it is
+                # not a literal entry: looked up verbatim, the one surface
+                # that reads raw bytes answered "Entry not found" for it.
+                entry_path = rewrite_well_known_path(
+                    archive, self.entry_path, tool_mode=self.tool_mode
+                )
+                entry = archive.get_entry_by_path(entry_path)
                 # libzim raises RuntimeError if get_item() is called on a
                 # redirect entry, so walk the chain (bounded against cycles)
                 # before reading the body.
@@ -171,6 +215,11 @@ class ZimEntryResource(Resource):
                     f"{Path(self.archive_path).stem!r}."
                 ),
             ) from exc
+        except OpenZimMcpEntryNotFoundError as exc:
+            # The well-known rewrite's miss (an archive that declares no main
+            # page) is the same caller mistake as the KeyError above, so it
+            # keeps that code rather than the archive-error branch's -32603.
+            raise MCPError(code=INVALID_PARAMS, message=str(exc)) from exc
         except OpenZimMcpArchiveError as exc:
             # SDK v2's ``read_resource`` forwards only ``MCPError`` and
             # ``ResourceError`` verbatim; every other exception type is
@@ -254,6 +303,8 @@ class ZimEntryTemplate(ResourceTemplate):
         context: Any = None,
     ) -> Resource:
         """Resolve {name} → archive_path and build a ZimEntryResource."""
+        # An entry read, priced and keyed as ``zim_get``'s text read is.
+        _charge_read(self.server_ref, "get_entry")
         name = params["name"]
         # _resolve_zim_name calls list_zim_files_data (sync filesystem I/O —
         # Path.glob + stat). Offload the whole helper to a thread so
@@ -298,6 +349,7 @@ class ZimEntryTemplate(ResourceTemplate):
             archive_path=target_path,
             entry_path=decoded_path,
             path_validator=self.server_ref.path_validator,
+            tool_mode=self.server_ref.config.tool_mode,
         )
 
 
@@ -318,6 +370,10 @@ def register_resources(server: "OpenZimMcpServer") -> None:
         mime_type="application/json",
     )
     async def list_zim_files_resource() -> str:
+        # No tool lists archives, so the bucket is keyed on the resource's
+        # own name, as the v2-only tools are keyed on theirs.
+        _charge_read(server, "zim_files")
+
         # ``list_zim_files_data`` does Path.glob + stat across every allowed
         # directory; offload to a worker thread so concurrent HTTP/SSE
         # clients aren't stalled while a directory scan runs.
@@ -343,6 +399,9 @@ def register_resources(server: "OpenZimMcpServer") -> None:
         mime_type="application/json",
     )
     async def zim_file_overview(name: str) -> str:
+        # An archive overview, priced and keyed as ``zim_metadata`` is.
+        _charge_read(server, "get_metadata")
+
         # Three blocking archive opens (metadata + namespaces + main page)
         # add up — under HTTP/SSE we must not run them on the event loop.
         # Offload the whole synchronous body to a worker thread.

@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any, Literal, Optional
 from ..exceptions import OpenZimMcpCursorMismatchError
 from ..linkgraph.reader import LinkGraphUnavailable
 from ..responses import tool_error
+from ..zim.content import normalize_entry_path
 from ._common import (
     READ_ONLY_ANNOTATIONS,
     blank_archive_path,
@@ -119,9 +120,15 @@ def register(server: "OpenZimMcpServer") -> None:
                 eff_kind: str = kind
                 if state is not None:
                     # Guard against replaying entry A's cursor against entry B,
-                    # which would apply A's offset to B's link list.
+                    # which would apply A's offset to B's link list. The data
+                    # layer mints ``ep`` from the slash-stripped path, so the
+                    # comparison has to strip it too or ``/A/X`` rejects its
+                    # own page-2 cursor.
                     ep_error = cursor_context_mismatch(
-                        state, field="ep", expected=entry_path, label="entry"
+                        state,
+                        field="ep",
+                        expected=normalize_entry_path(entry_path),
+                        label="entry",
                     )
                     if ep_error is not None:
                         return ep_error
@@ -163,7 +170,10 @@ def register(server: "OpenZimMcpServer") -> None:
                     # Guard against replaying entry A's cursor against entry B,
                     # which would apply A's offset to B's inbound list.
                     ep_error = cursor_context_mismatch(
-                        state, field="ep", expected=entry_path, label="entry"
+                        state,
+                        field="ep",
+                        expected=normalize_entry_path(entry_path),
+                        label="entry",
                     )
                     if ep_error is not None:
                         return ep_error

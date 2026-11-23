@@ -11,6 +11,7 @@ without changes.
 """
 
 import logging
+import unicodedata
 from contextlib import suppress
 from pathlib import Path
 from typing import (
@@ -34,7 +35,6 @@ from openzim_mcp.exceptions import (
     OpenZimMcpArchiveError,
     OpenZimMcpCursorMismatchError,
     OpenZimMcpEntryNotFoundError,
-    OpenZimMcpFileNotFoundError,
     OpenZimMcpValidationError,
 )
 from openzim_mcp.meta import attach_meta
@@ -315,8 +315,12 @@ def _non_article_graph_message(content_type: str) -> "Optional[str]":
 
 
 def _normalize_section_title(text: str) -> str:
-    """Fold a heading title / ``section_id`` for lenient comparison."""
-    return " ".join(text.split()).casefold()
+    """Fold a heading title / ``section_id`` for lenient comparison.
+
+    NFC first: IEP stores "Al-Ghazālī" decomposed while a caller types it
+    composed, and the two render identically but compare unequal.
+    """
+    return " ".join(unicodedata.normalize("NFC", text).split()).casefold()
 
 
 def _match_section_by_title(sections: List[Any], section_id: str) -> "Optional[int]":
@@ -511,7 +515,7 @@ class _StructureMixin:
         can hand it straight to the SDK's structured-content path.
 
         Raises:
-            OpenZimMcpFileNotFoundError: If ZIM file not found
+            OpenZimMcpArchivePathError: If the ZIM file is missing or not an archive
             OpenZimMcpArchiveError: If structure extraction fails
         """
         entry_path = normalize_entry_path(entry_path)
@@ -550,7 +554,7 @@ class _StructureMixin:
             JSON string containing article structure
 
         Raises:
-            OpenZimMcpFileNotFoundError: If ZIM file not found
+            OpenZimMcpArchivePathError: If the ZIM file is missing or not an archive
             OpenZimMcpArchiveError: If structure extraction fails
         """
         return _json(self.get_article_structure_data(zim_file_path, entry_path))
@@ -878,7 +882,7 @@ class _StructureMixin:
 
         Raises:
             OpenZimMcpValidationError: limit/offset/kind out of range.
-            OpenZimMcpFileNotFoundError: If ZIM file not found.
+            OpenZimMcpArchivePathError: If the ZIM file is missing or not an archive
             OpenZimMcpArchiveError: If link extraction fails.
         """
         self._validate_links_args(limit, offset, kind)
@@ -1010,7 +1014,7 @@ class _StructureMixin:
 
         Raises:
             OpenZimMcpValidationError: limit/offset/kind out of range.
-            OpenZimMcpFileNotFoundError: If ZIM file not found
+            OpenZimMcpArchivePathError: If the ZIM file is missing or not an archive
             OpenZimMcpArchiveError: If link extraction fails
         """
         return _json(
@@ -1032,7 +1036,7 @@ class _StructureMixin:
         can hand it straight to the SDK's structured-content path.
 
         Raises:
-            OpenZimMcpFileNotFoundError: If ZIM file not found
+            OpenZimMcpArchivePathError: If the ZIM file is missing or not an archive
             OpenZimMcpArchiveError: If TOC extraction fails
         """
         entry_path = normalize_entry_path(entry_path)
@@ -1074,7 +1078,7 @@ class _StructureMixin:
             JSON string containing hierarchical table of contents
 
         Raises:
-            OpenZimMcpFileNotFoundError: If ZIM file not found
+            OpenZimMcpArchivePathError: If the ZIM file is missing or not an archive
             OpenZimMcpArchiveError: If TOC extraction fails
         """
         return _json(self.get_table_of_contents_data(zim_file_path, entry_path))
@@ -1183,8 +1187,6 @@ class _StructureMixin:
                     include_subsections=include_subsections,
                     compact=compact,
                 )
-        except OpenZimMcpFileNotFoundError as e:
-            return tool_error(operation="file_not_found", message=str(e))
         except OpenZimMcpArchiveError as e:
             return tool_error(operation="entry_not_found", message=str(e))
 
@@ -1597,7 +1599,10 @@ class _StructureMixin:
             target_counts: Counter[str] = Counter()
             first_text: Dict[str, str] = {}
             for link in links_data.get("results", []):
-                target = self._resolve_link_to_entry_path(
+                # The row's ``path`` is already resolved, and for a same-host
+                # absolute link (fid 17) it is the only resolution there is:
+                # re-resolving ``url`` returns None for anything with ``://``.
+                target = link.get("path") or self._resolve_link_to_entry_path(
                     link.get("url", ""), resolved_source
                 )
                 if not target or target in (entry_path, resolved_source):
@@ -1797,23 +1802,25 @@ class _StructureMixin:
             # follows it. Mode-aware for the same reason
             # ``_entry_not_found_error`` above is: naming a tool the client
             # cannot call is worse than naming none, and in simple mode
-            # ``zim_query`` is the only tool there is.
+            # ``zim_query`` is the only tool there is. The simple-mode phrase
+            # must be one the parser routes: ``related articles for <path>``
+            # matched no pattern and ran a literal full-text search for it.
             advanced = self.config.tool_mode == "advanced"
             fallback = (
                 "Meanwhile `zim_links(direction='related')` gives "
                 "outbound-overlap neighbours and `zim_search` finds pages "
                 "that mention it."
                 if advanced
-                else "Meanwhile ask for `related articles for <path>`, or "
+                else "Meanwhile ask for `articles related to <path>`, or "
                 "search for the article's title to find pages that mention it."
             )
             raise LinkGraphUnavailable(
                 "Inbound links require a link-graph sidecar for this archive. "
                 f"Run `openzim-mcp build link-graph {validated_str}`. "
                 "If a sidecar file is already present it is stale — built for "
-                "a different archive revision or an older schema, which 3.0.0 "
-                "makes true of every sidecar built before it — and the build "
-                "refuses to overwrite without `--force`. " + fallback
+                "a different archive revision, or by a release with an older "
+                "sidecar schema — and the build refuses to overwrite without "
+                "`--force`. " + fallback
             )
         try:
             page = reader.query_inbound(lookup_path, limit=limit, offset=offset)
@@ -1973,6 +1980,15 @@ class _StructureMixin:
         # filters most, but be defensive in case callers pass raw HTML refs.
         if "://" in url or url.startswith("//"):
             return None
+        # Nothing filters a media row's ``src``, and a ``data:`` URI has no
+        # ``://``: each inline image was joined onto the source directory as
+        # an unfetchable ``path`` (175 of them, 706 KB, on one IEP page). The
+        # explicit list, not any ``word:`` prefix: ``Category:Physics`` is a
+        # relative href to a real entry.
+        from openzim_mcp.content_processor import NON_NAVIGABLE_LINK_SCHEMES
+
+        if url.lower().startswith(NON_NAVIGABLE_LINK_SCHEMES):
+            return None
         # Strip query string and fragment; ZIM entries don't carry them.
         for sep in ("#", "?"):
             if sep in url:
@@ -2040,7 +2056,9 @@ class _StructureMixin:
         When ``archive`` is provided, each resolved target is additionally
         canonicalized through ``_canonical_entry`` so the returned path is
         the (non-redirect) entry actually served — this is what the offline
-        builder needs to invert into a stable reverse-edge graph.
+        builder needs to invert into a stable reverse-edge graph. A link to
+        the archive's own host written absolutely is internal too, as it is
+        in that bucket (fid 17), once the archive is shown to serve it.
         When ``archive`` is ``None`` the redirect step is skipped and the
         path-normalized target is returned as-is, which keeps the helper
         unit-testable without a ZIM.
@@ -2103,4 +2121,26 @@ class _StructureMixin:
                 continue
             seen.add(target)
             edges.append((target, anchor))
+        # fid 17's promotion, which outbound applies in
+        # ``_promote_self_absolute_links``: warc2zim keeps a page's links to
+        # its own site absolute, the classifier files them external, and the
+        # index never listed the page as their linker. As there, only a
+        # target the archive serves is promoted, so this needs ``archive``.
+        self_host = _self_host(source_path) if archive is not None else None
+        promotable = links_data["external_links"] if self_host else []
+        for link in promotable:
+            candidate = _self_absolute_target(str(link.get("url", "")), str(self_host))
+            if candidate is None:
+                continue
+            try:
+                entry, target = _canonical_entry(archive, candidate)
+            except Exception as e:  # pragma: no cover - defensive
+                logger.debug(f"self-absolute probe for {candidate} failed: {e}")
+                continue
+            if entry is None or _StructureMixin._is_non_article_target(target):
+                continue
+            if target in seen or target == source_path:
+                continue
+            seen.add(target)
+            edges.append((target, (link.get("text") or "").strip()))
         return edges

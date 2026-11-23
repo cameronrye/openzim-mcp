@@ -10,7 +10,6 @@ from openzim_mcp.defaults import (
     NAMESPACE_SAMPLING,
     RATE_LIMIT,
     RATE_LIMIT_COSTS,
-    SERVER,
     TIMEOUTS,
     TOOL_MODE_ADVANCED,
     TOOL_MODE_SIMPLE,
@@ -24,7 +23,6 @@ from openzim_mcp.defaults import (
     InputLimitDefaults,
     NamespaceSamplingDefaults,
     RateLimitDefaults,
-    ServerDefaults,
     TimeoutDefaults,
 )
 
@@ -36,7 +34,6 @@ class TestCacheDefaults:
         """Test cache default values."""
         from pathlib import Path
 
-        assert CacheDefaults.ENABLED is True
         assert CacheDefaults.MAX_SIZE == 100
         assert CacheDefaults.TTL_SECONDS == 3600
         assert CacheDefaults.PERSISTENCE_ENABLED is False
@@ -49,14 +46,13 @@ class TestCacheDefaults:
 
     def test_cache_instance(self):
         """Test CACHE instance has correct values."""
-        assert CACHE.ENABLED is True
         assert CACHE.MAX_SIZE == 100
         assert CACHE.TTL_SECONDS == 3600
 
     def test_cache_dataclass_frozen(self):
         """Test that CacheDefaults is frozen (immutable)."""
         with pytest.raises(AttributeError):
-            CACHE.ENABLED = False  # type: ignore
+            CACHE.MAX_SIZE = 1  # type: ignore
 
 
 class TestContentDefaults:
@@ -102,16 +98,12 @@ class TestInputLimitDefaults:
     def test_input_limit_defaults_values(self):
         """Test input limit default values."""
         assert InputLimitDefaults.FILE_PATH == 1000
-        assert InputLimitDefaults.QUERY == 500
         assert InputLimitDefaults.ENTRY_PATH == 500
-        assert InputLimitDefaults.NAMESPACE == 100
-        assert InputLimitDefaults.CONTENT_TYPE == 100
-        assert InputLimitDefaults.PARTIAL_QUERY == 200
 
     def test_input_limits_instance(self):
         """Test INPUT_LIMITS instance has correct values."""
         assert INPUT_LIMITS.FILE_PATH == 1000
-        assert INPUT_LIMITS.QUERY == 500
+        assert INPUT_LIMITS.ENTRY_PATH == 500
 
 
 class TestCachePerformanceThresholds:
@@ -136,7 +128,6 @@ class TestNamespaceSamplingDefaults:
         """Test namespace sampling default values."""
         assert NamespaceSamplingDefaults.MAX_SAMPLE_SIZE == 1000
         assert NamespaceSamplingDefaults.MAX_NAMESPACE_ENTRIES == 200
-        assert NamespaceSamplingDefaults.MAX_SAMPLE_ATTEMPTS_MULTIPLIER == 3
 
     def test_namespace_sampling_instance(self):
         """Test NAMESPACE_SAMPLING instance has correct values."""
@@ -150,28 +141,10 @@ class TestTimeoutDefaults:
     def test_timeout_defaults_values(self):
         """Test timeout default values."""
         assert TimeoutDefaults.REGEX_SECONDS == pytest.approx(1.0)
-        assert TimeoutDefaults.ARCHIVE_OPEN_SECONDS == pytest.approx(30.0)
 
     def test_timeouts_instance(self):
         """Test TIMEOUTS instance has correct values."""
         assert TIMEOUTS.REGEX_SECONDS == pytest.approx(1.0)
-        assert TIMEOUTS.ARCHIVE_OPEN_SECONDS == pytest.approx(30.0)
-
-
-class TestServerDefaults:
-    """Test ServerDefaults dataclass."""
-
-    def test_server_defaults_values(self):
-        """Test server default values."""
-        assert ServerDefaults.NAME == "openzim-mcp"
-        assert ServerDefaults.TOOL_MODE == "simple"
-        assert ServerDefaults.LOG_LEVEL == "INFO"
-        assert "%(asctime)s" in ServerDefaults.LOG_FORMAT
-
-    def test_server_instance(self):
-        """Test SERVER instance has correct values."""
-        assert SERVER.NAME == "openzim-mcp"
-        assert SERVER.TOOL_MODE == "simple"
 
 
 class TestToolModeConstants:
@@ -265,7 +238,6 @@ def test_meta_defaults():
     from openzim_mcp.defaults import META
 
     assert META.FOOTER_ENABLED is True
-    assert META.TOKENIZER_ENCODING == "cl100k_base"
 
 
 def test_search_defaults():
