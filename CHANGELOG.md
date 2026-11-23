@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.5.0](https://github.com/cameronrye/openzim-mcp/compare/v3.4.1...v3.5.0) (2026-11-23)
+
+
+### Added
+
+* let operators replace the server instructions, with {{default}} to keep the built-in text ([#485](https://github.com/cameronrye/openzim-mcp/issues/485)) ([2d8d18c](https://github.com/cameronrye/openzim-mcp/commit/2d8d18cabfa559d85958cc49299d3a94521e1d11)), closes [#479](https://github.com/cameronrye/openzim-mcp/issues/479)
+
+
+### Fixed
+
+* close 70 defects across search, rendering, tools, transport and caching ([#491](https://github.com/cameronrye/openzim-mcp/issues/491)) ([cd8f9b4](https://github.com/cameronrye/openzim-mcp/commit/cd8f9b401b43794a412e3e33125a840d9fcc6ec8))
+
+
+### Documentation
+
+* correct the examples, snippets and claims that fail when followed ([#490](https://github.com/cameronrye/openzim-mcp/issues/490)) ([10fe8e0](https://github.com/cameronrye/openzim-mcp/commit/10fe8e02c2c0e9d29d3d6f8daf5ab9fa51b6fe26))
+* drop the Smithery listing, which Smithery's shutdown took offline ([#487](https://github.com/cameronrye/openzim-mcp/issues/487)) ([c0021fd](https://github.com/cameronrye/openzim-mcp/commit/c0021fd359ad74e0415763b3d5cc4b22c8cb13f4))
+* say an SSE client has to switch transports too, not just the server ([#489](https://github.com/cameronrye/openzim-mcp/issues/489)) ([92aeb89](https://github.com/cameronrye/openzim-mcp/commit/92aeb894de0dfb72c7ce25d810cc8fd274f7caaf))
+
+
+### Refactored
+
+* remove dead code and the tests that asserted nothing ([#492](https://github.com/cameronrye/openzim-mcp/issues/492)) ([9b58caa](https://github.com/cameronrye/openzim-mcp/commit/9b58caa19d3a8a9a76b5f2101d7395e508e91c1c))
+
 ## [3.4.1](https://github.com/cameronrye/openzim-mcp/compare/v3.4.0...v3.4.1) (2026-11-19)
 
 
