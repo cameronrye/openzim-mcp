@@ -157,9 +157,9 @@ Three-part article summary. Workflow:
 
 1. `zim_get` with `view="toc"` for the structural overview.
 2. `zim_get` with `view="summary"` for the lead-paragraph summary.
-3. `zim_links` with `direction="outbound"` for the most-mentioned related entries.
+3. `zim_links` with `direction="related"` for the most-mentioned related entries — distinct targets ranked by `mention_count`, where `"outbound"` would list every link occurrence in document order.
 
-Combined into: (a) one-paragraph TL;DR, (b) section list, (c) 5–10 most relevant outbound links.
+Combined into: (a) one-paragraph TL;DR, (b) section list, (c) the 5–10 most-mentioned related articles.
 
 Step 1 call shape:
 
@@ -195,7 +195,7 @@ Step 3 call shape:
   "arguments": {
     "zim_file_path": "<arg>",
     "entry_path": "<arg>",
-    "direction": "outbound"
+    "direction": "related"
   }
 }
 ```
@@ -208,7 +208,7 @@ High-level briefing of one ZIM file. Workflow:
 
 1. `zim_metadata` — title, language, creator, flavour, plus the deterministic namespace breakdown (surfaces minority namespaces — M, W, X).
 2. `zim_get` with `main_page=True` — the entry point.
-3. `zim_browse` with `mode="walk"`, `namespace="C"`, `limit=5` — sample article content.
+3. `zim_browse` with `mode="walk"`, `limit=5`, in the namespace that holds the articles — sample article content. The prompt opens the archive to name it: `namespace="C"` on a new-scheme archive, `"A"` on an old-scheme one, where a `C` walk returns nothing. If the archive cannot be opened, the step says to take the namespace from step 1's breakdown.
 
 Step 1 call shape:
 
@@ -233,7 +233,7 @@ Step 2 call shape:
 }
 ```
 
-Step 3 call shape:
+Step 3 call shape, for a new-scheme archive (`"A"` in place of `"C"` on an old-scheme one):
 
 ```json
 {

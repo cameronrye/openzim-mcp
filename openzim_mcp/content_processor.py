@@ -737,7 +737,9 @@ def _shift_window_to_first_hit(
     lead = min(_KWIC_LEAD_CHARS, max(effective_len // 4, 0))
     cut = max(0, hit - lead)
     if cut:
-        space = text.rfind(" ", cut, hit)
+        # Snap FORWARD to the first word boundary: ``rfind`` took the space
+        # just before the hit and threw away the lead-in kept for context.
+        space = text.find(" ", cut, hit)
         if space != -1:
             cut = space + 1
         # Never open inside a markdown link / emphasis run.
@@ -1425,6 +1427,23 @@ def _build_headings(
             if line_text and line_text != text:
                 entry["line_text"] = line_text
         headings.append(entry)
+    # A heading whose text slugs to nothing ("* * *", "★") has no id, and the
+    # bundle drops a heading without one: the TOC never listed it and the
+    # section before it ran on through its body. Give it a positional id
+    # instead. It is chosen once every other id is known and avoids all of
+    # them, so a heading that already had an id keeps it — reported as
+    # ``slug`` because, like one, it is generated rather than read from the
+    # page.
+    taken = {entry["id"] for entry in headings if entry["id"]}
+    for entry in headings:
+        if entry["id"]:
+            continue
+        base = f"section-{entry['position']}"
+        candidate, ordinal = base, 2
+        while candidate in taken:
+            candidate, ordinal = f"{base}_{ordinal}", ordinal + 1
+        taken.add(candidate)
+        entry["id"], entry["id_source"] = candidate, "slug"
     return headings
 
 
@@ -1680,6 +1699,18 @@ class ContentProcessor:
         ``"Area — City/State"`` restores the disambiguation that the
         original two-column rendering provided visually.
         """
+        return self._lift_infobox(soup, kv_limit=kv_limit)[0]
+
+    def _lift_infobox(
+        self, soup: BeautifulSoup, *, kv_limit: Optional[int] = None
+    ) -> Tuple[List[Dict[str, str]], int]:
+        """``extract_infobox``, plus how many fields ``kv_limit`` left out.
+
+        The compact render needs the count: the whole infobox is decomposed
+        once its rows are taken, so a field past the cap is gone from the
+        response, and Hydrogen's CAS Number, discoverer and namer vanished
+        with ``truncated`` false and nothing in the body to say so.
+        """
         if kv_limit is None:
             kv_limit = self._infobox_kv_limit
         for selector in self.INFOBOX_SELECTORS:
@@ -1687,6 +1718,7 @@ class ContentProcessor:
             if node is None:
                 continue
             rows: List[Dict[str, str]] = []
+            omitted = 0
             current_section: Optional[str] = None
             section_emitted_count = 0
             title_row_consumed = False
@@ -1788,6 +1820,11 @@ class ContentProcessor:
                     value = _join_cell_text(td)
                     if not raw_label or not value:
                         continue
+                    # Count a field past the cap instead of stopping at it,
+                    # so the render can say how many it left out.
+                    if len(rows) >= kv_limit:
+                        omitted += 1
+                        continue
                     # D1 (beta): Wikipedia infoboxes end with trailing
                     # "free-floating" terminal rows (Time zone, Area code,
                     # ISO 3166 code, Website, HDI) that don't belong to
@@ -1884,8 +1921,6 @@ class ContentProcessor:
                     title_row_consumed = True
                     if current_section is not None:
                         section_emitted_count += 1
-                    if len(rows) >= kv_limit:
-                        break
             # M2: only remove the matched node when we actually extracted KV
             # rows. The KV loop only emits rows pairing a <th> with a <td>, so
             # a div-based infobox, a <td class="infobox-label"> layout, or any
@@ -1897,9 +1932,9 @@ class ContentProcessor:
             # renders, and try the next selector.
             if rows:
                 node.decompose()
-                return rows
+                return rows, omitted
             continue
-        return []
+        return [], 0
 
     def replace_oversized_tables(
         self,
@@ -1953,7 +1988,14 @@ class ContentProcessor:
             )
             table.replace_with(placeholder)
 
-    def _render_soup_to_text(self, soup: BeautifulSoup, *, compact: bool) -> str:
+    def _render_soup_to_text(
+        self,
+        soup: BeautifulSoup,
+        *,
+        compact: bool,
+        infobox_sink: Optional[List[Dict[str, str]]] = None,
+        lead_sink: Optional[List[int]] = None,
+    ) -> str:
         """Render a BeautifulSoup tree to clean plain text.
 
         Strips ``UNWANTED_HTML_SELECTORS``, optionally extracts infoboxes
@@ -1961,6 +2003,19 @@ class ContentProcessor:
         ``html2text`` and collapses excess blank lines. Mutates the
         provided soup; callers that need to preserve the original tree
         should pass a copy.
+
+        ``infobox_sink`` receives the rows a compact render lifted, for a
+        caller that also keeps them as data (``bundle.extract_entry_bundle``).
+        Reading them back is what keeps that caller to ONE extraction: the
+        bundle used to lift the infobox itself and then render, and the
+        render's own ``extract_infobox`` found the NEXT infobox and hoisted it
+        to the top. Lifting here, after the strip, is also what keeps
+        TemplateStyles CSS out of the row values.
+
+        ``lead_sink`` receives the offset where the article itself starts in
+        the returned text: past the lifted infobox rows and their marker, or
+        0 when nothing was lifted. ``view="summary"`` reads from there, so a
+        200-word summary is the lead, not the infobox's labels.
         """
         for selector in UNWANTED_HTML_SELECTORS:
             for element in soup.select(selector):
@@ -1970,19 +2025,44 @@ class ContentProcessor:
 
         infobox_md = ""
         if compact:
-            kv_rows = self.extract_infobox(soup)
+            try:
+                kv_rows, omitted = self._lift_infobox(soup)
+            except Exception as exc:
+                # The infobox is supplementary. One that fails to parse used
+                # to fail the whole render, and with it every compact view of
+                # the article. The node is only removed once its rows are
+                # built, so on failure it is still in the soup and renders
+                # as an ordinary table.
+                logger.warning("Infobox extraction failed; rendering without: %s", exc)
+                kv_rows, omitted = [], 0
+            if infobox_sink is not None:
+                infobox_sink.extend(kv_rows)
             if kv_rows:
-                infobox_md = (
-                    "\n".join(f"**{r['label']}:** {r['value']}" for r in kv_rows)
-                    + "\n\n"
-                )
+                lines = [f"**{r['label']}:** {r['value']}" for r in kv_rows]
+                if omitted:
+                    # Worded and recovered like the table placeholder below,
+                    # and ASCII-only for the same reason.
+                    noun = "field" if omitted == 1 else "fields"
+                    lines.append(
+                        f"[Infobox: {omitted} more {noun} - "
+                        f"pass compact=False to expand]"
+                    )
+                infobox_md = "\n".join(lines) + "\n\n"
             self.replace_oversized_tables(soup)
 
         # Per-call HTML2Text so concurrent callers don't corrupt each
         # other's parser state.
         text = self._create_html_converter().handle(str(soup))
         text = re.sub(r"\n{3,}", "\n\n", text)
-        return (infobox_md + text).strip()
+        rendered = (infobox_md + text).strip()
+        if lead_sink is not None:
+            # ``infobox_md`` opens with ``**`` and so survives the strip
+            # intact: the body starts at its end, past any blank lines.
+            lead = len(infobox_md) if infobox_md else 0
+            while lead < len(rendered) and rendered[lead].isspace():
+                lead += 1
+            lead_sink.append(lead)
+        return rendered
 
     def html_to_plain_text(self, html_content: str, *, compact: bool = False) -> str:
         """Convert HTML to clean plain text.
@@ -2225,6 +2305,8 @@ class ContentProcessor:
         paginatable: bool = True,
         original_total: Optional[int] = None,
         batch_item: bool = False,
+        compact: bool = False,
+        entry_path: Optional[str] = None,
     ) -> str:
         """
         Truncate content to maximum length with informative message.
@@ -2244,9 +2326,9 @@ class ContentProcessor:
             current_offset: Where this slice starts in the source
                 content. Lets the truncation hint compute the correct
                 next-page offset for paginated reads.
-            paginatable: When False, omit the ``content_offset=N``
-                hint and emit a tighter "use get article ... for the
-                rest" hint instead. Main-page rendering passes False:
+            paginatable: When False, the hint routes the rest through
+                a path fetch of ``entry_path`` instead of the bare
+                ``content_offset=N``. Main-page rendering passes False:
                 ``_handle_main_page`` doesn't expose
                 ``content_offset`` (the operation always re-resolves
                 the main entry from scratch), so suggesting it would
@@ -2261,11 +2343,17 @@ class ContentProcessor:
                 post-slice length, so paginated reads under-reported
                 the article's length by ``current_offset`` chars.
             batch_item: When True, the continuation hint points at a
-                single-entry ``entry_path`` call. Batch mode rejects
+                single-entry fetch of ``entry_path``. Batch mode rejects
                 ``content_offset`` (``zim_get`` returns
                 ``invalid_path_combination``), so the default ``Pass
                 content_offset=N`` tail was advice the emitting mode
                 could not act on.
+            compact: Whether this page was rendered compact. A rerouted
+                hint (batch / main page) names it whenever the call it
+                routes to defaults the other way, so the next page comes
+                from the same rendering.
+            entry_path: The entry a rerouted hint names. Simple mode can
+                only reach it through a quoted ``get article`` request.
 
         Returns:
             Truncated content with metadata
@@ -2314,13 +2402,28 @@ class ContentProcessor:
         # this slice STARTED in the original article.
         next_offset = current_offset + consumed
 
+        # The batch and main-page hints reroute the caller to a path fetch,
+        # which only continues this page if it renders the same way, so the
+        # hint names ``compact`` whenever this page differs from the routed
+        # call's default. It also speaks the caller's surface: simple mode
+        # registers zim_query alone, which takes a request rather than an
+        # ``entry_path``.
+        advanced = self._tool_mode == "advanced"
+        routed_compact_default = not advanced  # zim_get False, zim_query True
+        resume = f"`content_offset={next_offset}`"
+        if compact != routed_compact_default:
+            resume += f" and `compact={compact}`"
+        target = entry_path or "<path>"
         if batch_item:
             # Batch entries are first-page only and the batch branch rejects
             # ``content_offset``; the working recovery is a single-entry call.
+            route = (
+                f"re-fetch this path as a single-entry `entry_path` call with {resume}"
+                if advanced
+                else f"ask for `get article {target}` with {resume}"
+            )
             tail = (
-                " Batch entries return their first page only; for the rest, "
-                "re-fetch this path with a single-entry `entry_path` call and "
-                f"`content_offset={next_offset}`."
+                f" Batch entries return their first page only; for the rest, {route}."
             )
         elif paginatable:
             # NO thousands separator here: unlike the human-readable counts
@@ -2331,12 +2434,13 @@ class ContentProcessor:
         else:
             # Main-page rendering: ``_handle_main_page`` re-resolves
             # from ``archive.main_entry`` on every call and never
-            # threads a content_offset. Point the caller at the
-            # ``get article`` route, which DOES support paging.
-            tail = (
-                " For the rest, switch to `get article` on the main-"
-                "page path with `content_offset`."
+            # threads a content_offset, so the rest is a path fetch.
+            route = (
+                f'fetch `entry_path="{target}"` with {resume}'
+                if advanced
+                else f"ask for `get article {target}` with {resume}"
             )
+            tail = f" For the rest, {route}."
 
         # Body of the slice description switches shape based on
         # whether we're paginating mid-article: at offset 0 the

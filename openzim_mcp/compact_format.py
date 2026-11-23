@@ -15,13 +15,36 @@ mixin is fully self-contained (no ``TYPE_CHECKING`` cross-declarations).
 import json
 import logging
 import re
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, NamedTuple, Optional, Tuple, Union, cast
 
 from .content_processor import _strip_dangling_bold, _truncate_before_dangling_link
 from .exceptions import RegexTimeoutError
 from .intent_parser import safe_regex_sub
+from .meta import remeasure
+from .pagination import Cursor, CursorState
 
 logger = logging.getLogger(__name__)
+
+# ``_Shrunk.resume`` when the body carries its own re-pointed continuation.
+_RESUME_CURSOR = "cursor"
+# Bounds the digit width of an offset named in a truncation footer. ZIM entry
+# ids are 32-bit, and every offset a listing pages by counts entries or hits.
+_RESUME_OFFSET_BOUND = 2**32
+
+
+class _Shrunk(NamedTuple):
+    """A structurally cut body, and how its reader reaches what was cut.
+
+    ``resume`` names the continuation that leads to the first dropped row:
+    ``_RESUME_CURSOR`` when the body still carries one, re-pointed at that
+    row; an ``int`` offset when the page had none to re-point (a last page)
+    but its rows map one-to-one onto offsets; ``None`` when no resume point
+    can be vouched for.
+    """
+
+    body: str
+    rows_dropped: Optional[int] = None
+    resume: Union[str, int, None] = None
 
 
 class _CompactFormatMixin:
@@ -79,8 +102,8 @@ class _CompactFormatMixin:
     # could explore 2^n combinations on inputs like
     # ``[a](\\\\\\\\\\\\\\\\…`` before failing. The disjoint form is
     # semantically identical for well-formed input but unambiguous to
-    # the engine. ``safe_regex_sub`` still wraps the .sub() call as
-    # belt-and-suspenders defense-in-depth.
+    # the engine, which is why ``_strip_markdown_links`` can run it
+    # directly rather than through ``safe_regex_sub``.
     _MARKDOWN_LINK_RE = re.compile(r"\[([^\[\]]*?)\]\((?:[^()\n\\]|\\.)*\)")
     # ``![alt](src)`` image syntax — drop entirely; alt text is rarely
     # informative in Wikipedia exports and the URL is just a media-asset
@@ -154,6 +177,34 @@ class _CompactFormatMixin:
     # is just a truncated sentence (and is what the prose path has always
     # produced).
     _LINE_ITEM_RE = re.compile(r"^(?:[-*+] |\d+[.)] |#{1,6} |> |\| )")
+    # The ``---`` block a paginated listing ends with: its continuation (a
+    # walk cursor, or the result-set ``offset`` search and links page by) or
+    # the line saying there is no next page. Finding one is what marks a body
+    # as a listing whose rows may be counted — an article has bullets too.
+    _LISTING_TAIL_RE = re.compile(
+        r"cursor=|`offset=\d+`|\(end of results\)|_End of (?:namespace|links)\._"
+    )
+    # The first line of one listing row: a bullet or numbered item (walk,
+    # links), or a search result's ``## N.`` heading — a shape html2text never
+    # emits itself, since it escapes the dot (see ``_SEARCH_SNIPPETS_RE``).
+    _BULLET_ROW_RE = re.compile(r"^(?:[-*+] |\d+[.)] )")
+    _SEARCH_ROW_RE = re.compile(r"^## \d+\. ", re.MULTILINE)
+    # A search row is worth shipping only with its path: that is what the
+    # reader fetches next.
+    _WHOLE_SEARCH_ROW_RE = re.compile(r"## \d+\. [^\n]*\nPath: [^\n]*\n")
+    # Header claims about which rows a page holds, as the renderers word them.
+    _SHOWING_RANGE_RE = re.compile(r"showing (\d+)-(\d+)")
+    _WALK_RANGE_RE = re.compile(r"^(# Namespace `[^`\n]*` — )entries (\d+)-(\d+)")
+    _WALK_SCANNED_RE = re.compile(
+        r"^(# Namespace `[^`\n]*` — )(\d+) entries \(scan positions "
+    )
+    _WALK_CURSOR_RE = re.compile(r"Pass `cursor=([A-Za-z0-9_\-=]+)`")
+    # A section heading that counts the rows under it (``## Internal (25 of
+    # 58)`` on a links page).
+    _SECTION_COUNT_RE = re.compile(r"^(#{2,6} [^\n]*\()(\d+)( of [\d,]+\))$")
+    # Intents whose ``offset`` argument is the row offset a last page's resume
+    # point is counted in (``_Shrunk.resume`` as an ``int``).
+    _OFFSET_RESUMABLE_INTENTS = frozenset({"browse", "walk_namespace"})
     # A leading run of base64 alphabet long enough that the field is a blob
     # rather than prose. Checked against a bounded prefix so the test costs
     # the same on a 6 KB thumbnail and a 50 MB video.
@@ -320,6 +371,7 @@ class _CompactFormatMixin:
         intent: Optional[str],
         *,
         rows_dropped: Optional[int] = None,
+        resume: Union[str, int, None] = None,
     ) -> str:
         """Render an operation-aware truncation footer.
 
@@ -330,11 +382,13 @@ class _CompactFormatMixin:
         and have no query to tighten.
 
         ``rows_dropped`` is set when the structural shrinker below had to
-        remove whole result rows to fit. The generic "page using the
-        cursor" clause is then actively wrong for the missing rows — the
-        cursor points at the page AFTER the one that was requested, so
-        following it skips them. Name the route that does recover them
-        instead: re-run the same call with a smaller ``limit``.
+        remove whole result rows to fit, and ``resume`` says how the reader
+        reaches them (see ``_Shrunk.resume``): through the cursor in the
+        body, re-pointed at the first of them; through an ``offset`` this
+        footer names, on a last page that had no cursor to re-point; or, when
+        neither can be vouched for, by re-running the same call with a
+        smaller ``limit`` — the shrinker has already removed the stale
+        continuation, so the footer must not send the reader looking for it.
         """
         head = (
             f"\n\n---\n_Response truncated at {max_chars:,} chars (was {original:,}). "
@@ -343,11 +397,26 @@ class _CompactFormatMixin:
             # P3-D5: no cursor, no query to tighten — only compact=False.
             return head + "Pass `compact=False` to opt out of size caps._"
         if rows_dropped:
+            lost = f"{rows_dropped:,} result rows were dropped to fit; "
+            if resume == _RESUME_CURSOR:
+                return (
+                    head
+                    + lost
+                    + "the cursor in the body above resumes at the first of "
+                    + "them, or pass `compact=False` to opt out of size caps._"
+                )
+            if isinstance(resume, int):
+                return (
+                    head
+                    + lost
+                    + f"pass `offset={resume}` to resume at the first of them, "
+                    + "or `compact=False` to opt out of size caps._"
+                )
             return (
                 head
-                + f"{rows_dropped:,} result rows were dropped to fit; re-run "
-                + "with a smaller `limit`, or pass `compact=False` to opt out "
-                + "of size caps._"
+                + lost
+                + "re-run with a smaller `limit`, or pass `compact=False` to "
+                + "opt out of size caps._"
             )
         return (
             head
@@ -396,45 +465,74 @@ class _CompactFormatMixin:
         # so the body is sized once and the choice of footer afterwards can
         # never push the response past ``max_chars``. ``original`` stands in
         # for ``rows_dropped`` only to bound that number's digit width — a
-        # response can never drop more rows than it had characters.
+        # response can never drop more rows than it had characters — and
+        # ``_RESUME_OFFSET_BOUND`` does the same for a resume offset.
+        # Only a JSON object or a listing can lose whole rows; prose keeps the
+        # budget the row footers would otherwise reserve.
         footer = cls._truncation_footer(max_chars, original, intent)
-        reserve = max(
-            len(footer),
-            len(
-                cls._truncation_footer(
-                    max_chars, original, intent, rows_dropped=original
-                )
-            ),
-        )
-        keep = max(max_chars - reserve, 0)
-        body, rows_dropped = cls._truncate_structurally(text, keep)
-        if rows_dropped:
-            footer = cls._truncation_footer(
-                max_chars, original, intent, rows_dropped=rows_dropped
+        reserve = len(footer)
+        if text.lstrip().startswith("{") or cls._listing_tail(text) is not None:
+            reserve = max(
+                reserve,
+                *(
+                    len(
+                        cls._truncation_footer(
+                            max_chars,
+                            original,
+                            intent,
+                            rows_dropped=original,
+                            resume=resume,
+                        )
+                    )
+                    for resume in (None, _RESUME_CURSOR, _RESUME_OFFSET_BOUND)
+                ),
             )
-        return body.rstrip() + footer
+        keep = max(max_chars - reserve, 0)
+        shrunk = cls._truncate_structurally(text, keep)
+        if shrunk.rows_dropped:
+            resume = shrunk.resume
+            # An offset is only a resume point on a surface that pages by row
+            # offset: suggest / title lookups ignore ``offset`` entirely.
+            if isinstance(resume, int) and intent not in cls._OFFSET_RESUMABLE_INTENTS:
+                resume = None
+            footer = cls._truncation_footer(
+                max_chars,
+                original,
+                intent,
+                rows_dropped=shrunk.rows_dropped,
+                resume=resume,
+            )
+        return shrunk.body.rstrip() + footer
 
     # ------------------------------------------------------------------
     # Structural truncation
     # ------------------------------------------------------------------
 
     @classmethod
-    def _truncate_structurally(cls, text: str, keep: int) -> Tuple[str, Optional[int]]:
+    def _truncate_structurally(cls, text: str, keep: int) -> _Shrunk:
         """Cut ``text`` down to ``keep`` chars without breaking its shape.
 
-        Returns ``(body, rows_dropped)``. ``rows_dropped`` is ``None``
-        unless whole result rows were removed from a JSON body.
+        ``rows_dropped`` on the result is ``None`` unless whole result rows
+        were removed from a JSON body or a markdown listing.
 
         Three strategies, in order:
 
         1. a JSON object body is re-serialised with whole rows dropped and
            its envelope (``next_cursor`` / ``total`` / ``done`` / ``_meta``)
-           intact, or — when the bulk is one opaque string, as on the binary
-           branch — with that string cut on a base64 quantum;
-        2. a markdown listing keeps whole bullets and its trailing
-           ``Pass \\`cursor=…\\`` block;
+           restated for the rows that are left, or — when the bulk is one
+           opaque string, as on the binary branch — with that string cut on a
+           base64 quantum;
+        2. a markdown listing keeps whole rows, says in its header which rows
+           those are, and keeps its trailing continuation block only while
+           that block still leads to the first row it lost;
         3. anything else (prose) falls back to the character slice, which is
            what a truncated paragraph has always looked like.
+
+        Either way the cap ships at most a prefix of the page the backend
+        built, so a continuation the backend minted for the WHOLE page skips
+        every row the cap removed. Re-pointing it means knowing the offset of
+        the first removed row, which is only knowable when the page's rows
+        sit one per offset — see ``_remint_cursor``.
         """
         shrunk = cls._shrink_json_body(text, keep)
         if shrunk is not None:
@@ -488,14 +586,17 @@ class _CompactFormatMixin:
         return best
 
     @classmethod
-    def _shrink_json_body(
-        cls, text: str, keep: int
-    ) -> Optional[Tuple[str, Optional[int]]]:
+    def _shrink_json_body(cls, text: str, keep: int) -> Optional[_Shrunk]:
         """Re-serialise a JSON object body small enough to fit ``keep``.
 
         Returns ``None`` when the body is not a JSON object, is too large to
         be worth parsing, or cannot be made to fit — the caller then falls
         back to the older behaviour rather than emitting something worse.
+
+        When rows go, the envelope is restated for the rows that are left:
+        ``next_cursor`` is re-pointed at the first dropped row (or nulled
+        when that row's offset is not knowable), and ``_meta``'s size fields
+        are re-measured — the backend's figures describe the uncut page.
         """
         if keep < 32 or len(text) > cls._STRUCTURAL_JSON_MAX_INPUT:
             return None
@@ -518,14 +619,35 @@ class _CompactFormatMixin:
         if isinstance(meta, dict):
             meta["truncated"] = True
 
+        # The page as the backend built it: its continuation counts these rows.
+        results = payload.get("results")
+        page_rows = len(results) if isinstance(results, list) else None
+        advertised = payload.get("next_cursor")
+
         rendered = cls._json_text(payload)
         dropped = 0
         rounds = 0
-        while len(rendered) > keep and rounds < cls._STRUCTURAL_PRUNE_ROUNDS:
-            rounds += 1
+        resume: Union[str, int, None] = None
+        # Whether the envelope describes the rows currently in ``payload``.
+        # Restating it costs a tokenizer pass, so it waits until the rows fit;
+        # the restated numbers can differ in width, hence the re-check.
+        settled = True
+        while True:
+            if len(rendered) <= keep:
+                if settled:
+                    break
+                resume = cls._settle_pruned_payload(
+                    payload, advertised=advertised, page_rows=page_rows
+                )
+                settled = True
+                rendered = cls._json_text(payload)
+                continue
+            if rounds >= cls._STRUCTURAL_PRUNE_ROUNDS:
+                break
             target = cls._largest_prunable_list(payload)
             if target is None:
                 break
+            rounds += 1
             step = max(1, len(target) // 4)
             del target[-step:]
             dropped += step
@@ -535,6 +657,14 @@ class _CompactFormatMixin:
             # it served, and the rows just went away — leaving it would have
             # the body assert 50 results next to 29 of them.
             cls._sync_returned_count(payload)
+            settled = False
+            rendered = cls._json_text(payload)
+        if not settled:
+            # Out of rounds while still over budget: whatever ships below
+            # must still not advertise a continuation past the cut.
+            resume = cls._settle_pruned_payload(
+                payload, advertised=advertised, page_rows=page_rows
+            )
             rendered = cls._json_text(payload)
 
         if len(rendered) > keep:
@@ -544,7 +674,88 @@ class _CompactFormatMixin:
 
         if len(rendered) > keep:
             return None
-        return rendered, (dropped or None)
+        return _Shrunk(rendered, dropped or None, resume)
+
+    @classmethod
+    def _settle_pruned_payload(
+        cls,
+        payload: Dict[str, Any],
+        *,
+        advertised: Any,
+        page_rows: Optional[int],
+    ) -> Union[str, int, None]:
+        """Restate a pruned payload's envelope; return its ``_Shrunk.resume``.
+
+        Only a cut to the top-level ``results`` moves the continuation: a
+        cursor resumes the stream those rows came from, not a nested list.
+        """
+        resume: Union[str, int, None] = None
+        results = payload.get("results")
+        if page_rows is not None and isinstance(results, list):
+            if len(results) < page_rows:
+                resume = cls._resume_json_page(
+                    payload, advertised=advertised, page_rows=page_rows
+                )
+        remeasure(payload)
+        return resume
+
+    @classmethod
+    def _resume_json_page(
+        cls, payload: Dict[str, Any], *, advertised: Any, page_rows: int
+    ) -> Union[str, int, None]:
+        """Point a cut page's continuation at its first dropped row."""
+        results = payload.get("results")
+        # Never 0: the prune loop only cuts lists of two or more rows, and
+        # never below one, so the resume point is always past the page start.
+        shipped = len(results) if isinstance(results, list) else 0
+        page_info = payload.get("page_info")
+        offset = page_info.get("offset") if isinstance(page_info, dict) else None
+        has_cursor = isinstance(advertised, str) and bool(advertised)
+        if not cls._is_count(offset):
+            # No page offset to count from, so no resume point to name.
+            if has_cursor:
+                payload["next_cursor"] = None
+            return None
+        start = cast(int, offset)
+        if has_cursor:
+            token = cls._remint_cursor(
+                advertised, expect=start + page_rows, resume_at=start + shipped
+            )
+            payload["next_cursor"] = token
+            return _RESUME_CURSOR if token is not None else None
+        # A last page has no cursor to re-point. Its rows sit one per offset
+        # exactly when they run to the end of ``total``.
+        total = payload.get("total")
+        if cls._is_count(total) and total == start + page_rows:
+            return start + shipped
+        return None
+
+    @staticmethod
+    def _remint_cursor(token: str, *, expect: int, resume_at: int) -> Optional[str]:
+        """``token`` re-pointed at ``resume_at``, or ``None`` if it can't be.
+
+        Only a cursor whose ``o`` is exactly ``expect`` — where its page ends
+        when counted one row per offset — can be moved: ``resume_at`` is then
+        the offset of the first row the cap dropped. Any other ``o`` means the
+        page consumed offsets it did not render (filtered assets, unreadable
+        entries, collapsed duplicates), and which offset the first dropped
+        row sits at is not knowable from the rendered page.
+        """
+        try:
+            decoded = Cursor.peek(token)
+        except ValueError:
+            return None
+        state = decoded["s"]
+        o = state.get("o")
+        if not isinstance(o, int) or isinstance(o, bool) or o != expect:
+            return None
+        return Cursor.encode(
+            tool=decoded["t"], state=cast(CursorState, {**state, "o": resume_at})
+        )
+
+    @staticmethod
+    def _is_count(value: Any) -> bool:
+        return isinstance(value, int) and not isinstance(value, bool) and value >= 0
 
     @staticmethod
     def _sync_returned_count(payload: Dict[str, Any]) -> None:
@@ -604,49 +815,184 @@ class _CompactFormatMixin:
         return empty if len(empty) <= keep else None
 
     @classmethod
-    def _shrink_markdown_body(cls, text: str, keep: int) -> Tuple[str, Optional[int]]:
-        """Cut a markdown body at a line boundary, keeping its cursor block.
+    def _shrink_markdown_body(cls, text: str, keep: int) -> _Shrunk:
+        """Cut a markdown body at a line boundary, keeping its listing tail.
 
-        Two behaviours, both narrow on purpose:
+        Narrow on purpose:
 
-        * a trailing ``---`` block naming a continuation cursor is the LAST
-          thing in a listing render, so it is exactly what a head-slice
-          removes. Reserve room for it and re-attach it.
+        * a trailing ``---`` block that ends a paginated listing (see
+          ``_LISTING_TAIL_RE``) is the LAST thing in the render, so it is
+          exactly what a head-slice removes. Reserve room for it and
+          re-attach it — but only while it is still true. Once whole rows
+          are cut, a continuation minted for the whole page skips them, and
+          an end-of-listing line claims the listing stopped where the cut
+          did. A walk cursor is re-pointed at the first cut row when its rows
+          sit one per scanned entry; every other tail is dropped, and the
+          page header is restated to name the rows that did ship.
         * when the slice lands inside a bullet / heading / table row, drop
-          that partial line. Prose keeps the character slice — a sentence
-          cut mid-word is what a truncated paragraph has always looked like,
-          and cutting to the previous newline there would throw away the
-          whole paragraph.
+          that partial line, and a search row that lost its ``Path:`` line
+          with it. Prose keeps the character slice — a sentence cut mid-word
+          is what a truncated paragraph has always looked like, and cutting
+          to the previous newline there would throw away the whole paragraph.
 
-        The dropped-row count is reported only when that cursor block was
+        The dropped-row count is reported only when that tail block was
         found, i.e. only for a paginated listing render. An article body can
         contain bullets too, and telling its reader to "re-run with a smaller
         ``limit``" would name a route that does not exist for it.
         """
         tail_block = ""
-        reserve = 0
-        idx = text.rfind("\n---\n")
-        if idx != -1:
-            candidate = text[idx + 1 :].rstrip()
-            if "cursor=" in candidate and len(candidate) <= cls._MARKDOWN_TAIL_MAX:
-                tail_block = candidate
-                reserve = len(tail_block) + 2
+        body_end = len(text)
+        found = cls._listing_tail(text)
+        if found is not None:
+            body_end, tail_block = found
+        # With no room for the tail at all it goes whether rows do or not, so
+        # its reserve is spent on rows rather than on the blind slice below,
+        # which kept the header's claim over every row it cut.
+        tail_fits = bool(tail_block) and keep - len(tail_block) - 2 > 0
+        reserve = len(tail_block) + 2 if tail_fits else 0
 
-        head_budget = keep - reserve
+        head_budget = min(keep - reserve, body_end)
         if head_budget <= 0:
-            return text[:keep], None
+            return _Shrunk(text[:keep])
         head = text[:head_budget]
         newline = head.rfind("\n")
         if newline > 0 and cls._LINE_ITEM_RE.match(head[newline + 1 :]):
             head = head[:newline]
         if not tail_block:
-            return head, None
-        dropped = sum(
-            1
-            for line in text[len(head) : idx].splitlines()
-            if cls._LINE_ITEM_RE.match(line)
+            return _Shrunk(head)
+        search_rows = cls._SEARCH_ROW_RE.search(text, 0, body_end) is not None
+        if search_rows:
+            head = cls._drop_partial_search_row(head)
+        dropped = cls._count_rows(text[len(head) : body_end], search_rows)
+        if not dropped:
+            if not tail_fits:
+                return _Shrunk(head)
+            return _Shrunk(head.rstrip("\n") + "\n\n" + tail_block)
+        shipped = cls._count_rows(head, search_rows)
+        head, tail, resume = cls._resume_markdown_page(
+            head, tail_block if tail_fits else "", shipped, search_rows=search_rows
         )
-        return head.rstrip("\n") + "\n\n" + tail_block, (dropped or None)
+        body = head.rstrip("\n")
+        if tail:
+            body += "\n\n" + tail
+        return _Shrunk(body, dropped, resume)
+
+    @classmethod
+    def _listing_tail(cls, text: str) -> Optional[Tuple[int, str]]:
+        """``(start, block)`` of the listing tail ``text`` ends with, if any."""
+        idx = text.rfind("\n---\n")
+        if idx == -1:
+            return None
+        candidate = text[idx + 1 :].rstrip()
+        if len(candidate) > cls._MARKDOWN_TAIL_MAX:
+            return None
+        if not cls._LISTING_TAIL_RE.search(candidate):
+            return None
+        return idx, candidate
+
+    @classmethod
+    def _count_rows(cls, segment: str, search_rows: bool) -> int:
+        if search_rows:
+            return len(cls._SEARCH_ROW_RE.findall(segment))
+        return sum(1 for line in segment.splitlines() if cls._BULLET_ROW_RE.match(line))
+
+    @classmethod
+    def _drop_partial_search_row(cls, head: str) -> str:
+        """Drop a trailing search row whose ``Path:`` line did not survive."""
+        rows = list(cls._SEARCH_ROW_RE.finditer(head))
+        if rows and not cls._WHOLE_SEARCH_ROW_RE.match(head, rows[-1].start()):
+            return head[: rows[-1].start()]
+        return head
+
+    @classmethod
+    def _resume_markdown_page(
+        cls, head: str, tail: str, shipped: int, *, search_rows: bool
+    ) -> Tuple[str, str, Union[str, int, None]]:
+        """Restate a cut listing page for the rows that shipped.
+
+        Returns ``(head, tail, resume)``: the head with its header naming the
+        rows it holds, the tail to re-attach (empty when none is still true),
+        and the ``_Shrunk.resume`` the cap footer reports.
+        """
+        # The header is everything before the first row: the renderers put
+        # their "which rows" claim there (walk's first line, search's
+        # ``Found … showing a-b:``).
+        first_row = re.search(
+            (cls._SEARCH_ROW_RE if search_rows else cls._BULLET_ROW_RE).pattern,
+            head,
+            re.MULTILINE,
+        )
+        split = first_row.start() if first_row else len(head)
+        header, rows = head[:split], head[split:]
+        kept_tail = ""
+        resume: Union[str, int, None] = None
+
+        walk = cls._WALK_RANGE_RE.search(header)
+        scanned = cls._WALK_SCANNED_RE.search(header)
+        showing = cls._SHOWING_RANGE_RE.search(header)
+        if walk:
+            first, last = int(walk.group(2)), int(walk.group(3))
+            claim = f"none of entries {first}-{last}"
+            # With no row shipped the first cut row is the page's own start: a
+            # continuation re-pointed there would serve this page forever.
+            if shipped:
+                # One row per scanned entry id, so the first cut row's id is
+                # the page's start plus the rows that shipped — and the
+                # walk's ``offset`` IS that scan position.
+                resume_at = first - 1 + shipped
+                claim = f"entries {first}-{resume_at}"
+                cursor = cls._WALK_CURSOR_RE.search(tail)
+                if cursor is not None:
+                    token = cls._remint_cursor(
+                        cursor.group(1), expect=last, resume_at=resume_at
+                    )
+                    if token is not None:
+                        kept_tail = (
+                            tail[: cursor.start(1)] + token + tail[cursor.end(1) :]
+                        )
+                        resume = _RESUME_CURSOR
+                elif "_End of namespace._" in tail:
+                    resume = resume_at
+            header = (
+                header[: walk.start()] + walk.group(1) + claim + header[walk.end() :]
+            )
+        elif scanned:
+            # Rows were filtered mid-scan, so no offset names the first cut
+            # row; say how many of the page's rows this is.
+            header = (
+                header[: scanned.start()]
+                + f"{scanned.group(1)}{shipped} of {scanned.group(2)} entries "
+                + "(scan positions "
+                + header[scanned.end() :]
+            )
+        elif showing:
+            first, last = int(showing.group(1)), int(showing.group(2))
+            claim = f"showing {first}-{first - 1 + shipped}"
+            if not shipped:
+                claim = f"showing none of {first}-{last}"
+            header = header[: showing.start()] + claim + header[showing.end() :]
+        head = header + rows
+        if not search_rows:
+            head = cls._restate_section_counts(head)
+        return head, kept_tail, resume
+
+    @classmethod
+    def _restate_section_counts(cls, head: str) -> str:
+        """Re-count each ``## Label (n of N)`` heading's surviving rows."""
+        lines = head.split("\n")
+        for i, line in enumerate(lines):
+            m = cls._SECTION_COUNT_RE.match(line)
+            if m is None:
+                continue
+            rows = 0
+            for following in lines[i + 1 :]:
+                if following.startswith("#"):
+                    break
+                if cls._BULLET_ROW_RE.match(following):
+                    rows += 1
+            if rows < int(m.group(2)):
+                lines[i] = f"{m.group(1)}{rows}{m.group(3)}"
+        return "\n".join(lines)
 
     @classmethod
     def _strip_markdown_links(cls, text: str) -> str:
@@ -662,25 +1008,18 @@ class _CompactFormatMixin:
 
         Idempotent on already-stripped text and on non-markdown text.
 
-        Both regexes share the ``(?:\\.|[^()\\n])*`` shape, which can
-        backtrack quadratically against an unclosed ``[text](URL`` —
-        rare in well-formed Wikipedia exports but possible from
-        adversarial or corrupted backend output. The
-        :func:`safe_regex_sub` wrapper bounds wall-clock time; on
-        timeout we log and return the partially-processed text rather
-        than failing the whole query.
+        Both patterns run directly, not through :func:`safe_regex_sub`.
+        Their disjoint alternation keeps them linear (an unclosed
+        ``[text](URL`` scales n -> 2n), so the wrapper's timeout never
+        bounded real work. What it did do was give up after 1 s of
+        QUEUE wait whenever the shared regex pool was busy, and hand back
+        the text unstripped. The entry builder then measured, paged and
+        cached that page under the compact key, so ``total_chars`` and
+        ``more_at_offset`` disagreed with every later page.
         """
         if not text or "[" not in text:
             return text
-        try:
-            # Drop image markdown first so the leading ``!`` doesn't get
-            # left behind by the text-link substitution.
-            text = safe_regex_sub(cls._MARKDOWN_IMAGE_RE, "", text)
-            text = safe_regex_sub(cls._MARKDOWN_LINK_RE, r"\1", text)
-        except RegexTimeoutError:
-            logger.warning(
-                "Markdown link strip timed out (input %d chars); "
-                "returning partially-processed text",
-                len(text),
-            )
-        return text
+        # Drop image markdown first so the leading ``!`` doesn't get left
+        # behind by the text-link substitution.
+        text = cls._MARKDOWN_IMAGE_RE.sub("", text)
+        return cls._MARKDOWN_LINK_RE.sub(r"\1", text)

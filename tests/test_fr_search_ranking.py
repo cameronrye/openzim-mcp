@@ -538,9 +538,18 @@ class TestAdvancedFulltextCanonicalSplice:
         # match, exactly as ``zim_query`` renders it.
         assert paths[0] == _IEP_CANONICAL, paths
         assert out["results"][0]["snippet"] == "(canonical title match)"
-        # Positive: the splice is additive — every BM25 hit survives.
-        for bm25_path, _title in _IEP_BM25_PAGE:
-            assert bm25_path in paths, paths
+        # Positive: the splice takes a slot, not a hit. The page holds
+        # ``limit`` rows, and the BM25 hit that made room opens page two.
+        bm25_paths = [p for p, _title in _IEP_BM25_PAGE]
+        assert paths[1:] == bm25_paths[:4], paths
+        page_two = await handler(
+            query="epistemology",
+            mode="fulltext",
+            zim_file_path=str(zim_file),
+            limit=5,
+            offset=out["page_info"]["next_offset"],
+        )
+        assert [r["path"] for r in page_two["results"]] == bm25_paths[4:]
         # ``_meta`` describes the page that ships, not the pre-splice one.
         body = json.dumps(
             {k: v for k, v in out.items() if k != "_meta"}, ensure_ascii=False

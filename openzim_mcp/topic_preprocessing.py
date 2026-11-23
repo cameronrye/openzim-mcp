@@ -28,7 +28,7 @@ pre-extraction, and the A3a diff-test's caplog assertion (which scopes to
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 from .title_promotion import (
     accept_possessive_promotion,
@@ -47,6 +47,50 @@ from .title_promotion import (
 # natural ``__name__`` would silently drop those records from the
 # capture and break the byte-identical contract.
 logger = logging.getLogger("openzim_mcp.simple_tools")
+
+# Distinct title-index lookups one promotion may make. Pass 2 probes every
+# non-trailing window of up to four tokens — about four per query word — the
+# data layer caches no miss, and a one-word miss runs its ~500-variant typo
+# sweep: 64 nonsense words took 8.8 s in title mode and 400 took 54.5 s. 48
+# still covers every probe of a 12-token topic; the longest in the b1-b13
+# probe set has nine.
+_PROMOTION_PROBE_BUDGET = 48
+
+
+class _ProbeBudget:
+    """``zim_operations`` as one promotion sees it: memoised, then capped.
+
+    The passes probe the same strings more than once — Pass 3 walks Pass 1's
+    tails again at a looser gate, and the Z3/Z4 discriminators probe single
+    tokens Pass 2 also probes — and every repeat of a miss paid a full lookup.
+    Each distinct ``(title, limit)`` is now looked up once per call; once the
+    budget is spent, a string not yet looked up reads as a miss.
+    """
+
+    def __init__(self, zim_operations: Any, budget: int) -> None:
+        self._zim_operations = zim_operations
+        self._pages: Dict[Tuple[str, str, bool, int], Any] = {}
+        self._left = budget
+
+    def find_entry_by_title_data(
+        self,
+        zim_file_path: str,
+        title: str,
+        cross_file: bool = False,
+        limit: int = 10,
+    ) -> Any:
+        key = (zim_file_path, title, cross_file, limit)
+        if key not in self._pages:
+            if self._left <= 0:
+                return {"results": []}
+            self._left -= 1
+            self._pages[key] = self._zim_operations.find_entry_by_title_data(
+                zim_file_path, title, cross_file=cross_file, limit=limit
+            )
+        return self._pages[key]
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._zim_operations, name)
 
 
 def promote_topic_via_title_index(
@@ -75,6 +119,9 @@ def promote_topic_via_title_index(
     because the title-match boost isn't strong enough. The 1.0 gate
     promotes the canonical past that ranking.
     """
+    # Every probe below, the Z3/Z4 token probes included, draws on one
+    # per-call memo and budget (see ``_ProbeBudget``).
+    zim_operations = _ProbeBudget(zim_operations, _PROMOTION_PROBE_BUDGET)
     # Pass 0: probe the FULL topic (with original punctuation
     # preserved) BEFORE iter_query_tails decomposes it.
     # ``iter_query_tails`` tokenizes on alphanumeric runs, so

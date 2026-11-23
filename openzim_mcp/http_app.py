@@ -38,6 +38,7 @@ from starlette.routing import Route
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from .exceptions import OpenZimMcpConfigurationError, OpenZimMcpTimeoutError
+from .security import sanitize_for_log
 from .timeout_utils import _get_executor, run_with_timeout
 
 if TYPE_CHECKING:
@@ -60,6 +61,20 @@ MCP_PATH = "/mcp"
 
 # Health endpoints exempt from auth.
 AUTH_EXEMPT_PATHS = {HEALTHZ_PATH, READYZ_PATH}
+
+
+def _is_auth_exempt(path: str) -> bool:
+    """Whether ``path`` is a health endpoint, with or without one trailing slash.
+
+    Auth and the Host/Origin gate run ahead of routing, so an exact match
+    refused ``/healthz/`` — which the router redirects to ``/healthz`` — as
+    unauthenticated on a server with a token. Exactly one slash is dropped,
+    so ``/healthz//`` and ``/healthz/x`` stay as protected as any other path.
+    """
+    if path.endswith("/"):
+        path = path[:-1]
+    return path in AUTH_EXEMPT_PATHS
+
 
 # Request headers a browser client may send to the MCP endpoint. A module
 # constant rather than an inline literal so the policy is inspectable — see
@@ -121,6 +136,22 @@ def _is_loopback_host(host: str) -> bool:
     return False
 
 
+def _configured_token(config: object) -> Optional[str]:
+    """The bearer secret ``config`` sets, or ``None`` when it sets none.
+
+    A blank secret counts as none. Config validation refuses one at load
+    time, but ``model_copy`` skips validators, so both readers — the startup
+    check and the auth middleware — go through this one function. When they
+    disagreed, ``0.0.0.0`` with ``SecretStr("")`` passed the startup check as
+    authenticated and was then served to everyone as unauthenticated.
+    """
+    token = getattr(config, "auth_token", None)
+    if token is None:
+        return None
+    secret = token.get_secret_value()
+    return secret if secret and secret.strip() else None
+
+
 def check_safe_startup(config: object) -> None:
     """Refuse to start if a network transport is exposed unsafely.
 
@@ -170,7 +201,7 @@ def check_safe_startup(config: object) -> None:
                 "OPENZIM_MCP_INSECURE_DISABLE_AUTH does not apply to SSE."
             )
         return
-    has_token = getattr(config, "auth_token", None) is not None
+    has_token = _configured_token(config) is not None
     if not is_localhost and not has_token:
         if getattr(config, "insecure_disable_auth", False):
             logger.warning(
@@ -336,13 +367,12 @@ class BearerTokenAuthMiddleware(BaseHTTPMiddleware):
     def __init__(self, app: ASGIApp, config: object) -> None:
         """Capture the expected token from config (None disables auth)."""
         super().__init__(app)
-        token = getattr(config, "auth_token", None)
-        secret = token.get_secret_value() if token is not None else None
         # Defense in depth: an empty/whitespace secret must NOT authenticate
         # every request via ``hmac.compare_digest('', '')``. Config validation
         # already rejects a blank token at load time (H4); normalise here too
-        # so the ``is None`` fast-path below treats it as "no auth configured".
-        self._expected = secret if secret and secret.strip() else None
+        # so the ``is None`` fast-path below treats it as "no auth configured"
+        # — the same reading ``check_safe_startup`` takes of it.
+        self._expected = _configured_token(config)
 
     async def dispatch(
         self,
@@ -352,7 +382,7 @@ class BearerTokenAuthMiddleware(BaseHTTPMiddleware):
         """Validate the Bearer token; pass through on success, 401 otherwise."""
         from .request_context import set_client_id
 
-        if request.url.path in AUTH_EXEMPT_PATHS:
+        if _is_auth_exempt(request.url.path):
             # Health endpoints are public; OPTIONS preflight against them is
             # also fine (no secret to leak via the preflight response).
             return await call_next(request)
@@ -408,12 +438,16 @@ class BearerTokenAuthMiddleware(BaseHTTPMiddleware):
         return await call_next(request)
 
     def _log_failure(self, request: Request, reason: str) -> None:
+        # Both values are the caller's to choose, and the path arrives
+        # percent-decoded: ``/mcp%1B%5B2J`` is a raw ESC by the time it is
+        # logged, so an unauthenticated request could drive the operator's
+        # terminal from the one line meant for spotting it.
         client_host = request.client.host if request.client else "unknown"
         logger.warning(
             "auth failure: reason=%s client=%s path=%s",
             reason,
-            client_host,
-            request.url.path,
+            sanitize_for_log(client_host),
+            sanitize_for_log(request.url.path),
         )
 
 
@@ -499,6 +533,12 @@ def _default_uvicorn_runner(app: Starlette, host: str, port: int) -> None:
         port=port,
         log_level="info",
         timeout_graceful_shutdown=SHUTDOWN_GRACE_SECONDS,
+        # uvicorn's default rewrites the client address from X-Forwarded-For
+        # whenever the peer is 127.0.0.1 — on a loopback bind, every peer.
+        # Without a token the rate limiter keys a client on that address, so
+        # each caller could name a fresh one per request and never be
+        # limited. Nothing here relies on a forwarded header.
+        proxy_headers=False,
     )
     uvicorn.Server(config).run()
 
@@ -532,6 +572,17 @@ class TransportSecurityGateMiddleware(BaseHTTPMiddleware):
     for each request before checking it, so the gate spares a stateless
     server the same churn.
 
+    One check is the gate's own rather than the SDK's. The SDK runs its Host
+    and Origin checks under a single flag, and a bind-all server with no
+    ``OPENZIM_MCP_ALLOWED_HOSTS`` turns that flag off, because a direct-IP
+    ``Host`` varies by interface. An ``Origin`` does not, and it is the header
+    that gives a DNS-rebinding page away: with the flag off, a page at
+    ``http://evil.example:8000`` reached every tool of a server run with
+    ``OPENZIM_MCP_INSECURE_DISABLE_AUTH``. So when the flag is off the gate
+    still refuses an ``Origin`` outside the allow-list, by the SDK's own rule
+    and with its 403. A request with no ``Origin`` — what non-browser clients
+    send — passes as it always did.
+
     Health endpoints are exempt for the same reason they are exempt from auth.
     """
 
@@ -541,6 +592,8 @@ class TransportSecurityGateMiddleware(BaseHTTPMiddleware):
         from mcp.server.transport_security import TransportSecurityMiddleware
 
         self._validator = TransportSecurityMiddleware(security)
+        self._check_origin_only = not security.enable_dns_rebinding_protection
+        self._allowed_origins = list(security.allowed_origins)
 
     async def dispatch(
         self,
@@ -548,14 +601,35 @@ class TransportSecurityGateMiddleware(BaseHTTPMiddleware):
         call_next: Callable[[Request], Awaitable[Response]],
     ) -> Response:
         """Reject what the SDK would reject, before it builds anything for it."""
-        if request.url.path in AUTH_EXEMPT_PATHS:
+        if _is_auth_exempt(request.url.path):
             return await call_next(request)
         error = await self._validator.validate_request(
             request, is_post=request.method == "POST"
         )
         if error is not None:
             return error
+        if self._check_origin_only:
+            origin = request.headers.get("origin")
+            if origin and not _origin_is_allowed(origin, self._allowed_origins):
+                logger.warning("Invalid Origin header: %s", sanitize_for_log(origin))
+                return Response("Invalid Origin header", status_code=403)
         return await call_next(request)
+
+
+def _origin_is_allowed(origin: str, allowed_origins: "list[str]") -> bool:
+    """The SDK's Origin rule: an exact entry, or ``base:*`` for any port of it.
+
+    Mirrors ``TransportSecurityMiddleware._validate_origin`` so a bind-all
+    server judges an ``Origin`` exactly as a loopback one does. The agreement
+    is pinned by a test that sends both the same origins, rather than by
+    calling the SDK's private method.
+    """
+    if origin in allowed_origins:
+        return True
+    return any(
+        allowed.endswith(":*") and origin.startswith(allowed[:-2] + ":")
+        for allowed in allowed_origins
+    )
 
 
 def _is_initialize_request(body: bytes) -> bool:

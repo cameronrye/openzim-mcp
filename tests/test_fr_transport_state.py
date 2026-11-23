@@ -619,12 +619,14 @@ class TestTrailingSlashEndpointIsServed:
 # --------------------------------------------------------------------------
 
 # The first bytes of a real ZIM file: ``has_zim_signature`` reads exactly
-# this, so a stub archive is enough to be counted as a loadable one.
+# this, so a stub archive is enough to be counted as a loadable one, provided
+# it is padded to the full 80-byte header (a shorter file is a truncated
+# download).
 _ZIM_SIGNATURE = b"\x5a\x49\x4d\x04"
 
 
 def _stub_archive(path: Path) -> Path:
-    path.write_bytes(_ZIM_SIGNATURE + b"\x00" * 64)
+    path.write_bytes(_ZIM_SIGNATURE + b"\x00" * 76)
     return path
 
 

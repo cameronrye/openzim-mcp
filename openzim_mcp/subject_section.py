@@ -270,7 +270,7 @@ class _SubjectSectionMixin:
                 f"that compact mode strips. "
                 f"Re-issue `tell me about {top_path}` with "
                 f"`compact=False` to see the full article including "
-                f"table bodies, or `get section {section_id} of "
+                f"table bodies, or `get section {section_text} of "
                 f"{top_path}` with `compact=False` for just this "
                 f"section._\n"
                 f"<!-- intent=subject_attribute_section cert=1.00 -->"

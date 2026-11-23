@@ -8,6 +8,7 @@ maintain consistent error messages and potentially support localization.
 import logging
 from dataclasses import dataclass
 from typing import Callable, Dict, List, Optional, Type
+from urllib.parse import unquote
 
 from .exceptions import (
     OpenZimMcpArchiveError,
@@ -365,14 +366,33 @@ def url_shaped_path_hint(entry_path: str) -> str:
     an archive keeps the ``www.`` depends on the URL zimit was seeded
     with, so both spellings are offered — the stripped one first, because
     that is the one that resolves on the archives whose hrefs carry it.
+
+    A MediaWiki article URL (``/wiki/<Title>``) is the other exception.
+    mwoffliner, which builds the Wikipedia, Wiktionary and Wikivoyage
+    archives, files the article under its title alone:
+    ``https://en.wikipedia.org/wiki/Carbon_tax`` is ``A/Carbon_tax`` on an
+    old-scheme archive and ``Carbon_tax`` on a new one, and libzim resolves
+    the bare title on both. The host-kept spelling missed, and its own miss
+    carried no hint, because the scheme was gone. It stays as the fallback,
+    for a zimit crawl of a wiki.
     """
     scheme, separator, remainder = entry_path.partition("://")
     if not separator or not scheme.isalpha():
         return ""
-    lead = " Entry paths are archive-relative, never URLs: drop the scheme"
+    lead = " Entry paths are archive-relative, never URLs"
     if not remainder:
-        return lead + "."
+        return lead + ": drop the scheme."
     host, slash, rest = remainder.partition("/")
+    if rest.startswith("wiki/"):
+        # A fragment or query string is never part of the title; the title
+        # itself arrives percent-encoded, and libzim stores raw UTF-8.
+        title = unquote(rest[len("wiki/") :].split("#", 1)[0].split("?", 1)[0])
+        if title:
+            return (
+                f"{lead}: a wiki article is filed under its title (e.g. "
+                f"'{title}', or '{remainder}' if that misses)."
+            )
+    lead += ": drop the scheme"
     if host[:4].lower() == "www." and len(host) > 4:
         return (
             f"{lead} (e.g. '{host[4:]}{slash}{rest}', or '{remainder}' "

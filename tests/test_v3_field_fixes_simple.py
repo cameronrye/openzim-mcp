@@ -202,7 +202,9 @@ class TestD44ForeignCursorRejectedUniformly:
             zim_file_path="/zims/test.zim",
             options={"compact": True},
         )
-        assert mock.find_entry_by_title_data.call_args.kwargs["limit"] == 10
+        # The first lookup is the title itself; promotion probes follow it.
+        first = mock.find_entry_by_title_data.call_args_list[0]
+        assert first.kwargs["limit"] == 10
         mock.find_entry_by_title_data.reset_mock()
         handler.handle_zim_query(
             "find article titled Measles",
@@ -389,7 +391,10 @@ class TestD48GetArticleDeterminerAndAbout:
             ("get the article Immanuel Kant", "immanuel kant"),
             ("show an entry about Photosynthesis", "photosynthesis"),
             ("get article about Photosynthesis", "photosynthesis"),
-            ("fetch the page on Photosynthesis", "on photosynthesis"),
+            # ``on`` is peeled too once a determiner makes the noun a
+            # description ("the page on X"); README's own example is
+            # ``summarize the article on Photosynthesis``.
+            ("fetch the page on Photosynthesis", "photosynthesis"),
             # Title-internal prepositions are still preserved (H6).
             ("get the article Lord of the Rings", "lord of the rings"),
         ],
@@ -797,8 +802,9 @@ class TestD52BinaryNotFoundRecovery:
         out = handler.handle_zim_query(
             "get pdf easy-to-read-materials", zim_file_path="/zims/test.zim"
         )
-        assert "Error Processing Query" not in out
-        assert "max_size_bytes must be positive" in out
+        assert isinstance(out, dict) and out["operation"] == "invalid_request", out
+        assert "Error Processing Query" not in _text(out)
+        assert "max_size_bytes must be positive" in _text(out)
 
     def test_archive_level_failure_still_reaches_the_path_envelope(self) -> None:
         handler, mock = _handler_with()
@@ -820,7 +826,10 @@ class TestD52BinaryNotFoundRecovery:
         )
         assert "Missing Entry Path" in out
         assert "extract_article_links" not in out
-        assert "links in" in out
+        # ``links in`` never lists media (compact drops the bucket, the full
+        # view is internal-only), so the tip names a route that does.
+        assert "links in" not in out
+        assert "`browse namespace I`" in out
 
 
 # ---------------------------------------------------------------------------

@@ -6,12 +6,13 @@ from abuse and ensure fair resource usage.
 """
 
 import logging
+import math
 import threading
 import time
 from collections import OrderedDict
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Self
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from .defaults import RATE_LIMIT, RATE_LIMIT_COSTS
 from .exceptions import OpenZimMcpRateLimitError
@@ -45,7 +46,16 @@ class RateLimitConfig(BaseModel):
     @field_validator("requests_per_second")
     @classmethod
     def _validate_requests_per_second(cls, v: float) -> float:
-        """Reject non-positive refill rates."""
+        """Reject non-finite and non-positive refill rates."""
+        # Checked before the sign, because ``nan <= 0`` is False: NaN loaded,
+        # and the refill's ``min(capacity, tokens + elapsed * nan)`` answers
+        # ``capacity``, so every acquire succeeded. ``inf`` refills the same
+        # way. Neither is a rate; ``enabled=false`` is how limiting is off.
+        if not math.isfinite(v):
+            raise ValueError(
+                f"requests_per_second must be a finite number, not {v}; set "
+                "rate_limit.enabled=false to turn rate limiting off"
+            )
         if v <= 0:
             raise ValueError("requests_per_second must be positive")
         return v
@@ -57,6 +67,30 @@ class RateLimitConfig(BaseModel):
         if v <= 0:
             raise ValueError("burst_size must be positive")
         return v
+
+    @model_validator(mode="after")
+    def _reject_a_disabled_operation(self) -> Self:
+        """Refuse ``enabled: false`` inside a per-operation entry.
+
+        Each entry is a whole ``RateLimitConfig``, so it accepts ``enabled``,
+        but the limiter consults only the global flag, and the entry's bucket
+        went on being enforced. The documented overrides are the bucket's
+        ``requests_per_second`` and ``burst_size``; "disabled" could mean
+        dropping that bucket or exempting the operation from limiting
+        altogether, so it is refused rather than guessed at. An explicit
+        ``enabled: true`` is what every entry does anyway, and loads.
+        """
+        for operation, limits in self.per_operation_limits.items():
+            if "enabled" in limits.model_fields_set and not limits.enabled:
+                raise ValueError(
+                    f"per_operation_limits[{operation!r}] sets enabled=false, "
+                    "which a per-operation entry cannot do: it takes "
+                    "requests_per_second and burst_size, and its bucket "
+                    "applies whenever the entry exists. Remove the entry to "
+                    "leave the operation under the global limit alone, or set "
+                    "rate_limit.enabled=false to turn rate limiting off."
+                )
+        return self
 
 
 class TokenBucket:

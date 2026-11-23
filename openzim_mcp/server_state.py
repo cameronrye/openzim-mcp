@@ -341,14 +341,21 @@ def _build_health_report(
 ) -> Union[HealthStatus, ToolErrorPayload]:
     try:
         cache_stats = server.cache.stats()
-        if _redact_diagnostics(server) and "persistence_path" in cache_stats:
+        if _redact_diagnostics(server):
             # The cache file is a host path no client can hand back to a tool,
             # so it follows the PID/directory masking rather than the
-            # ``loaded_archives`` exemption (see _redact_diagnostics).
+            # ``loaded_archives`` exemption (see _redact_diagnostics). So does
+            # the error naming it, which the warnings below are built from:
+            # an unwritable cache directory is exactly when it is non-empty.
             cache_stats = dict(cache_stats)
-            cache_stats["persistence_path"] = sanitize_path_for_error(
-                str(cache_stats["persistence_path"])
-            )
+            if "persistence_path" in cache_stats:
+                cache_stats["persistence_path"] = sanitize_path_for_error(
+                    str(cache_stats["persistence_path"])
+                )
+            if cache_stats.get("persistence_error"):
+                cache_stats["persistence_error"] = redact_paths_in_message(
+                    str(cache_stats["persistence_error"])
+                )
         recommendations: List[str] = []
         warnings: List[str] = []
         health_checks: Dict[str, Any] = {

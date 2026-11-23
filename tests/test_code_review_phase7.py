@@ -123,7 +123,15 @@ def test_m15_real_slash_title_found_not_redirected():
         options={"compact": True},
     )
     assert "Namespace Path, Not a Title" not in out
-    mock.find_entry_by_title_data.assert_called_once()
+    assert "A/B_testing" in out
+    # The one lookup of the title itself both decides the redirect and feeds
+    # the page; the promotion probes title mode runs come after it.
+    typed = [
+        c
+        for c in mock.find_entry_by_title_data.call_args_list
+        if c.args[1] == "a/b testing" and c.kwargs.get("limit") == 10
+    ]
+    assert len(typed) == 1, mock.find_entry_by_title_data.call_args_list
 
 
 def test_m15_genuine_namespace_path_still_redirects():
