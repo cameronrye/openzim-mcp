@@ -88,7 +88,9 @@ done
 **v3.0.0 invalidated every sidecar built by 2.x.** Edge targets are now stored
 under the path the archive can actually serve rather than the raw
 percent-encoded href, so the schema version was bumped and older files are
-rejected on load. Rebuild with `--force`.
+rejected on load. **v3.5 did the same to every sidecar built by 3.0–3.4**: the
+builder now also records absolute links that point at the archive's own site,
+whenever the archive serves the target. Rebuild with `--force`.
 
 ## `openzim-mcp download-models` — pre-stage the reranker
 
