@@ -76,7 +76,6 @@ if TYPE_CHECKING:
     from openzim_mcp.tool_schemas import (
         ArchiveValidationResponse,
         EntryResponse,
-        ListZimFilesResponse,
         ZimMetadataResponse,
     )
 
@@ -434,14 +433,11 @@ def configure_libzim_caches(
     """
     global _LIBZIM_DIRENT_CACHE_MAX_COUNT
     if cluster_cache_max_size_bytes is not None:
-        try:
-            libzim.set_cluster_cache_max_size(cluster_cache_max_size_bytes)
-            logger.info(
-                "libzim cluster cache max size set to %d bytes (process-global)",
-                cluster_cache_max_size_bytes,
-            )
-        except Exception as e:  # pragma: no cover — defensive across versions
-            logger.debug("set_cluster_cache_max_size unavailable: %s", e)
+        libzim.set_cluster_cache_max_size(cluster_cache_max_size_bytes)
+        logger.info(
+            "libzim cluster cache max size set to %d bytes (process-global)",
+            cluster_cache_max_size_bytes,
+        )
     # Guard on None so a caller tuning only the cluster cache doesn't clobber
     # a dirent count another caller already set — ``None`` means "leave as-is",
     # not "reset to default" (symmetric with the cluster branch above).
@@ -596,13 +592,9 @@ def zim_archive(
     def open_archive() -> Archive:
         archive = _zim_ops_shim.Archive(str(file_path))
         # Apply the optional per-archive dirent-cache size (count of
-        # dirents). ``None`` leaves libzim's default. Guarded so a binding
-        # that predates the settable property degrades silently.
+        # dirents). ``None`` leaves libzim's default.
         if _LIBZIM_DIRENT_CACHE_MAX_COUNT is not None:
-            try:
-                archive.dirent_cache_max_size = _LIBZIM_DIRENT_CACHE_MAX_COUNT
-            except Exception as e:  # pragma: no cover — defensive across versions
-                logger.debug("dirent_cache_max_size unavailable: %s", e)
+            archive.dirent_cache_max_size = _LIBZIM_DIRENT_CACHE_MAX_COUNT
         return archive
 
     try:
@@ -915,8 +907,6 @@ class ZimOperations(
         # Cache key bumped to v2c when the per-file dict gained the
         # ``readable`` / ``warning`` signature-probe fields, so a persisted
         # v2b listing (no marker) can't be served as if it had been probed.
-        # The files→results / count→total rename happens one layer up in
-        # ``list_zim_files_summary_data``.
         #
         # The directory signature is folded into the key so that adding,
         # removing, or renaming a ``.zim`` file at runtime invalidates the
@@ -940,49 +930,6 @@ class ZimOperations(
         if not needle:
             return all_zim_files
         return [f for f in all_zim_files if needle in f["name"].lower()]
-
-    def list_zim_files_summary_data(
-        self, name_filter: Optional[str] = None
-    ) -> "ListZimFilesResponse":
-        """Structured ``list_zim_files`` payload.
-
-        Wraps :py:meth:`list_zim_files_data` with the directories metadata
-        that the legacy markdown-header string variant carries in its
-        prose preamble, so MCP clients consuming the structured output
-        get the same context without reparsing a header.
-
-        v2 Phase B contract: the response carries the canonical pagination
-        keys (``results`` / ``next_cursor`` / ``total`` / ``done`` /
-        ``page_info``) plus the tool-specific ``directories_count`` and
-        ``name_filter`` fields. ``list_zim_files`` is non-paginated — every
-        matching file in the allowed directories is returned in a single
-        call — so ``next_cursor`` is always ``None`` and ``done`` is
-        always ``True``. The contract is applied for uniformity with the
-        other list-shaped responses.
-
-        Returns:
-            ``ListZimFilesResponse``-shaped dict carrying ``results`` (the
-            per-file dicts with name/path/directory/size/size_bytes/modified
-            — formerly ``files``), ``next_cursor`` (always ``None``),
-            ``total`` (the count, formerly ``count``), ``done`` (always
-            ``True``), ``page_info``, plus ``directories_count``,
-            ``name_filter``, and the ``_meta`` envelope.
-        """
-        files_list = self.list_zim_files_data(name_filter=name_filter)
-        payload: Dict[str, Any] = {
-            "name_filter": name_filter or "",
-            "directories_count": len(self.config.allowed_directories),
-            "results": files_list,
-            "next_cursor": None,
-            "total": len(files_list),
-            "done": True,
-            "page_info": {
-                "offset": 0,
-                "limit": len(files_list),
-                "returned_count": len(files_list),
-            },
-        }
-        return cast("ListZimFilesResponse", attach_meta(payload))
 
     def list_zim_files(self, name_filter: Optional[str] = None) -> str:
         """List all ZIM files in allowed directories.
@@ -1034,7 +981,7 @@ class ZimOperations(
         tools can hand it straight to the SDK's structured-content path.
 
         Raises:
-            OpenZimMcpFileNotFoundError: If ZIM file not found
+            OpenZimMcpArchivePathError: If the ZIM file is missing or not an archive
             OpenZimMcpArchiveError: If metadata retrieval fails
         """
         # Validate and resolve file path
@@ -1099,7 +1046,7 @@ class ZimOperations(
             JSON string containing ZIM metadata
 
         Raises:
-            OpenZimMcpFileNotFoundError: If ZIM file not found
+            OpenZimMcpArchivePathError: If the ZIM file is missing or not an archive
             OpenZimMcpArchiveError: If metadata retrieval fails
         """
         return _json(self.get_zim_metadata_data(zim_file_path))
@@ -1116,7 +1063,7 @@ class ZimOperations(
         argument.
 
         Raises:
-            OpenZimMcpFileNotFoundError: If ZIM file not found
+            OpenZimMcpArchivePathError: If the ZIM file is missing or not an archive
             OpenZimMcpArchiveError: If validation fails
         """
         validated_path = self._validate_zim_path(zim_file_path)
@@ -1401,15 +1348,6 @@ class ZimOperations(
         content = bytes(item.content).decode("utf-8", errors="replace").strip()
         return content or None
 
-    def _read_new_scheme_metadata_value(
-        self, archive: Archive, meta_key: str
-    ) -> Optional[str]:
-        """Capped display form of :meth:`_read_new_scheme_metadata_raw`."""
-        content = self._read_new_scheme_metadata_raw(archive, meta_key)
-        if content is None:
-            return None
-        return self._cap_metadata_preview(content)
-
     def _read_old_scheme_metadata_raw(
         self, archive: Archive, meta_key: str
     ) -> Optional[str]:
@@ -1446,16 +1384,6 @@ class ZimOperations(
         item = entry.get_item()
         content = bytes(item.content).decode("utf-8", errors="replace").strip()
         return content or None
-
-    def _read_old_scheme_metadata_value(
-        self, archive: Archive, meta_key: str
-    ) -> Optional[str]:
-        """Distilled + capped display form of
-        :meth:`_read_old_scheme_metadata_raw`."""
-        content = self._read_old_scheme_metadata_raw(archive, meta_key)
-        if content is None:
-            return None
-        return self._format_metadata_html_value(content)
 
     def _format_metadata_html_value(self, content: str) -> str:
         """Distil an old-scheme metadata value's HTML wrapper + cap it.
@@ -1535,7 +1463,7 @@ class ZimOperations(
             Main page content or information about main page
 
         Raises:
-            OpenZimMcpFileNotFoundError: If ZIM file not found
+            OpenZimMcpArchivePathError: If the ZIM file is missing or not an archive
             OpenZimMcpArchiveError: If main page retrieval fails
         """
         validated_path, cache_key, cached_result = self._main_page_cache_lookup(
@@ -1630,7 +1558,7 @@ class ZimOperations(
         ``None`` the branch keeps its ``DEFAULT_MAIN_PAGE_TRUNCATION`` cap.
 
         Raises:
-            OpenZimMcpFileNotFoundError: If ZIM file not found
+            OpenZimMcpArchivePathError: If the ZIM file is missing or not an archive
             OpenZimMcpArchiveError: If main page retrieval fails
         """
         validated_path, cache_key, cached_result = self._main_page_cache_lookup(

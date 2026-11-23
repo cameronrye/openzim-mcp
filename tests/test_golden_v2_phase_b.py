@@ -24,9 +24,6 @@ Notes
   ZIM entry ``path`` values (e.g. ``A/Einstein``) are part of the contract
   and are intentionally retained.
   Stripping these keeps the diff focused on structural contract shape.
-* ``list_zim_files_summary_data`` is intentionally excluded — its output
-  contains absolute paths and file-system timestamps that are
-  environment-specific; five solid stable snapshots beat eight flaky ones.
 """
 
 import json

@@ -600,7 +600,7 @@ class TestRerankerStateComment:
         assert self._make_handler_stub().compute() is None
 
     def test_engaged_detected(self) -> None:
-        from openzim_mcp.simple_tools import _RERANKER_ENGAGED
+        from openzim_mcp.rerank import _RERANKER_ENGAGED
 
         stub = self._make_handler_stub()
         stub.record(_RERANKER_ENGAGED)
@@ -609,21 +609,21 @@ class TestRerankerStateComment:
         assert stub._telemetry[_RERANKER_ENGAGED] == 1
 
     def test_skipped_not_installed_detected(self) -> None:
-        from openzim_mcp.simple_tools import _RERANKER_SKIPPED_NOT_INSTALLED
+        from openzim_mcp.rerank import _RERANKER_SKIPPED_NOT_INSTALLED
 
         stub = self._make_handler_stub()
         stub.record(_RERANKER_SKIPPED_NOT_INSTALLED)
         assert stub.compute() == "skipped:not_installed"
 
     def test_skipped_no_results_detected(self) -> None:
-        from openzim_mcp.simple_tools import _RERANKER_SKIPPED_NO_RESULTS
+        from openzim_mcp.rerank import _RERANKER_SKIPPED_NO_RESULTS
 
         stub = self._make_handler_stub()
         stub.record(_RERANKER_SKIPPED_NO_RESULTS)
         assert stub.compute() == "skipped:no_results"
 
     def test_skipped_passthrough_detected(self) -> None:
-        from openzim_mcp.simple_tools import _RERANKER_SKIPPED_PASSTHROUGH
+        from openzim_mcp.rerank import _RERANKER_SKIPPED_PASSTHROUGH
 
         stub = self._make_handler_stub()
         stub.record(_RERANKER_SKIPPED_PASSTHROUGH)
@@ -633,7 +633,7 @@ class TestRerankerStateComment:
         # An internal sub-search's no_results followed by the main search's
         # passthrough must report passthrough — the main (last) outcome —
         # NOT no_results (which the old priority-order diff surfaced).
-        from openzim_mcp.simple_tools import (
+        from openzim_mcp.rerank import (
             _RERANKER_SKIPPED_NO_RESULTS,
             _RERANKER_SKIPPED_PASSTHROUGH,
         )
@@ -644,7 +644,7 @@ class TestRerankerStateComment:
         assert stub.compute() == "skipped:passthrough"
 
     def test_state_is_consumed_so_it_cannot_leak(self) -> None:
-        from openzim_mcp.simple_tools import _RERANKER_ENGAGED
+        from openzim_mcp.rerank import _RERANKER_ENGAGED
 
         stub = self._make_handler_stub()
         stub.record(_RERANKER_ENGAGED)

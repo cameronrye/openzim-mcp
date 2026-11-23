@@ -98,7 +98,6 @@ class MetaConfig(BaseModel):
     """Configuration for the response `_meta` envelope (Phase A item #5)."""
 
     footer_enabled: bool = Field(default=META.FOOTER_ENABLED)
-    tokenizer_encoding: str = Field(default=META.TOKENIZER_ENCODING)
 
 
 class SearchConfig(BaseModel):

@@ -34,7 +34,7 @@ from typing import Any, Dict
 from urllib.parse import urlparse
 
 import pytest
-from libzim.writer import Creator, Hint, Item, StringProvider
+from libzim.writer import Creator, Hint
 
 from openzim_mcp.zim_operations import ZimOperations
 from tests.conftest_v2_fixtures import _HtmlItem, make_zim_ops
@@ -79,28 +79,6 @@ _REDIRECTS = {
     f"{HOST}/aris-log/": f"{HOST}/aristotle-logic/",
     f"{HOST}/ibnrushd/": f"{HOST}/ibn-rushd-averroes/",
 }
-
-
-class _Redirect(Item):
-    def __init__(self, path: str, target: str) -> None:
-        super().__init__()
-        self._path = path
-        self._target = target
-
-    def get_path(self) -> str:
-        return self._path
-
-    def get_title(self) -> str:
-        return self._path
-
-    def get_mimetype(self) -> str:
-        return "text/html"
-
-    def get_contentprovider(self) -> StringProvider:
-        return StringProvider("")
-
-    def get_hints(self) -> Dict[Hint, int]:
-        return {Hint.FRONT_ARTICLE: 1}
 
 
 @pytest.fixture(scope="module")

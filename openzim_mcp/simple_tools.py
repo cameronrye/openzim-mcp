@@ -41,15 +41,7 @@ from .linkgraph.reader import LinkGraphUnavailable
 from .meta import build_meta, format_footer, remeasure
 from .onboarding import acquisition_hint_markdown
 from .pagination import archive_identity
-from .rerank import (
-    _INFO_LEVEL_TELEMETRY_EVENTS,
-    _RERANK_STATE_VAR,
-    _RERANKER_ENGAGED,
-    _RERANKER_SKIPPED_NO_RESULTS,
-    _RERANKER_SKIPPED_NOT_INSTALLED,
-    _RERANKER_SKIPPED_PASSTHROUGH,
-    _RerankMixin,
-)
+from .rerank import _INFO_LEVEL_TELEMETRY_EVENTS, _RERANK_STATE_VAR, _RerankMixin
 from .responses import ToolErrorPayload, tool_error
 from .security import sanitize_context_for_error, sanitize_control_chars
 from .subject_section import _SubjectSectionMixin
@@ -781,23 +773,8 @@ class SimpleToolsHandler(
         # request so a prior request's outcome can never leak into this
         # request's ``<!-- reranker=<state> -->`` marker. The marker is read
         # from ``_RERANK_STATE_VAR`` (stamped as the rerank runs), not the
-        # process-wide Counter below — see ``_compute_rerank_state``.
+        # process-wide telemetry Counter — see ``_compute_rerank_state``.
         _RERANK_STATE_VAR.set(None)
-        # The ``_RERANK_EVENTS_BEFORE`` snapshot is retained only for the
-        # ``get_server_health`` telemetry contract; the in-band marker no
-        # longer derives from it.
-        _RERANK_EVENTS_BEFORE = {
-            _RERANKER_ENGAGED: self._telemetry.get(_RERANKER_ENGAGED, 0),
-            _RERANKER_SKIPPED_NOT_INSTALLED: self._telemetry.get(
-                _RERANKER_SKIPPED_NOT_INSTALLED, 0
-            ),
-            _RERANKER_SKIPPED_NO_RESULTS: self._telemetry.get(
-                _RERANKER_SKIPPED_NO_RESULTS, 0
-            ),
-            _RERANKER_SKIPPED_PASSTHROUGH: self._telemetry.get(
-                _RERANKER_SKIPPED_PASSTHROUGH, 0
-            ),
-        }
         try:
             # Conversational filler / meta-instructions ("do both",
             # "try again", "test this", "ok") have no information content
@@ -892,7 +869,6 @@ class SimpleToolsHandler(
                     low_confidence_note=low_confidence_note,
                     handler_reason=None,
                     handler_suggestions=None,
-                    rerank_events_before=_RERANK_EVENTS_BEFORE,
                 )
 
             # Post-v2.0.0 D-A: ``search_all`` is semantically cross-archive
@@ -954,7 +930,6 @@ class SimpleToolsHandler(
                         low_confidence_note="",
                         handler_reason=None,
                         handler_suggestions=None,
-                        rerank_events_before=_RERANK_EVENTS_BEFORE,
                     )
             # Hallucinated paths were already normalized at the top of
             # ``handle_zim_query`` (see comment above the synthesize branch).
@@ -1014,7 +989,6 @@ class SimpleToolsHandler(
                 low_confidence_note=low_confidence_note,
                 handler_reason=handler_reason,
                 handler_suggestions=handler_suggestions,
-                rerank_events_before=_RERANK_EVENTS_BEFORE,
                 server_authored=server_authored,
                 refit=refit,
             )
@@ -1160,7 +1134,6 @@ class SimpleToolsHandler(
         low_confidence_note: str,
         handler_reason: Optional[str],
         handler_suggestions: Optional[List[Dict[str, str]]],
-        rerank_events_before: Dict[str, int],
         server_authored: bool = False,
         refit: Optional[Callable[[int], Optional[str]]] = None,
     ) -> str:
@@ -1201,7 +1174,7 @@ class SimpleToolsHandler(
             # calling LLM). Emitted only when the request actually
             # touched a search path — non-search intents leave the
             # counter untouched and the comment is suppressed.
-            _rerank_state = self._compute_rerank_state(rerank_events_before)
+            _rerank_state = self._compute_rerank_state()
             if _rerank_state is not None:
                 telemetry_markers += f"\n<!-- reranker={_rerank_state} -->"
             # In compact mode the markers are appended AFTER the size cap

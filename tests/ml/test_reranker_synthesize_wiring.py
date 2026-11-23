@@ -43,14 +43,6 @@ def _make_reranker(scores: List[float], *, min_query_tokens: int = 1) -> BGERera
     )
 
 
-def _make_top_hits(paths: List[str], archive: str = "wiki") -> list[tuple[str, dict]]:
-    """Build minimal top_hits list for _extract_passages_for_top_hits."""
-    return [
-        (archive, {"path": p, "snippet": f"text about {p}", "score": 1.0 - 0.1 * i})
-        for i, p in enumerate(paths)
-    ]
-
-
 # ---------------------------------------------------------------------------
 # Unit-level: rerank block logic in synthesize_query
 # ---------------------------------------------------------------------------

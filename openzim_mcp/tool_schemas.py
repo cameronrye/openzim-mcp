@@ -343,17 +343,6 @@ class LinksResponse(TypedDict):
     message: NotRequired[str]
 
 
-class ListZimFilesResponse(TypedDict):
-    results: list[FileSummary]
-    next_cursor: Optional[str]
-    total: Optional[int]
-    done: bool
-    page_info: PageInfo
-    _meta: MetaEnvelope
-    name_filter: Optional[str]
-    directories_count: int
-
-
 class RelatedArticlesResponse(TypedDict):
     results: list[RelatedArticle]
     next_cursor: Optional[str]

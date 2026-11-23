@@ -10,6 +10,8 @@ from starlette.responses import PlainTextResponse
 from starlette.routing import Route
 from starlette.testclient import TestClient
 
+from tests._http_helpers import build_health_app
+
 
 @pytest.fixture
 def app_with_auth():
@@ -133,13 +135,13 @@ def test_non_ascii_configured_token_returns_401_not_500():
 
 def test_health_endpoints_skip_auth():
     """/healthz and /readyz must NOT require auth."""
-    from openzim_mcp.http_app import BearerTokenAuthMiddleware, build_starlette_app
+    from openzim_mcp.http_app import BearerTokenAuthMiddleware
 
     server = MagicMock()
     server.config = MagicMock()
     server.config.auth_token = SecretStr("topsecret")
     server.config.allowed_directories = ["/tmp"]
-    app = build_starlette_app(server)
+    app = build_health_app(server)
     app.add_middleware(BearerTokenAuthMiddleware, config=server.config)
     client = TestClient(app)
     assert client.get("/healthz").status_code == 200

@@ -1,7 +1,7 @@
 """HTTP-mode helpers for OpenZIM MCP.
 
-Provides the Starlette app the MCP server is mounted on, plus health
-endpoints, auth middleware, and CORS for streamable-HTTP transport.
+Serves the MCP server's Starlette app over streamable-HTTP transport, with
+health endpoints, auth middleware, and CORS.
 
 This module exists so server.py stays focused on MCP-protocol concerns and
 HTTP-specific behavior is grouped here.
@@ -34,7 +34,6 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.cors import CORSMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
-from starlette.routing import Route
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from .exceptions import OpenZimMcpConfigurationError, OpenZimMcpTimeoutError
@@ -489,19 +488,6 @@ def apply_cors_middleware(app: Starlette, config: object) -> None:
         # omitting them fails browser preflight for every 2026-era client.
         allow_headers=list(CORS_ALLOW_HEADERS),
         expose_headers=["Mcp-Session-Id"],
-    )
-
-
-def build_starlette_app(server: "OpenZimMcpServer") -> Starlette:
-    """Build the Starlette app served by streamable-HTTP transport.
-
-    Includes /healthz, /readyz, and (later tasks) auth/CORS middleware.
-    """
-    return Starlette(
-        routes=[
-            Route(HEALTHZ_PATH, healthz),
-            Route(READYZ_PATH, _make_readyz(server)),
-        ]
     )
 
 

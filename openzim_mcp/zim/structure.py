@@ -35,7 +35,6 @@ from openzim_mcp.exceptions import (
     OpenZimMcpArchiveError,
     OpenZimMcpCursorMismatchError,
     OpenZimMcpEntryNotFoundError,
-    OpenZimMcpFileNotFoundError,
     OpenZimMcpValidationError,
 )
 from openzim_mcp.meta import attach_meta
@@ -516,7 +515,7 @@ class _StructureMixin:
         can hand it straight to the SDK's structured-content path.
 
         Raises:
-            OpenZimMcpFileNotFoundError: If ZIM file not found
+            OpenZimMcpArchivePathError: If the ZIM file is missing or not an archive
             OpenZimMcpArchiveError: If structure extraction fails
         """
         entry_path = normalize_entry_path(entry_path)
@@ -555,7 +554,7 @@ class _StructureMixin:
             JSON string containing article structure
 
         Raises:
-            OpenZimMcpFileNotFoundError: If ZIM file not found
+            OpenZimMcpArchivePathError: If the ZIM file is missing or not an archive
             OpenZimMcpArchiveError: If structure extraction fails
         """
         return _json(self.get_article_structure_data(zim_file_path, entry_path))
@@ -883,7 +882,7 @@ class _StructureMixin:
 
         Raises:
             OpenZimMcpValidationError: limit/offset/kind out of range.
-            OpenZimMcpFileNotFoundError: If ZIM file not found.
+            OpenZimMcpArchivePathError: If the ZIM file is missing or not an archive
             OpenZimMcpArchiveError: If link extraction fails.
         """
         self._validate_links_args(limit, offset, kind)
@@ -1015,7 +1014,7 @@ class _StructureMixin:
 
         Raises:
             OpenZimMcpValidationError: limit/offset/kind out of range.
-            OpenZimMcpFileNotFoundError: If ZIM file not found
+            OpenZimMcpArchivePathError: If the ZIM file is missing or not an archive
             OpenZimMcpArchiveError: If link extraction fails
         """
         return _json(
@@ -1037,7 +1036,7 @@ class _StructureMixin:
         can hand it straight to the SDK's structured-content path.
 
         Raises:
-            OpenZimMcpFileNotFoundError: If ZIM file not found
+            OpenZimMcpArchivePathError: If the ZIM file is missing or not an archive
             OpenZimMcpArchiveError: If TOC extraction fails
         """
         entry_path = normalize_entry_path(entry_path)
@@ -1079,7 +1078,7 @@ class _StructureMixin:
             JSON string containing hierarchical table of contents
 
         Raises:
-            OpenZimMcpFileNotFoundError: If ZIM file not found
+            OpenZimMcpArchivePathError: If the ZIM file is missing or not an archive
             OpenZimMcpArchiveError: If TOC extraction fails
         """
         return _json(self.get_table_of_contents_data(zim_file_path, entry_path))
@@ -1188,8 +1187,6 @@ class _StructureMixin:
                     include_subsections=include_subsections,
                     compact=compact,
                 )
-        except OpenZimMcpFileNotFoundError as e:
-            return tool_error(operation="file_not_found", message=str(e))
         except OpenZimMcpArchiveError as e:
             return tool_error(operation="entry_not_found", message=str(e))
 

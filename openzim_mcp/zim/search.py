@@ -963,7 +963,7 @@ class _SearchMixin:
             Search result text
 
         Raises:
-            OpenZimMcpFileNotFoundError: If ZIM file not found
+            OpenZimMcpArchivePathError: If the ZIM file is missing or not an archive
             OpenZimMcpArchiveError: If search operation fails
         """
         payload = self.search_zim_file_data(zim_file_path, query, limit, offset)
@@ -991,7 +991,7 @@ class _SearchMixin:
         as ``walk_namespace`` / ``extract_article_links``.
 
         Raises:
-            OpenZimMcpFileNotFoundError: If ZIM file not found
+            OpenZimMcpArchivePathError: If the ZIM file is missing or not an archive
             OpenZimMcpArchiveError: If search operation fails
             OpenZimMcpValidationError: If a cursor was issued for a different archive
         """
@@ -1945,9 +1945,8 @@ class _SearchMixin:
         # a13: imports hoisted from function-local to module-level
         # (see top of file) so unit tests can patch
         # ``openzim_mcp.zim.search.find_title_match`` directly. The
-        # ``is_strong_title_match`` reference is retained for
-        # historical callers but the splice gate (post-a13 D5) uses
-        # exact path comparison rather than the strong-match predicate.
+        # splice gate (post-a13 D5) uses exact path comparison rather
+        # than the strong-match predicate.
         try:
             canonical = find_title_match(self, zim_file_path, query)
         except Exception:  # pragma: no cover — defensive
@@ -2201,7 +2200,7 @@ class _SearchMixin:
             Search result text
 
         Raises:
-            OpenZimMcpFileNotFoundError: If ZIM file not found
+            OpenZimMcpArchivePathError: If the ZIM file is missing or not an archive
             OpenZimMcpValidationError: If parameter validation fails
                 (limit out of range, negative offset, malformed namespace).
             OpenZimMcpArchiveError: If search operation fails
@@ -2327,7 +2326,7 @@ class _SearchMixin:
         contract.
 
         Raises:
-            OpenZimMcpFileNotFoundError: If ZIM file not found
+            OpenZimMcpArchivePathError: If the ZIM file is missing or not an archive
             OpenZimMcpValidationError: If parameter validation fails
                 (limit out of range, negative offset, malformed namespace,
                 cursor archive mismatch).
@@ -3029,7 +3028,7 @@ class _SearchMixin:
         honoured here.
 
         Raises:
-            OpenZimMcpFileNotFoundError: If ZIM file not found
+            OpenZimMcpArchivePathError: If the ZIM file is missing or not an archive
             OpenZimMcpValidationError: If ``limit`` is outside ``1..50``.
             OpenZimMcpArchiveError: If suggestion generation fails
         """
@@ -3167,7 +3166,7 @@ class _SearchMixin:
             JSON string containing search suggestions
 
         Raises:
-            OpenZimMcpFileNotFoundError: If ZIM file not found
+            OpenZimMcpArchivePathError: If the ZIM file is missing or not an archive
             OpenZimMcpValidationError: If ``limit`` is outside ``1..50``.
             OpenZimMcpArchiveError: If suggestion generation fails
         """

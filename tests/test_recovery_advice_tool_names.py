@@ -9,7 +9,7 @@ they had drifted: five of the names they instructed
 
 This module generalises the prompts guard over the two tool modes. The
 simple half matters most: ``tool_mode='simple'`` is the default
-(``ServerDefaults.TOOL_MODE``) and what the README tells every user to
+(``OpenZimMcpConfig.tool_mode``) and what the README tells every user to
 copy-paste, and it registers ``zim_query`` alone. Naming any *other* tool
 there describes a tool the client cannot see — at the exact moment the
 model is recovering from a failure.

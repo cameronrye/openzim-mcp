@@ -16,7 +16,6 @@ from .exceptions import (
     OpenZimMcpArchivePathError,
     OpenZimMcpEntryNotFoundError,
     OpenZimMcpError,
-    OpenZimMcpFileNotFoundError,
     OpenZimMcpRateLimitError,
     OpenZimMcpSecurityError,
     OpenZimMcpValidationError,
@@ -37,16 +36,6 @@ class ErrorConfig:
 
 # Error message configurations mapped by exception type
 ERROR_CONFIGS: Dict[Type[OpenZimMcpError], ErrorConfig] = {
-    OpenZimMcpFileNotFoundError: ErrorConfig(
-        title="File Not Found Error",
-        issue="The specified ZIM file could not be found.",
-        steps=[
-            "Verify the file path is correct",
-            "Check that the file exists in one of the allowed directories",
-            'Use `zim_query("list available ZIM files")` to see available files',
-            "Ensure you have read permissions for the file",
-        ],
-    ),
     OpenZimMcpArchiveError: ErrorConfig(
         title="Archive Operation Error",
         issue="The ZIM archive operation failed.",

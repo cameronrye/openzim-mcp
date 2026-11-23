@@ -5,8 +5,8 @@ of mixins coordinated by :class:`openzim_mcp.zim.archive.ZimOperations`).
 External callers that historically imported from this module continue to
 work via the re-exports below — both for the public API
 (``ZimOperations``, ``zim_archive``) and for the internal symbols that
-tests patch (``Archive``, ``Query``, ``Searcher``, ``SuggestionSearcher``,
-``MAX_REDIRECT_DEPTH``).
+tests patch (``Archive``, ``Query``, ``Searcher``, ``SuggestionSearcher``)
+or read (``MAX_REDIRECT_DEPTH``).
 
 The mixin modules look up these symbols on this module at *call time*
 (via ``import openzim_mcp.zim_operations as ...``), so test patches like

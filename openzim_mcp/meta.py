@@ -120,17 +120,6 @@ def _raw_tokens_est(rendered: str) -> Optional[int]:
         return None
 
 
-def tokens_est(rendered: str) -> int:
-    """Estimate the token count of a rendered string using cl100k_base.
-
-    Returns 0 on empty input and 0 when the tokenizer is unavailable —
-    the public helper preserves the legacy int return; envelope builders
-    that need the "unavailable" signal call :func:`_raw_tokens_est`.
-    """
-    raw = _raw_tokens_est(rendered)
-    return raw if raw is not None else 0
-
-
 def build_meta(
     *,
     rendered: str,
