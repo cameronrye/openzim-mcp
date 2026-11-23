@@ -1,11 +1,30 @@
 ---
 title: Upgrading
-summary: What breaks between major versions and what to do about it — v2 to v3 for subscription clients and link-graph sidecars, plus a pointer to the v1 to v2 mapping.
+summary: What breaks between versions and what to do about it — the v3.5 sidecar rebuild, v2 to v3 for subscription clients and sidecars, and the v1 to v2 mapping.
 group: Operate
 sidebar_order: 6
 ---
 
-Newest first. The sections below concern crossing a major boundary, but a minor release can still change behaviour without breaking a call — v3.1.0 stopped the reranker downloading its own model and moved caller-error logs from ERROR to WARNING — so read the `Upgrade notes` block of any release you move to.
+Newest first. Most sections concern crossing a major boundary; v3.5 gets its own because it makes existing link-graph sidecars unusable. A minor release can still change behaviour without breaking a call — v3.1.0 stopped the reranker downloading its own model and moved caller-error logs from ERROR to WARNING — so read the `Upgrade notes` block of any release you move to.
+
+## v3.4 → v3.5
+
+### Link-graph sidecars must be rebuilt again
+
+**Who is affected:** anyone using `zim_links(direction="inbound")`.
+
+v3.5 bumped the sidecar schema again. The builder now also records absolute
+links that point at the archive's own site, whenever the archive serves the
+target; archives made with warc2zim often contain such links. A sidecar built
+by any 3.0–3.4 release lacks those edges, so it is rejected on load, and
+inbound lookups return `inbound_sidecar_unavailable` until you rebuild it. The
+rebuild loop, the check and the time and memory budget are the same as for
+[v2 → v3](#1-link-graph-sidecars-must-be-rebuilt).
+
+v3.5's other behaviour changes, including settings that startup now refuses,
+are in the `Upgrade notes` block of its
+[CHANGELOG](https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md)
+entry.
 
 ## v2 → v3
 
@@ -25,7 +44,7 @@ lookups return an `inbound_sidecar_unavailable` envelope. No other direction
 is affected, and nothing else about the archive changes.
 
 ```bash
-# Rebuild every sidecar. --force is required: the 2.x file is still there.
+# Rebuild every sidecar. --force is required: the old file is still there.
 for z in /srv/zim/*.zim; do
   openzim-mcp build link-graph --force --quiet "$z" || echo "FAILED: $z"
 done
