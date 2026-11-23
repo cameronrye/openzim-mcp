@@ -8,6 +8,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [3.5.0](https://github.com/cameronrye/openzim-mcp/compare/v3.4.1...v3.5.0) (2026-11-23)
 
 
+### Upgrade notes
+
+Rebuild any link-graph sidecars after upgrading, and check the configuration
+changes below if a server's startup now stops with a configuration error.
+
+**Link-graph sidecars must be rebuilt.** The builder now indexes same-host
+absolute links, and the sidecar schema moved from v3 to v4. A v3 sidecar is
+reported stale, so `zim_links` inbound lookups return
+`inbound_sidecar_unavailable` until it is rebuilt with
+`openzim-mcp build link-graph --force <archive>`.
+
+**With `cache.persistence_enabled` on, the saved cache snapshot is discarded
+once.** A snapshot now records the content-shaping settings it was rendered
+under, and is dropped when they change. A 3.4.x snapshot has no such record, so
+the first start after upgrading begins with an empty cache.
+
+**Startup refuses settings it used to accept and then misbehave on:** an auth
+token with leading or trailing whitespace or a control character, a NaN or
+infinite rate limit, and `enabled: false` inside a per-operation rate limit.
+Set `rate_limit.enabled=false` to turn rate limiting off.
+
+**HTTP no longer reads `X-Forwarded-For`, even from `127.0.0.1`.** Without an
+auth token, the rate limiter keys each client on the connecting address, so
+clients behind a reverse proxy on the same host now share the proxy's bucket.
+With a token, each client is keyed on its token.
+
+**`resources/read` is rate limited**, in the same bucket as its tool
+counterpart; `zim://files` uses `zim_files`.
+
+**A simple-mode HTTP server no longer advertises resource subscriptions** or
+runs the file watcher, since it registers no resources.
+
+**`meta.tokenizer_encoding` (`OPENZIM_MCP_META__TOKENIZER_ENCODING`) is gone.**
+It never had an effect, and a leftover setting is ignored.
+
+
 ### Added
 
 * let operators replace the server instructions, with {{default}} to keep the built-in text ([#485](https://github.com/cameronrye/openzim-mcp/issues/485)) ([2d8d18c](https://github.com/cameronrye/openzim-mcp/commit/2d8d18cabfa559d85958cc49299d3a94521e1d11)), closes [#479](https://github.com/cameronrye/openzim-mcp/issues/479)
