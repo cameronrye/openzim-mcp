@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.5.1](https://github.com/cameronrye/openzim-mcp/compare/v3.5.0...v3.5.1) (2026-11-23)
+
+
+### Documentation
+
+* say v3.5 invalidates 3.x link-graph sidecars too, not just 2.x ones ([#495](https://github.com/cameronrye/openzim-mcp/issues/495)) ([30a093d](https://github.com/cameronrye/openzim-mcp/commit/30a093d7e0812112ca612f97c48baf7e88842031))
+
 ## [3.5.0](https://github.com/cameronrye/openzim-mcp/compare/v3.4.1...v3.5.0) (2026-11-23)
 
 
