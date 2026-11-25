@@ -579,6 +579,20 @@ class OpenZimMcpServer:
                 f"Must be one of: {', '.join(sorted(VALID_TRANSPORT_TYPES))}"
             )
 
+        # A logger.warning for the same reasons as the sse notice below, but
+        # transport-independent, so it sits before the transport branch.
+        # ``model_fields_set`` tells an operator's value from the default.
+        if "final_top_k" in self.config.ml.reranker.model_fields_set:
+            logger.warning(
+                "DEPRECATED: ml.reranker.final_top_k "
+                "(OPENZIM_MCP_ML__RERANKER__FINAL_TOP_K) no longer has any "
+                "effect and will be removed in the next major release "
+                "(4.0.0). The reranker only reorders results now: `search "
+                "all files for` returns up to `limit` hits from every "
+                "archive (default 5), so pass a smaller `limit` for a "
+                "shorter answer, and unset this variable."
+            )
+
         logger.info(f"Starting OpenZIM MCP server with transport: {transport}")
         try:
             if transport == "streamable-http":

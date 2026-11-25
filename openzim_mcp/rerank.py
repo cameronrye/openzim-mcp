@@ -276,20 +276,28 @@ class _RerankMixin:
             self._record_rerank_event(_RERANKER_SKIPPED_NO_RESULTS)
             return per_file
 
+        # Rerank REORDERS each archive's hits; it is never a second cap, here
+        # any more than on the single-archive page. Every archive's ``limit``
+        # was honoured by the fan-out, and the hits are regrouped per archive
+        # and rendered in archive order, so pooling them changes only the
+        # order inside each archive. The one thing a cut below the pool adds
+        # is deletion: ``final_top_k`` used to keep the top 10 across ALL
+        # archives, which emptied any archive whose hits all scored below
+        # that line, and ``render_search_all`` skips an empty archive, so
+        # it vanished from the answer with no trace.
         reranked_tagged = reranker.rerank(
             query=query,
             candidates=tagged_hits,
-            top_k=reranker_cfg.final_top_k,
+            top_k=len(tagged_hits),
         )
         # H9: BGEReranker.rerank's skip paths (the short-query gate that fires
         # for any query under min_query_tokens words — i.e. most real queries —
-        # and the inference-failure passthrough) return ``candidates[:top_k]``
-        # in ARCHIVE order with NO ``rerank_score``. Redistributing that
-        # truncated, un-reranked slice silently zeroes out the third-and-later
-        # archives (results=[], has_hits=False) and reorders by archive index —
-        # telling the user those archives had no hits when Xapian found some.
-        # Only redistribute when reranking actually happened (mirrors the
-        # synthesize passthrough guard); otherwise return per_file untouched.
+        # and the inference-failure passthrough) return the candidates in
+        # ARCHIVE order with NO ``rerank_score``. Nothing was reranked, so
+        # there is nothing to redistribute, and counting it as engaged would
+        # misreport the telemetry. Only redistribute when reranking actually
+        # happened (mirrors the synthesize passthrough guard); otherwise
+        # return per_file untouched.
         scored = bool(reranked_tagged and "rerank_score" in reranked_tagged[0])
         if not scored:
             self._record_rerank_event(_RERANKER_SKIPPED_PASSTHROUGH)

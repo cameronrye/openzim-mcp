@@ -139,13 +139,19 @@ Set via environment variables with the `OPENZIM_MCP_` prefix:
 ```bash
 export OPENZIM_MCP_ML__RERANKER__ENABLED=true
 export OPENZIM_MCP_ML__RERANKER__MIN_QUERY_TOKENS=4
-export OPENZIM_MCP_ML__RERANKER__FINAL_TOP_K=10
 export OPENZIM_MCP_ML__RERANKER__FIRST_CALL_TIMEOUT_SECONDS=15.0
 export OPENZIM_MCP_ML__RERANKER__ALLOW_MODEL_DOWNLOAD=false
 export OPENZIM_MCP_ML__RERANKER__CACHE_DIR=/var/lib/openzim-mcp/models
 ```
 
 (The `__` double-underscore delimits nested config sections.)
+
+`OPENZIM_MCP_ML__RERANKER__FINAL_TOP_K` is deprecated and has no effect. It
+used to cap `search all files for` at that many hits across all archives, so
+an archive whose hits all scored below the cut disappeared from the answer.
+Rerank now reorders each archive's hits and drops none; pass a smaller `limit`
+(per archive, default 5) for a shorter answer. Setting the variable logs a
+deprecation notice on start, and it is removed in 4.0.0.
 
 ## Telemetry
 

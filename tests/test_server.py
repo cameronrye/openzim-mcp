@@ -1,6 +1,7 @@
 """Tests for server module."""
 
 import asyncio
+import logging
 from unittest.mock import MagicMock
 
 import pytest
@@ -13,6 +14,34 @@ from openzim_mcp.exceptions import (
     OpenZimMcpValidationError,
 )
 from openzim_mcp.server import OpenZimMcpServer
+
+
+def _deprecation_warnings_on_run(config: OpenZimMcpConfig) -> list[str]:
+    """Start a server on ``config`` and return the DEPRECATED notices it logs.
+
+    Records are collected with a handler attached to the server module
+    logger AFTER the server is constructed: ``OpenZimMcpConfig``'s
+    ``setup_logging`` runs ``logging.basicConfig(force=True)`` during server
+    init, which strips pytest's ``caplog`` handler off the root.
+    """
+    server = OpenZimMcpServer(config)
+    server.mcp.run = MagicMock()
+
+    captured: list[str] = []
+
+    class _Capture(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            captured.append(record.getMessage())
+
+    srv_logger = logging.getLogger("openzim_mcp.server")
+    handler = _Capture(level=logging.WARNING)
+    srv_logger.addHandler(handler)
+    try:
+        server.run()
+    finally:
+        srv_logger.removeHandler(handler)
+
+    return [msg for msg in captured if "DEPRECATED" in msg]
 
 
 class TestOpenZimMcpServer:
@@ -675,38 +704,14 @@ class TestOpenZimMcpServerRun:
         in 4.0.0, so it has to name the replacement transport — and it must
         not fire for operators already on a supported transport, or it
         becomes background noise nobody reads.
-
-        Records are collected with a handler attached to the server module
-        logger AFTER each server is constructed: ``OpenZimMcpConfig``'s
-        ``setup_logging`` runs ``logging.basicConfig(force=True)`` during
-        server init, which strips pytest's ``caplog`` handler off the root.
         """
-        import logging
-
         monkeypatch.setattr(
             "openzim_mcp.http_app.serve_streamable_http", lambda s: None
         )
 
         def deprecation_warnings_for(transport: str) -> list[str]:
             test_config.transport = transport
-            server = OpenZimMcpServer(test_config)
-            server.mcp.run = MagicMock()
-
-            captured: list[str] = []
-
-            class _Capture(logging.Handler):
-                def emit(self, record: logging.LogRecord) -> None:
-                    captured.append(record.getMessage())
-
-            srv_logger = logging.getLogger("openzim_mcp.server")
-            handler = _Capture(level=logging.WARNING)
-            srv_logger.addHandler(handler)
-            try:
-                server.run()
-            finally:
-                srv_logger.removeHandler(handler)
-
-            return [msg for msg in captured if "DEPRECATED" in msg]
+            return _deprecation_warnings_on_run(test_config)
 
         sse_warnings = deprecation_warnings_for("sse")
         assert len(sse_warnings) == 1, sse_warnings
@@ -716,6 +721,37 @@ class TestOpenZimMcpServerRun:
 
         assert deprecation_warnings_for("stdio") == []
         assert deprecation_warnings_for("http") == []
+
+    def test_run_warns_when_final_top_k_is_set_and_only_then(
+        self, temp_dir, monkeypatch
+    ):
+        """An operator-set ``final_top_k`` logs a deprecation notice on start.
+
+        The cross-archive rerank was the last reader of the knob, and it no
+        longer cuts its pooled list, so a deployment that set it to keep
+        ``search all files`` short now gets every archive's ``limit`` back.
+        The notice is how that operator learns why. It must name the knob
+        and the release that removes it, and stay silent when the knob was
+        never set: the default value is not an operator's choice.
+        """
+        env = "OPENZIM_MCP_ML__RERANKER__FINAL_TOP_K"
+
+        monkeypatch.setenv(env, "3")
+        set_warnings = _deprecation_warnings_on_run(
+            OpenZimMcpConfig(allowed_directories=[str(temp_dir)])
+        )
+        assert len(set_warnings) == 1, set_warnings
+        assert "final_top_k" in set_warnings[0]
+        assert env in set_warnings[0]
+        assert "4.0.0" in set_warnings[0]
+
+        monkeypatch.delenv(env)
+        assert (
+            _deprecation_warnings_on_run(
+                OpenZimMcpConfig(allowed_directories=[str(temp_dir)])
+            )
+            == []
+        )
 
 
 class TestOpenZimMcpServerNewTools:
