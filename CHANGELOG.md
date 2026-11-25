@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.5.2](https://github.com/cameronrye/openzim-mcp/compare/v3.5.1...v3.5.2) (2026-11-25)
+
+
+### Fixed
+
+* stop the cross-archive rerank dropping whole archives from search results ([#497](https://github.com/cameronrye/openzim-mcp/issues/497)) ([be01287](https://github.com/cameronrye/openzim-mcp/commit/be01287c86a44d34277b9d145321ab4cacd42e62))
+
 ## [3.5.1](https://github.com/cameronrye/openzim-mcp/compare/v3.5.0...v3.5.1) (2026-11-23)
 
 
