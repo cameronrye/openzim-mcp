@@ -4575,9 +4575,9 @@ class SimpleToolsHandler(
             # Phase D sub-D-1: cross-encoder rerank across all archives.
             # Hits are flattened into a single candidate list (tagged with
             # their source archive index so they can be redistributed after
-            # reranking), reranked globally so the best hits win regardless
-            # of which archive they come from, then grouped back into the
-            # per-archive structure that ``render_search_all`` expects.
+            # reranking), reranked in one batch, then grouped back into the
+            # per-archive structure that ``render_search_all`` expects. Each
+            # archive keeps every hit its ``limit`` asked for, reordered.
             per_file: List[Dict[str, Any]] = [
                 cast(Dict[str, Any], e) for e in (data.get("results") or [])
             ]

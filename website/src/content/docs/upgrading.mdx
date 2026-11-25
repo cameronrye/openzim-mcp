@@ -109,6 +109,7 @@ rather than moving here, because several pages link straight to that anchor.
 | Deprecated | Removed in | Replacement |
 |---|---|---|
 | `--transport sse` / `OPENZIM_MCP_TRANSPORT=sse` | 4.0.0 | `--transport http` (streamable HTTP at `/mcp`), with the client switched to streamable HTTP too. It warns on every start |
+| `OPENZIM_MCP_ML__RERANKER__FINAL_TOP_K` | 4.0.0 | None: it no longer has any effect, so unset it. To shorten `search all files for`, pass a smaller `limit`. It warns on every start while set |
 
 ## How to upgrade
 

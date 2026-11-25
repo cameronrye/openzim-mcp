@@ -673,55 +673,105 @@ class TestRerankerWiredToHandleSearchAll:
         mock_reranker.rerank.assert_not_called()
         assert handler.get_telemetry().get("reranker_engaged", 0) == 0
 
-    def test_handle_search_all_cross_archive_ordering_preserved(self) -> None:
-        """Redistribution: hit B1 outscores A1 — B1 must survive top_k=1 and
-        A1's archive bucket must end up empty after rerank+regrouping."""
-        mock_reranker = MagicMock()
-        # Score B1=0.9, A1=0.1; top_k honours the value passed by the handler
-        # (driven by final_top_k=1 on the config); only B1 survives.
-        mock_reranker.rerank = MagicMock(
-            side_effect=lambda query, candidates, top_k: sorted(
-                [
-                    {**c, "rerank_score": 0.9 if c["path"] == "B1" else 0.1}
-                    for c in candidates
-                ],
-                key=lambda x: x["rerank_score"],
-                reverse=True,
-            )[:top_k]
-        )
+    def test_handle_search_all_rerank_reorders_without_dropping_archives(
+        self,
+    ) -> None:
+        """The cross-archive rerank reorders each archive's hits; it never
+        cuts the pooled list down to ``final_top_k``.
+
+        Three archives of 5 hits pool into 15 candidates, more than the
+        default ``final_top_k`` of 10. Every passage in archive C scores below
+        every hit in A and B, so a global top-10 cut empties C, and
+        ``render_search_all`` skips an archive with no hits: C vanished from
+        the answer as if Xapian had found nothing there, although the caller
+        asked for 5 per archive and Xapian returned 5.
+
+        Only the ONNX model is faked. ``BGEReranker.rerank`` (its scoring,
+        sort and slice) runs for real, with scores keyed by passage text so
+        the input order cannot leak into the result.
+        """
+        query = "what year was Marie Curie born"
+        scores = {
+            # Xapian order a0..a4; by score a1 a3 a4 a2 a0.
+            "passage a0": 0.60,
+            "passage a1": 0.95,
+            "passage a2": 0.70,
+            "passage a3": 0.90,
+            "passage a4": 0.80,
+            # Xapian order b0..b4; by score b4 b0 b2 b1 b3.
+            "passage b0": 0.85,
+            "passage b1": 0.65,
+            "passage b2": 0.75,
+            "passage b3": 0.62,
+            "passage b4": 0.99,
+            # All below the lowest A/B score (0.60); by score c1 c4 c2 c0 c3.
+            "passage c0": 0.10,
+            "passage c1": 0.30,
+            "passage c2": 0.20,
+            "passage c3": 0.05,
+            "passage c4": 0.25,
+        }
+        fake_model = MagicMock()
+        fake_model.rerank = lambda q, passages: iter([scores[p] for p in passages])
+        reranker = BGEReranker(model=fake_model, config=RerankerConfig())
+
+        def archive(letter: str) -> dict:
+            hits = [
+                {
+                    "path": f"{letter.upper()}/{letter}{i}",
+                    "title": f"Topic {letter}{i}",
+                    "snippet": f"passage {letter}{i}",
+                }
+                for i in range(5)
+            ]
+            return {
+                "zim_file_path": f"/{letter}.zim",
+                "name": f"archive_{letter}",
+                "has_hits": True,
+                "error": False,
+                "result": {
+                    "query": query,
+                    "results": hits,
+                    "total": 40,
+                    "done": False,
+                    "next_cursor": None,
+                    "page_info": {"offset": 0, "limit": 5, "returned_count": 5},
+                },
+            }
+
         handler = self._make_handler()
-        # Override final_top_k to 1 so the reranker keeps only the top hit
-        # globally — this is the eviction scenario we want to exercise.
-        handler.zim_operations.config.ml.reranker = RerankerConfig(final_top_k=1)
-        with patch(
-            "openzim_mcp.ml.reranker.BGEReranker.get",
-            return_value=mock_reranker,
-        ):
+        handler.zim_operations.search_all_data.return_value = {
+            "query": query,
+            "results": [archive("a"), archive("b"), archive("c")],
+            "_meta": {"reason": None, "suggestions": None},
+            "files_available": 3,
+            "files_searched": 3,
+            "files_with_hits": 3,
+            "files_failed": 0,
+            "budget_exceeded": False,
+            "done": True,
+        }
+        with patch("openzim_mcp.ml.reranker.BGEReranker.get", return_value=reranker):
             result = handler._handle_search_all(
-                query="what year was Marie Curie born",
+                query=query,
                 zim_file_path="/fake/wiki.zim",
                 params={},
                 options={"compact": True},
             )
-        # Reranker called exactly once with both archives' hits flattened.
-        mock_reranker.rerank.assert_called_once()
-        call_kwargs = mock_reranker.rerank.call_args.kwargs
-        assert call_kwargs["query"] == "what year was Marie Curie born"
-        candidate_paths = {c["path"] for c in call_kwargs["candidates"]}
-        assert candidate_paths == {
-            "A1",
-            "B1",
-        }, "Both archive hits must be flattened into the candidates list"
 
-        # _rerank_src_idx must not leak into the rendered body or hit dicts.
+        rendered: dict = {}
+        current = None
+        for line in result.body.splitlines():
+            if line.startswith("## `"):
+                current = line.split("`")[1]
+                rendered[current] = []
+            elif line.startswith("- **") and current is not None:
+                rendered[current].append(line.rsplit("`", 2)[1])
+        assert rendered == {
+            "archive_a": ["A/a1", "A/a3", "A/a4", "A/a2", "A/a0"],
+            "archive_b": ["B/b4", "B/b0", "B/b2", "B/b1", "B/b3"],
+            "archive_c": ["C/c1", "C/c4", "C/c2", "C/c0", "C/c3"],
+        }
+        assert "## `archive_c` — 5 hits (of 40)" in result.body
         assert "_rerank_src_idx" not in result.body
-
-        # B1 (high score) must appear in the rendered output.
-        assert "B1" in result.body, "High-scored hit B1 must survive top_k eviction"
-
-        # A1 (low score, evicted) must not appear — its archive bucket is empty
-        # and render_search_all skips archives with no results.
-        assert "A1" not in result.body, "Low-scored hit A1 must be evicted"
-
-        # Reranker engagement was tracked.
         assert handler.get_telemetry().get("reranker_engaged", 0) == 1

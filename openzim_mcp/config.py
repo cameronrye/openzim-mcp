@@ -226,11 +226,12 @@ class RerankerConfig(BaseModel):
         ge=1,
         le=100,
         description=(
-            "Default response cap after rerank, applied only when the "
-            "caller supplies no `limit`. A caller-supplied `limit` always "
-            "wins — rerank reorders the caller's page, it is not a second "
-            "cap, and truncating below `limit` would desynchronise "
-            "`page_info`/`next_cursor` from the rows actually returned."
+            "DEPRECATED, removed in 4.0.0, and read by nothing: setting it "
+            "only logs a deprecation notice on start. It used to cap the "
+            "cross-archive `search all files` rerank at this many hits in "
+            "total, which emptied every archive whose hits scored below the "
+            "cut. Rerank only reorders now, on every path; `limit` alone "
+            "sizes the answer."
         ),
     )
     max_query_length: int = Field(default=256, ge=1, le=4096)
